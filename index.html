@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>מערכת ניהול — הגברה ותאורה</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🎛️ מערכת ניהול — הגברה ותאורה</div>
+    <div class="company-switch">
+      <label>חברה:</label>
+      <select id="companySelect"></select>
+    </div>
+    <div id="statusPills" class="pills"></div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="events">אירועים</button>
+    <button class="tab" data-tab="calendar">התאמת יומן</button>
+    <button class="tab" data-tab="invoicing">חיוב לקוחות</button>
+    <button class="tab" data-tab="contractors">קבלנים</button>
+    <button class="tab" data-tab="payroll">שכר עובדים</button>
+    <button class="tab" data-tab="connections">🔌 חיבורים</button>
+  </nav>
+
+  <main id="content"></main>
+
+  <!-- מודל הדבקת הודעת ווטסאפ -->
+  <div id="ingestModal" class="modal hidden">
+    <div class="modal-card">
+      <h3>הדבקת הודעת אירוע מווטסאפ</h3>
+      <p class="muted">הדבק את ההודעה כפי שהיא (תאריך / זמר / תמחור / מיקום / סאונד / עובדים / תוספת / קבלן). המערכת תנתח אוטומטית.</p>
+      <textarea id="ingestText" rows="10" placeholder="תאריך: 20/07/2026&#10;זמר: ...&#10;תמחור: ...&#10;מיקום: ...&#10;סאונד: ...&#10;עובדים: ...&#10;תוספת לעובדים: ...&#10;קבלן: ..."></textarea>
+      <div class="modal-actions">
+        <button id="ingestCancel" class="btn ghost">ביטול</button>
+        <button id="ingestSave" class="btn primary">נתח ושמור</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

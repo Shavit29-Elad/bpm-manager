@@ -1,0 +1,18 @@
+{
+  "name": "bpm-manager",
+  "version": "0.1.0",
+  "description": "מערכת ניהול לחברות הגברה ותאורה - אירועים, עובדים, קבלנים, חשבונית ירוקה, יומן והתאמת בנק",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/run-tests.js"
+  },
+  "optionalDependencies": {
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
