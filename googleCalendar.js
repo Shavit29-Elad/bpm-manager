@@ -1,16 +1,12 @@
-// lib/googleCalendar.js
-// שליפת אירועים מיומן גוגל של החברה, והצלבה מול אירועי ווטסאפ כדי לזהות
-// מה התפספס פה או שם.
-//
-// אימות: Access Token של גוגל (OAuth) במשתנה סביבה GOOGLE_ACCESS_TOKEN,
-// או חיבור דרך מחבר Google Calendar. הפונקציה matchEvents לא תלויה ב-API
-// ולכן ניתנת לבדיקה מלאה גם בלי חיבור.
+// googleCalendar.js
+// חיבור יומן גוגל דרך קישור iCal פרטי (סודי) — בלי OAuth ובלי אסימונים שפגים.
+// בגוגל יומן: הגדרות היומן ← "כתובת סודית בפורמט iCal" ← להעתיק את הכתובת.
+// הכתובת נשמרת ב-GOOGLE_ICAL_URL. גם matchEvents עצמאי וניתן לבדיקה בלי רשת.
 
 function normalize(str) {
   return (str || '').toLowerCase().replace(/["'’.,\-()]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-// דמיון פשוט בין שני שמות (האם אחד מכיל את השני / חפיפת מילים)
 function nameSimilar(a, b) {
   const na = normalize(a), nb = normalize(b);
   if (!na || !nb) return 0;
@@ -21,17 +17,15 @@ function nameSimilar(a, b) {
   return hits / Math.max(wa.size, wb.length);
 }
 
-// הצלבה: whatsappEvents[] מול calendarEvents[]. מחזיר התאמות + מה חסר בכל צד.
-// calendarEvents פריט: { id, date (yyyy-mm-dd), title, location }
+// הצלבה בין אירועי ווטסאפ לאירועי יומן
 export function matchEvents(whatsappEvents, calendarEvents) {
   const matched = [];
   const usedCal = new Set();
-
   for (const wa of whatsappEvents) {
     let best = null, bestScore = 0;
     for (const cal of calendarEvents) {
       if (usedCal.has(cal.id)) continue;
-      if (wa.date && cal.date && wa.date !== cal.date) continue; // חייב אותו תאריך
+      if (wa.date && cal.date && wa.date !== cal.date) continue;
       const score = Math.max(
         nameSimilar(wa.artist, cal.title),
         nameSimilar(wa.location, cal.location),
@@ -46,44 +40,75 @@ export function matchEvents(whatsappEvents, calendarEvents) {
       matched.push({ whatsapp: wa, calendar: null, score: 0 });
     }
   }
-
   const missingInCalendar = matched.filter(m => !m.calendar).map(m => m.whatsapp);
   const matchedCalIds = new Set(matched.filter(m => m.calendar).map(m => m.calendar.id));
   const missingInWhatsapp = calendarEvents.filter(c => !matchedCalIds.has(c.id));
-
   return { matched, missingInCalendar, missingInWhatsapp };
 }
 
-// שליפה אמיתית מיומן גוגל (כשיש Access Token)
-export async function fetchCalendarEvents({ calendarId = 'primary', timeMin, timeMax } = {}) {
-  const token = process.env.GOOGLE_ACCESS_TOKEN;
-  if (!token) throw new Error('חסר GOOGLE_ACCESS_TOKEN לחיבור יומן גוגל');
-  const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`);
-  if (timeMin) url.searchParams.set('timeMin', timeMin);
-  if (timeMax) url.searchParams.set('timeMax', timeMax);
-  url.searchParams.set('singleEvents', 'true');
-  url.searchParams.set('orderBy', 'startTime');
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error(`יומן גוגל: ${res.status} ${await res.text()}`);
-  const data = await res.json();
-  return (data.items || []).map(it => ({
-    id: it.id,
-    date: (it.start?.date || it.start?.dateTime || '').slice(0, 10),
-    title: it.summary || '',
-    location: it.location || '',
+// --- ניתוח פורמט iCal (.ics) ---
+// מפענח בלוקים של VEVENT ומחזיר { id, date (yyyy-mm-dd), title, location }
+export function parseIcs(text) {
+  // ביטול "קיפול שורות" (שורות המשך מתחילות ברווח/טאב)
+  const unfolded = text.replace(/\r?\n[ \t]/g, '');
+  const lines = unfolded.split(/\r?\n/);
+  const events = [];
+  let cur = null;
+  for (const line of lines) {
+    if (line === 'BEGIN:VEVENT') { cur = {}; continue; }
+    if (line === 'END:VEVENT') { if (cur) events.push(cur); cur = null; continue; }
+    if (!cur) continue;
+    const idx = line.indexOf(':');
+    if (idx === -1) continue;
+    const rawKey = line.slice(0, idx);
+    const value = line.slice(idx + 1);
+    const key = rawKey.split(';')[0].toUpperCase();
+    if (key === 'DTSTART') {
+      const digits = value.replace(/[^0-9]/g, '');
+      if (digits.length >= 8) {
+        cur.date = `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+      }
+    } else if (key === 'SUMMARY') {
+      cur.title = unescapeIcs(value);
+    } else if (key === 'LOCATION') {
+      cur.location = unescapeIcs(value);
+    } else if (key === 'UID') {
+      cur.id = value;
+    }
+  }
+  return events.map((e, i) => ({
+    id: e.id || `cal_${i}`,
+    date: e.date || '',
+    title: e.title || '',
+    location: e.location || '',
   }));
 }
 
-// בדיקת חיבור אמיתית: מנסה למשוך את רשימת היומנים
+function unescapeIcs(v) {
+  return v.replace(/\\n/gi, ' ').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\').trim();
+}
+
+// שליפת אירועים מהיומן דרך קישור ה-iCal
+export async function fetchCalendarEvents() {
+  const url = process.env.GOOGLE_ICAL_URL;
+  if (!url) throw new Error('לא הוגדר קישור iCal ליומן (GOOGLE_ICAL_URL)');
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`יומן גוגל (iCal): ${res.status}`);
+  const text = await res.text();
+  return parseIcs(text);
+}
+
+// בדיקת חיבור: מושך את ה-iCal ומוודא שזה יומן תקין
 export async function verify() {
-  const token = process.env.GOOGLE_ACCESS_TOKEN;
-  if (!token) return { ok: false, error: 'לא הוזן Access Token' };
+  const url = process.env.GOOGLE_ICAL_URL;
+  if (!url) return { ok: false, error: 'לא הוזן קישור iCal' };
   try {
-    const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1',
-      { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) return { ok: false, error: `${res.status} ${await res.text()}` };
-    return { ok: true };
+    const res = await fetch(url);
+    if (!res.ok) return { ok: false, error: `סטטוס ${res.status}` };
+    const text = await res.text();
+    if (!/BEGIN:VCALENDAR/.test(text)) return { ok: false, error: 'הכתובת אינה קובץ יומן iCal תקין' };
+    return { ok: true, count: parseIcs(text).length };
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
-export default { matchEvents, fetchCalendarEvents, verify };
+export default { matchEvents, fetchCalendarEvents, parseIcs, verify };

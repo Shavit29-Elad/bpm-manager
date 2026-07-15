@@ -213,7 +213,7 @@ add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, _q, body) => {
 add('GET', /^\/api\/health$/, (req, res) => json(res, {
   ok: true,
   greenInvoiceConnected: greenInvoice.haveCredentials(),
-  calendarConnected: Boolean(process.env.GOOGLE_ACCESS_TOKEN),
+  calendarConnected: Boolean(process.env.GOOGLE_ICAL_URL),
   whatsapp: getBridgeStatus().status,
 }));
 

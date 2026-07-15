@@ -18,8 +18,8 @@ export const DEFS = {
   googleCalendar: {
     name: 'יומן גוגל',
     icon: '📅',
-    fields: [{ env: 'GOOGLE_ACCESS_TOKEN', label: 'Access Token', secret: true }],
-    help: 'Access Token של OAuth לחיבור היומן',
+    fields: [{ env: 'GOOGLE_ICAL_URL', label: 'כתובת iCal פרטית של היומן', secret: true }],
+    help: 'בגוגל יומן: הגדרות היומן ← "כתובת סודית בפורמט iCal" ← העתק והדבק כאן',
   },
   whatsapp: {
     name: 'ווטסאפ (גשר ווב)',
