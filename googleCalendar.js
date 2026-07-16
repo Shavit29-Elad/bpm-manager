@@ -88,26 +88,41 @@ function unescapeIcs(v) {
   return v.replace(/\\n/gi, ' ').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\').trim();
 }
 
-// שליפת אירועים מהיומן דרך קישור ה-iCal
-export async function fetchCalendarEvents() {
-  const url = process.env.GOOGLE_ICAL_URL;
-  if (!url) throw new Error('לא הוגדר קישור iCal ליומן (GOOGLE_ICAL_URL)');
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`יומן גוגל (iCal): ${res.status}`);
-  const text = await res.text();
-  return parseIcs(text);
+// תומך בכמה יומנים: כמה כתובות iCal מופרדות בפסיק / רווח / שורה חדשה
+function icalUrls() {
+  return (process.env.GOOGLE_ICAL_URL || '')
+    .split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
 }
 
-// בדיקת חיבור: מושך את ה-iCal ומוודא שזה יומן תקין
-export async function verify() {
-  const url = process.env.GOOGLE_ICAL_URL;
-  if (!url) return { ok: false, error: 'לא הוזן קישור iCal' };
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return { ok: false, error: `סטטוס ${res.status}` };
+// שליפת אירועים מכל היומנים דרך קישורי ה-iCal (ממוזגים יחד)
+export async function fetchCalendarEvents() {
+  const urls = icalUrls();
+  if (!urls.length) throw new Error('לא הוגדר קישור iCal ליומן (GOOGLE_ICAL_URL)');
+  const all = [];
+  for (let i = 0; i < urls.length; i++) {
+    const res = await fetch(urls[i]);
+    if (!res.ok) throw new Error(`יומן ${i + 1} (iCal): ${res.status}`);
     const text = await res.text();
-    if (!/BEGIN:VCALENDAR/.test(text)) return { ok: false, error: 'הכתובת אינה קובץ יומן iCal תקין' };
-    return { ok: true, count: parseIcs(text).length };
+    // קידומת למזהה לפי אינדקס היומן כדי למנוע התנגשויות בין יומנים
+    parseIcs(text).forEach(e => all.push({ ...e, id: `c${i}_${e.id}`, calendarIndex: i }));
+  }
+  return all;
+}
+
+// בדיקת חיבור: מושך את כל היומנים ומוודא שכולם תקינים
+export async function verify() {
+  const urls = icalUrls();
+  if (!urls.length) return { ok: false, error: 'לא הוזן קישור iCal' };
+  try {
+    let count = 0;
+    for (let i = 0; i < urls.length; i++) {
+      const res = await fetch(urls[i]);
+      if (!res.ok) return { ok: false, error: `יומן ${i + 1}: סטטוס ${res.status}` };
+      const text = await res.text();
+      if (!/BEGIN:VCALENDAR/.test(text)) return { ok: false, error: `יומן ${i + 1}: אינו קובץ iCal תקין` };
+      count += parseIcs(text).length;
+    }
+    return { ok: true, count, calendars: urls.length };
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
