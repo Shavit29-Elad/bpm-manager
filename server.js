@@ -157,16 +157,58 @@ add('GET', /^\/api\/contractors\/payables$/, (req, res, _p, q) =>
 add('GET', /^\/api\/payroll$/, (req, res, _p, q) =>
   json(res, employeePayForMonth(companyEvents(load(), q.companyId), q.month)));
 
+// ---- ווטסאפ דרך webhook (גשר חיצוני שרץ על מחשב המשתמש) ----
+let lastWhatsappAt = null;
+
+// זיהוי אם טקסט נראה כמו הודעת אירוע (כדי לא לקלוט הודעות רגילות)
+function looksLikeEvent(text) {
+  if (!text) return false;
+  const t = String(text);
+  const hasDate = /תאריך|(\d{1,2}[./]\d{1,2}[./]\d{2,4})/.test(t);
+  const hasField = /(זמר|מיקום|תמחור|סאונד|עובדים|תוספת|קבלן)/.test(t);
+  return hasDate && hasField;
+}
+
+// סטטוס ווטסאפ במצב webhook: 'connected' אם התקבלה הודעה, 'ready' אם מוגדר וממתין, אחרת 'disabled'
+function whatsappStatus() {
+  const tokenConfigured = Boolean(process.env.WHATSAPP_WEBHOOK_TOKEN);
+  const status = !tokenConfigured ? 'disabled' : (lastWhatsappAt ? 'connected' : 'ready');
+  return { mode: 'webhook', status, tokenConfigured, lastReceivedAt: lastWhatsappAt };
+}
+
 // GET /api/whatsapp/status
-add('GET', /^\/api\/whatsapp\/status$/, (req, res) => json(res, getBridgeStatus()));
+add('GET', /^\/api\/whatsapp\/status$/, (req, res) => json(res, whatsappStatus()));
+
+// POST /api/whatsapp/ingest — נקודת קצה מאובטחת שהגשר המקומי שולח אליה הודעות
+add('POST', /^\/api\/whatsapp\/ingest$/, (req, res, _p, _q, body) => {
+  const token = process.env.WHATSAPP_WEBHOOK_TOKEN;
+  if (!token) return json(res, { error: 'webhook לא מוגדר בשרת (חסר WHATSAPP_WEBHOOK_TOKEN)' }, 503);
+  if ((req.headers['x-webhook-token'] || '') !== token) return json(res, { error: 'unauthorized' }, 401);
+  const text = body?.text || '';
+  lastWhatsappAt = new Date().toISOString();
+  if (!looksLikeEvent(text)) return json(res, { ok: true, ingested: false, reason: 'ההודעה לא נראית כהודעת אירוע — לא נשמרה' });
+  // מניעת כפילויות לפי מזהה ההודעה מווטסאפ
+  if (body.msgId) {
+    const db = load();
+    db.whatsappMsgIds = db.whatsappMsgIds || [];
+    if (db.whatsappMsgIds.includes(body.msgId)) return json(res, { ok: true, ingested: false, reason: 'ההודעה כבר נקלטה' });
+    db.whatsappMsgIds.push(body.msgId);
+    if (db.whatsappMsgIds.length > 3000) db.whatsappMsgIds = db.whatsappMsgIds.slice(-3000);
+    save(db);
+  }
+  const event = ingestText(text, body.companyId);
+  console.log('ווטסאפ webhook: נקלט אירוע', event.date || '', event.artist || '');
+  return json(res, { ok: true, ingested: true, event });
+});
 
 // ---- מרכז חיבורים ----
 async function verifyConnection(key) {
   if (key === 'greenInvoice') return greenInvoice.verify();
   if (key === 'googleCalendar') return calendarVerify();
   if (key === 'whatsapp') {
-    const st = getBridgeStatus().status;
-    return { ok: st === 'connected', error: st === 'connected' ? null : `סטטוס: ${st}` };
+    const s = whatsappStatus();
+    if (s.status === 'disabled') return { ok: false, error: 'לא מוגדר טוקן webhook (WHATSAPP_WEBHOOK_TOKEN)' };
+    return { ok: true, error: null };
   }
   return { ok: false, error: 'לא נתמך' };
 }
@@ -175,11 +217,11 @@ async function verifyConnection(key) {
 function buildConnectionsView() {
   const masked = statusMasked();
   const records = getRecords();
-  const bridge = getBridgeStatus();
+  const waStatus = whatsappStatus();
   return Object.entries(CONN_DEFS).map(([key, def]) => {
     const rec = records[key] || {};
     let status = rec.status || 'disconnected';
-    if (key === 'whatsapp') status = bridge.status === 'connected' ? 'connected' : (rec.status || bridge.status || 'disconnected');
+    if (key === 'whatsapp') status = waStatus.status;
     if (def.soon) status = 'soon';
     return {
       key, name: def.name, icon: def.icon, help: def.help, soon: Boolean(def.soon),
@@ -190,7 +232,7 @@ function buildConnectionsView() {
       connectedAt: rec.connectedAt || null,
       lastCheckedAt: rec.lastCheckedAt || null,
       message: rec.message || null,
-      whatsappQr: key === 'whatsapp' ? bridge.hasQr : undefined,
+      whatsappInfo: key === 'whatsapp' ? waStatus : undefined,
     };
   });
 }
@@ -342,7 +384,7 @@ add('GET', /^\/api\/health$/, (req, res) => json(res, {
   greenInvoiceConnected: greenInvoice.haveCredentials(),
   calendarConnected: hasCalendar(),
   chatConnected: chatConfigured(),
-  whatsapp: getBridgeStatus().status,
+  whatsapp: whatsappStatus().status,
 }));
 
 // ---- הגשת קבצים סטטיים ----
@@ -393,6 +435,13 @@ async function autoVerifyConnections() {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const q = Object.fromEntries(url.searchParams);
+  // CORS — מאפשר לתוסף ה-Chrome (מ-web.whatsapp.com) לשלוח לנקודות הקצה
+  if (url.pathname.startsWith('/api/')) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-webhook-token');
+    if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+  }
   if (url.pathname.startsWith('/api/')) {
     const route = routes.find(r => r.method === req.method && r.pattern.test(url.pathname));
     if (!route) return json(res, { error: 'route not found' }, 404);
