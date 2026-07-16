@@ -41,16 +41,25 @@ async function callGemini(system, messages) {
 // --- Anthropic Claude (בתשלום) ---
 async function callAnthropic(system, messages) {
   const key = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.CHAT_MODEL || 'claude-3-5-sonnet-latest';
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-    body: JSON.stringify({ model, max_tokens: 1200, system, messages }),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`שגיאת צ'אט (${res.status}): ${text.slice(0, 300)}`);
-  let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מהשירות'); }
-  return (data.content || []).map(c => c.text).filter(Boolean).join('') || '(אין תשובה)';
+  // רשימת מודלים לניסיון (מהחכם/עדכני לישן) — עמידה בפני שינויי שמות
+  const candidates = process.env.CHAT_MODEL
+    ? [process.env.CHAT_MODEL]
+    : ['claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-latest'];
+  const bodyBase = { max_tokens: 1200, system, messages };
+  let lastErr = '';
+  for (const model of candidates) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model, ...bodyBase }),
+    });
+    const text = await res.text();
+    if (res.status === 404) { lastErr = `(404) ${text.slice(0, 120)}`; continue; } // מודל לא קיים — ננסה את הבא
+    if (!res.ok) throw new Error(`שגיאת צ'אט (${res.status}): ${text.slice(0, 300)}`);
+    let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מהשירות'); }
+    return (data.content || []).map(c => c.text).filter(Boolean).join('') || '(אין תשובה)';
+  }
+  throw new Error(`אף מודל Claude לא זמין. אפשר לקבוע CHAT_MODEL ידנית. פרט: ${lastErr}`);
 }
 
 async function complete(system, messages) {
