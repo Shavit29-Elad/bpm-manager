@@ -816,14 +816,74 @@ window.setBankSort = (key) => {
 const DOC_TYPE_SHORT = { 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 300: 'הצעת מחיר', 330: 'זיכוי', 10: 'חשבון עסקה' };
 let _bankList = [];
 
+function bankPeriodMatch(t) {
+  const per = state.bankPer || { mode: 'all' };
+  if (per.mode === 'all') return true;
+  const m = (t.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/); if (!m) return false;
+  const y = +m[3], mo = +m[2], key = `${m[3]}${m[2]}`;
+  if (per.mode === 'month') { const [py, pm] = (per.month || '').split('-').map(Number); return y === py && mo === pm; }
+  if (per.mode === 'year') { return y === +per.year; }
+  if (per.mode === 'range') { const f = (per.from || '').replace('-', ''), tt = (per.to || '').replace('-', ''); return key >= f && key <= tt; }
+  return true;
+}
+window.setBankFilter = (f) => { state.bankFilter = f; renderBank($('#content')); };
+window.setBankPerMode = (mode) => {
+  const p = state.bankPer || (state.bankPer = {});
+  p.mode = mode; const now = new Date();
+  if (mode === 'month' && !p.month) p.month = now.toISOString().slice(0, 7);
+  if (mode === 'year' && !p.year) p.year = now.getFullYear();
+  if (mode === 'range') { if (!p.from) p.from = now.toISOString().slice(0, 7); if (!p.to) p.to = p.from; }
+  renderBank($('#content'));
+};
+window.setBankPerPart = (field, part, val) => {
+  const p = state.bankPer; if (!p) return;
+  if (field === 'year') { p.year = +val; }
+  else { let [y, mo] = (p[field] || '').split('-').map(Number); if (part === 'm') mo = +val; else y = +val; p[field] = `${y}-${String(mo).padStart(2, '0')}`; }
+  renderBank($('#content'));
+};
+function bankDirControls() {
+  const d = state.bankFilter || 'credit';
+  const seg = (v, l) => `<button class="btn ${d === v ? 'primary' : 'ghost'}" style="padding:6px 12px" onclick="setBankFilter('${v}')">${l}</button>`;
+  return `<div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('credit', 'רק זכות')}${seg('all', 'הכל')}${seg('debit', 'רק חובה')}</div>`;
+}
+function bankPeriodControls() {
+  const p = state.bankPer || { mode: 'all' };
+  const seg = (m, l) => `<button class="btn ${p.mode === m ? 'primary' : 'ghost'}" style="padding:6px 11px" onclick="setBankPerMode('${m}')">${l}</button>`;
+  let extra = '';
+  if (p.mode === 'month') { const [y, mo] = (p.month || '').split('-').map(Number); extra = `<select onchange="setBankPerPart('month','m',this.value)" style="padding:7px 10px">${monthOptions(mo)}</select><select onchange="setBankPerPart('month','y',this.value)" style="padding:7px 10px">${yearOptions(y)}</select>`; }
+  else if (p.mode === 'year') { extra = `<select onchange="setBankPerPart('year','y',this.value)" style="padding:7px 10px">${yearOptions(+p.year)}</select>`; }
+  else if (p.mode === 'range') { const [fy, fm] = (p.from || '').split('-').map(Number); const [ty, tm] = (p.to || '').split('-').map(Number); extra = `<span class="muted">מ־</span><select onchange="setBankPerPart('from','m',this.value)" style="padding:7px 8px">${monthOptions(fm)}</select><select onchange="setBankPerPart('from','y',this.value)" style="padding:7px 8px">${yearOptions(fy)}</select><span class="muted">עד</span><select onchange="setBankPerPart('to','m',this.value)" style="padding:7px 8px">${monthOptions(tm)}</select><select onchange="setBankPerPart('to','y',this.value)" style="padding:7px 8px">${yearOptions(ty)}</select>`; }
+  return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('all', 'הכל')}${seg('month', 'חודשי')}${seg('year', 'שנתי')}${seg('range', 'טווח')}</div>${extra}</div>`;
+}
+
 async function renderBank(c) {
   c.innerHTML = `<div class="panel"><div class="empty">טוען תנועות…</div></div>`;
-  const list = await api(`/api/bank?companyId=${state.company}`);
-  _bankList = list;
-  const credits = list.filter(t => t.direction === 'credit');
-  const matched = credits.filter(t => (t.matchedInvoices || []).length && (t.matchStatus === 'auto' || t.matchStatus === 'manual')).length;
-  const pending = credits.filter(t => t.matchStatus === 'unmatched').length;
-  const rows = sortBankRows(state.bankShowAll ? list : credits);
+  const all = await api(`/api/bank?companyId=${state.company}`);
+  _bankList = all;
+  const dir = state.bankFilter || 'credit';
+  let rows0 = all.filter(t => dir === 'all' ? true : dir === 'credit' ? t.direction === 'credit' : t.direction === 'debit');
+  rows0 = rows0.filter(bankPeriodMatch);
+  const rows = sortBankRows(rows0);
+  // סיכומים על המוצג
+  const cr = rows.filter(t => t.direction === 'credit'), db = rows.filter(t => t.direction === 'debit');
+  const sumCredit = cr.reduce((s, t) => s + (t.absAmount || 0), 0);
+  const sumDebit = db.reduce((s, t) => s + (t.absAmount || 0), 0);
+  const matchedCr = cr.filter(t => (t.matchedInvoices || []).length && (t.matchStatus === 'auto' || t.matchStatus === 'manual'));
+  const invSum = (t) => (t.matchedInvoices || []).reduce((a, i) => a + (Number(i.amount) || 0), 0);
+  const sumInv = matchedCr.reduce((s, t) => s + invSum(t), 0);
+  const sumWh = matchedCr.reduce((s, t) => { const si = invSum(t), w = si - t.absAmount; return s + ((w > 1 && w < si * 0.08) ? w : 0); }, 0);
+  const unmatched = cr.filter(t => t.matchStatus === 'unmatched').length;
+
+  const stat = (label, val, color) => `<div class="card" style="padding:11px 14px"><div class="label" style="font-size:12px">${label}</div><div style="font-size:18px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
+  const summary = `<div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(125px,1fr));margin-top:12px;gap:12px">
+    ${stat('שורות מוצגות', rows.length)}
+    ${stat('סה"כ זכות', money(sumCredit), 'var(--accent2)')}
+    ${dir !== 'credit' ? stat('סה"כ חובה', money(sumDebit), 'var(--danger)') : ''}
+    ${stat('סה"כ סכום חשבוניות', money(sumInv))}
+    ${stat('סה"כ ניכוי במקור', money(sumWh), 'var(--warn)')}
+    ${stat('שורות לא מותאמות', unmatched, unmatched ? 'var(--danger)' : 'var(--accent2)')}
+  </div>`;
+
   const bs = state.bankSort || { key: 'date', dir: 'desc' };
   const th = (key, label) => { const on = bs.key === key; const arw = on ? (bs.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'; return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="setBankSort('${key}')">${label}<span class="muted" style="font-size:11px">${arw}</span></th>`; };
   const p = (label) => `<th style="white-space:nowrap">${label}</th>`;
@@ -832,16 +892,15 @@ async function renderBank(c) {
       ${th('date', 'תאריך')}${th('amount', 'סכום בבנק')}${th('name', 'שם עסק')}
       ${p('חשבונית מס / מס-קבלה')}${p('קבלה')}${p('סכום חשבונית')}${p('ניכוי במקור')}${p('תצוגה')}${p('הורדה')}${p('הערות')}${p('אישור')}
     </tr></thead><tbody>${rows.map(bankTr).join('')}</tbody></table></div>`
-    : `<div class="empty" style="margin-top:14px">אין תנועות עדיין. לחץ "ייבא תנועות".</div>`;
+    : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
   c.innerHTML = `<div class="panel">
     <div class="row-between">
-      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">${credits.length} תנועות זכות · ${matched} מותאמות · <span style="color:var(--danger)">${pending} לא מותאמות</span></span></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn ghost" onclick="toggleBankAll()">${state.bankShowAll ? 'רק זכות (הכנסות)' : 'הצג גם חיובים'}</button>
-        <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
-      </div>
+      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמת תנועות הבנק לחשבוniות ההכנסה מחשבונית ירוקה</span></div>
+      <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
     </div>
-    <p class="muted" style="font-size:13px;margin-top:4px">כל שורה = תנועת זכות בבנק והחשבונית/ות שהותאמו לה. לחיצה על כותרת ממיינת. אפשר לכתוב הערה, ולאשר/לבטל התאמה. תנועות בלי התאמה מסומנות באדום.</p>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px">${bankDirControls()}${bankPeriodControls()}</div>
+    ${summary}
+    <p class="muted" style="font-size:12.5px;margin-top:10px">לחיצה על כותרת ממיינת · שורות אדומות = לא מותאמות · כפתור 🔗 שייך לשיוך ידני של חשבונית/קבלה.</p>
     ${table}
   </div>`;
 }
@@ -880,7 +939,8 @@ function bankTr(t) {
   }
 
   const linkBtn = credit ? `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="openLinkModal('${t.id}')">🔗 שייך</button>` : '';
-  return `<tr>
+  const rowStyle = (credit && t.matchStatus === 'unmatched') ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)' : (credit && t.matchStatus === 'ignored' ? 'opacity:.55' : '');
+  return `<tr style="${rowStyle}">
     <td style="white-space:nowrap">${t.date}</td>
     <td style="white-space:nowrap;color:${credit ? 'var(--accent2)' : 'var(--danger)'};font-weight:600">${amt}</td>
     <td>${biz}</td>
