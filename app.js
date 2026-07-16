@@ -33,13 +33,17 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ events: renderEvents, calendar: renderCalendar, invoicing: renderInvoicing,
+  ({ events: renderCombined, invoicing: renderInvoicing,
      contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
 }
 
-// ---- אירועים ----
-async function renderEvents(c) {
-  const events = await api(`/api/events?companyId=${state.company}`);
+// ---- אירועים + אי-התאמות + יומן (לשונית אחת מאוחדת) ----
+async function renderCombined(c) {
+  const [events, m] = await Promise.all([
+    api(`/api/events?companyId=${state.company}`),
+    api(`/api/calendar/match?companyId=${state.company}`),
+  ]);
+  const misses = m.matched.filter(x => !x.calendar);
   c.innerHTML = `
     <div class="panel">
       <div class="row-between">
@@ -50,8 +54,28 @@ async function renderEvents(c) {
         <thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>איכות קליטה</th></tr></thead>
         <tbody>${events.map(rowEvent).join('')}</tbody></table>`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
-    </div>`;
+    </div>
+
+    <div class="panel">
+      <h2>אי-התאמות מול יומן גוגל</h2>
+      <p class="muted">אירועים שנקלטו בווטסאפ אך חסרים ביומן (או להיפך). כאן נגדיר בהמשך את הטיפול בכל אחד.</p>
+      <div class="cards" style="margin:14px 0">
+        <div class="card"><div class="label">חסר ביומן (יש בווטסאפ)</div><div class="big" style="color:var(--danger)">${m.missingInCalendar.length}</div></div>
+        <div class="card"><div class="label">חסר בווטסאפ (יש ביומן)</div><div class="big" style="color:var(--warn)">${m.missingInWhatsappCount ?? (m.missingInWhatsapp?.length || 0)}</div></div>
+        <div class="card"><div class="label">הותאמו</div><div class="big" style="color:var(--accent2)">${m.matched.filter(x => x.calendar).length}</div></div>
+      </div>
+      ${misses.length ? `<table><thead><tr><th>תאריך</th><th>אירוע (ווטסאפ)</th><th>סטטוס</th></tr></thead>
+      <tbody>${misses.map(x => `<tr>
+        <td>${x.whatsapp.date || '—'}</td>
+        <td>${x.whatsapp.artist || '—'} / ${x.whatsapp.location || ''}</td>
+        <td><span class="tag miss">חסר ביומן</span></td>
+      </tr>`).join('')}</tbody></table>`
+      : `<div class="empty">אין אי-התאמות כרגע 👌</div>`}
+    </div>
+
+    <div class="panel" id="calWrap"><div class="empty">טוען יומן…</div></div>`;
   $('#addEvent').onclick = () => $('#ingestModal').classList.remove('hidden');
+  renderCalView();
 }
 
 // ---- תצוגת יומן: שבועית (ברירת מחדל) או חודשית, עם מתג ----
