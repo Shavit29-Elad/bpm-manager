@@ -856,8 +856,8 @@ function bankPeriodControls() {
   return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('all', 'הכל')}${seg('month', 'חודשי')}${seg('year', 'שנתי')}${seg('range', 'טווח')}</div>${extra}</div>`;
 }
 
-async function renderBank(c) {
-  c.innerHTML = `<div class="panel"><div class="empty">טוען תנועות…</div></div>`;
+async function renderBank(c, soft) {
+  if (!soft) c.innerHTML = `<div class="panel"><div class="empty">טוען תנועות…</div></div>`;
   const all = await api(`/api/bank?companyId=${state.company}`);
   _bankList = all;
   const dir = state.bankFilter || 'credit';
@@ -971,7 +971,9 @@ function invChip(inv) {
     ${receipt}</div>`;
 }
 window.toggleBankAll = () => { state.bankShowAll = !state.bankShowAll; renderBank($('#content')); };
-const bankPut = (id, body) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(() => renderBank($('#content')));
+// עדכון פעולה בלי לקפוץ למעלה — שומר את מיקום הגלילה
+async function renderBankKeepScroll() { const y = window.scrollY; await renderBank($('#content'), true); window.scrollTo(0, y); }
+const bankPut = (id, body) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(() => renderBankKeepScroll());
 window.matchBank = (id, j) => bankPut(id, { matchStatus: 'manual', matchedInvoices: [JSON.parse(decodeURIComponent(j))] });
 window.confirmBank = (id) => bankPut(id, { matchStatus: 'manual' });
 window.unmatchBank = (id) => bankPut(id, { matchStatus: 'unmatched', matchedInvoices: [] });
@@ -1014,24 +1016,40 @@ window.renderLinkClients = (q) => {
   const list = (_linkClients || []).filter(c => !q || (c.name || '').includes(q)).slice(0, 40);
   box.innerHTML = list.length ? list.map(c => `<div class="chat-item" style="margin:0;padding:6px 10px" onclick="linkPickClient('${c.id}','${(c.name || '').replace(/'/g, '%27')}')">🏢 ${escapeHtml(c.name)}</div>`).join('') : '<span class="muted">אין תוצאות.</span>';
 };
+// מסמכים שכבר משויכים לתנועות אחרות (כדי לא להציע אותם שוב)
+function linkedDocIds() {
+  const ids = new Set(), recs = new Set();
+  for (const t of (_bankList || [])) {
+    for (const inv of (t.matchedInvoices || [])) {
+      if (t.id !== _linkTxId) ids.add(inv.id);                 // תנועות אחרות חוסמות את המסמך
+      if (inv.receipt && inv.receipt.number) recs.add(String(inv.receipt.number));
+    }
+  }
+  for (const d of _linkSel) ids.add(d.id);                      // מה שכבר נבחר כאן
+  return { ids, recs };
+}
 window.linkPickClient = async (id, name) => {
   const box = document.getElementById('linkDocs'); if (!box) return;
   box.innerHTML = '<div class="muted" style="font-size:13px">טוען מסמכים…</div>';
   const docs = await api(`/api/clients/${id}/documents`);
-  const rows = (Array.isArray(docs) ? docs : []).map(d => {
+  const { ids, recs } = linkedDocIds();
+  const allowed = [305, 320, 400];   // חשבונית מס, חשבונית מס-קבלה, קבלה בלבד
+  const avail = (Array.isArray(docs) ? docs : []).filter(d =>
+    allowed.includes(Number(d.type)) && !ids.has(d.id) && !(Number(d.type) === 400 && recs.has(String(d.number))));
+  const rows = avail.map(d => {
     const j = encodeURIComponent(JSON.stringify({ id: d.id, number: d.number, type: d.type, clientName: d.clientName, amount: d.amountIncVat, date: d.date, url: d.url }));
     return `<div style="display:flex;gap:6px;align-items:center;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
       <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${fmtDate(d.date)} · ${money(d.amountIncVat)}</span>
       <button class="btn ghost" style="padding:2px 10px;font-size:11px" onclick="linkAdd('${j}')">הוסף</button></div>`;
   }).join('');
-  box.innerHTML = `<b style="font-size:13px">מסמכי ${decodeURIComponent(name)}:</b>${rows || '<div class="muted">אין מסמכים.</div>'}`;
+  box.innerHTML = `<b style="font-size:13px">מסמכים פנויים של ${decodeURIComponent(name)} (חשבונית מס / מס-קבלה / קבלה):</b>${rows || '<div class="muted" style="font-size:13px;margin-top:4px">אין מסמכים פנויים — כולם כבר משויכים לתנועות אחרות.</div>'}`;
 };
 window.linkAdd = (j) => { const d = JSON.parse(decodeURIComponent(j)); if (!_linkSel.find(x => x.id === d.id)) _linkSel.push(d); const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml(); };
 window.linkRemove = (i) => { _linkSel.splice(i, 1); const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml(); };
 window.linkSave = async () => {
   await fetch(`/api/bank/${_linkTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: _linkSel.length ? 'manual' : 'unmatched', matchedInvoices: _linkSel }) });
   const m = document.getElementById('linkModal'); if (m) m.classList.add('hidden');
-  renderBank($('#content'));
+  renderBankKeepScroll();
 };
 window.openBankImport = () => {
   let m = document.getElementById('bankModal');
