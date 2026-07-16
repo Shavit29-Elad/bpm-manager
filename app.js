@@ -25,7 +25,6 @@ async function renderStatus() {
   $('#statusPills').innerHTML = [
     pill('חשבונית ירוקה', h.greenInvoiceConnected),
     pill('יומן גוגל', h.calendarConnected),
-    pill('ווטסאפ', h.whatsapp === 'connected', h.whatsapp),
   ].join('');
 }
 const pill = (label, ok, text) =>
