@@ -33,7 +33,7 @@ const pill = (label, ok, text) =>
 function render() {
   const c = $('#content');
   ({ home: renderHome, events: renderCombined, clients: renderClients, team: renderTeam,
-     requests: renderRequests, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
+     contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
@@ -682,12 +682,16 @@ async function renderTeam(c) {
       ${item('group', '👥', 'כל הצוות', `${members.length} עובדים`, state.activeChat === 'group')}
       <div style="height:1px;background:var(--line);margin:8px 0"></div>
       ${members.map(m => item(m.id, m.emoji, m.name, m.role, state.activeChat === m.id)).join('')}
+      <div style="height:1px;background:var(--line);margin:8px 0"></div>
+      ${item('requests', '📋', 'בקשות פיתוח', 'המשימות שאספנו', state.activeChat === 'requests')}
     </div>`;
-  const activeName = state.activeChat === 'group' ? 'כל הצוות' : (members.find(m => m.id === state.activeChat)?.name || '');
-  const notice = data.configured ? '' : `<div class="warn-banner">כדי שהצוות יענה צריך מפתח AI. הכי קל וחינמי: מפתח Google Gemini — הוסף <b>GEMINI_API_KEY</b> כמשתנה סביבה ב-Render (משיגים חינם ב-aistudio.google.com/apikey).</div>`;
-  c.innerHTML = `<div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
-    ${sidebar}
-    <div class="panel" style="flex:1;min-width:320px;display:flex;flex-direction:column;height:600px">
+  let main;
+  if (state.activeChat === 'requests') {
+    main = `<div class="panel" style="flex:1;min-width:320px" id="requestsBody"><div class="empty">טוען…</div></div>`;
+  } else {
+    const activeName = state.activeChat === 'group' ? 'כל הצוות' : (members.find(m => m.id === state.activeChat)?.name || '');
+    const notice = data.configured ? '' : `<div class="warn-banner">כדי שהצוות יענה צריך מפתח AI. הכי קל וחינמי: מפתח Google Gemini — הוסף <b>GEMINI_API_KEY</b> כמשתנה סביבה ב-Render (משיגים חינם ב-aistudio.google.com/apikey).</div>`;
+    main = `<div class="panel" style="flex:1;min-width:320px;display:flex;flex-direction:column;height:600px">
       <div class="row-between" style="margin-bottom:12px"><h2>${activeName}</h2>
         ${data.configured ? `<button class="btn ghost" style="padding:6px 12px" onclick="summarizeRequest(this)">📋 סכם כבקשת פיתוח</button>` : ''}
       </div>
@@ -697,9 +701,11 @@ async function renderTeam(c) {
         <input id="chatInput" placeholder="כתוב הודעה..." style="flex:1" ${data.configured ? '' : 'disabled'} onkeydown="if(event.key==='Enter')sendChat()"/>
         <button class="btn primary" onclick="sendChat()" ${data.configured ? '' : 'disabled'}>שלח</button>
       </div>
-    </div>
-  </div>`;
-  loadChat();
+    </div>`;
+  }
+  c.innerHTML = `<div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">${sidebar}${main}</div>`;
+  if (state.activeChat === 'requests') renderRequestsBody($('#requestsBody'));
+  else loadChat();
 }
 
 async function loadChat() {
@@ -739,28 +745,25 @@ window.sendChat = async () => {
   inp.focus();
 };
 
-// ---- בקשות פיתוח ----
+// ---- בקשות פיתוח (בתוך אזור הצוות) ----
 window.summarizeRequest = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'מסכם…'; }
   const r = await fetch(`/api/team/${state.activeChat}/summarize-request`, { method: 'POST' }).then(x => x.json());
-  if (btn) { btn.disabled = false; btn.textContent = '📋 סכם כבקשת פיתוח'; }
-  if (r.error) { alert(r.error); return; }
-  state.tab = 'requests';
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === 'requests'));
-  render();
+  if (r.error) { if (btn) { btn.disabled = false; btn.textContent = '📋 סכם כבקשת פיתוח'; } alert(r.error); return; }
+  state.activeChat = 'requests';
+  renderTeam($('#content'));
 };
 
 const REQ_STATUS = { open: { t: 'פתוח', cls: 'pending' }, 'in-progress': { t: 'בעבודה', cls: 'invoiced' }, done: { t: 'הושלם', cls: 'match' } };
 const REQ_PRIORITY = { low: 'נמוכה', medium: 'בינונית', high: 'גבוהה' };
 
-async function renderRequests(c) {
+async function renderRequestsBody(box) {
+  if (!box) return;
   const list = await api('/api/requests');
   const open = list.filter(r => r.status !== 'done').length;
-  c.innerHTML = `<div class="panel">
-    <div class="row-between"><div><h2>📋 בקשות פיתוח</h2><span class="muted">${list.length} בקשות · ${open} פתוחות · נוצרות מהשיחות עם הצוות</span></div></div>
-    <p class="muted" style="font-size:13px;margin-top:4px">בצ'אט עם הצוות (למשל איריס), אחרי שסיכמתם מה צריך — לחץ "📋 סכם כבקשת פיתוח" והבקשה תופיע כאן.</p>
-    <div style="margin-top:14px">${list.length ? list.map(reqCard).join('') : `<div class="empty">אין בקשות עדיין.</div>`}</div>
-  </div>`;
+  box.innerHTML = `<div class="row-between"><div><h2>📋 בקשות פיתוח</h2><span class="muted">${list.length} בקשות · ${open} פתוחות</span></div></div>
+    <p class="muted" style="font-size:13px;margin-top:4px">בצ'אט עם הצוות, אחרי שסיכמתם מה צריך — לחץ "📋 סכם כבקשת פיתוח" והבקשה תופיע כאן.</p>
+    <div style="margin-top:14px">${list.length ? list.map(reqCard).join('') : `<div class="empty">אין בקשות עדיין.</div>`}</div>`;
 }
 function reqCard(r) {
   const s = REQ_STATUS[r.status] || REQ_STATUS.open;
@@ -781,12 +784,12 @@ function reqCard(r) {
 }
 window.setReqStatus = async (id, status) => {
   await fetch(`/api/requests/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
-  renderRequests($('#content'));
+  renderRequestsBody($('#requestsBody'));
 };
 window.deleteReq = async (id) => {
   if (!confirm('למחוק את הבקשה?')) return;
   await fetch(`/api/requests/${id}`, { method: 'DELETE' });
-  renderRequests($('#content'));
+  renderRequestsBody($('#requestsBody'));
 };
 
 // ---- מודל הדבקה ----
