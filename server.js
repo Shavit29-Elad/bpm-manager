@@ -17,7 +17,7 @@ import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
-import { chatWithMember, chatGroupReply, chatConfigured } from './chat.js';
+import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange } from './chat.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
 
@@ -262,16 +262,17 @@ add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body
 
   const db = load();
   db.chats = db.chats || {};
+  db.memory = db.memory || {};
   const now = new Date().toISOString();
 
   if (id === 'group') {
     const history = db.chats.group = db.chats.group || [];
     history.push({ role: 'user', name: 'אתה', content: text, at: now });
     try {
-      // כל חבר צוות עונה בתורו על סמך התמלול המתעדכן
+      // כל חבר צוות עונה בתורו על סמך התמלול המתעדכן, עם הזיכרון האישי שלו
       for (const member of TEAM) {
-        const transcript = history.map(m => `${m.name || (m.role === 'user' ? 'אתה' : m.memberName || 'צוות')}: ${m.content}`).join('\n');
-        const reply = await chatGroupReply(member, transcript);
+        const transcript = history.map(m => `${m.name || (m.role === 'user' ? 'אתה' : 'צוות')}: ${m.content}`).join('\n');
+        const reply = await chatGroupReply(member, transcript, db.memory[member.id] || '');
         history.push({ role: 'assistant', memberId: member.id, name: member.name, emoji: member.emoji, content: reply, at: new Date().toISOString() });
       }
       save(db);
@@ -285,10 +286,20 @@ add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body
   const history = db.chats[id] = db.chats[id] || [];
   history.push({ role: 'user', content: text, at: now });
   try {
-    const reply = await chatWithMember(member, history);
+    const reply = await chatWithMember(member, history, db.memory[id] || '');
     history.push({ role: 'assistant', content: reply, at: new Date().toISOString() });
     save(db);
     json(res, { ok: true, messages: history });
+    // למידה מתמשכת (ברקע, לא חוסם את התשובה): מזקק עובדות לזיכרון
+    learnFromExchange(member, `משתמש: ${text}\n${member.name}: ${reply}`).then(notes => {
+      if (!notes) return;
+      const db2 = load(); db2.memory = db2.memory || {};
+      const prev = db2.memory[id] || '';
+      db2.memory[id] = (prev ? prev + '\n' : '') + notes.split('\n').map(l => l.replace(/^[-•\s]+/, '- ').trim()).join('\n');
+      // תקרת גודל לזיכרון (שומר את הסוף — העדכני ביותר)
+      if (db2.memory[id].length > 4000) db2.memory[id] = db2.memory[id].slice(-4000);
+      save(db2);
+    }).catch(() => {});
   } catch (e) { save(db); json(res, { error: e.message, messages: history }, 500); }
 });
 

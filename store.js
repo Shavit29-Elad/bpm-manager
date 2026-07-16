@@ -21,6 +21,7 @@ const EMPTY = {
   fixedExpenses: [],// הוצאות קבועות
   assets: [],      // רכבים/הלוואות/ביטוחים - תוקף והתראות
   chats: {},       // שיחות עם דמויות הצוות: { memberId: [ {role, content, at} ] }
+  memory: {},      // זיכרון מתמשך לכל דמות: { memberId: "עובדות שנלמדו..." }
 };
 
 function ensure() {

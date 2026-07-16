@@ -384,7 +384,7 @@ async function renderTeam(c) {
       ${members.map(m => item(m.id, m.emoji, m.name, m.role, state.activeChat === m.id)).join('')}
     </div>`;
   const activeName = state.activeChat === 'group' ? 'כל הצוות' : (members.find(m => m.id === state.activeChat)?.name || '');
-  const notice = data.configured ? '' : `<div class="warn-banner">כדי לשוחח עם הצוות צריך מפתח Anthropic. הוסף <b>ANTHROPIC_API_KEY</b> כמשתנה סביבה ב-Render (כמו שאר החיבורים).</div>`;
+  const notice = data.configured ? '' : `<div class="warn-banner">כדי שהצוות יענה צריך מפתח AI. הכי קל וחינמי: מפתח Google Gemini — הוסף <b>GEMINI_API_KEY</b> כמשתנה סביבה ב-Render (משיגים חינם ב-aistudio.google.com/apikey).</div>`;
   c.innerHTML = `<div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
     ${sidebar}
     <div class="panel" style="flex:1;min-width:320px;display:flex;flex-direction:column;height:600px">
