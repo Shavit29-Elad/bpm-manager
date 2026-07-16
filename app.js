@@ -915,7 +915,7 @@ async function renderBank(c, soft) {
   const table = rows.length ? `<div style="overflow-x:auto;margin-top:14px"><table style="min-width:1120px;font-size:13px">
     <thead><tr>
       ${th('date', 'תאריך')}${th('amount', 'סכום בבנק')}${th('name', 'שם עסק')}
-      ${p('חשבונית מס / מס-קבלה')}${p('קבלה')}${p('סכום חשבונית')}${p('ניכוי במקור')}${p('תצוגה')}${p('הורדה')}${p('הערות')}${p('אישור')}
+      ${p('חשבונית מס / מס-קבלה')}${p('קבלה')}${p('סכום חשבונית')}${p('ניכוי במקור')}${p('הערות')}${p('אישור')}
     </tr></thead><tbody>${rows.map(bankTr).join('')}</tbody></table></div>`
     : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
   c.innerHTML = `<div class="panel">
@@ -940,18 +940,18 @@ function bankTr(t) {
   const isMatched = credit && mis.length && (t.matchStatus === 'auto' || t.matchStatus === 'manual');
   const notesInput = `<input value="${(t.notes || '').replace(/"/g, '&quot;')}" placeholder="הערה…" onchange="saveBankNotes('${t.id}', this.value)" style="width:120px;padding:4px 7px;font-size:12px"/>`;
   const stack = (arr) => arr.map(x => `<div style="padding:2px 0${arr.length > 1 ? ';border-bottom:1px dashed var(--line)' : ''}">${x}</div>`).join('');
-  let biz = '<span class="muted">—</span>', invNo = '—', recNo = '—', invAmt = '—', wh = '—', prev = '—', dl = '—', action = '';
+  // תצוגה 👁 + הורדה ↓ צמודים לשם המסמך (במקום עמודות נפרדות)
+  const act = (url) => url ? ` <button class="btn ghost" style="padding:0 6px;font-size:11px" title="תצוגה מקדימה" onclick="previewDoc('${esc(url)}')">👁</button><a href="${url}" target="_blank" class="muted" style="font-size:12px;text-decoration:none" title="הורדה">↓</a>` : '';
+  let biz = '<span class="muted">—</span>', invNo = '—', recNo = '—', invAmt = '—', wh = '—', action = '';
 
   if (isMatched) {
     biz = stack(mis.map(i => `<b>${escapeHtml(i.clientName || '')}</b>`));
-    invNo = stack(mis.map(i => `${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}`));
-    recNo = stack(mis.map(i => i.receipt ? `#${i.receipt.number}` : ((i.type == 320) ? '<span class="muted" style="font-size:11px">כלול בחשבונית</span>' : '—')));
+    invNo = stack(mis.map(i => `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url)}</span>`));
+    recNo = stack(mis.map(i => i.receipt ? `<span style="white-space:nowrap">#${i.receipt.number}${act(i.receipt.url)}</span>` : ((i.type == 320) ? '<span class="muted" style="font-size:11px">כלול בחשבונית</span>' : '—')));
     invAmt = stack(mis.map(i => money(i.amount)));
     const sumInv = mis.reduce((s, i) => s + (Number(i.amount) || 0), 0);
     const whAmt = sumInv - t.absAmount;
     wh = (whAmt > 1 && whAmt < sumInv * 0.08) ? `<span style="color:var(--warn)">${money(whAmt)}</span>` : '—';
-    prev = stack(mis.map(i => `${i.url ? `<button class="btn ghost" style="padding:2px 7px;font-size:11px" onclick="previewDoc('${esc(i.url)}')">חשבונית</button>` : ''}${i.receipt && i.receipt.url ? ` <button class="btn ghost" style="padding:2px 7px;font-size:11px" onclick="previewDoc('${esc(i.receipt.url)}')">קבלה</button>` : ''}` || '—'));
-    dl = stack(mis.map(i => `${i.url ? `<a href="${i.url}" target="_blank" class="muted" style="white-space:nowrap">חשבונית ↓</a>` : ''}${i.receipt && i.receipt.url ? `<br><a href="${i.receipt.url}" target="_blank" class="muted" style="white-space:nowrap">קבלה ↓</a>` : ''}` || '—'));
     const conf = bankConfidence(t);
     const confBadge = t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'מדויק' : 'לבדיקה'}</span>` : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '');
     action = `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
@@ -978,8 +978,6 @@ function bankTr(t) {
     <td>${recNo}</td>
     <td style="white-space:nowrap">${invAmt}</td>
     <td style="white-space:nowrap">${wh}</td>
-    <td>${prev}</td>
-    <td>${dl}</td>
     <td>${notesInput}</td>
     <td style="white-space:nowrap"><div style="display:flex;gap:5px;flex-wrap:wrap">${action}${linkBtn}</div></td>
   </tr>`;
