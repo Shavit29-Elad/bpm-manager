@@ -174,7 +174,14 @@ function docsTable(docs, opts = {}) {
   const totalInc = rows.reduce((s, d) => s + (Number(d.amountIncVat) || 0), 0);
   const totalEx = rows.reduce((s, d) => s + (Number(d.amountExVat) || 0), 0);
   const cc = opts.showClient;
-  return `<table><thead><tr><th>תאריך</th>${cc ? '<th>לקוח</th>' : ''}<th>סוג</th><th>מספר</th><th>ללא מע"מ</th><th>כולל מע"מ</th><th></th></tr></thead>
+  const s = opts.sort;
+  const th = (key, label) => {
+    if (!opts.onSort || !key) return `<th>${label}</th>`;
+    const on = s && s.key === key;
+    const arw = on ? (s.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕';
+    return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="${opts.onSort}('${key}')">${label}<span class="muted" style="font-size:11px">${arw}</span></th>`;
+  };
+  return `<table><thead><tr>${th('date', 'תאריך')}${cc ? th('client', 'לקוח') : ''}${th('type', 'סוג')}${th('number', 'מספר')}${th('amount', 'סכום ללא מע"מ')}${th('amount', 'סכום כולל מע"מ')}<th></th></tr></thead>
     <tbody>${rows.map(d => `<tr>
       <td>${fmtDate(d.date)}</td>${cc ? `<td>${d.clientName || '—'}</td>` : ''}
       <td>${DOC_TYPE_NAMES[d.type] || `סוג ${d.type}`}</td>
@@ -240,7 +247,7 @@ function monthlyBreakdown(docs) {
   const tInc = keys.reduce((s, k) => s + byMonth[k].inc, 0);
   const tN = keys.reduce((s, k) => s + byMonth[k].n, 0);
   const mName = (k) => { const [y, m] = k.split('-').map(Number); return `${MONTHS_FULL[m - 1]} ${y}`; };
-  return `<table><thead><tr><th>חודש</th><th>מסמכים</th><th>ללא מע"מ</th><th>כולל מע"מ</th></tr></thead><tbody>
+  return `<table><thead><tr><th>חודש</th><th>מסמכים</th><th>סכום ללא מע"מ</th><th>סכום כולל מע"מ</th></tr></thead><tbody>
     ${keys.map(k => `<tr><td>${mName(k)}</td><td>${byMonth[k].n}</td><td>${money(byMonth[k].ex)}</td><td>${money(byMonth[k].inc)}</td></tr>`).join('')}
     <tr style="background:var(--panel2)"><td><b>סה"כ</b></td><td><b>${tN}</b></td><td><b>${money(tEx)}</b></td><td><b>${money(tInc)}</b></td></tr>
   </tbody></table>`;
@@ -278,7 +285,7 @@ function clientRows(list) {
       <span class="muted" style="margin-inline-start:auto;font-size:14px">‹</span>
     </div>`).join('');
 }
-let _clientDocs = [], _clientName = '', _clientSort = { key: 'date', dir: 'desc' };
+let _clientDocs = [], _clientName = '', _clientSort = { key: 'date', dir: 'desc' }, _clientYear = 'all';
 window.selectClient = async (id, name) => {
   name = decodeURIComponent(name);
   document.querySelectorAll('#clientsList .chat-item').forEach(el => el.classList.remove('active'));
@@ -290,8 +297,10 @@ window.selectClient = async (id, name) => {
   _clientDocs = Array.isArray(docs) ? docs : [];
   _clientName = name;
   _clientSort = { key: 'date', dir: 'desc' };
+  _clientYear = 'all';
   renderClientDetail();
 };
+window.setClientYear = (v) => { _clientYear = v; renderClientDetail(); };
 function sortClientDocs(docs, s) {
   const dir = s.dir === 'asc' ? 1 : -1;
   return [...docs].sort((a, b) => {
@@ -320,8 +329,12 @@ window.setClientSort = (key) => {
 function renderClientDetail() {
   const detail = document.getElementById('clientDetail');
   if (!detail) return;
-  const docs = sortClientDocs(_clientDocs, _clientSort);
-  detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${_clientName}</h2><span class="muted">${docs.length} מסמכים</span></div>${sortBar()}${docsTable(docs, { showClient: false })}`;
+  const years = [...new Set(_clientDocs.map(d => (d.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  let docs = _clientDocs;
+  if (_clientYear !== 'all') docs = docs.filter(d => (d.date || '').slice(0, 4) === _clientYear);
+  docs = sortClientDocs(docs, _clientSort);
+  const yearSel = `<select onchange="setClientYear(this.value)" style="padding:6px 10px"><option value="all" ${_clientYear === 'all' ? 'selected' : ''}>כל השנים</option>${years.map(y => `<option value="${y}" ${_clientYear === y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
+  detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${_clientName}</h2><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים</span></div></div><div class="muted" style="font-size:12.5px;margin:8px 0 2px">לחיצה על כותרת מיינת לפיה (▲ עולה / ▼ יורד)</div>${docsTable(docs, { showClient: false, sort: _clientSort, onSort: 'setClientSort' })}`;
 }
 
 // ---- אירועים + אי-התאמות + יומן (לשונית אחת מאוחדת) ----
