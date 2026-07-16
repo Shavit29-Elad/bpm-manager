@@ -41,7 +41,7 @@ function extractCounterparty(text) {
 }
 
 // שם לצורך התאמה: מהמהות אם קיים, אחרת מהתיאור (אם אינו פעולה גנרית)
-const GENERIC_DESC = /^(העברה|זיכוי|פרעון|פירעון|ביצוע|הוראת קבע|ויזה|מ\s*\.?\s*ע\s*\.?\s*מ|מס הכנסה|עמלת|מימון|הרשאה|בנק |פמה|אחים יעקב|העברת יומן|א\.ק)/;
+const GENERIC_DESC = /^(העברה|זיכוי|פרעון|פירעון|ביצוע|הוראת קבע|ויזה|מ\s*\.?\s*ע\s*\.?\s*מ|מס הכנסה|עמלת?|מימון|הרשאה|בנק |פמה|אחים יעקב|העברת יומן|א\.ק|הפקדת שיק|הפקדה|ריבית|משיכת)/;
 function nameHintFrom(counterparty, description) {
   if (counterparty) return counterparty;
   const d = description.replace(/\s*\([יפסמ]\)\s*$/, '').replace(/\s*-\s*\d+\s*$/, '').trim();
@@ -103,4 +103,50 @@ function finalize(t) {
   delete t._lines;
 }
 
-export default { parseMizrahi };
+// ----- קובץ "אקסל" של מזרחי (בפועל טבלת HTML) -----
+function decodeCell(s) {
+  return String(s || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&').replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+    .replace(BIDI, '').replace(/\s+/g, ' ').trim();
+}
+function parseAmt(s) {
+  const t = String(s == null ? '' : s).replace(/[^\d.\-]/g, '');
+  if (!t || t === '-' || t === '.') return null;
+  const n = parseFloat(t);
+  return isNaN(n) ? null : n;
+}
+function normDate(d) { const m = String(d).match(/^(\d{2})\/(\d{2})\/(\d{2,4})/); if (!m) return d; const y = m[3].length === 2 ? '20' + m[3] : m[3]; return `${m[1]}/${m[2]}/${y}`; }
+
+export function parseMizrahiExcel(htmlText) {
+  const rows = [...String(htmlText).matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map(m => m[1]);
+  const txns = [];
+  for (const r of rows) {
+    const c = [...r.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(m => decodeCell(m[1]));
+    if (c.length < 6) continue;
+    if (!/^\d{2}\/\d{2}\/\d{2,4}$/.test(c[0])) continue;    // שורת נתונים בלבד
+    const credit = parseAmt(c[3]);   // זכות
+    const debit = parseAmt(c[4]);    // חובה
+    let amount = null, direction = null;
+    if (credit) { amount = Math.abs(credit); direction = 'credit'; }
+    else if (debit) { amount = -Math.abs(debit); direction = 'debit'; }
+    else continue;
+    const description = clean(c[2] || '');
+    const t = {
+      date: normDate(c[0]), description, amount, absAmount: Math.abs(amount), direction,
+      balance: parseAmt(c[5]), reference: (c[6] || '').replace(/\D/g, '') || null, memo: '',
+    };
+    t.invoiceNumber = extractInvoiceNumber(description);
+    t.counterparty = null;
+    t.nameHint = nameHintFrom(null, description);
+    txns.push(t);
+  }
+  return txns;
+}
+
+// זיהוי אוטומטי: אם זה טבלת HTML (קובץ אקסל של מזרחי) — פרסר אקסל, אחרת פרסר הדבקה
+export function parseBank(text) {
+  if (/<tr[\s>]/i.test(text) || /<table/i.test(text)) return parseMizrahiExcel(text);
+  return parseMizrahi(text);
+}
+
+export default { parseMizrahi, parseMizrahiExcel, parseBank };

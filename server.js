@@ -13,7 +13,7 @@ import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
-import { parseMizrahi } from './bankParser.js';
+import { parseBank } from './bankParser.js';
 import { matchCredits } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
@@ -396,7 +396,7 @@ function bankSig(t) { return `${t.date}|${t.absAmount}|${t.reference || ''}|${(t
 add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   const text = body?.text || '';
   const companyId = body?.companyId || null;
-  const parsed = parseMizrahi(text);
+  const parsed = parseBank(text);
   if (!parsed.length) return json(res, { ok: true, added: 0, total: 0, message: 'לא זוהו תנועות בטקסט' });
   // טווח תאריכים לשליפת חשבוניות
   let invoices = [];

@@ -884,8 +884,12 @@ window.openBankImport = () => {
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(640px,94vw)">
     <h3>ייבוא תנועות בנק</h3>
-    <p class="muted" style="font-size:13px">הדבק את התנועות כפי שהן מופיעות באתר הבנק (מזרחי — התצוגה המפורטת). אני אזהה, אתאים לחשבוניות ההכנסה, ואבקש ממך לאשר.</p>
-    <textarea id="bankText" rows="10" placeholder="הדבק כאן את התנועות…" style="width:100%;margin:10px 0"></textarea>
+    <p class="muted" style="font-size:13px">שתי דרכים: להעלות את קובץ ה-Excel שהורדת ממזרחי (מהיר, כל התנועות), או להדביק ידנית מהתצוגה המפורטת באתר (מוסיף מספרי חשבונית).</p>
+    <label class="btn ghost" style="display:inline-block;cursor:pointer;margin:6px 0">📄 העלה קובץ Excel (מזרחי)
+      <input type="file" id="bankFile" accept=".xls,.xlsx,.csv,.htm,.html" style="display:none" onchange="bankFilePicked(this)"/>
+    </label>
+    <div class="muted" style="font-size:12px;margin:6px 0">— או —</div>
+    <textarea id="bankText" rows="8" placeholder="הדבק כאן את התנועות מהאתר…" style="width:100%;margin:6px 0"></textarea>
     <div id="bankStatus" style="font-size:13px;margin-bottom:8px;min-height:18px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('bankModal').classList.add('hidden')">סגור</button>
@@ -894,6 +898,18 @@ window.openBankImport = () => {
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   setTimeout(() => { const ta = document.getElementById('bankText'); if (ta) ta.focus(); }, 50);
+};
+window.bankFilePicked = (input) => {
+  const f = input.files && input.files[0]; if (!f) return;
+  const status = document.getElementById('bankStatus');
+  const reader = new FileReader();
+  reader.onload = () => {
+    const ta = document.getElementById('bankText');
+    if (ta) ta.value = reader.result;
+    if (status) status.innerHTML = `<span class="muted">נטען: ${f.name} — לחץ "ייבא והתאם".</span>`;
+  };
+  reader.onerror = () => { if (status) status.innerHTML = '<span style="color:var(--danger)">שגיאה בקריאת הקובץ.</span>'; };
+  reader.readAsText(f, 'utf-8');
 };
 window.doBankImport = async (btn) => {
   const ta = document.getElementById('bankText');
