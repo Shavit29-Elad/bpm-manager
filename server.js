@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { load, save, id, upsertEvent, companyEvents } from './store.js';
+import { init as initStore, load, save, id, upsertEvent, companyEvents } from './store.js';
 import { parseEventMessage } from './whatsappParser.js';
 import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar } from './googleCalendar.js';
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables } from './invoicing.js';
@@ -410,7 +410,8 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
+  await initStore();          // מחבר ל-Postgres (Neon) לפני שמתחילים לקרוא/לכתוב נתונים
   seedIfEmpty();
   autoVerifyConnections();
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);

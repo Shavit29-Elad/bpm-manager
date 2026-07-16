@@ -1,6 +1,9 @@
 // store.js
-// שכבת נתונים פשוטה מבוססת קובץ JSON. בלי תלות בבסיס נתונים חיצוני -
-// כדי שהמערכת תרוץ מיד. בהמשך אפשר להחליף ל-Postgres/SQLite בלי לשנות את שאר הקוד.
+// שכבת נתונים עם מטמון בזיכרון (קריאה מיידית) וגיבוי קבוע ל-Postgres (Neon).
+// אם אין DATABASE_URL — נופל אוטומטית לקובץ מקומי כך שהמערכת עדיין רצה.
+//
+// דגם הנתונים נשמר כמסמך JSON יחיד (שורה אחת בטבלה app_state), כך ששאר הקוד
+// לא משתנה: load() מחזיר את המטמון, save() מעדכן אותו ומסנכרן לרקע ל-Postgres.
 
 import fs from 'fs';
 import path from 'path';
@@ -24,21 +27,90 @@ const EMPTY = {
   memory: {},      // זיכרון מתמשך לכל דמות: { memberId: "עובדות שנלמדו..." }
 };
 
-function ensure() {
+let cache = null;   // המסמך בזיכרון
+let pool = null;    // Postgres pool (אם מחובר)
+let usePg = false;
+let dirty = false;
+let saving = false;
+
+// ----- אתחול (נקרא פעם אחת בעליית השרת) -----
+async function initPg() {
+  const url = process.env.DATABASE_URL;
+  if (!url) return false;
+  const pg = (await import('pg')).default;
+  pool = new pg.Pool({
+    connectionString: url,
+    ssl: { rejectUnauthorized: false },
+    max: 3,
+    idleTimeoutMillis: 30000,
+  });
+  await pool.query('CREATE TABLE IF NOT EXISTS app_state (id INT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ DEFAULT now())');
+  const r = await pool.query('SELECT data FROM app_state WHERE id = 1');
+  if (r.rows.length) {
+    cache = { ...EMPTY, ...r.rows[0].data };
+  } else {
+    cache = { ...EMPTY };
+    await pool.query('INSERT INTO app_state (id, data) VALUES (1, $1)', [JSON.stringify(cache)]);
+  }
+  usePg = true;
+  return true;
+}
+
+export async function init() {
+  try {
+    if (await initPg()) { console.log('אחסון: מחובר ל-Postgres (Neon) ✓'); return; }
+    console.log('אחסון: לא הוגדר DATABASE_URL — משתמש בקובץ מקומי (זמני, יתאפס בפריסה)');
+  } catch (e) {
+    console.error('אחסון: חיבור ל-Postgres נכשל, נופל לקובץ מקומי:', e.message);
+  }
+  ensureFile();
+  try { cache = { ...EMPTY, ...JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) }; }
+  catch { cache = { ...EMPTY }; }
+  usePg = false;
+}
+
+function ensureFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify(EMPTY, null, 2));
 }
 
+// ----- API תואם-לאחור (סינכרוני) -----
 export function load() {
-  ensure();
-  const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  return { ...EMPTY, ...raw };
+  if (!cache) {
+    // fallback אם init עדיין לא רץ
+    try { ensureFile(); cache = { ...EMPTY, ...JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) }; }
+    catch { cache = { ...EMPTY }; }
+  }
+  return cache;
 }
 
 export function save(db) {
-  ensure();
-  fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
-  return db;
+  cache = db || cache;
+  persist();
+  return cache;
+}
+
+function persist() {
+  if (usePg) { dirty = true; flushLoop(); }
+  else {
+    try { ensureFile(); fs.writeFileSync(DATA_FILE, JSON.stringify(cache, null, 2)); }
+    catch (e) { console.error('אחסון: כתיבה לקובץ נכשלה:', e.message); }
+  }
+}
+
+// מאחד כתיבות מרובות וכותב תמיד את הגרסה האחרונה ל-Postgres
+async function flushLoop() {
+  if (saving || !dirty || !cache) return;
+  saving = true; dirty = false;
+  try {
+    await pool.query('UPDATE app_state SET data = $1, updated_at = now() WHERE id = 1', [JSON.stringify(cache)]);
+  } catch (e) {
+    console.error('אחסון: כתיבה ל-Postgres נכשלה:', e.message);
+    dirty = true; // ננסה שוב בכתיבה הבאה
+  } finally {
+    saving = false;
+    if (dirty) setTimeout(flushLoop, 300);
+  }
 }
 
 export function id(prefix = 'id') {
