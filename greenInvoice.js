@@ -155,6 +155,12 @@ export async function monthlyIncome(month) {
   return incomeForRange(`${month}-01`, lastDay(month));
 }
 
+// קבלות (סוג 400) בטווח — לצורך קישור קבלה לחשבונית מס בהתאמות בנק
+export async function receiptsForRange(fromDate, toDate) {
+  const items = await documentsInRange(fromDate, toDate, [400]);
+  return items.map(mapDoc);
+}
+
 // כל המסמכים של לקוח מסוים (כל הסוגים, כל התאריכים)
 export async function clientDocuments(clientId) {
   const all = [];
@@ -195,5 +201,5 @@ export async function listClients() {
   return (res.items || []).map(c => ({ id: c.id, name: c.name })).filter(c => c.name);
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, incomeForRange, openInvoicesCount, listClients, clientDocuments, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, listClients, clientDocuments, DOC_TYPES };
 export default greenInvoice;

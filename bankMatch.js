@@ -1,20 +1,19 @@
 // bankMatch.js — התאמת תנועות בנק (זיכויים) לחשבוניות הכנסה מחשבונית ירוקה.
-// לכל תנועה מחשבים ציון מול כל חשבונית: מספר חשבונית > סכום > שם > קרבת תאריך.
+// תומך ב: התאמה מדויקת, התאמה עם ניכוי מס במקור 5% (סכום נמוך ב-5%),
+// והתאמה של תנועה אחת למספר חשבוניות (צירוף שסכומן = ההעברה).
+
+const WH = 0.95;            // ניכוי מס במקור 5% → מתקבל 95% מהחשבונית
+const tol = (base) => Math.max(3, base * 0.004);
 
 function normName(s) {
   return String(s || '')
-    .replace(/בע["'׳]?מ/g, '')       // בע"מ
-    .replace(/\(.*?\)/g, '')          // סוגריים
-    .replace(/[.,"'׳\-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/בע["'׳]?מ/g, '').replace(/\(.*?\)/g, '')
+    .replace(/[.,"'׳\-]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 function nameMatch(a, b) {
   const x = normName(a), y = normName(b);
   if (!x || !y || x.length < 2 || y.length < 2) return false;
-  if (x === y) return true;
-  if (x.includes(y) || y.includes(x)) return true;
-  // חפיפת מילים משמעותיות
+  if (x === y || x.includes(y) || y.includes(x)) return true;
   const wx = x.split(' ').filter(w => w.length >= 2);
   const wy = y.split(' ').filter(w => w.length >= 2);
   const common = wx.filter(w => wy.includes(w));
@@ -22,68 +21,110 @@ function nameMatch(a, b) {
 }
 function parseDate(s) {
   if (!s) return null;
-  let m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);       // YYYY-MM-DD
-  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
-  m = String(s).match(/^(\d{2})\/(\d{2})\/(\d{2,4})/);        // DD/MM/YY(YY)
-  if (m) { const y = m[3].length === 2 ? 2000 + +m[3] : +m[3]; return new Date(y, +m[2] - 1, +m[1]); }
+  let m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  m = String(s).match(/^(\d{2})\/(\d{2})\/(\d{2,4})/); if (m) { const y = m[3].length === 2 ? 2000 + +m[3] : +m[3]; return new Date(y, +m[2] - 1, +m[1]); }
   return null;
 }
-function daysBetween(a, b) {
-  const da = parseDate(a), db = parseDate(b);
-  if (!da || !db) return 999;
-  return Math.abs((da - db) / 86400000);
+function daysBetween(a, b) { const da = parseDate(a), db = parseDate(b); return (!da || !db) ? 999 : Math.abs((da - db) / 86400000); }
+
+// סוג התאמת סכום בין תנועה לחשבונית בודדת: 'exact' | 'wh' (פחות 5%) | null
+function amountKind(bank, invAmt) {
+  if (bank == null || invAmt == null) return null;
+  if (Math.abs(bank - invAmt) <= tol(invAmt)) return 'exact';
+  if (Math.abs(bank - invAmt * WH) <= tol(invAmt)) return 'wh';
+  return null;
 }
 
-// ציון התאמה בין תנועה (זיכוי) לחשבונית
 export function scoreMatch(tx, inv) {
   let score = 0; const reasons = [];
-  if (tx.invoiceNumber && inv.number != null && String(inv.number) === String(tx.invoiceNumber)) {
-    score += 100; reasons.push('מספר חשבונית');
-  }
-  if (tx.absAmount != null && inv.amountIncVat != null && Math.abs(tx.absAmount - inv.amountIncVat) < 1) {
-    score += 50; reasons.push('סכום זהה');
-  }
-  if (tx.nameHint && inv.clientName && nameMatch(tx.nameHint, inv.clientName)) {
-    score += 40; reasons.push('שם לקוח');
-  }
+  if (tx.invoiceNumber && inv.number != null && String(inv.number) === String(tx.invoiceNumber)) { score += 100; reasons.push('מספר חשבונית'); }
+  const ak = amountKind(tx.absAmount, inv.amountIncVat);
+  if (ak === 'exact') { score += 50; reasons.push('סכום זהה'); }
+  else if (ak === 'wh') { score += 45; reasons.push('סכום פחות 5% (ניכוי מס)'); }
+  if (tx.nameHint && inv.clientName && nameMatch(tx.nameHint, inv.clientName)) { score += 40; reasons.push('שם לקוח'); }
   const dd = daysBetween(tx.date, inv.date);
   if (dd <= 7) score += 12; else if (dd <= 30) score += 6;
-  return { score, reasons, days: dd };
+  return { score, reasons, amountKind: ak };
 }
 
-const toSug = (inv, s) => ({ id: inv.id, number: inv.number, clientName: inv.clientName, amount: inv.amountIncVat, date: inv.date, url: inv.url || null, score: s.score, reasons: s.reasons });
+const toInv = (inv, extra = {}) => ({ id: inv.id, number: inv.number, type: inv.type, clientName: inv.clientName, amount: inv.amountIncVat, date: inv.date, url: inv.url || null, ...extra });
 
-// מתאים רשימת תנועות מול רשימת חשבוניות. הקצאה חמדנית — חשבונית לא מותאמת פעמיים.
+// מציאת צירוף חשבוניות (2..4) שסכומן ≈ target
+function findCombo(target, invs) {
+  const pool = invs.slice().filter(i => i.amountIncVat > 0).sort((a, b) => b.amountIncVat - a.amountIncVat).slice(0, 16);
+  const t = tol(target); let best = null;
+  (function dfs(start, chosen, sum) {
+    if (best) return;
+    if (chosen.length >= 2 && Math.abs(sum - target) <= t) { best = chosen.slice(); return; }
+    if (chosen.length >= 4) return;
+    for (let i = start; i < pool.length; i++) {
+      if (sum + pool[i].amountIncVat - target > t) continue;   // גלישה
+      chosen.push(pool[i]); dfs(i + 1, chosen, sum + pool[i].amountIncVat); chosen.pop();
+      if (best) return;
+    }
+  })(0, [], 0);
+  return best;
+}
+
+// מתאים תנועות מול חשבוניות. חשבונית לא מותאמת פעמיים. תומך בצירוף חשבוניות.
 export function matchCredits(txns, invoices) {
-  const credits = txns.filter(t => t.direction === 'credit');
-  // כל צמדי (תנועה, חשבונית) עם ציון, לפי ציון יורד
-  const pairs = [];
-  credits.forEach((tx, ti) => {
-    invoices.forEach(inv => {
-      const s = scoreMatch(tx, inv);
-      if (s.score > 0) pairs.push({ ti, inv, ...s });
-    });
-  });
-  pairs.sort((a, b) => b.score - a.score);
-  const txMatch = {};        // ti -> chosen pair
   const usedInv = new Set();
+  const result = new Map();   // index -> {matchStatus, matchedInvoices, suggestions}
+  const credits = [];
+  txns.forEach((t, i) => { if (t.direction === 'credit') credits.push({ t, i }); });
+
+  // שלב 1: התאמות בודדות חמדניות. חובה הסכמה על סכום (מדויק/5%) או מספר חשבונית — לא שם בלבד.
+  const pairs = [];
+  credits.forEach(({ t, i }) => invoices.forEach(inv => {
+    const s = scoreMatch(t, inv);
+    const strong = s.amountKind !== null || s.reasons.includes('מספר חשבונית');
+    if (strong && s.score >= 45) pairs.push({ i, inv, ...s });
+  }));
+  pairs.sort((a, b) => b.score - a.score);
   for (const p of pairs) {
-    if (txMatch[p.ti] || usedInv.has(p.inv.id)) continue;
-    if (p.score >= 50) { txMatch[p.ti] = p; usedInv.add(p.inv.id); }
+    if (result.has(p.i) || usedInv.has(p.inv.id)) continue;
+    result.set(p.i, { matchStatus: 'auto', matchedInvoices: [toInv(p.inv, { reasons: p.reasons })], suggestions: [] });
+    usedInv.add(p.inv.id);
   }
-  // בונים תוצאה לכל תנועה (כולל חיובים שמדלגים)
-  let ci = -1;
-  return txns.map(tx => {
-    if (tx.direction !== 'credit') return { ...tx, matchStatus: 'skip' };
-    ci++;
-    const chosen = txMatch[ci];
-    // הצעות משמעותיות בלבד (סכום/שם/מספר — לא רק קרבת תאריך)
-    const sugg = invoices.map(inv => ({ inv, ...scoreMatch(tx, inv) }))
+
+  // שלב 2: צירוף חשבוניות לתנועות שנשארו (לפי שם לקוח)
+  for (const { t, i } of credits) {
+    if (result.has(i) || !t.nameHint) continue;
+    const cand = invoices.filter(inv => !usedInv.has(inv.id) && inv.clientName && nameMatch(t.nameHint, inv.clientName));
+    if (cand.length < 2) continue;
+    let combo = findCombo(t.absAmount, cand);
+    let reason = 'צירוף חשבוניות';
+    if (!combo) { combo = findCombo(t.absAmount / WH, cand); reason = 'צירוף חשבוניות פחות 5%'; }
+    if (combo) {
+      combo.forEach(inv => usedInv.add(inv.id));
+      result.set(i, { matchStatus: 'auto', matchedInvoices: combo.map(inv => toInv(inv, { reasons: [reason] })), suggestions: [] });
+    }
+  }
+
+  // בונים פלט לכל התנועות
+  return txns.map((t, i) => {
+    if (t.direction !== 'credit') return { ...t, matchStatus: 'skip' };
+    const r = result.get(i);
+    if (r) return { ...t, ...r };
+    // הצעות: חשבוניות בודדות עם ציון משמעותי שעדיין פנויות
+    const sugg = invoices.map(inv => ({ inv, ...scoreMatch(t, inv) }))
       .filter(s => s.score >= 40 && !usedInv.has(s.inv.id))
-      .sort((a, b) => b.score - a.score).slice(0, 4).map(s => toSug(s.inv, s));
-    if (chosen) return { ...tx, matchStatus: 'auto', matchedInvoice: toSug(chosen.inv, chosen), suggestions: sugg };
-    return { ...tx, matchStatus: 'unmatched', matchedInvoice: null, suggestions: sugg };
+      .sort((a, b) => b.score - a.score).slice(0, 5).map(s => toInv(s.inv, { reasons: s.reasons, score: s.score }));
+    return { ...t, matchStatus: 'unmatched', matchedInvoices: [], suggestions: sugg };
   });
 }
 
-export default { scoreMatch, matchCredits };
+// קישור קבלה (סוג 400) לכל חשבונית מס (סוג 305) לפי לקוח+סכום
+export function attachReceipts(matched, receipts) {
+  if (!receipts || !receipts.length) return matched;
+  for (const t of matched) {
+    for (const inv of (t.matchedInvoices || [])) {
+      if (inv.type === 320 || inv.type === '320') continue;    // מס-קבלה — כולל קבלה
+      const rec = receipts.find(r => nameMatch(inv.clientName, r.clientName) && Math.abs((r.amountIncVat ?? r.amount) - inv.amount) <= tol(inv.amount));
+      if (rec) inv.receipt = { number: rec.number, url: rec.url || null, amount: rec.amountIncVat ?? rec.amount };
+    }
+  }
+  return matched;
+}
+
+export default { scoreMatch, matchCredits, attachReceipts };

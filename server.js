@@ -14,7 +14,7 @@ import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables } from './
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
 import { parseBank } from './bankParser.js';
-import { matchCredits } from './bankMatch.js';
+import { matchCredits, attachReceipts } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
@@ -399,13 +399,14 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   const parsed = parseBank(text);
   if (!parsed.length) return json(res, { ok: true, added: 0, total: 0, message: 'לא זוהו תנועות בטקסט' });
   // טווח תאריכים לשליפת חשבוניות
-  let invoices = [];
+  let invoices = [], receipts = [];
   const iso = parsed.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
   if (greenInvoice.haveCredentials() && iso.length) {
-    try { const inc = await greenInvoice.incomeForRange(shiftISODays(iso[0], -75), shiftISODays(iso[iso.length - 1], 5)); invoices = inc.docs || []; }
-    catch (e) { /* אם אין חשבוניות — נמשיך בלי התאמה */ }
+    const from = shiftISODays(iso[0], -75), to = shiftISODays(iso[iso.length - 1], 5);
+    try { const inc = await greenInvoice.incomeForRange(from, to); invoices = inc.docs || []; } catch (e) { /* נמשיך בלי התאמה */ }
+    try { receipts = await greenInvoice.receiptsForRange(from, to); } catch (e) { /* קבלות אופציונליות */ }
   }
-  const matched = matchCredits(parsed, invoices);
+  const matched = attachReceipts(matchCredits(parsed, invoices), receipts);
   const db = load();
   db.bankTx = db.bankTx || [];
   const existing = new Set(db.bankTx.filter(t => !companyId || t.companyId === companyId).map(t => t.sig));
@@ -418,7 +419,7 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
       date: t.date, description: t.description, amount: t.amount, absAmount: t.absAmount,
       direction: t.direction, reference: t.reference, invoiceNumber: t.invoiceNumber,
       nameHint: t.nameHint, memo: t.memo,
-      matchStatus: t.matchStatus, matchedInvoice: t.matchedInvoice || null, suggestions: t.suggestions || [],
+      matchStatus: t.matchStatus, matchedInvoices: t.matchedInvoices || [], suggestions: t.suggestions || [],
       importedAt: new Date().toISOString(),
     });
     existing.add(sig); added++;
@@ -443,7 +444,7 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, (req, res, params, _q, body) => {
   const t = (db.bankTx || []).find(x => x.id === params[0]);
   if (!t) return json(res, { error: 'לא נמצא' }, 404);
   if (body.matchStatus) t.matchStatus = body.matchStatus;
-  if (body.matchedInvoice !== undefined) t.matchedInvoice = body.matchedInvoice;
+  if (body.matchedInvoices !== undefined) t.matchedInvoices = body.matchedInvoices;
   save(db);
   json(res, { ok: true, tx: t });
 });

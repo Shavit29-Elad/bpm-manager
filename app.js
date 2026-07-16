@@ -845,11 +845,13 @@ function bankTr(t) {
   const name = `${escapeHtml(t.nameHint || t.description || '')}${t.invoiceNumber ? ` <span class="muted" style="font-size:11px">· ח.מס ${t.invoiceNumber}</span>` : ''}`;
   let invCell = '<span class="muted">—</span>', actionCell = '';
   if (credit) {
-    const m = t.matchedInvoice;
-    if (m && (t.matchStatus === 'auto' || t.matchStatus === 'manual')) {
-      const pv = m.url ? `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="previewDoc('${String(m.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
-      const dl = m.url ? `<a href="${m.url}" target="_blank" class="muted" style="white-space:nowrap;font-size:12px">הורדה ↓</a>` : '';
-      invCell = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span>✓ <b>#${m.number}</b> · ${escapeHtml(m.clientName || '')} · ${money(m.amount)}</span>${pv}${dl}</div>`;
+    const mis = t.matchedInvoices || [];
+    if (mis.length && (t.matchStatus === 'auto' || t.matchStatus === 'manual')) {
+      const sum = mis.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+      const reasons = (mis[0] && mis[0].reasons) ? mis[0].reasons.join(', ') : '';
+      invCell = `<div style="font-size:12.5px">${mis.map(invChip).join('')}
+        ${mis.length > 1 ? `<div style="margin-top:3px"><b>סה"כ ${mis.length} חשבוניות · ${money(sum)}</b></div>` : ''}
+        ${reasons ? `<div class="muted" style="font-size:11px;margin-top:2px">(${reasons})</div>` : ''}</div>`;
       actionCell = `${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
     } else if (t.matchStatus === 'ignored') {
       invCell = `<span class="muted">ללא התאמה</span>`;
@@ -872,11 +874,27 @@ function bankTr(t) {
     <td style="white-space:nowrap">${actionCell}</td>
   </tr>`;
 }
+// כרטיס חשבונית בודדת בתא ההתאמה — שם עסק, סוג+מספר, סכום, קבלה נפרדת, תצוגה+הורדה
+function invChip(inv) {
+  const esc = (u) => String(u).replace(/'/g, '%27');
+  const typeLabel = DOC_TYPE_NAMES[inv.type] || 'מסמך';
+  const pv = inv.url ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="previewDoc('${esc(inv.url)}')">תצוגה 👁</button>` : '';
+  const dl = inv.url ? `<a href="${inv.url}" target="_blank" class="muted" style="font-size:11px;white-space:nowrap">הורדה ↓</a>` : '';
+  let receipt = '';
+  if (inv.receipt) {
+    const rpv = inv.receipt.url ? `<button class="btn ghost" style="padding:2px 7px;font-size:11px" onclick="previewDoc('${esc(inv.receipt.url)}')">👁</button>` : '';
+    const rdl = inv.receipt.url ? `<a href="${inv.receipt.url}" target="_blank" class="muted" style="font-size:11px">↓</a>` : '';
+    receipt = `<div class="muted" style="font-size:11px;margin-top:1px">🧾 קבלה #${inv.receipt.number} · ${money(inv.receipt.amount)} ${rpv} ${rdl}</div>`;
+  }
+  return `<div style="padding:4px 0;border-bottom:1px dashed var(--line)">
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">✓ <b>${escapeHtml(inv.clientName || '')}</b> · ${typeLabel} #${inv.number} · ${money(inv.amount)} ${pv} ${dl}</div>
+    ${receipt}</div>`;
+}
 window.toggleBankAll = () => { state.bankShowAll = !state.bankShowAll; renderBank($('#content')); };
 const bankPut = (id, body) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(() => renderBank($('#content')));
-window.matchBank = (id, j) => bankPut(id, { matchStatus: 'manual', matchedInvoice: JSON.parse(decodeURIComponent(j)) });
+window.matchBank = (id, j) => bankPut(id, { matchStatus: 'manual', matchedInvoices: [JSON.parse(decodeURIComponent(j))] });
 window.confirmBank = (id) => bankPut(id, { matchStatus: 'manual' });
-window.unmatchBank = (id) => bankPut(id, { matchStatus: 'unmatched', matchedInvoice: null });
+window.unmatchBank = (id) => bankPut(id, { matchStatus: 'unmatched', matchedInvoices: [] });
 window.setBankIgnore = (id, ig) => bankPut(id, { matchStatus: ig ? 'ignored' : 'unmatched' });
 window.openBankImport = () => {
   let m = document.getElementById('bankModal');
@@ -902,20 +920,16 @@ window.openBankImport = () => {
 window.bankFilePicked = (input) => {
   const f = input.files && input.files[0]; if (!f) return;
   const status = document.getElementById('bankStatus');
-  const reader = new FileReader();
-  reader.onload = () => {
-    const ta = document.getElementById('bankText');
-    if (ta) ta.value = reader.result;
-    if (status) status.innerHTML = `<span class="muted">נטען: ${f.name} — לחץ "ייבא והתאם".</span>`;
-  };
-  reader.onerror = () => { if (status) status.innerHTML = '<span style="color:var(--danger)">שגיאה בקריאת הקובץ.</span>'; };
-  reader.readAsText(f, 'utf-8');
+  if (status) status.innerHTML = `<span class="muted">נבחר קובץ: ${f.name} — לחץ "ייבא והתאם".</span>`;
 };
 window.doBankImport = async (btn) => {
+  const fileInput = document.getElementById('bankFile');
   const ta = document.getElementById('bankText');
-  const text = (ta?.value || '').trim();
   const status = document.getElementById('bankStatus');
-  if (!text) { if (status) status.innerHTML = '<span style="color:var(--warn)">הדבק קודם את התנועות.</span>'; return; }
+  let text = '';
+  if (fileInput && fileInput.files && fileInput.files[0]) { text = await fileInput.files[0].text(); }
+  else { text = (ta?.value || '').trim(); }
+  if (!text) { if (status) status.innerHTML = '<span style="color:var(--warn)">בחר קובץ או הדבק תנועות.</span>'; return; }
   btn.disabled = true; btn.textContent = 'מייבא ומתאים…';
   if (status) status.innerHTML = '<span class="muted">מייבא ומצליב מול חשבונית ירוקה… זה עשוי לקחת כמה שניות.</span>';
   try {
