@@ -33,7 +33,7 @@ const pill = (label, ok, text) =>
 function render() {
   const c = $('#content');
   ({ home: renderHome, events: renderCombined, clients: renderClients, team: renderTeam,
-     contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
+     bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
@@ -790,6 +790,95 @@ window.deleteReq = async (id) => {
   if (!confirm('למחוק את הבקשה?')) return;
   await fetch(`/api/requests/${id}`, { method: 'DELETE' });
   renderRequestsBody($('#requestsBody'));
+};
+
+// ---- בנק: התאמת תנועות לחשבוניות ----
+const BANK_META = { auto: { t: 'הותאם אוטומטית', cls: 'invoiced' }, manual: { t: 'אושר', cls: 'match' }, unmatched: { t: 'ממתין לאישור', cls: 'pending' }, ignored: { t: 'ללא התאמה', cls: 'miss' } };
+
+async function renderBank(c) {
+  c.innerHTML = `<div class="panel"><div class="empty">טוען תנועות…</div></div>`;
+  const list = await api(`/api/bank?companyId=${state.company}`);
+  const credits = list.filter(t => t.direction === 'credit');
+  const matched = credits.filter(t => t.matchStatus === 'auto' || t.matchStatus === 'manual').length;
+  const pending = credits.filter(t => t.matchStatus === 'unmatched').length;
+  const rows = state.bankShowAll ? list : credits;
+  c.innerHTML = `<div class="panel">
+    <div class="row-between">
+      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">${credits.length} תנועות זכות · ${matched} מותאמות · ${pending} ממתינות</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ghost" onclick="toggleBankAll()">${state.bankShowAll ? 'רק זכות (הכנסות)' : 'הצג גם חיובים'}</button>
+        <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
+      </div>
+    </div>
+    <p class="muted" style="font-size:13px;margin-top:4px">מדביקים (או אני קורא מהמסך) את התנועות מאתר הבנק. המערכת מתאימה כל תנועת זכות לחשבונית ההכנסה לפי מספר/סכום/שם — ואתה מאשר.</p>
+    <div style="margin-top:14px">${rows.length ? rows.map(bankRow).join('') : `<div class="empty">אין תנועות עדיין. לחץ "ייבא תנועות".</div>`}</div>
+  </div>`;
+}
+function bankRow(t) {
+  const credit = t.direction === 'credit';
+  const amt = `${credit ? '+' : '−'}${money(t.absAmount)}`;
+  const meta = credit ? (BANK_META[t.matchStatus] || BANK_META.unmatched) : null;
+  let block = '';
+  if (credit) {
+    const m = t.matchedInvoice;
+    if (m && (t.matchStatus === 'auto' || t.matchStatus === 'manual')) {
+      block = `<div style="margin-top:8px;padding:8px 11px;background:var(--grad-soft);border:1px solid var(--line);border-radius:10px;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span>✓ חשבונית <b>#${m.number}</b> · ${escapeHtml(m.clientName || '')} · ${money(m.amount)}</span>
+        <span style="margin-inline-start:auto;display:flex;gap:6px">
+          ${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 10px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button>` : ''}
+          <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>
+        </span></div>`;
+    } else if (t.matchStatus === 'ignored') {
+      block = `<div class="muted" style="margin-top:8px;font-size:13px">סומן ללא התאמה · <a href="#" onclick="setBankIgnore('${t.id}',false);return false" style="color:var(--accent)">החזר</a></div>`;
+    } else {
+      const sugg = (t.suggestions || []).map(s => {
+        const j = encodeURIComponent(JSON.stringify(s));
+        return `<button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`;
+      }).join('');
+      block = `<div style="margin-top:8px;font-size:13px">
+        ${sugg ? `<div class="muted" style="margin-bottom:5px">הצעות התאמה — לחץ לבחירה:</div><div style="display:flex;gap:6px;flex-wrap:wrap">${sugg}</div>` : '<span class="muted">לא נמצאה חשבונית תואמת.</span>'}
+        <button class="btn ghost" style="padding:3px 10px;font-size:12px;margin-top:7px" onclick="setBankIgnore('${t.id}',true)">התעלם</button>
+      </div>`;
+    }
+  }
+  return `<div class="card" style="margin-bottom:10px">
+    <div class="row-between" style="margin:0">
+      <div><b style="color:${credit ? 'var(--accent2)' : 'var(--danger)'};font-size:15px">${amt}</b> <span class="muted" style="font-size:12.5px">· ${t.date}</span></div>
+      ${meta ? `<span class="tag ${meta.cls}">${meta.t}</span>` : '<span class="tag pending">חיוב</span>'}
+    </div>
+    <div style="font-size:13px;margin-top:4px">${escapeHtml(t.nameHint || t.description || '')}${t.invoiceNumber ? ` <span class="muted">· ח.מס ${t.invoiceNumber}</span>` : ''}</div>
+    ${block}
+  </div>`;
+}
+window.toggleBankAll = () => { state.bankShowAll = !state.bankShowAll; renderBank($('#content')); };
+const bankPut = (id, body) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(() => renderBank($('#content')));
+window.matchBank = (id, j) => bankPut(id, { matchStatus: 'manual', matchedInvoice: JSON.parse(decodeURIComponent(j)) });
+window.confirmBank = (id) => bankPut(id, { matchStatus: 'manual' });
+window.unmatchBank = (id) => bankPut(id, { matchStatus: 'unmatched', matchedInvoice: null });
+window.setBankIgnore = (id, ig) => bankPut(id, { matchStatus: ig ? 'ignored' : 'unmatched' });
+window.openBankImport = () => {
+  let m = document.getElementById('bankModal');
+  if (!m) { m = document.createElement('div'); m.id = 'bankModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(640px,94vw)">
+    <h3>ייבוא תנועות בנק</h3>
+    <p class="muted" style="font-size:13px">הדבק את התנועות כפי שהן מופיעות באתר הבנק (מזרחי — התצוגה המפורטת). אני אזהה, אתאים לחשבוניות ההכנסה, ואבקש ממך לאשר.</p>
+    <textarea id="bankText" rows="10" placeholder="הדבק כאן את התנועות…" style="width:100%;margin:10px 0"></textarea>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('bankModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="doBankImport(this)">ייבא והתאם</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+};
+window.doBankImport = async (btn) => {
+  const text = $('#bankText').value.trim(); if (!text) return;
+  btn.disabled = true; btn.textContent = 'מייבא ומתאים…';
+  const r = await fetch('/api/bank/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, companyId: state.company }) }).then(x => x.json());
+  document.getElementById('bankModal').classList.add('hidden');
+  await renderBank($('#content'));
+  if (r.error) alert(r.error);
+  else alert(`נוספו ${r.added} תנועות. מתוך ${r.credits} תנועות זכות, ${r.autoMatched} הותאמו אוטומטית לחשבוניות.`);
 };
 
 // ---- מודל הדבקה ----

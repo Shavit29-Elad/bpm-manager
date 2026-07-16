@@ -13,6 +13,8 @@ import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
+import { parseMizrahi } from './bankParser.js';
+import { matchCredits } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
@@ -383,6 +385,83 @@ add('GET', /^\/api\/clients$/, async (req, res) => {
 // GET /api/clients/:id/documents — כל המסמכים של לקוח
 add('GET', /^\/api\/clients\/([^/]+)\/documents$/, async (req, res, params) => {
   try { json(res, await greenInvoice.clientDocuments(params[0])); } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// ---- בנק: ייבוא תנועות + התאמה לחשבוניות הכנסה ----
+function ddmmyyyyToISO(d) { const m = String(d || '').match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; }
+function shiftISODays(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
+function bankSig(t) { return `${t.date}|${t.absAmount}|${t.reference || ''}|${(t.description || '').slice(0, 20)}`; }
+
+// POST /api/bank/import  { text, companyId }
+add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
+  const text = body?.text || '';
+  const companyId = body?.companyId || null;
+  const parsed = parseMizrahi(text);
+  if (!parsed.length) return json(res, { ok: true, added: 0, total: 0, message: 'לא זוהו תנועות בטקסט' });
+  // טווח תאריכים לשליפת חשבוניות
+  let invoices = [];
+  const iso = parsed.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
+  if (greenInvoice.haveCredentials() && iso.length) {
+    try { const inc = await greenInvoice.incomeForRange(shiftISODays(iso[0], -75), shiftISODays(iso[iso.length - 1], 5)); invoices = inc.docs || []; }
+    catch (e) { /* אם אין חשבוניות — נמשיך בלי התאמה */ }
+  }
+  const matched = matchCredits(parsed, invoices);
+  const db = load();
+  db.bankTx = db.bankTx || [];
+  const existing = new Set(db.bankTx.filter(t => !companyId || t.companyId === companyId).map(t => t.sig));
+  let added = 0;
+  for (const t of matched) {
+    const sig = bankSig(t);
+    if (existing.has(sig)) continue;
+    db.bankTx.push({
+      id: id('btx'), companyId, sig,
+      date: t.date, description: t.description, amount: t.amount, absAmount: t.absAmount,
+      direction: t.direction, reference: t.reference, invoiceNumber: t.invoiceNumber,
+      nameHint: t.nameHint, memo: t.memo,
+      matchStatus: t.matchStatus, matchedInvoice: t.matchedInvoice || null, suggestions: t.suggestions || [],
+      importedAt: new Date().toISOString(),
+    });
+    existing.add(sig); added++;
+  }
+  save(db);
+  const credits = matched.filter(t => t.direction === 'credit');
+  json(res, { ok: true, added, total: parsed.length, credits: credits.length, autoMatched: credits.filter(t => t.matchStatus === 'auto').length, invoicesLoaded: invoices.length });
+});
+
+// GET /api/bank?companyId=
+add('GET', /^\/api\/bank$/, (req, res, _p, q) => {
+  const db = load();
+  let list = (db.bankTx || []).filter(t => !q.companyId || t.companyId === q.companyId);
+  const key = (d) => (d || '').split('/').reverse().join('');
+  list = [...list].sort((a, b) => key(b.date).localeCompare(key(a.date)));
+  json(res, list);
+});
+
+// PUT /api/bank/:id  { matchStatus?, matchedInvoice? }
+add('PUT', /^\/api\/bank\/([^/]+)$/, (req, res, params, _q, body) => {
+  const db = load();
+  const t = (db.bankTx || []).find(x => x.id === params[0]);
+  if (!t) return json(res, { error: 'לא נמצא' }, 404);
+  if (body.matchStatus) t.matchStatus = body.matchStatus;
+  if (body.matchedInvoice !== undefined) t.matchedInvoice = body.matchedInvoice;
+  save(db);
+  json(res, { ok: true, tx: t });
+});
+
+// DELETE /api/bank/:id
+add('DELETE', /^\/api\/bank\/([^/]+)$/, (req, res, params) => {
+  const db = load();
+  db.bankTx = (db.bankTx || []).filter(x => x.id !== params[0]);
+  save(db);
+  json(res, { ok: true });
+});
+
+// DELETE /api/bank  — ניקוי כל התנועות של החברה
+add('DELETE', /^\/api\/bank$/, (req, res, _p, q) => {
+  const db = load();
+  db.bankTx = (db.bankTx || []).filter(t => q.companyId && t.companyId !== q.companyId);
+  save(db);
+  json(res, { ok: true });
 });
 
 // GET /api/health
