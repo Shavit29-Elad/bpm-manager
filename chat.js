@@ -85,6 +85,30 @@ export async function chatGroupReply(member, transcript, memory = '') {
   return complete(withMemory(member, memory), [{ role: 'user', content }]);
 }
 
+// סיכום שיחה כבקשת פיתוח מובנית (JSON)
+export async function summarizeAsRequest(member, transcript) {
+  const system = `אתה עוזר שממיר שיחה עם ${member.name} (${member.role}) לבקשת פיתוח מסודרת עבור מערכת הניהול. ענה אך ורק ב-JSON תקין, בלי טקסט נוסף.`;
+  const prompt = `מתוך השיחה הבאה, נסח בקשת פיתוח אחת שמסכמת מה המנהל רוצה שיפותח או ישונה במערכת. החזר JSON בלבד במבנה המדויק:
+{"title":"כותרת קצרה","summary":"משפט או שניים שמסבירים את הבקשה","details":["פרט או קריטריון קבלה 1","פרט 2"],"priority":"low|medium|high"}
+אם אין בקשה ברורה בשיחה, קבע title ל"לא זוהתה בקשה ברורה".
+
+השיחה:
+${transcript}`;
+  const raw = await complete(system, [{ role: 'user', content: prompt }]);
+  try {
+    const jsonStr = (raw.match(/\{[\s\S]*\}/) || [raw])[0];
+    const out = JSON.parse(jsonStr);
+    return {
+      title: out.title || 'בקשת פיתוח',
+      summary: out.summary || '',
+      details: Array.isArray(out.details) ? out.details.filter(Boolean) : [],
+      priority: ['low', 'medium', 'high'].includes(out.priority) ? out.priority : 'medium',
+    };
+  } catch {
+    return { title: 'בקשת פיתוח', summary: raw.slice(0, 300), details: [], priority: 'medium' };
+  }
+}
+
 // למידה: מפיק "עובדות לזכור" מתוך חילופי ההודעות האחרונים (לזיכרון המתמשך)
 export async function learnFromExchange(member, exchangeText) {
   const system = `אתה עוזר שמתחזק זיכרון ארוך-טווח עבור ${member.name} (${member.role}). מטרתך לזקק עובדות/העדפות/החלטות יציבות ששווה לזכור לטווח ארוך.`;

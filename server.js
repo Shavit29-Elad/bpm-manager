@@ -17,7 +17,7 @@ import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
-import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange } from './chat.js';
+import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest } from './chat.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
 
@@ -301,6 +301,55 @@ add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body
       save(db2);
     }).catch(() => {});
   } catch (e) { save(db); json(res, { error: e.message, messages: history }, 500); }
+});
+
+// ---- בקשות פיתוח (נוצרות מסיכום שיחות עם הצוות) ----
+// POST /api/team/:id/summarize-request — הופך את השיחה לבקשת פיתוח בתיבה
+add('POST', /^\/api\/team\/([^/]+)\/summarize-request$/, async (req, res, params) => {
+  const chatId = params[0];
+  if (!chatConfigured()) return json(res, { error: 'הצ\'אט לא מוגדר — הוסף ANTHROPIC_API_KEY ב-Render' }, 400);
+  const db = load();
+  const history = db.chats?.[chatId] || [];
+  if (!history.length) return json(res, { error: 'אין שיחה לסכם — כתוב קודם מה תרצה' }, 400);
+  const member = chatId === 'group' ? { name: 'הצוות', role: 'צוות' } : (findMember(chatId) || { name: 'עוזר', role: '' });
+  const transcript = history.slice(-30).map(m => `${m.name || (m.role === 'user' ? 'מנהל' : member.name)}: ${m.content}`).join('\n');
+  try {
+    const spec = await summarizeAsRequest(member, transcript);
+    db.requests = db.requests || [];
+    const request = {
+      id: id('req'),
+      memberId: chatId, memberName: member.name,
+      title: spec.title, summary: spec.summary, details: spec.details, priority: spec.priority,
+      status: 'open',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    db.requests.unshift(request);
+    save(db);
+    json(res, { ok: true, request });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// GET /api/requests
+add('GET', /^\/api\/requests$/, (req, res) => json(res, load().requests || []));
+
+// PUT /api/requests/:id  { status?, title? }
+add('PUT', /^\/api\/requests\/([^/]+)$/, (req, res, params, _q, body) => {
+  const db = load();
+  const r = (db.requests || []).find(x => x.id === params[0]);
+  if (!r) return json(res, { error: 'לא נמצא' }, 404);
+  if (body.status) r.status = body.status;
+  if (body.title != null) r.title = body.title;
+  r.updatedAt = new Date().toISOString();
+  save(db);
+  json(res, { ok: true, request: r });
+});
+
+// DELETE /api/requests/:id
+add('DELETE', /^\/api\/requests\/([^/]+)$/, (req, res, params) => {
+  const db = load();
+  db.requests = (db.requests || []).filter(x => x.id !== params[0]);
+  save(db);
+  json(res, { ok: true });
 });
 
 // GET /api/dashboard?month=YYYY-MM  — נתוני דף הבית מחשבונית ירוקה

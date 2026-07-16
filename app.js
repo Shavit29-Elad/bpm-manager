@@ -33,7 +33,7 @@ const pill = (label, ok, text) =>
 function render() {
   const c = $('#content');
   ({ home: renderHome, events: renderCombined, clients: renderClients, team: renderTeam,
-     contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
+     requests: renderRequests, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
@@ -688,7 +688,9 @@ async function renderTeam(c) {
   c.innerHTML = `<div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
     ${sidebar}
     <div class="panel" style="flex:1;min-width:320px;display:flex;flex-direction:column;height:600px">
-      <div class="row-between" style="margin-bottom:12px"><h2>${activeName}</h2></div>
+      <div class="row-between" style="margin-bottom:12px"><h2>${activeName}</h2>
+        ${data.configured ? `<button class="btn ghost" style="padding:6px 12px" onclick="summarizeRequest(this)">📋 סכם כבקשת פיתוח</button>` : ''}
+      </div>
       ${notice}
       <div id="chatMsgs" style="flex:1;overflow:auto;display:flex;flex-direction:column;gap:10px;padding:4px"></div>
       <div style="display:flex;gap:8px;margin-top:12px">
@@ -735,6 +737,56 @@ window.sendChat = async () => {
   renderMsgs(r.messages || existing);
   if (r.error) { const b = $('#chatMsgs'); if (b) b.innerHTML += `<div class="warn-banner">${r.error}</div>`; }
   inp.focus();
+};
+
+// ---- בקשות פיתוח ----
+window.summarizeRequest = async (btn) => {
+  if (btn) { btn.disabled = true; btn.textContent = 'מסכם…'; }
+  const r = await fetch(`/api/team/${state.activeChat}/summarize-request`, { method: 'POST' }).then(x => x.json());
+  if (btn) { btn.disabled = false; btn.textContent = '📋 סכם כבקשת פיתוח'; }
+  if (r.error) { alert(r.error); return; }
+  state.tab = 'requests';
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === 'requests'));
+  render();
+};
+
+const REQ_STATUS = { open: { t: 'פתוח', cls: 'pending' }, 'in-progress': { t: 'בעבודה', cls: 'invoiced' }, done: { t: 'הושלם', cls: 'match' } };
+const REQ_PRIORITY = { low: 'נמוכה', medium: 'בינונית', high: 'גבוהה' };
+
+async function renderRequests(c) {
+  const list = await api('/api/requests');
+  const open = list.filter(r => r.status !== 'done').length;
+  c.innerHTML = `<div class="panel">
+    <div class="row-between"><div><h2>📋 בקשות פיתוח</h2><span class="muted">${list.length} בקשות · ${open} פתוחות · נוצרות מהשיחות עם הצוות</span></div></div>
+    <p class="muted" style="font-size:13px;margin-top:4px">בצ'אט עם הצוות (למשל איריס), אחרי שסיכמתם מה צריך — לחץ "📋 סכם כבקשת פיתוח" והבקשה תופיע כאן.</p>
+    <div style="margin-top:14px">${list.length ? list.map(reqCard).join('') : `<div class="empty">אין בקשות עדיין.</div>`}</div>
+  </div>`;
+}
+function reqCard(r) {
+  const s = REQ_STATUS[r.status] || REQ_STATUS.open;
+  const sbtn = (st, label) => `<button class="btn ${r.status === st ? 'primary' : 'ghost'}" style="padding:5px 11px;font-size:13px" onclick="setReqStatus('${r.id}','${st}')">${label}</button>`;
+  return `<div class="card" style="margin-bottom:12px">
+    <div class="row-between" style="margin:0">
+      <div style="font-weight:700;font-size:15px">${escapeHtml(r.title)}</div>
+      <span class="tag ${s.cls}">${s.t}</span>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:3px">${escapeHtml(r.memberName || '')} · ${fmtTime(r.createdAt)} · עדיפות ${REQ_PRIORITY[r.priority] || ''}</div>
+    ${r.summary ? `<div style="margin-top:8px;line-height:1.5">${escapeHtml(r.summary)}</div>` : ''}
+    ${(r.details && r.details.length) ? `<ul style="margin:8px 0 0;padding-inline-start:18px;line-height:1.6">${r.details.map(d => `<li>${escapeHtml(d)}</li>`).join('')}</ul>` : ''}
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      ${sbtn('open', 'פתוח')}${sbtn('in-progress', 'בעבודה')}${sbtn('done', 'הושלם')}
+      <button class="btn ghost" style="padding:5px 11px;font-size:13px;margin-inline-start:auto;color:var(--danger)" onclick="deleteReq('${r.id}')">מחק</button>
+    </div>
+  </div>`;
+}
+window.setReqStatus = async (id, status) => {
+  await fetch(`/api/requests/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+  renderRequests($('#content'));
+};
+window.deleteReq = async (id) => {
+  if (!confirm('למחוק את הבקשה?')) return;
+  await fetch(`/api/requests/${id}`, { method: 'DELETE' });
+  renderRequests($('#content'));
 };
 
 // ---- מודל הדבקה ----
