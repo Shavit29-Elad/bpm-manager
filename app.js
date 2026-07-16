@@ -880,7 +880,8 @@ function updateBankRow(tx) { const el = document.getElementById('btr-' + tx.id);
 function bankConfidence(t) {
   const mis = t.matchedInvoices || []; if (!mis.length) return null;
   const reasons = mis.flatMap(i => i.reasons || []);
-  if (reasons.some(r => r.includes('מספר חשבונית')) || (reasons.some(r => r.includes('סכום זהה')) && reasons.some(r => r.includes('שם')))) return 'strong';
+  // מדויק = מספר חשבונית תואם או סכום זהה בדיוק. אחרת (5%/צירוף/שם בלבד) = לבדיקה.
+  if (reasons.some(r => r.includes('מספר חשבונית')) || reasons.some(r => r.includes('סכום זהה'))) return 'strong';
   return 'weak';
 }
 async function bankAction(id, body) {
@@ -890,8 +891,8 @@ async function bankAction(id, body) {
 }
 window.approveAllStrong = async (btn) => {
   const strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
-  if (!strong.length) { alert('אין התאמות חזקות שממתינות לאישור בתצוגה הנוכחית.'); return; }
-  if (!confirm(`לאשר ${strong.length} התאמות חזקות (מספר חשבונית / סכום+שם)?`)) return;
+  if (!strong.length) { alert('אין התאמות מדויקות שממתינות לאישור בתצוגה הנוכחית.'); return; }
+  if (!confirm(`לאשר ${strong.length} התאמות מדויקות (סכום זהה או מספר חשבונית)?`)) return;
   if (btn) { btn.disabled = true; btn.textContent = 'מאשר…'; }
   for (const t of strong) {
     const r = await fetch(`/api/bank/${t.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual' }) }).then(x => x.json()).catch(() => null);
@@ -921,13 +922,13 @@ async function renderBank(c, soft) {
     <div class="row-between">
       <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמת תנועות הבנק לחשבוניות ההכנסה מחשבונית ירוקה</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn success" onclick="approveAllStrong(this)">✓ אשר הכל החזקות</button>
+        <button class="btn success" onclick="approveAllStrong(this)">✓ אשר את כל ההתאמות המדויקות</button>
         <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
       </div>
     </div>
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px">${bankDirControls()}${bankPeriodControls()}</div>
     ${summary}
-    <p class="muted" style="font-size:12.5px;margin-top:10px">שורות אדומות = לא מותאמות · תגית ירוקה "בטוח" = התאמה חזקה, צהובה "לבדיקה" = כדאי לוודא · 🔗 שייך לשיוך ידני.</p>
+    <p class="muted" style="font-size:12.5px;margin-top:10px">תגית ירוקה <b>"מדויק"</b> = סכום זהה או מספר חשבונית (בטוח לאישור) · צהובה <b>"לבדיקה"</b> = ניכוי 5% / צירוף / שם בלבד (כדאי לוודא בתצוגה) · שורות אדומות = לא מותאמות · 🔗 שייך לשיוך ידני.</p>
     ${table}
   </div>`;
 }
@@ -952,7 +953,7 @@ function bankTr(t) {
     prev = stack(mis.map(i => `${i.url ? `<button class="btn ghost" style="padding:2px 7px;font-size:11px" onclick="previewDoc('${esc(i.url)}')">חשבונית</button>` : ''}${i.receipt && i.receipt.url ? ` <button class="btn ghost" style="padding:2px 7px;font-size:11px" onclick="previewDoc('${esc(i.receipt.url)}')">קבלה</button>` : ''}` || '—'));
     dl = stack(mis.map(i => `${i.url ? `<a href="${i.url}" target="_blank" class="muted" style="white-space:nowrap">חשבונית ↓</a>` : ''}${i.receipt && i.receipt.url ? `<br><a href="${i.receipt.url}" target="_blank" class="muted" style="white-space:nowrap">קבלה ↓</a>` : ''}` || '—'));
     const conf = bankConfidence(t);
-    const confBadge = t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'בטוח' : 'לבדיקה'}</span>` : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '');
+    const confBadge = t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'מדויק' : 'לבדיקה'}</span>` : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '');
     action = `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
   } else if (credit && t.matchStatus === 'ignored') {
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
