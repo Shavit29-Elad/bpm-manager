@@ -856,15 +856,14 @@ function bankPeriodControls() {
   return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('all', 'הכל')}${seg('month', 'חודשי')}${seg('year', 'שנתי')}${seg('range', 'טווח')}</div>${extra}</div>`;
 }
 
-async function renderBank(c, soft) {
-  if (!soft) c.innerHTML = `<div class="panel"><div class="empty">טוען תנועות…</div></div>`;
-  const all = await api(`/api/bank?companyId=${state.company}`);
-  _bankList = all;
+function bankVisibleRows() {
   const dir = state.bankFilter || 'credit';
-  let rows0 = all.filter(t => dir === 'all' ? true : dir === 'credit' ? t.direction === 'credit' : t.direction === 'debit');
-  rows0 = rows0.filter(bankPeriodMatch);
-  const rows = sortBankRows(rows0);
-  // סיכומים על המוצג
+  let rows = (_bankList || []).filter(t => dir === 'all' ? true : dir === 'credit' ? t.direction === 'credit' : t.direction === 'debit');
+  rows = rows.filter(bankPeriodMatch);
+  return sortBankRows(rows);
+}
+function bankSummaryHtml(rows) {
+  const dir = state.bankFilter || 'credit';
   const cr = rows.filter(t => t.direction === 'credit'), db = rows.filter(t => t.direction === 'debit');
   const sumCredit = cr.reduce((s, t) => s + (t.absAmount || 0), 0);
   const sumDebit = db.reduce((s, t) => s + (t.absAmount || 0), 0);
@@ -873,16 +872,41 @@ async function renderBank(c, soft) {
   const sumInv = matchedCr.reduce((s, t) => s + invSum(t), 0);
   const sumWh = matchedCr.reduce((s, t) => { const si = invSum(t), w = si - t.absAmount; return s + ((w > 1 && w < si * 0.08) ? w : 0); }, 0);
   const unmatched = cr.filter(t => t.matchStatus === 'unmatched').length;
-
   const stat = (label, val, color) => `<div class="card" style="padding:11px 14px"><div class="label" style="font-size:12px">${label}</div><div style="font-size:18px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
-  const summary = `<div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(125px,1fr));margin-top:12px;gap:12px">
-    ${stat('שורות מוצגות', rows.length)}
-    ${stat('סה"כ זכות', money(sumCredit), 'var(--accent2)')}
-    ${dir !== 'credit' ? stat('סה"כ חובה', money(sumDebit), 'var(--danger)') : ''}
-    ${stat('סה"כ סכום חשבוניות', money(sumInv))}
-    ${stat('סה"כ ניכוי במקור', money(sumWh), 'var(--warn)')}
-    ${stat('שורות לא מותאמות', unmatched, unmatched ? 'var(--danger)' : 'var(--accent2)')}
-  </div>`;
+  return `${stat('שורות מוצגות', rows.length)}${stat('סה"כ זכות', money(sumCredit), 'var(--accent2)')}${dir !== 'credit' ? stat('סה"כ חובה', money(sumDebit), 'var(--danger)') : ''}${stat('סה"כ סכום חשבוניות', money(sumInv))}${stat('סה"כ ניכוי במקור', money(sumWh), 'var(--warn)')}${stat('שורות לא מותאמות', unmatched, unmatched ? 'var(--danger)' : 'var(--accent2)')}`;
+}
+function updateBankSummary() { const el = document.getElementById('bankSummary'); if (el) el.innerHTML = bankSummaryHtml(bankVisibleRows()); }
+function updateBankRow(tx) { const el = document.getElementById('btr-' + tx.id); if (el) el.outerHTML = bankTr(tx); updateBankSummary(); }
+function bankConfidence(t) {
+  const mis = t.matchedInvoices || []; if (!mis.length) return null;
+  const reasons = mis.flatMap(i => i.reasons || []);
+  if (reasons.some(r => r.includes('מספר חשבונית')) || (reasons.some(r => r.includes('סכום זהה')) && reasons.some(r => r.includes('שם')))) return 'strong';
+  return 'weak';
+}
+async function bankAction(id, body) {
+  const r = await fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => null);
+  const tx = r && r.tx;
+  if (tx) { const i = _bankList.findIndex(t => t.id === id); if (i >= 0) _bankList[i] = tx; updateBankRow(tx); }
+}
+window.approveAllStrong = async (btn) => {
+  const strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
+  if (!strong.length) { alert('אין התאמות חזקות שממתינות לאישור בתצוגה הנוכחית.'); return; }
+  if (!confirm(`לאשר ${strong.length} התאמות חזקות (מספר חשבונית / סכום+שם)?`)) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'מאשר…'; }
+  for (const t of strong) {
+    const r = await fetch(`/api/bank/${t.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual' }) }).then(x => x.json()).catch(() => null);
+    if (r && r.tx) { const i = _bankList.findIndex(x => x.id === t.id); if (i >= 0) _bankList[i] = r.tx; }
+  }
+  const y = window.scrollY; await renderBank($('#content'), true); window.scrollTo(0, y);
+};
+
+async function renderBank(c, soft) {
+  if (!soft) c.innerHTML = `<div class="panel"><div class="empty">טוען תנועות…</div></div>`;
+  const all = await api(`/api/bank?companyId=${state.company}`);
+  _bankList = all;
+  const dir = state.bankFilter || 'credit';
+  const rows = bankVisibleRows();
+  const summary = `<div id="bankSummary" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(125px,1fr));margin-top:12px;gap:12px">${bankSummaryHtml(rows)}</div>`;
 
   const bs = state.bankSort || { key: 'date', dir: 'desc' };
   const th = (key, label) => { const on = bs.key === key; const arw = on ? (bs.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'; return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="setBankSort('${key}')">${label}<span class="muted" style="font-size:11px">${arw}</span></th>`; };
@@ -895,12 +919,15 @@ async function renderBank(c, soft) {
     : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
   c.innerHTML = `<div class="panel">
     <div class="row-between">
-      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמת תנועות הבנק לחשבוniות ההכנסה מחשבונית ירוקה</span></div>
-      <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
+      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמת תנועות הבנק לחשבוניות ההכנסה מחשבונית ירוקה</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn success" onclick="approveAllStrong(this)">✓ אשר הכל החזקות</button>
+        <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
+      </div>
     </div>
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px">${bankDirControls()}${bankPeriodControls()}</div>
     ${summary}
-    <p class="muted" style="font-size:12.5px;margin-top:10px">לחיצה על כותרת ממיינת · שורות אדומות = לא מותאמות · כפתור 🔗 שייך לשיוך ידני של חשבונית/קבלה.</p>
+    <p class="muted" style="font-size:12.5px;margin-top:10px">שורות אדומות = לא מותאמות · תגית ירוקה "בטוח" = התאמה חזקה, צהובה "לבדיקה" = כדאי לוודא · 🔗 שייך לשיוך ידני.</p>
     ${table}
   </div>`;
 }
@@ -924,7 +951,9 @@ function bankTr(t) {
     wh = (whAmt > 1 && whAmt < sumInv * 0.08) ? `<span style="color:var(--warn)">${money(whAmt)}</span>` : '—';
     prev = stack(mis.map(i => `${i.url ? `<button class="btn ghost" style="padding:2px 7px;font-size:11px" onclick="previewDoc('${esc(i.url)}')">חשבונית</button>` : ''}${i.receipt && i.receipt.url ? ` <button class="btn ghost" style="padding:2px 7px;font-size:11px" onclick="previewDoc('${esc(i.receipt.url)}')">קבלה</button>` : ''}` || '—'));
     dl = stack(mis.map(i => `${i.url ? `<a href="${i.url}" target="_blank" class="muted" style="white-space:nowrap">חשבונית ↓</a>` : ''}${i.receipt && i.receipt.url ? `<br><a href="${i.receipt.url}" target="_blank" class="muted" style="white-space:nowrap">קבלה ↓</a>` : ''}` || '—'));
-    action = `${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
+    const conf = bankConfidence(t);
+    const confBadge = t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'בטוח' : 'לבדיקה'}</span>` : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '');
+    action = `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
   } else if (credit && t.matchStatus === 'ignored') {
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
     invNo = '<span class="muted">ללא התאמה</span>';
@@ -940,7 +969,7 @@ function bankTr(t) {
 
   const linkBtn = credit ? `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="openLinkModal('${t.id}')">🔗 שייך</button>` : '';
   const rowStyle = (credit && t.matchStatus === 'unmatched') ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)' : (credit && t.matchStatus === 'ignored' ? 'opacity:.55' : '');
-  return `<tr style="${rowStyle}">
+  return `<tr id="btr-${t.id}" style="${rowStyle}">
     <td style="white-space:nowrap">${t.date}</td>
     <td style="white-space:nowrap;color:${credit ? 'var(--accent2)' : 'var(--danger)'};font-weight:600">${amt}</td>
     <td>${biz}</td>
@@ -970,14 +999,11 @@ function invChip(inv) {
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">✓ <b>${escapeHtml(inv.clientName || '')}</b> · ${typeLabel} #${inv.number} · ${money(inv.amount)} ${pv} ${dl}</div>
     ${receipt}</div>`;
 }
-window.toggleBankAll = () => { state.bankShowAll = !state.bankShowAll; renderBank($('#content')); };
-// עדכון פעולה בלי לקפוץ למעלה — שומר את מיקום הגלילה
-async function renderBankKeepScroll() { const y = window.scrollY; await renderBank($('#content'), true); window.scrollTo(0, y); }
-const bankPut = (id, body) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(() => renderBankKeepScroll());
-window.matchBank = (id, j) => bankPut(id, { matchStatus: 'manual', matchedInvoices: [JSON.parse(decodeURIComponent(j))] });
-window.confirmBank = (id) => bankPut(id, { matchStatus: 'manual' });
-window.unmatchBank = (id) => bankPut(id, { matchStatus: 'unmatched', matchedInvoices: [] });
-window.setBankIgnore = (id, ig) => bankPut(id, { matchStatus: ig ? 'ignored' : 'unmatched' });
+// פעולות מתעדכנות במקום (בלי לרנדר מחדש את כל הטבלה ובלי לקפוץ למעלה)
+window.matchBank = (id, j) => bankAction(id, { matchStatus: 'manual', matchedInvoices: [JSON.parse(decodeURIComponent(j))] });
+window.confirmBank = (id) => bankAction(id, { matchStatus: 'manual' });
+window.unmatchBank = (id) => bankAction(id, { matchStatus: 'unmatched', matchedInvoices: [] });
+window.setBankIgnore = (id, ig) => bankAction(id, { matchStatus: ig ? 'ignored' : 'unmatched' });
 window.saveBankNotes = (id, val) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: val }) });
 
 // ---- שיוך ידני של חשבונית/קבלה לתנועת בנק ----
@@ -1047,9 +1073,9 @@ window.linkPickClient = async (id, name) => {
 window.linkAdd = (j) => { const d = JSON.parse(decodeURIComponent(j)); if (!_linkSel.find(x => x.id === d.id)) _linkSel.push(d); const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml(); };
 window.linkRemove = (i) => { _linkSel.splice(i, 1); const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml(); };
 window.linkSave = async () => {
-  await fetch(`/api/bank/${_linkTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: _linkSel.length ? 'manual' : 'unmatched', matchedInvoices: _linkSel }) });
+  const r = await fetch(`/api/bank/${_linkTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: _linkSel.length ? 'manual' : 'unmatched', matchedInvoices: _linkSel }) }).then(x => x.json()).catch(() => null);
   const m = document.getElementById('linkModal'); if (m) m.classList.add('hidden');
-  renderBankKeepScroll();
+  if (r && r.tx) { const i = _bankList.findIndex(t => t.id === _linkTxId); if (i >= 0) _bankList[i] = r.tx; updateBankRow(r.tx); }
 };
 window.openBankImport = () => {
   let m = document.getElementById('bankModal');
