@@ -941,7 +941,7 @@ function bankTr(t) {
   const notesInput = `<input value="${(t.notes || '').replace(/"/g, '&quot;')}" placeholder="הערה…" onchange="saveBankNotes('${t.id}', this.value)" style="width:120px;padding:4px 7px;font-size:12px"/>`;
   const stack = (arr) => arr.map(x => `<div style="padding:2px 0${arr.length > 1 ? ';border-bottom:1px dashed var(--line)' : ''}">${x}</div>`).join('');
   // תצוגה 👁 + הורדה ↓ צמודים לשם המסמך (במקום עמודות נפרדות)
-  const act = (url) => url ? ` <button class="btn ghost" style="padding:0 6px;font-size:11px" title="תצוגה מקדימה" onclick="previewDoc('${esc(url)}')">👁</button><a href="${url}" target="_blank" class="muted" style="font-size:12px;text-decoration:none" title="הורדה">↓</a>` : '';
+  const act = (url) => url ? ` <button class="btn ghost" style="padding:1px 7px;font-size:11px" onclick="previewDoc('${esc(url)}')">תצוגה 👁</button> <a href="${url}" target="_blank" class="btn ghost" style="padding:1px 7px;font-size:11px;text-decoration:none;white-space:nowrap">להורדה ↓</a>` : '';
   let biz = '<span class="muted">—</span>', invNo = '—', recNo = '—', invAmt = '—', wh = '—', action = '';
 
   if (isMatched) {
