@@ -14,6 +14,7 @@ export const KEYS = [
   'GREENINVOICE_API_KEY_ID',
   'GREENINVOICE_API_SECRET',
   'GOOGLE_ICAL_URL',
+  'GOOGLE_ICAL_URL_2',
   'WHATSAPP_BRIDGE',
 ];
 
@@ -63,6 +64,7 @@ export function statusMasked() {
     GREENINVOICE_API_KEY_ID: { set: Boolean(env.GREENINVOICE_API_KEY_ID), hint: mask(env.GREENINVOICE_API_KEY_ID) },
     GREENINVOICE_API_SECRET: { set: Boolean(env.GREENINVOICE_API_SECRET), hint: mask(env.GREENINVOICE_API_SECRET) },
     GOOGLE_ICAL_URL: { set: Boolean(env.GOOGLE_ICAL_URL), hint: mask(env.GOOGLE_ICAL_URL) },
+    GOOGLE_ICAL_URL_2: { set: Boolean(env.GOOGLE_ICAL_URL_2), hint: mask(env.GOOGLE_ICAL_URL_2) },
     WHATSAPP_BRIDGE: { set: env.WHATSAPP_BRIDGE === 'on', hint: env.WHATSAPP_BRIDGE || 'off' },
   };
 }

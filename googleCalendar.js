@@ -88,11 +88,17 @@ function unescapeIcs(v) {
   return v.replace(/\\n/gi, ' ').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\').trim();
 }
 
-// תומך בכמה יומנים: כמה כתובות iCal מופרדות בפסיק / רווח / שורה חדשה
+// תומך בכמה יומנים: משתנים נפרדים GOOGLE_ICAL_URL / _URL_2 / _URL_3,
+// וגם כמה כתובות מופרדות בפסיק בתוך כל אחד (גמישות מלאה).
 function icalUrls() {
-  return (process.env.GOOGLE_ICAL_URL || '')
-    .split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  return [process.env.GOOGLE_ICAL_URL, process.env.GOOGLE_ICAL_URL_2, process.env.GOOGLE_ICAL_URL_3]
+    .filter(Boolean)
+    .flatMap(v => v.split(/[\s,]+/))
+    .map(s => s.trim()).filter(Boolean);
 }
+
+// האם יומן כלשהו הוגדר
+export function hasCalendar() { return icalUrls().length > 0; }
 
 // שליפת אירועים מכל היומנים דרך קישורי ה-iCal (ממוזגים יחד)
 export async function fetchCalendarEvents() {
@@ -126,4 +132,4 @@ export async function verify() {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
-export default { matchEvents, fetchCalendarEvents, parseIcs, verify };
+export default { matchEvents, fetchCalendarEvents, parseIcs, verify, hasCalendar };

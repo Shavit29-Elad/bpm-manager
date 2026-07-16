@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 
 import { load, save, id, upsertEvent, companyEvents } from './store.js';
 import { parseEventMessage } from './whatsappParser.js';
-import { matchEvents, fetchCalendarEvents, verify as calendarVerify } from './googleCalendar.js';
+import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar } from './googleCalendar.js';
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
@@ -102,7 +102,7 @@ add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
   let cal = [];
   let calendarError = null;
   try {
-    if (process.env.GOOGLE_ICAL_URL) {
+    if (hasCalendar()) {
       cal = (await fetchCalendarEvents())
         .filter(e => (e.date || '').startsWith(month))
         .map(e => ({ date: e.date, title: e.title, location: e.location, source: 'calendar' }));
@@ -233,7 +233,7 @@ add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, _q, body) => {
 add('GET', /^\/api\/health$/, (req, res) => json(res, {
   ok: true,
   greenInvoiceConnected: greenInvoice.haveCredentials(),
-  calendarConnected: Boolean(process.env.GOOGLE_ICAL_URL),
+  calendarConnected: hasCalendar(),
   whatsapp: getBridgeStatus().status,
 }));
 
@@ -268,7 +268,7 @@ function seedIfEmpty() {
 async function autoVerifyConnections() {
   const checks = [
     ['greenInvoice', greenInvoice.haveCredentials()],
-    ['googleCalendar', Boolean(process.env.GOOGLE_ICAL_URL)],
+    ['googleCalendar', hasCalendar()],
   ];
   for (const [key, hasEnv] of checks) {
     if (!hasEnv) continue;

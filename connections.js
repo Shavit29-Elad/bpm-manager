@@ -18,8 +18,11 @@ export const DEFS = {
   googleCalendar: {
     name: 'יומן גוגל',
     icon: '📅',
-    fields: [{ env: 'GOOGLE_ICAL_URL', label: 'כתובת iCal פרטית של היומן (אפשר כמה — הפרד בפסיק)', secret: true }],
-    help: 'בגוגל יומן: הגדרות היומן ← "כתובת סודית בפורמט iCal". לשני יומנים — הדבק את שתי הכתובות עם פסיק ביניהן.',
+    fields: [
+      { env: 'GOOGLE_ICAL_URL', label: 'קישור iCal — יומן 1', secret: true },
+      { env: 'GOOGLE_ICAL_URL_2', label: 'קישור iCal — יומן 2 (אופציונלי)', secret: true },
+    ],
+    help: 'בגוגל יומן: הגדרות היומן ← "כתובת סודית בפורמט iCal" (נגמרת ב-basic.ics). כל יומן בשורה משלו.',
   },
   whatsapp: {
     name: 'ווטסאפ (גשר ווב)',
