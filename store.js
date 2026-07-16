@@ -113,6 +113,23 @@ async function flushLoop() {
   }
 }
 
+// כתיבה מיידית וסינכרונית ל-Postgres — נקראת לפני כיבוי כדי לא לאבד את הכתיבה האחרונה
+async function flushNow() {
+  if (!usePg || !pool || !cache) return;
+  try { await pool.query('UPDATE app_state SET data = $1, updated_at = now() WHERE id = 1', [JSON.stringify(cache)]); dirty = false; }
+  catch (e) { console.error('אחסון: כתיבה אחרונה לפני כיבוי נכשלה:', e.message); }
+}
+
+// בפריסה מחדש / כיבוי, Render שולח SIGTERM — נשמור את המצב האחרון ואז נצא
+let shuttingDown = false;
+async function gracefulExit() {
+  if (shuttingDown) return; shuttingDown = true;
+  await flushNow();
+  process.exit(0);
+}
+process.on('SIGTERM', gracefulExit);
+process.on('SIGINT', gracefulExit);
+
 export function id(prefix = 'id') {
   return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
 }
