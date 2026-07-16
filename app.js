@@ -934,7 +934,7 @@ async function renderBank(c, soft) {
 }
 function bankTr(t) {
   const credit = t.direction === 'credit';
-  const amt = `${credit ? '+' : '−'}${money(t.absAmount)}`;
+  const amt = `${credit ? '' : '−'}${money(t.absAmount)}`;
   const esc = (u) => String(u).replace(/'/g, '%27');
   const mis = t.matchedInvoices || [];
   const isMatched = credit && mis.length && (t.matchStatus === 'auto' || t.matchStatus === 'manual');
