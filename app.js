@@ -426,9 +426,9 @@ async function renderWeekCalendar() {
     const isToday = iso === today;
     const evs = byDay[iso] || [];
     const items = evs.length ? evs.map(e =>
-      `<div style="font-size:12px;padding:4px 7px;margin-top:4px;border-radius:6px;line-height:1.3;background:${e.cls === 'wa' ? 'rgba(91,140,255,.22)' : 'rgba(56,211,159,.18)'};color:${e.cls === 'wa' ? '#bcd0ff' : '#7ff0cf'}">${e.title || 'אירוע'}${e.location ? `<div style="font-size:10px;opacity:.75">${e.location}</div>` : ''}</div>`).join('')
+      `<div style="font-size:12px;padding:4px 7px;margin-top:4px;border-radius:6px;line-height:1.3;background:${e.cls === 'wa' ? 'var(--ev-wa-bg)' : 'var(--ev-cal-bg)'};color:${e.cls === 'wa' ? 'var(--ev-wa)' : 'var(--ev-cal)'}">${e.title || 'אירוע'}${e.location ? `<div style="font-size:10px;opacity:.75">${e.location}</div>` : ''}</div>`).join('')
       : `<div class="muted" style="font-size:11px;margin-top:8px">—</div>`;
-    return `<div style="border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:10px;padding:9px;min-height:230px;background:${isToday ? 'rgba(91,140,255,.10)' : 'var(--panel2)'}">
+    return `<div style="border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:10px;padding:9px;min-height:230px;background:${isToday ? 'rgba(79,70,229,.08)' : 'var(--panel2)'}">
       <div style="font-weight:600;font-size:13px;border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:2px">
         ${DAYS_FULL[i]} <span class="muted" style="font-weight:400">${d.getDate()}/${d.getMonth() + 1}</span>
         ${isToday ? '<span style="color:var(--accent);font-size:11px;font-weight:700">· היום</span>' : ''}
@@ -441,7 +441,7 @@ async function renderWeekCalendar() {
       <h2>יומן שבועי — ${days[0].getDate()}/${days[0].getMonth() + 1} עד ${days[6].getDate()}/${days[6].getMonth() + 1}</h2>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         ${viewToggle()}
-        <span style="font-size:12px" class="muted"><span style="color:#7ff0cf">●</span> יומן גוגל &nbsp; <span style="color:#bcd0ff">●</span> ווטסאפ</span>
+        <span style="font-size:12px" class="muted"><span style="color:var(--ev-cal)">●</span> יומן גוגל &nbsp; <span style="color:var(--ev-wa)">●</span> ווטסאפ</span>
         <button class="btn ghost" onclick="shiftWeek(-1)">שבוע קודם →</button>
         <button class="btn ghost" onclick="shiftWeek(1)">← שבוע הבא</button>
       </div>
@@ -481,9 +481,9 @@ async function renderMonthCalendar() {
     const isToday = iso === today;
     const evs = byDay[iso] || [];
     const items = evs.slice(0, 4).map(e =>
-      `<div title="${(e.title || '').replace(/"/g, '')} ${e.location || ''}" style="font-size:11px;padding:1px 5px;margin-top:2px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${e.cls === 'wa' ? 'rgba(91,140,255,.25)' : 'rgba(56,211,159,.2)'};color:${e.cls === 'wa' ? '#bcd0ff' : '#7ff0cf'}">${e.title || 'אירוע'}</div>`).join('');
+      `<div title="${(e.title || '').replace(/"/g, '')} ${e.location || ''}" style="font-size:11px;padding:1px 5px;margin-top:2px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${e.cls === 'wa' ? 'var(--ev-wa-bg)' : 'var(--ev-cal-bg)'};color:${e.cls === 'wa' ? 'var(--ev-wa)' : 'var(--ev-cal)'}">${e.title || 'אירוע'}</div>`).join('');
     const more = evs.length > 4 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">+${evs.length - 4} עוד</div>` : '';
-    cells += `<div style="min-height:88px;border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:8px;padding:5px;background:${isToday ? 'rgba(91,140,255,.10)' : (evs.length ? 'var(--panel2)' : 'transparent')}">
+    cells += `<div style="min-height:88px;border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:8px;padding:5px;background:${isToday ? 'rgba(79,70,229,.08)' : (evs.length ? 'var(--panel2)' : 'transparent')}">
       <div style="font-size:12px;color:${isToday ? 'var(--accent)' : 'var(--muted)'};font-weight:${isToday ? '700' : '400'}">${day}${isToday ? ' • היום' : ''}</div>${items}${more}</div>`;
   }
 
@@ -492,7 +492,7 @@ async function renderMonthCalendar() {
       <h2>יומן חודשי — ${MONTHS_HE[m - 1]} ${y}</h2>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         ${viewToggle()}
-        <span style="font-size:12px" class="muted"><span style="color:#7ff0cf">●</span> יומן גוגל &nbsp; <span style="color:#bcd0ff">●</span> ווטסאפ</span>
+        <span style="font-size:12px" class="muted"><span style="color:var(--ev-cal)">●</span> יומן גוגל &nbsp; <span style="color:var(--ev-wa)">●</span> ווטסאפ</span>
         <button class="btn ghost" onclick="shiftMonth(-1)">חודש קודם →</button>
         <button class="btn ghost" onclick="shiftMonth(1)">← חודש הבא</button>
       </div>
