@@ -445,6 +445,7 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, (req, res, params, _q, body) => {
   if (!t) return json(res, { error: 'לא נמצא' }, 404);
   if (body.matchStatus) t.matchStatus = body.matchStatus;
   if (body.matchedInvoices !== undefined) t.matchedInvoices = body.matchedInvoices;
+  if (body.notes !== undefined) t.notes = body.notes;
   save(db);
   json(res, { ok: true, tx: t });
 });
