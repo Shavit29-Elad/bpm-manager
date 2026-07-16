@@ -1008,18 +1008,34 @@ window.setBankIgnore = (id, ig) => bankAction(id, { matchStatus: ig ? 'ignored' 
 window.saveBankNotes = (id, val) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: val }) });
 
 // ---- שיוך ידני של חשבונית/קבלה לתנועת בנק ----
-let _linkTxId = null, _linkSel = [], _linkClients = null;
+let _linkTxId = null, _linkSel = [], _linkClients = null, _linkRecs = [];
+// חיפוש קבלה (400) התואמת לחשבונית לפי סכום (מלא או פחות 5% ניכוי), שלא נוצלה כבר בבחירה
+function findReceiptFor(inv) {
+  const usedNums = new Set(_linkSel.map(x => x.receipt && String(x.receipt.number)).filter(Boolean));
+  const t = Math.max(3, (inv.amount || 0) * 0.004);
+  let best = null, bestDiff = Infinity;
+  for (const r of _linkRecs) {
+    if (usedNums.has(String(r.number))) continue;
+    const diff = Math.min(Math.abs(r.amount - inv.amount), Math.abs(r.amount - inv.amount * 0.95));
+    if (diff <= t && diff < bestDiff) { bestDiff = diff; best = r; }
+  }
+  return best ? { number: best.number, url: best.url || null, amount: best.amount } : null;
+}
 function linkSelHtml() {
   if (!_linkSel.length) return '<span class="muted">אין מסמכים מקושרים.</span>';
-  return _linkSel.map((d, i) => `<div style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0">
-    <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${money(d.amount)}</span>
-    ${d.url ? `<button class="btn ghost" style="padding:1px 8px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : ''}
-    <button class="btn ghost" style="padding:1px 8px;font-size:12px" onclick="linkRemove(${i})">הסר ×</button></div>`).join('');
+  return _linkSel.map((d, i) => `<div style="padding:3px 0">
+    <div style="display:flex;gap:8px;align-items:center;font-size:13px">
+      <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${money(d.amount)}</span>
+      ${d.url ? `<button class="btn ghost" style="padding:1px 8px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : ''}
+      <button class="btn ghost" style="padding:1px 8px;font-size:12px" onclick="linkRemove(${i})">הסר ×</button></div>
+    ${d.receipt ? `<div class="muted" style="font-size:11.5px;margin-top:1px">🧾 קבלה #${d.receipt.number} · ${money(d.receipt.amount)}${d.receipt.url ? ` <button class="btn ghost" style="padding:0 6px;font-size:11px" onclick="previewDoc('${String(d.receipt.url).replace(/'/g, '%27')}')">👁</button>` : ''} <a onclick="linkDetachRec(${i})" style="cursor:pointer;color:var(--danger)">הסר קבלה ×</a></div>` : (Number(d.type) === 320 ? '<div class="muted" style="font-size:11.5px;margin-top:1px">🧾 קבלה כלולה בחשבונית</div>' : '')}
+  </div>`).join('');
 }
 window.openLinkModal = async (txId) => {
   const tx = (_bankList || []).find(t => t.id === txId);
   _linkTxId = txId;
   _linkSel = tx ? JSON.parse(JSON.stringify(tx.matchedInvoices || [])) : [];
+  _linkRecs = [];
   let m = document.getElementById('linkModal');
   if (!m) { m = document.createElement('div'); m.id = 'linkModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
@@ -1061,10 +1077,13 @@ window.linkPickClient = async (id, name) => {
   box.innerHTML = '<div class="muted" style="font-size:13px">טוען מסמכים…</div>';
   const docs = await api(`/api/clients/${id}/documents`);
   const { ids, recs } = linkedDocIds();
-  const allowed = [305, 320, 400];   // חשבונית מס, חשבונית מס-קבלה, קבלה בלבד
-  const avail = (Array.isArray(docs) ? docs : []).filter(d =>
-    allowed.includes(Number(d.type)) && !ids.has(d.id) && !(Number(d.type) === 400 && recs.has(String(d.number))));
-  const rows = avail.map(d => {
+  const all = Array.isArray(docs) ? docs : [];
+  // מציגים לשיוך רק חשבוניות פנויות (מס / מס-קבלה). הקבלה תצורף אוטומטית לפי הסכום.
+  const invoices = all.filter(d => [305, 320].includes(Number(d.type)) && !ids.has(d.id));
+  // קבלות פנויות של הלקוח — נשמרות לצירוף אוטומטי לחשבונית שנבחרת
+  _linkRecs = all.filter(d => Number(d.type) === 400 && !recs.has(String(d.number)))
+    .map(d => ({ number: d.number, url: d.url, amount: d.amountIncVat }));
+  const rows = invoices.map(d => {
     const j = encodeURIComponent(JSON.stringify({ id: d.id, number: d.number, type: d.type, clientName: d.clientName, amount: d.amountIncVat, date: d.date, url: d.url }));
     const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
     const dl = d.url ? `<a href="${d.url}" target="_blank" class="muted" style="font-size:11px;white-space:nowrap">הורדה ↓</a>` : '';
@@ -1072,10 +1091,20 @@ window.linkPickClient = async (id, name) => {
       <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${fmtDate(d.date)} · ${money(d.amountIncVat)}</span>
       ${pv}${dl}<button class="btn primary" style="padding:2px 12px;font-size:11px" onclick="linkAdd('${j}')">הוסף</button></div>`;
   }).join('');
-  box.innerHTML = `<b style="font-size:13px">מסמכים פנויים של ${decodeURIComponent(name)} (חשבונית מס / מס-קבלה / קבלה):</b>${rows || '<div class="muted" style="font-size:13px;margin-top:4px">אין מסמכים פנויים — כולם כבר משויכים לתנועות אחרות.</div>'}`;
+  box.innerHTML = `<b style="font-size:13px">חשבוניות פנויות של ${decodeURIComponent(name)}:</b>
+    <div class="muted" style="font-size:11.5px;margin:2px 0 4px">מוצגות רק חשבוניות שאינן משויכות עדיין · הקבלה התואמת תצורף אוטומטית.</div>
+    ${rows || '<div class="muted" style="font-size:13px;margin-top:4px">אין חשבוניות פנויות — כולן כבר משויכות לתנועות אחרות.</div>'}`;
 };
-window.linkAdd = (j) => { const d = JSON.parse(decodeURIComponent(j)); if (!_linkSel.find(x => x.id === d.id)) _linkSel.push(d); const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml(); };
+window.linkAdd = (j) => {
+  const d = JSON.parse(decodeURIComponent(j));
+  if (!_linkSel.find(x => x.id === d.id)) {
+    if (Number(d.type) === 305) { const rec = findReceiptFor(d); if (rec) d.receipt = rec; }  // צירוף קבלה אוטומטי
+    _linkSel.push(d);
+  }
+  const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml();
+};
 window.linkRemove = (i) => { _linkSel.splice(i, 1); const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml(); };
+window.linkDetachRec = (i) => { if (_linkSel[i]) delete _linkSel[i].receipt; const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml(); };
 window.linkSave = async () => {
   const r = await fetch(`/api/bank/${_linkTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: _linkSel.length ? 'manual' : 'unmatched', matchedInvoices: _linkSel }) }).then(x => x.json()).catch(() => null);
   const m = document.getElementById('linkModal'); if (m) m.classList.add('hidden');
