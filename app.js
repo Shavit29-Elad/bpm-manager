@@ -279,7 +279,7 @@ async function renderClients(c) {
 function clientRows(list) {
   if (!list.length) return `<div class="empty">לא נמצאו לקוחות.</div>`;
   return list.map(cl => `
-    <div class="chat-item" id="cli-${cl.id}" style="margin:0;border-radius:0;border-bottom:1px solid var(--line)" onclick="selectClient('${cl.id}','${(cl.name || '').replace(/'/g, '%27')}')">
+    <div class="chat-item" id="cli-${cl.id}" style="margin:0;border-radius:0;border-bottom:1px solid var(--line)" onclick="selectClient('${cl.id}','${encodeURIComponent(cl.name || '')}')">
       <span style="font-size:15px">🏢</span><div style="font-weight:600;font-size:14px">${cl.name}</div>
       <span class="muted" style="margin-inline-start:auto;font-size:14px">‹</span>
     </div>`).join('');
@@ -1040,7 +1040,7 @@ window.openLinkModal = async (txId) => {
 window.renderLinkClients = (q) => {
   const box = document.getElementById('linkClients'); if (!box) return;
   const list = (_linkClients || []).filter(c => !q || (c.name || '').includes(q)).slice(0, 40);
-  box.innerHTML = list.length ? list.map(c => `<div class="chat-item" style="margin:0;padding:6px 10px" onclick="linkPickClient('${c.id}','${(c.name || '').replace(/'/g, '%27')}')">🏢 ${escapeHtml(c.name)}</div>`).join('') : '<span class="muted">אין תוצאות.</span>';
+  box.innerHTML = list.length ? list.map(c => `<div class="chat-item" style="margin:0;padding:6px 10px" onclick="linkPickClient('${c.id}','${encodeURIComponent(c.name || '')}')">🏢 ${escapeHtml(c.name)}</div>`).join('') : '<span class="muted">אין תוצאות.</span>';
 };
 // מסמכים שכבר משויכים לתנועות אחרות (כדי לא להציע אותם שוב)
 function linkedDocIds() {
