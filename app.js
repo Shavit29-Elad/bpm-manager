@@ -914,8 +914,8 @@ async function renderBank(c, soft) {
   const p = (label) => `<th style="white-space:nowrap">${label}</th>`;
   const table = rows.length ? `<div style="overflow-x:auto;margin-top:14px"><table style="min-width:1120px;font-size:13px">
     <thead><tr>
-      ${th('date', 'תאריך')}${th('amount', 'סכום בבנק')}${th('name', 'שם עסק')}
-      ${p('חשבונית מס / מס-קבלה')}${p('קבלה')}${p('סכום חשבונית')}${p('ניכוי במקור')}${p('הערות')}${p('אישור')}
+      ${th('date', 'תאריך')}${th('amount', 'סכום בבנק')}${p('סכום חשבונית')}${p('ניכוי במקור')}${th('name', 'שם עסק')}
+      ${p('חשבונית מס / מס-קבלה')}${p('קבלה')}${p('הערות')}${p('אישור')}
     </tr></thead><tbody>${rows.map(bankTr).join('')}</tbody></table></div>`
     : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
   c.innerHTML = `<div class="panel">
@@ -973,11 +973,11 @@ function bankTr(t) {
   return `<tr id="btr-${t.id}" style="${rowStyle}">
     <td style="white-space:nowrap">${t.date}</td>
     <td style="white-space:nowrap;color:${credit ? 'var(--accent2)' : 'var(--danger)'};font-weight:600">${amt}</td>
+    <td style="white-space:nowrap">${invAmt}</td>
+    <td style="white-space:nowrap">${wh}</td>
     <td>${biz}</td>
     <td>${invNo}</td>
     <td>${recNo}</td>
-    <td style="white-space:nowrap">${invAmt}</td>
-    <td style="white-space:nowrap">${wh}</td>
     <td>${notesInput}</td>
     <td style="white-space:nowrap"><div style="display:flex;gap:5px;flex-wrap:wrap">${action}${linkBtn}</div></td>
   </tr>`;
