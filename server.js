@@ -92,6 +92,26 @@ add('GET', /^\/api\/calendar\/match$/, async (req, res, _p, q) => {
   }
 });
 
+// GET /api/calendar/events?companyId=&month=YYYY-MM  (לתצוגת יומן חודשית)
+add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
+  const db = load();
+  const month = q.month || new Date().toISOString().slice(0, 7);
+  const wa = (q.companyId ? companyEvents(db, q.companyId) : db.events)
+    .filter(e => (e.date || '').startsWith(month))
+    .map(e => ({ date: e.date, title: e.artist || 'אירוע', location: e.location || '', source: 'whatsapp' }));
+  let cal = [];
+  let calendarError = null;
+  try {
+    if (process.env.GOOGLE_ICAL_URL) {
+      cal = (await fetchCalendarEvents())
+        .filter(e => (e.date || '').startsWith(month))
+        .map(e => ({ date: e.date, title: e.title, location: e.location, source: 'calendar' }));
+    } else { calendarError = 'יומן גוגל לא מחובר'; }
+  } catch (e) { calendarError = e.message; }
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify({ month, whatsapp: wa, calendar: cal, calendarError }));
+});
+
 // GET /api/invoicing/pending?companyId=
 add('GET', /^\/api\/invoicing\/pending$/, (req, res, _p, q) =>
   json(res, groupForInvoicing(companyEvents(load(), q.companyId))));
@@ -231,7 +251,7 @@ function serveStatic(req, res) {
   fs.createReadStream(file).pipe(res);
 }
 
-// זריעה אוטומטית בעלייה ראשונה (אם אין עדיין חברות)
+// זריעה אוטומטית בעלייה ראשונה — רק החברות, בלי אירוע דוגמה (מתחילים דף נקי)
 function seedIfEmpty() {
   const db = load();
   if (db.companies && db.companies.length) return;
@@ -240,9 +260,25 @@ function seedIfEmpty() {
     { id: 'co_ofek', name: 'אופק ידעי הגברה ותאורה', active: false, greenInvoiceId: null },
   ];
   save(db);
-  const msg = `תאריך: 25/07/2026\nזמר: עומר אדם\nתמחור: 4500\nמיקום: אולמי גן הפקאן, ראשל"צ\nסאונד: PA מלא + מוניטורים\nעובדים: דני, אבי, שחר\nתוספת לעובדים: 150 לכל אחד\nקבלן: תאורה - ליאור`;
-  ingestText(msg, 'co_bpm');
-  console.log('נזרעו נתוני התחלה (חברות + אירוע דוגמה)');
+  console.log('נזרעו החברות (בלי אירוע דוגמה)');
+}
+
+// זיהוי-מחדש אוטומטי של חיבורים בכל הפעלה: אם המפתחות קיימים (למשל כמשתני סביבה
+// קבועים ב-Render) — מאמת אותם ומסמן ירוק, כך שאין צורך לחבר מחדש אחרי כל פרסום.
+async function autoVerifyConnections() {
+  const checks = [
+    ['greenInvoice', greenInvoice.haveCredentials()],
+    ['googleCalendar', Boolean(process.env.GOOGLE_ICAL_URL)],
+  ];
+  for (const [key, hasEnv] of checks) {
+    if (!hasEnv) continue;
+    try {
+      const r = key === 'greenInvoice' ? await greenInvoice.verify() : await calendarVerify();
+      const now = new Date().toISOString();
+      setRecord(key, r.ok ? { status: 'connected', lastCheckedAt: now, message: null }
+        : { status: 'error', lastCheckedAt: now, message: r.error });
+    } catch (e) { /* לא חוסם עליית שרת */ }
+  }
 }
 
 // ---- שרת ----
@@ -268,6 +304,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   seedIfEmpty();
+  autoVerifyConnections();
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);
   startWhatsappBridge(async (text) => { ingestText(text); })
     .then(r => { if (r && !r.ok) console.log('ווטסאפ:', r.reason); });

@@ -50,8 +50,64 @@ async function renderEvents(c) {
         <thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>איכות קליטה</th></tr></thead>
         <tbody>${events.map(rowEvent).join('')}</tbody></table>`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
-    </div>`;
+    </div>
+    <div class="panel" id="calWrap"><div class="empty">טוען יומן…</div></div>`;
   $('#addEvent').onclick = () => $('#ingestModal').classList.remove('hidden');
+  renderMonthCalendar();
+}
+
+// ---- תצוגת יומן חודשית (מתחת לאירועים) ----
+if (!state.calMonth) state.calMonth = new Date().toISOString().slice(0, 7);
+const MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+const DAYS_HE = ['א','ב','ג','ד','ה','ו','ש'];
+function shiftMonth(delta) {
+  const [y, m] = state.calMonth.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  state.calMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  renderMonthCalendar();
+}
+window.shiftMonth = shiftMonth;
+
+async function renderMonthCalendar() {
+  const wrap = $('#calWrap'); if (!wrap) return;
+  const month = state.calMonth;
+  const data = await api(`/api/calendar/events?companyId=${state.company}&month=${month}`);
+  const [y, m] = month.split('-').map(Number);
+  const first = new Date(y, m - 1, 1);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const startDow = first.getDay(); // 0=ראשון
+  // מיפוי אירועים לפי יום
+  const byDay = {};
+  const add = (ev, cls) => { const d = ev.date; if (!d) return; (byDay[d] = byDay[d] || []).push({ ...ev, cls }); };
+  (data.calendar || []).forEach(e => add(e, 'cal'));
+  (data.whatsapp || []).forEach(e => add(e, 'wa'));
+
+  let cells = '';
+  for (let i = 0; i < startDow; i++) cells += '<div style="min-height:84px"></div>';
+  for (let day = 1; day <= daysInMonth; day++) {
+    const iso = `${month}-${String(day).padStart(2, '0')}`;
+    const evs = byDay[iso] || [];
+    const items = evs.slice(0, 4).map(e =>
+      `<div title="${(e.title || '').replace(/"/g, '')} ${e.location || ''}" style="font-size:11px;padding:1px 5px;margin-top:2px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${e.cls === 'wa' ? 'rgba(91,140,255,.25)' : 'rgba(56,211,159,.2)'};color:${e.cls === 'wa' ? '#bcd0ff' : '#7ff0cf'}">${e.title || 'אירוע'}</div>`).join('');
+    const more = evs.length > 4 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">+${evs.length - 4} עוד</div>` : '';
+    cells += `<div style="min-height:84px;border:1px solid var(--line);border-radius:8px;padding:5px;background:${evs.length ? 'var(--panel2)' : 'transparent'}">
+      <div style="font-size:12px;color:var(--muted)">${day}</div>${items}${more}</div>`;
+  }
+
+  wrap.innerHTML = `
+    <div class="row-between" style="margin-bottom:12px">
+      <h2>יומן — ${MONTHS_HE[m - 1]} ${y}</h2>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:12px" class="muted"><span style="color:#7ff0cf">●</span> יומן גוגל &nbsp; <span style="color:#bcd0ff">●</span> ווטסאפ</span>
+        <button class="btn ghost" onclick="shiftMonth(-1)">← קודם</button>
+        <button class="btn ghost" onclick="shiftMonth(1)">הבא →</button>
+      </div>
+    </div>
+    ${data.calendarError ? `<div class="warn-banner">${data.calendarError}</div>` : ''}
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">
+      ${DAYS_HE.map(d => `<div style="text-align:center;color:var(--muted);font-size:12px;font-weight:600;padding-bottom:4px">${d}</div>`).join('')}
+      ${cells}
+    </div>`;
 }
 function rowEvent(e) {
   const miss = e.missingFields?.length ? `<span class="tag miss">חסר: ${e.missingFields.join(', ')}</span>` : `<span class="tag match">מלא</span>`;
