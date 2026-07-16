@@ -947,7 +947,7 @@ function bankTr(t) {
   if (isMatched) {
     biz = stack(mis.map(i => `<b>${escapeHtml(i.clientName || '')}</b>`));
     invNo = stack(mis.map(i => `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url)}</span>`));
-    recNo = stack(mis.map(i => i.receipt ? `<span style="white-space:nowrap">#${i.receipt.number}${act(i.receipt.url)}</span>` : ((i.type == 320) ? '<span class="muted" style="font-size:11px">כלול בחשבונית</span>' : '—')));
+    recNo = stack(mis.map(i => i.receipt ? `<span style="white-space:nowrap">קבלה #${i.receipt.number}${act(i.receipt.url)}</span>` : ((i.type == 320) ? '<span class="muted" style="font-size:11px">כלול בחשבונית</span>' : '—')));
     invAmt = stack(mis.map(i => money(i.amount)));
     const sumInv = mis.reduce((s, i) => s + (Number(i.amount) || 0), 0);
     const whAmt = sumInv - t.absAmount;
