@@ -1010,8 +1010,9 @@ window.saveBankNotes = (id, val) => fetch(`/api/bank/${id}`, { method: 'PUT', he
 let _linkTxId = null, _linkSel = [], _linkClients = null;
 function linkSelHtml() {
   if (!_linkSel.length) return '<span class="muted">אין מסמכים מקושרים.</span>';
-  return _linkSel.map((d, i) => `<div style="display:flex;gap:6px;align-items:center;font-size:13px;padding:3px 0">
+  return _linkSel.map((d, i) => `<div style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0">
     <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${money(d.amount)}</span>
+    ${d.url ? `<button class="btn ghost" style="padding:1px 8px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : ''}
     <button class="btn ghost" style="padding:1px 8px;font-size:12px" onclick="linkRemove(${i})">הסר ×</button></div>`).join('');
 }
 window.openLinkModal = async (txId) => {
@@ -1064,9 +1065,11 @@ window.linkPickClient = async (id, name) => {
     allowed.includes(Number(d.type)) && !ids.has(d.id) && !(Number(d.type) === 400 && recs.has(String(d.number))));
   const rows = avail.map(d => {
     const j = encodeURIComponent(JSON.stringify({ id: d.id, number: d.number, type: d.type, clientName: d.clientName, amount: d.amountIncVat, date: d.date, url: d.url }));
-    return `<div style="display:flex;gap:6px;align-items:center;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
+    const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
+    const dl = d.url ? `<a href="${d.url}" target="_blank" class="muted" style="font-size:11px;white-space:nowrap">הורדה ↓</a>` : '';
+    return `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
       <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${fmtDate(d.date)} · ${money(d.amountIncVat)}</span>
-      <button class="btn ghost" style="padding:2px 10px;font-size:11px" onclick="linkAdd('${j}')">הוסף</button></div>`;
+      ${pv}${dl}<button class="btn primary" style="padding:2px 12px;font-size:11px" onclick="linkAdd('${j}')">הוסף</button></div>`;
   }).join('');
   box.innerHTML = `<b style="font-size:13px">מסמכים פנויים של ${decodeURIComponent(name)} (חשבונית מס / מס-קבלה / קבלה):</b>${rows || '<div class="muted" style="font-size:13px;margin-top:4px">אין מסמכים פנויים — כולם כבר משויכים לתנועות אחרות.</div>'}`;
 };
