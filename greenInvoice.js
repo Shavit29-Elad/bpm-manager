@@ -108,32 +108,51 @@ function lastDay(month) {
   return `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
 }
 
-// מיפוי מסמך לתצוגה
+// מיפוי מסמך לתצוגה, כולל פירוק מע"מ (הסכום בחשבונית ירוקה כולל מע"מ)
 function mapDoc(d) {
+  const amount = num(d.amount ?? d.total ?? d.sum); // כולל מע"מ
+  const vat = d.vat != null ? num(d.vat) : amount - amount / 1.18; // 18% אם לא סופק
   return {
     id: d.id, number: d.number, type: d.type, date: d.documentDate,
-    amount: num(d.amount ?? d.total ?? d.sum),
+    amount,
+    amountIncVat: amount,
+    amountExVat: amount - vat,
+    vat,
     clientName: d.client?.name || d.clientName || d.client_name || '—',
     url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null),
     amountDue: d.amountDue,
   };
 }
 
-// הכנסה חודשית מחשבוניות מס (305) + מס/קבלה (320), וצפי מע"מ + פירוט המסמכים
-export async function monthlyIncome(month) {
-  const fromDate = `${month}-01`, toDate = lastDay(month);
-  const res = await api('/documents/search', {
-    method: 'POST',
-    body: { fromDate, toDate, page: 1, pageSize: 100, type: [305, 320], sort: 'documentDate' },
-  });
-  const items = res.items || [];
-  let income = 0, vat = 0;
-  for (const d of items) {
-    const amt = num(d.amount ?? d.total ?? d.sum);
-    income += amt;
-    vat += (d.vat != null ? num(d.vat) : amt - amt / 1.18); // מע"מ 18% אם לא סופק
+// כל המסמכים בטווח תאריכים (עם דפדוף), לפי סוגים
+async function documentsInRange(fromDate, toDate, types) {
+  const all = [];
+  let page = 1;
+  for (let i = 0; i < 20; i++) { // עד ~2000 מסמכים
+    const res = await api('/documents/search', {
+      method: 'POST',
+      body: { fromDate, toDate, page, pageSize: 100, type: types, sort: 'documentDate' },
+    });
+    const items = res.items || [];
+    all.push(...items);
+    if (items.length < 100) break;
+    page++;
   }
-  return { income, vat, count: items.length, docs: items.map(mapDoc) };
+  return all;
+}
+
+// הכנסה בטווח מחשבוניות מס (305) + מס/קבלה (320), צפי מע"מ + פירוט
+export async function incomeForRange(fromDate, toDate) {
+  const items = await documentsInRange(fromDate, toDate, [305, 320]);
+  const docs = items.map(mapDoc);
+  const income = docs.reduce((s, d) => s + d.amountIncVat, 0);
+  const vat = docs.reduce((s, d) => s + d.vat, 0);
+  return { income, vat, count: docs.length, docs };
+}
+
+// תאימות לאחור — חודש בודד
+export async function monthlyIncome(month) {
+  return incomeForRange(`${month}-01`, lastDay(month));
 }
 
 // כל המסמכים של לקוח מסוים (כל הסוגים, כל התאריכים)
@@ -176,5 +195,5 @@ export async function listClients() {
   return (res.items || []).map(c => ({ id: c.id, name: c.name })).filter(c => c.name);
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, openInvoicesCount, listClients, clientDocuments, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, incomeForRange, openInvoicesCount, listClients, clientDocuments, DOC_TYPES };
 export default greenInvoice;

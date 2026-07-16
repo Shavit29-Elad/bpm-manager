@@ -305,10 +305,19 @@ add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body
 
 // GET /api/dashboard?month=YYYY-MM  — נתוני דף הבית מחשבונית ירוקה
 add('GET', /^\/api\/dashboard$/, async (req, res, _p, q) => {
-  const month = q.month || new Date().toISOString().slice(0, 7);
-  const out = { month, income: null, vat: null, openInvoices: null, monthDocs: null, docs: [], clients: [], bank: null, errors: {} };
+  // טווח: from/to בפורמט YYYY-MM (או YYYY-MM-DD). ברירת מחדל — החודש הנוכחי.
+  const lastDay = (ym) => { const [y, m] = ym.split('-').map(Number); return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; };
+  let fromDate, toDate;
+  if (q.from && q.to) {
+    fromDate = q.from.length === 7 ? `${q.from}-01` : q.from;
+    toDate = q.to.length === 7 ? lastDay(q.to) : q.to;
+  } else {
+    const month = q.month || new Date().toISOString().slice(0, 7);
+    fromDate = `${month}-01`; toDate = lastDay(month);
+  }
+  const out = { month: q.month || null, fromDate, toDate, income: null, vat: null, openInvoices: null, monthDocs: null, docs: [], clients: [], bank: null, errors: {} };
   if (greenInvoice.haveCredentials()) {
-    try { const m = await greenInvoice.monthlyIncome(month); out.income = m.income; out.vat = m.vat; out.monthDocs = m.count; out.docs = m.docs; }
+    try { const m = await greenInvoice.incomeForRange(fromDate, toDate); out.income = m.income; out.vat = m.vat; out.monthDocs = m.count; out.docs = m.docs; }
     catch (e) { out.errors.income = e.message; }
     try { out.openInvoices = await greenInvoice.openInvoicesCount(); } catch (e) { out.errors.open = e.message; }
     try { out.clients = await greenInvoice.listClients(); } catch (e) { out.errors.clients = e.message; }

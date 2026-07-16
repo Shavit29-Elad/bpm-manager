@@ -39,55 +39,96 @@ function render() {
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
 const MONTHS_FULL = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
-function shiftDashMonth(delta) {
-  if (!state.dashMonth) state.dashMonth = new Date().toISOString().slice(0, 7);
+function initPeriod() {
+  const now = new Date();
+  if (!state.period) state.period = 'month';
+  if (!state.dashMonth) state.dashMonth = now.toISOString().slice(0, 7);
+  if (!state.dashYear) state.dashYear = now.getFullYear();
+  if (!state.rangeFrom) state.rangeFrom = state.dashMonth;
+  if (!state.rangeTo) state.rangeTo = state.dashMonth;
+}
+window.setPeriod = (p) => { state.period = p; renderHome($('#content')); };
+window.shiftDashMonth = (delta) => {
   const [y, m] = state.dashMonth.split('-').map(Number);
   const dt = new Date(y, m - 1 + delta, 1);
   state.dashMonth = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
   renderHome($('#content'));
+};
+window.shiftDashYear = (delta) => { state.dashYear = Number(state.dashYear) + delta; renderHome($('#content')); };
+window.applyRange = () => {
+  state.rangeFrom = $('#rngFrom').value || state.rangeFrom;
+  state.rangeTo = $('#rngTo').value || state.rangeTo;
+  renderHome($('#content'));
+};
+function periodQuery() {
+  if (state.period === 'year') return `from=${state.dashYear}-01&to=${state.dashYear}-12`;
+  if (state.period === 'range') return `from=${state.rangeFrom}&to=${state.rangeTo}`;
+  return `month=${state.dashMonth}`;
 }
-window.shiftDashMonth = shiftDashMonth;
+function periodLabel() {
+  if (state.period === 'year') return `שנת ${state.dashYear}`;
+  if (state.period === 'range') { const f = state.rangeFrom.split('-'), t = state.rangeTo.split('-'); return `${MONTHS_FULL[+f[1] - 1]} ${f[0]} — ${MONTHS_FULL[+t[1] - 1]} ${t[0]}`; }
+  const [y, m] = state.dashMonth.split('-').map(Number); return `${MONTHS_FULL[m - 1]} ${y}`;
+}
+function periodControls() {
+  const seg = (p, label) => `<button class="btn ${state.period === p ? 'primary' : 'ghost'}" style="padding:6px 13px" onclick="setPeriod('${p}')">${label}</button>`;
+  const toggle = `<div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('month', 'חודשי')}${seg('range', 'טווח')}${seg('year', 'שנתי')}</div>`;
+  let nav = '';
+  if (state.period === 'month') nav = `<button class="btn ghost" onclick="shiftDashMonth(-1)">חודש קודם →</button><button class="btn ghost" onclick="shiftDashMonth(1)">← חודש הבא</button>`;
+  else if (state.period === 'year') nav = `<button class="btn ghost" onclick="shiftDashYear(-1)">שנה קודמת →</button><button class="btn ghost" onclick="shiftDashYear(1)">← שנה הבאה</button>`;
+  else nav = `<input type="month" id="rngFrom" value="${state.rangeFrom}"/><span class="muted">עד</span><input type="month" id="rngTo" value="${state.rangeTo}"/><button class="btn primary" style="padding:6px 13px" onclick="applyRange()">הצג</button>`;
+  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${toggle}${nav}</div>`;
+}
+
+// טבלת מסמכים משותפת (עם פירוק מע"מ). opts.showClient מוסיף עמודת לקוח.
+function docsTable(docs, opts = {}) {
+  if (docs && docs.error) return `<div class="warn-banner">${docs.error}</div>`;
+  const rows = Array.isArray(docs) ? docs : [];
+  if (!rows.length) return `<div class="empty">אין מסמכים.</div>`;
+  const totalInc = rows.reduce((s, d) => s + (Number(d.amountIncVat) || 0), 0);
+  const totalEx = rows.reduce((s, d) => s + (Number(d.amountExVat) || 0), 0);
+  const cc = opts.showClient;
+  return `<table><thead><tr><th>תאריך</th>${cc ? '<th>לקוח</th>' : ''}<th>סוג</th><th>מספר</th><th>ללא מע"מ</th><th>כולל מע"מ</th><th></th></tr></thead>
+    <tbody>${rows.map(d => `<tr>
+      <td>${d.date || '—'}</td>${cc ? `<td>${d.clientName || '—'}</td>` : ''}
+      <td>${DOC_TYPE_NAMES[d.type] || `סוג ${d.type}`}</td>
+      <td>${d.number ?? '—'}</td>
+      <td>${money(d.amountExVat)}</td>
+      <td>${money(d.amountIncVat)}</td>
+      <td>${d.url ? `<a href="${d.url}" target="_blank" class="muted">פתח ↗</a>` : ''}</td>
+    </tr>`).join('')}
+    <tr style="background:var(--panel2)"><td colspan="${cc ? 4 : 3}"><b>סה"כ</b></td><td><b>${money(totalEx)}</b></td><td><b>${money(totalInc)}</b></td><td></td></tr>
+    </tbody></table>`;
+}
 
 async function renderHome(c) {
-  if (!state.dashMonth) state.dashMonth = new Date().toISOString().slice(0, 7);
+  initPeriod();
   c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מחשבונית ירוקה…</div></div>`;
-  const d = await api(`/api/dashboard?companyId=${state.company}&month=${state.dashMonth}`);
-  const [y, m] = (d.month || state.dashMonth).split('-').map(Number);
-  const monthName = `${MONTHS_FULL[m - 1]} ${y}`;
+  const d = await api(`/api/dashboard?companyId=${state.company}&${periodQuery()}`);
+  const label = periodLabel();
   const err = d.errors || {};
-  const kpi = (label, val, sub, color) => `<div class="card"><div class="label">${label}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
+  const kpi = (lbl, val, sub, color) => `<div class="card"><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
   const otherErrs = Object.keys(err).filter(k => k !== 'greenInvoice').map(k => err[k]);
   const docs = d.docs || [];
+  const incomeLabel = state.period === 'month' ? 'הכנסה החודש' : 'הכנסה בתקופה';
   c.innerHTML = `
     <div class="panel">
       <div class="row-between">
-        <div><h2>דף הבית — סקירת ${monthName}</h2><span class="muted">נתונים חיים מחשבונית ירוקה</span></div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn ghost" onclick="shiftDashMonth(-1)">חודש קודם →</button>
-          <button class="btn ghost" onclick="shiftDashMonth(1)">← חודש הבא</button>
-        </div>
+        <div><h2>דף הבית — ${label}</h2><span class="muted">נתונים חיים מחשבונית ירוקה</span></div>
+        ${periodControls()}
       </div>
       ${err.greenInvoice ? `<div class="warn-banner">חשבונית ירוקה לא מחוברת — חבר אותה בלשונית 🔌 חיבורים כדי לראות נתונים.</div>` : ''}
       <div class="cards" style="margin-top:14px">
-        ${kpi('הכנסה החודש', money(d.income), d.monthDocs != null ? `${d.monthDocs} חשבוניות מס/מס-קבלה` : '', 'var(--accent2)')}
-        ${kpi('צפי מע"מ (18%)', money(d.vat), 'מתוך ההכנסה החודשית', 'var(--warn)')}
+        ${kpi(incomeLabel, money(d.income), d.monthDocs != null ? `${d.monthDocs} חשבוניות מס/מס-קבלה` : '', 'var(--accent2)')}
+        ${kpi('צפי מע"מ (18%)', money(d.vat), 'מתוך ההכנסה', 'var(--warn)')}
         ${kpi('חשבוניות מס פתוחות', d.openInvoices != null ? d.openInvoices : '—', 'טרם שולמו במלואן', 'var(--danger)')}
         ${kpi('יתרת עו"ש', '—', 'יש לחבר חשבון בנק', 'var(--muted)')}
       </div>
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
     </div>
     <div class="panel">
-      <div class="row-between"><h2>חשבוניות ${monthName}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
-      ${docs.length ? `<table><thead><tr><th>תאריך</th><th>לקוח</th><th>סוג</th><th>מספר</th><th>סכום</th><th></th></tr></thead>
-        <tbody>${docs.map(x => `<tr>
-          <td>${x.date || '—'}</td>
-          <td>${x.clientName || '—'}</td>
-          <td>${DOC_TYPE_NAMES[x.type] || `סוג ${x.type}`}</td>
-          <td>${x.number ?? '—'}</td>
-          <td>${money(x.amount)}</td>
-          <td>${x.url ? `<a href="${x.url}" target="_blank" class="muted">פתח ↗</a>` : ''}</td>
-        </tr>`).join('')}</tbody></table>`
-        : `<div class="empty">אין חשבוניות בחודש זה.</div>`}
+      <div class="row-between"><h2>חשבוניות — ${label}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
+      ${docsTable(docs, { showClient: true })}
     </div>`;
 }
 
@@ -99,14 +140,10 @@ async function renderClients(c) {
     const list = await api(`/api/clients`);
     state.clientsList = Array.isArray(list) ? list : [];
   }
-  drawClients(c, '');
-}
-function drawClients(c, filter) {
-  const list = (state.clientsList || []).filter(cl => !filter || (cl.name || '').includes(filter));
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>לקוחות</h2><span class="muted">${state.clientsList.length} לקוחות</span></div></div>
-    <input id="clientSearch" placeholder="חיפוש לקוח…" style="width:100%;margin-bottom:14px" value="${filter.replace(/"/g, '&quot;')}"/>
-    <div id="clientsList">${clientRows(list)}</div>
+    <input id="clientSearch" placeholder="חיפוש לקוח…" style="width:100%;margin-bottom:14px"/>
+    <div id="clientsList">${clientRows(state.clientsList)}</div>
   </div>`;
   const inp = $('#clientSearch');
   inp.oninput = () => { $('#clientsList').innerHTML = clientRows((state.clientsList || []).filter(cl => !inp.value || (cl.name || '').includes(inp.value))); };
@@ -114,35 +151,29 @@ function drawClients(c, filter) {
 }
 function clientRows(list) {
   if (!list.length) return `<div class="empty">לא נמצאו לקוחות.</div>`;
-  return `<div style="display:flex;flex-direction:column;gap:2px">${list.map(cl => `
-    <div class="chat-item" onclick="openClientDocs('${cl.id}', '${(cl.name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;')}')">
-      <span style="font-size:16px">🏢</span><div style="font-weight:600">${cl.name}</div>
-      <span class="muted" style="margin-inline-start:auto;font-size:12px">כל המסמכים ←</span>
-    </div>`).join('')}</div>`;
+  return list.map(cl => `
+    <div style="border:1px solid var(--line);border-radius:12px;margin-bottom:8px;overflow:hidden">
+      <div class="chat-item" style="margin:0;border-radius:0" onclick="toggleClient('${cl.id}')">
+        <span style="font-size:16px">🏢</span><div style="font-weight:600">${cl.name}</div>
+        <span class="muted" id="arw-${cl.id}" style="margin-inline-start:auto;font-size:12px">הצג מסמכים ▾</span>
+      </div>
+      <div id="body-${cl.id}" style="display:none;padding:10px 14px;background:var(--bg)"></div>
+    </div>`).join('');
 }
-window.openClientDocs = async (id, name) => {
-  const c = $('#content');
-  c.innerHTML = `<div class="panel"><button class="btn ghost" onclick="renderClients($('#content'))">→ חזרה ללקוחות</button>
-    <h2 style="margin-top:12px">מסמכים — ${name}</h2><div class="empty">טוען מסמכים…</div></div>`;
-  const docs = await api(`/api/clients/${id}/documents`);
-  const rows = (Array.isArray(docs) ? docs : []);
-  const total = rows.reduce((s, d) => s + (Number(d.amount) || 0), 0);
-  c.innerHTML = `<div class="panel">
-    <button class="btn ghost" onclick="renderClients($('#content'))">→ חזרה ללקוחות</button>
-    <div class="row-between" style="margin-top:12px"><h2>מסמכים — ${name}</h2><span class="muted">${rows.length} מסמכים · סה"כ ${money(total)}</span></div>
-    ${docs.error ? `<div class="warn-banner">${docs.error}</div>` : ''}
-    ${rows.length ? `<table><thead><tr><th>תאריך</th><th>סוג</th><th>מספר</th><th>סכום</th><th></th></tr></thead>
-      <tbody>${rows.map(d => `<tr>
-        <td>${d.date || '—'}</td>
-        <td>${DOC_TYPE_NAMES[d.type] || `סוג ${d.type}`}</td>
-        <td>${d.number ?? '—'}</td>
-        <td>${money(d.amount)}</td>
-        <td>${d.url ? `<a href="${d.url}" target="_blank" class="muted">פתח ↗</a>` : ''}</td>
-      </tr>`).join('')}</tbody></table>`
-      : `<div class="empty">אין מסמכים ללקוח זה.</div>`}
-  </div>`;
+window.toggleClient = async (id) => {
+  const body = document.getElementById('body-' + id);
+  const arw = document.getElementById('arw-' + id);
+  if (!body) return;
+  if (body.style.display === 'none') {
+    if (!body.dataset.loaded) {
+      body.innerHTML = `<div class="muted" style="font-size:13px">טוען מסמכים…</div>`;
+      const docs = await api(`/api/clients/${id}/documents`);
+      body.innerHTML = docsTable(docs, { showClient: false });
+      body.dataset.loaded = '1';
+    }
+    body.style.display = 'block'; arw.textContent = 'הסתר ▴';
+  } else { body.style.display = 'none'; arw.textContent = 'הצג מסמכים ▾'; }
 };
-window.renderClients = renderClients;
 
 // ---- אירועים + אי-התאמות + יומן (לשונית אחת מאוחדת) ----
 async function renderCombined(c) {
