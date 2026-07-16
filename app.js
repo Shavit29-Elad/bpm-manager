@@ -55,6 +55,7 @@ window.shiftDashMonth = (delta) => {
   renderHome($('#content'));
 };
 window.shiftDashYear = (delta) => { state.dashYear = Number(state.dashYear) + delta; renderHome($('#content')); };
+window.pickDashMonth = (v) => { if (v) { state.dashMonth = v; renderHome($('#content')); } };
 window.applyRange = () => {
   state.rangeFrom = $('#rngFrom').value || state.rangeFrom;
   state.rangeTo = $('#rngTo').value || state.rangeTo;
@@ -74,11 +75,31 @@ function periodControls() {
   const seg = (p, label) => `<button class="btn ${state.period === p ? 'primary' : 'ghost'}" style="padding:6px 13px" onclick="setPeriod('${p}')">${label}</button>`;
   const toggle = `<div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('month', 'חודשי')}${seg('range', 'טווח')}${seg('year', 'שנתי')}</div>`;
   let nav = '';
-  if (state.period === 'month') nav = `<button class="btn ghost" onclick="shiftDashMonth(-1)">חודש קודם →</button><button class="btn ghost" onclick="shiftDashMonth(1)">← חודש הבא</button>`;
+  if (state.period === 'month') nav = `<button class="btn ghost" style="padding:6px 12px" onclick="shiftDashMonth(-1)">→</button><input type="month" id="dashMonthPick" value="${state.dashMonth}" onchange="pickDashMonth(this.value)"/><button class="btn ghost" style="padding:6px 12px" onclick="shiftDashMonth(1)">←</button>`;
   else if (state.period === 'year') nav = `<button class="btn ghost" onclick="shiftDashYear(-1)">שנה קודמת →</button><button class="btn ghost" onclick="shiftDashYear(1)">← שנה הבאה</button>`;
   else nav = `<input type="month" id="rngFrom" value="${state.rangeFrom}"/><span class="muted">עד</span><input type="month" id="rngTo" value="${state.rangeTo}"/><button class="btn primary" style="padding:6px 13px" onclick="applyRange()">הצג</button>`;
   return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${toggle}${nav}</div>`;
 }
+
+// תצוגה מקדימה של מסמך (PDF) בחלון קופץ, בלי להוריד קובץ
+window.previewDoc = (url) => {
+  if (!url) return;
+  let m = document.getElementById('docPreview');
+  if (!m) { m = document.createElement('div'); m.id = 'docPreview'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(920px,95vw);height:90vh;padding:0;display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>תצוגה מקדימה של המסמך</b>
+      <div style="display:flex;gap:8px;align-items:center">
+        <a href="${url}" target="_blank" class="btn ghost" style="padding:6px 13px;text-decoration:none">פתח בכרטיסייה ↗</a>
+        <button class="btn primary" style="padding:6px 13px" onclick="closePreview()">סגור</button>
+      </div>
+    </div>
+    <iframe src="${url}" style="flex:1;width:100%;border:none;background:#fff"></iframe>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) closePreview(); };
+};
+window.closePreview = () => { const m = document.getElementById('docPreview'); if (m) m.classList.add('hidden'); };
 
 // טבלת מסמכים משותפת (עם פירוק מע"מ). opts.showClient מוסיף עמודת לקוח.
 function docsTable(docs, opts = {}) {
@@ -95,7 +116,7 @@ function docsTable(docs, opts = {}) {
       <td>${d.number ?? '—'}</td>
       <td>${money(d.amountExVat)}</td>
       <td>${money(d.amountIncVat)}</td>
-      <td>${d.url ? `<a href="${d.url}" target="_blank" class="muted">פתח ↗</a>` : ''}</td>
+      <td>${d.url ? `<div style="display:flex;gap:8px;align-items:center;justify-content:flex-end"><button class="btn ghost" style="padding:5px 11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button><a href="${d.url}" target="_blank" class="muted" style="white-space:nowrap">הורדה ↓</a></div>` : ''}</td>
     </tr>`).join('')}
     <tr style="background:var(--panel2)"><td colspan="${cc ? 4 : 3}"><b>סה"כ</b></td><td><b>${money(totalEx)}</b></td><td><b>${money(totalInc)}</b></td><td></td></tr>
     </tbody></table>`;
