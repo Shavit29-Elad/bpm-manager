@@ -1,5 +1,5 @@
 // app.js — לוגיקת הממשק (SPA פשוט ללא ספריות)
-const state = { company: null, companies: [], tab: 'events' };
+const state = { company: null, companies: [], tab: 'home' };
 const $ = (s) => document.querySelector(s);
 const money = (n) => (n == null ? '—' : '₪' + Number(n).toLocaleString('he-IL'));
 const api = (p) => fetch(p).then(r => r.json());
@@ -33,8 +33,38 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ events: renderCombined, invoicing: renderInvoicing, team: renderTeam,
+  ({ home: renderHome, events: renderCombined, invoicing: renderInvoicing, team: renderTeam,
      contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
+}
+
+// ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
+const MONTHS_FULL = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+async function renderHome(c) {
+  c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מחשבונית ירוקה…</div></div>`;
+  const d = await api(`/api/dashboard?companyId=${state.company}`);
+  const [y, m] = (d.month || new Date().toISOString().slice(0, 7)).split('-').map(Number);
+  const monthName = `${MONTHS_FULL[m - 1]} ${y}`;
+  const err = d.errors || {};
+  const kpi = (label, val, sub, color) => `<div class="card"><div class="label">${label}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
+  const otherErrs = Object.keys(err).filter(k => k !== 'greenInvoice').map(k => err[k]);
+  c.innerHTML = `
+    <div class="panel">
+      <div class="row-between"><div><h2>דף הבית — סקירת ${monthName}</h2><span class="muted">נתונים חיים מחשבונית ירוקה</span></div></div>
+      ${err.greenInvoice ? `<div class="warn-banner">חשבונית ירוקה לא מחוברת — חבר אותה בלשונית 🔌 חיבורים כדי לראות נתונים.</div>` : ''}
+      <div class="cards" style="margin-top:14px">
+        ${kpi('הכנסה החודש', money(d.income), d.monthDocs != null ? `${d.monthDocs} חשבוניות מס/מס-קבלה` : '', 'var(--accent2)')}
+        ${kpi('צפי מע"מ (18%)', money(d.vat), 'מתוך ההכנסה החודשית', 'var(--warn)')}
+        ${kpi('חשבוניות מס פתוחות', d.openInvoices != null ? d.openInvoices : '—', 'טרם שולמו במלואן', 'var(--danger)')}
+        ${kpi('יתרת עו"ש', '—', 'יש לחבר חשבון בנק', 'var(--muted)')}
+      </div>
+      ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
+    </div>
+    <div class="panel">
+      <div class="row-between"><h2>לקוחות</h2><span class="muted">${(d.clients || []).length} לקוחות</span></div>
+      ${(d.clients || []).length
+        ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${d.clients.slice(0, 80).map(cl => `<span class="chip" style="padding:7px 12px;font-size:13px">${cl.name}</span>`).join('')}</div>`
+        : `<div class="empty">אין לקוחות להצגה עדיין.</div>`}
+    </div>`;
 }
 
 // ---- אירועים + אי-התאמות + יומן (לשונית אחת מאוחדת) ----

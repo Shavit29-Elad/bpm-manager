@@ -101,5 +101,50 @@ export async function createReceipt({ client, items, remarks }) {
   return createInvoice({ client, items, type: DOC_TYPES.RECEIPT, remarks });
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, DOC_TYPES };
+// ===== נתונים לדף הבית =====
+const num = (v) => (Number(v) || 0);
+function lastDay(month) {
+  const [y, m] = month.split('-').map(Number);
+  return `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+}
+
+// הכנסה חודשית מחשבוניות מס (305) + מס/קבלה (320), וצפי מע"מ
+export async function monthlyIncome(month) {
+  const fromDate = `${month}-01`, toDate = lastDay(month);
+  const res = await api('/documents/search', {
+    method: 'POST',
+    body: { fromDate, toDate, page: 1, pageSize: 100, type: [305, 320], sort: 'documentDate' },
+  });
+  const items = res.items || [];
+  let income = 0, vat = 0;
+  for (const d of items) {
+    const amt = num(d.amount ?? d.total ?? d.sum);
+    income += amt;
+    vat += (d.vat != null ? num(d.vat) : amt - amt / 1.18); // מע"מ 18% אם לא סופק
+  }
+  return { income, vat, count: items.length };
+}
+
+// כמות חשבוניות מס פתוחות (לא שולמו במלואן)
+export async function openInvoicesCount() {
+  const res = await api('/documents/search', {
+    method: 'POST',
+    body: { page: 1, pageSize: 100, type: [305], sort: 'documentDate' },
+  });
+  const items = res.items || [];
+  return items.filter(d => {
+    if (d.amountDue != null) return num(d.amountDue) > 0.01;
+    if (d.paid != null) return !d.paid;
+    if (d.paymentStatus != null) return num(d.paymentStatus) === 0;
+    return false;
+  }).length;
+}
+
+// רשימת לקוחות (ממורנינג / חשבונית ירוקה)
+export async function listClients() {
+  const res = await api('/clients/search', { method: 'POST', body: { page: 1, pageSize: 200 } });
+  return (res.items || []).map(c => ({ id: c.id, name: c.name })).filter(c => c.name);
+}
+
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, openInvoicesCount, listClients, DOC_TYPES };
 export default greenInvoice;

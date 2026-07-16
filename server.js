@@ -303,6 +303,19 @@ add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body
   } catch (e) { save(db); json(res, { error: e.message, messages: history }, 500); }
 });
 
+// GET /api/dashboard?month=YYYY-MM  — נתוני דף הבית מחשבונית ירוקה
+add('GET', /^\/api\/dashboard$/, async (req, res, _p, q) => {
+  const month = q.month || new Date().toISOString().slice(0, 7);
+  const out = { month, income: null, vat: null, openInvoices: null, monthDocs: null, clients: [], bank: null, errors: {} };
+  if (greenInvoice.haveCredentials()) {
+    try { const m = await greenInvoice.monthlyIncome(month); out.income = m.income; out.vat = m.vat; out.monthDocs = m.count; }
+    catch (e) { out.errors.income = e.message; }
+    try { out.openInvoices = await greenInvoice.openInvoicesCount(); } catch (e) { out.errors.open = e.message; }
+    try { out.clients = await greenInvoice.listClients(); } catch (e) { out.errors.clients = e.message; }
+  } else { out.errors.greenInvoice = 'חשבונית ירוקה לא מחוברת'; }
+  json(res, out);
+});
+
 // GET /api/health
 add('GET', /^\/api\/health$/, (req, res) => json(res, {
   ok: true,
