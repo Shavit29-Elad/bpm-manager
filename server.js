@@ -16,6 +16,8 @@ import greenInvoice from './greenInvoice.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
+import { listTeam, findMember, TEAM } from './team.js';
+import { chatWithMember, chatGroupReply, chatConfigured } from './chat.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
 
@@ -241,11 +243,61 @@ add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, _q, body) => {
   json(res, { ok: true, connections: buildConnectionsView() });
 });
 
+// ---- צוות (עובדים וירטואליים) + צ'אט ----
+// GET /api/team  -> רשימת חברי הצוות
+add('GET', /^\/api\/team$/, (req, res) => json(res, { members: listTeam(), configured: chatConfigured() }));
+
+// GET /api/team/:id/messages  (id = 'group' או מזהה חבר)
+add('GET', /^\/api\/team\/([^/]+)\/messages$/, (req, res, params) => {
+  const db = load();
+  json(res, db.chats?.[params[0]] || []);
+});
+
+// POST /api/team/:id/message  { text }
+add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body) => {
+  const id = params[0];
+  const text = (body?.text || '').trim();
+  if (!text) return json(res, { error: 'חסר טקסט' }, 400);
+  if (!chatConfigured()) return json(res, { error: 'הצ\'אט לא מוגדר — הוסף ANTHROPIC_API_KEY ב-Render' }, 400);
+
+  const db = load();
+  db.chats = db.chats || {};
+  const now = new Date().toISOString();
+
+  if (id === 'group') {
+    const history = db.chats.group = db.chats.group || [];
+    history.push({ role: 'user', name: 'אתה', content: text, at: now });
+    try {
+      // כל חבר צוות עונה בתורו על סמך התמלול המתעדכן
+      for (const member of TEAM) {
+        const transcript = history.map(m => `${m.name || (m.role === 'user' ? 'אתה' : m.memberName || 'צוות')}: ${m.content}`).join('\n');
+        const reply = await chatGroupReply(member, transcript);
+        history.push({ role: 'assistant', memberId: member.id, name: member.name, emoji: member.emoji, content: reply, at: new Date().toISOString() });
+      }
+      save(db);
+      json(res, { ok: true, messages: history });
+    } catch (e) { save(db); json(res, { error: e.message, messages: history }, 500); }
+    return;
+  }
+
+  const member = findMember(id);
+  if (!member) return json(res, { error: 'עובד לא נמצא' }, 404);
+  const history = db.chats[id] = db.chats[id] || [];
+  history.push({ role: 'user', content: text, at: now });
+  try {
+    const reply = await chatWithMember(member, history);
+    history.push({ role: 'assistant', content: reply, at: new Date().toISOString() });
+    save(db);
+    json(res, { ok: true, messages: history });
+  } catch (e) { save(db); json(res, { error: e.message, messages: history }, 500); }
+});
+
 // GET /api/health
 add('GET', /^\/api\/health$/, (req, res) => json(res, {
   ok: true,
   greenInvoiceConnected: greenInvoice.haveCredentials(),
   calendarConnected: hasCalendar(),
+  chatConnected: chatConfigured(),
   whatsapp: getBridgeStatus().status,
 }));
 

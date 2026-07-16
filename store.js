@@ -20,6 +20,7 @@ const EMPTY = {
   bankTx: [],      // תנועות בנק להתאמה
   fixedExpenses: [],// הוצאות קבועות
   assets: [],      // רכבים/הלוואות/ביטוחים - תוקף והתראות
+  chats: {},       // שיחות עם דמויות הצוות: { memberId: [ {role, content, at} ] }
 };
 
 function ensure() {

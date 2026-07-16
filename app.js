@@ -33,7 +33,7 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ events: renderCombined, invoicing: renderInvoicing,
+  ({ events: renderCombined, invoicing: renderInvoicing, team: renderTeam,
      contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
 }
 
@@ -363,6 +363,77 @@ function wireCard(x) {
   b(`[data-test="${x.key}"]`, () => post('/api/connections/test', {}));
   b(`[data-disc="${x.key}"]`, () => { if (confirm('לנתק חיבור זה?')) post('/api/connections/disconnect', {}); });
 }
+
+// ---- הצוות (עובדים וירטואליים) + צ'אט ----
+const escapeHtml = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+window.openChat = (id) => { state.activeChat = id; renderTeam($('#content')); };
+
+async function renderTeam(c) {
+  const data = await api('/api/team');
+  if (!state.activeChat) state.activeChat = 'group';
+  const members = data.members || [];
+  const item = (id, emoji, name, sub, active) => `
+    <div class="chat-item ${active ? 'active' : ''}" onclick="openChat('${id}')">
+      <span style="font-size:20px">${emoji}</span>
+      <div style="min-width:0"><div style="font-weight:600">${name}</div><div class="muted" style="font-size:12px">${sub}</div></div>
+    </div>`;
+  const sidebar = `<div class="panel" style="width:250px;flex:none">
+      <h2 style="margin-bottom:14px">הצוות</h2>
+      ${item('group', '👥', 'כל הצוות', `${members.length} עובדים`, state.activeChat === 'group')}
+      <div style="height:1px;background:var(--line);margin:8px 0"></div>
+      ${members.map(m => item(m.id, m.emoji, m.name, m.role, state.activeChat === m.id)).join('')}
+    </div>`;
+  const activeName = state.activeChat === 'group' ? 'כל הצוות' : (members.find(m => m.id === state.activeChat)?.name || '');
+  const notice = data.configured ? '' : `<div class="warn-banner">כדי לשוחח עם הצוות צריך מפתח Anthropic. הוסף <b>ANTHROPIC_API_KEY</b> כמשתנה סביבה ב-Render (כמו שאר החיבורים).</div>`;
+  c.innerHTML = `<div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
+    ${sidebar}
+    <div class="panel" style="flex:1;min-width:320px;display:flex;flex-direction:column;height:600px">
+      <div class="row-between" style="margin-bottom:12px"><h2>${activeName}</h2></div>
+      ${notice}
+      <div id="chatMsgs" style="flex:1;overflow:auto;display:flex;flex-direction:column;gap:10px;padding:4px"></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <input id="chatInput" placeholder="כתוב הודעה..." style="flex:1" ${data.configured ? '' : 'disabled'} onkeydown="if(event.key==='Enter')sendChat()"/>
+        <button class="btn primary" onclick="sendChat()" ${data.configured ? '' : 'disabled'}>שלח</button>
+      </div>
+    </div>
+  </div>`;
+  loadChat();
+}
+
+async function loadChat() {
+  const msgs = await api(`/api/team/${state.activeChat}/messages`);
+  renderMsgs(msgs);
+}
+
+function bubble(m) {
+  const mine = m.role === 'user';
+  const who = mine ? 'אתה' : `${m.emoji || '🤖'} ${m.name || 'עוזר'}`;
+  return `<div style="align-self:${mine ? 'flex-start' : 'flex-end'};max-width:80%;background:${mine ? 'var(--panel2)' : 'var(--grad-soft)'};border:1px solid var(--line);border-radius:14px;padding:10px 14px">
+    <div class="muted" style="font-size:11px;margin-bottom:4px">${who}</div>
+    <div style="white-space:pre-wrap;line-height:1.55">${escapeHtml(m.content)}</div></div>`;
+}
+function renderMsgs(msgs, typing) {
+  const box = $('#chatMsgs'); if (!box) return;
+  const list = (msgs || []).map(bubble).join('');
+  const typingBubble = typing ? `<div style="align-self:flex-end;background:var(--grad-soft);border:1px solid var(--line);border-radius:14px;padding:10px 14px" class="muted">כותב…</div>` : '';
+  box.innerHTML = (list || (typing ? '' : `<div class="empty">התחל שיחה 👋</div>`)) + typingBubble;
+  box.scrollTop = box.scrollHeight;
+}
+
+window.sendChat = async () => {
+  const inp = $('#chatInput'); if (!inp) return;
+  const text = inp.value.trim(); if (!text) return;
+  inp.value = ''; inp.disabled = true;
+  const existing = await api(`/api/team/${state.activeChat}/messages`);
+  renderMsgs([...existing, { role: 'user', content: text }], true);
+  const r = await fetch(`/api/team/${state.activeChat}/message`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
+  }).then(r => r.json());
+  inp.disabled = false;
+  renderMsgs(r.messages || existing);
+  if (r.error) { const b = $('#chatMsgs'); if (b) b.innerHTML += `<div class="warn-banner">${r.error}</div>`; }
+  inp.focus();
+};
 
 // ---- מודל הדבקה ----
 function setupModal() {

@@ -151,6 +151,11 @@ tbody tr:last-child td{border-bottom:none}
 .warn-banner{background:rgba(245,177,61,.10);border:1px solid rgba(245,177,61,.4);color:var(--warn);padding:12px 16px;border-radius:12px;font-size:13px;margin-bottom:16px}
 .empty{color:var(--muted);text-align:center;padding:34px;font-size:14.5px}
 
+/* ===== צ'אט צוות ===== */
+.chat-item{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:12px;cursor:pointer;transition:background .12s;margin-bottom:2px}
+.chat-item:hover{background:rgba(255,255,255,.04)}
+.chat-item.active{background:var(--grad-soft);border:1px solid var(--line)}
+
 /* גלילה עדינה */
 ::-webkit-scrollbar{width:11px;height:11px}
 ::-webkit-scrollbar-thumb{background:#26324e;border-radius:8px;border:3px solid transparent;background-clip:content-box}
