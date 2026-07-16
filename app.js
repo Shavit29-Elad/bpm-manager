@@ -50,17 +50,82 @@ async function renderEvents(c) {
         <thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>איכות קליטה</th></tr></thead>
         <tbody>${events.map(rowEvent).join('')}</tbody></table>`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
-    </div>
-    <div class="panel" id="calWrap"><div class="empty">טוען יומן…</div></div>`;
+    </div>`;
   $('#addEvent').onclick = () => $('#ingestModal').classList.remove('hidden');
-  renderMonthCalendar();
 }
 
-// ---- תצוגת יומן חודשית (מתחת לאירועים) ----
-if (!state.calMonth) state.calMonth = new Date().toISOString().slice(0, 7);
-const MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
-const DAYS_HE = ['א','ב','ג','ד','ה','ו','ש'];
+// ---- תצוגת יומן: שבועית (ברירת מחדל) או חודשית, עם מתג ----
+const DAYS_FULL = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+const DAYS_HE = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
+const MONTHS_HE = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+const isoDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+function viewToggle() {
+  const week = state.calView !== 'month';
+  return `<div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">
+    <button class="btn ${week ? 'primary' : 'ghost'}" style="padding:5px 13px" onclick="setCalView('week')">שבועי</button>
+    <button class="btn ${!week ? 'primary' : 'ghost'}" style="padding:5px 13px" onclick="setCalView('month')">חודשי</button>
+  </div>`;
+}
+function setCalView(v) { state.calView = v; renderCalView(); }
+window.setCalView = setCalView;
+function renderCalView() { (state.calView === 'month' ? renderMonthCalendar : renderWeekCalendar)(); }
+function initWeek() {
+  if (state.weekStart) return;
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  t.setDate(t.getDate() - t.getDay()); // חזרה ליום ראשון
+  state.weekStart = isoDate(t);
+}
+function shiftWeek(delta) {
+  const d = new Date(state.weekStart + 'T00:00:00');
+  d.setDate(d.getDate() + delta * 7);
+  state.weekStart = isoDate(d);
+  renderWeekCalendar();
+}
+window.shiftWeek = shiftWeek;
+
+async function renderWeekCalendar() {
+  const wrap = $('#calWrap'); if (!wrap) return;
+  initWeek();
+  const start = new Date(state.weekStart + 'T00:00:00');
+  const days = [...Array(7)].map((_, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return d; });
+  const from = isoDate(days[0]), to = isoDate(days[6]);
+  const data = await api(`/api/calendar/events?companyId=${state.company}&from=${from}&to=${to}`);
+  const byDay = {};
+  const add = (ev, cls) => { if (!ev.date) return; (byDay[ev.date] = byDay[ev.date] || []).push({ ...ev, cls }); };
+  (data.calendar || []).forEach(e => add(e, 'cal'));
+  (data.whatsapp || []).forEach(e => add(e, 'wa'));
+
+  const cols = days.map((d, i) => {
+    const iso = isoDate(d);
+    const evs = byDay[iso] || [];
+    const items = evs.length ? evs.map(e =>
+      `<div style="font-size:12px;padding:4px 7px;margin-top:4px;border-radius:6px;line-height:1.3;background:${e.cls === 'wa' ? 'rgba(91,140,255,.22)' : 'rgba(56,211,159,.18)'};color:${e.cls === 'wa' ? '#bcd0ff' : '#7ff0cf'}">${e.title || 'אירוע'}${e.location ? `<div style="font-size:10px;opacity:.75">${e.location}</div>` : ''}</div>`).join('')
+      : `<div class="muted" style="font-size:11px;margin-top:8px">—</div>`;
+    return `<div style="border:1px solid var(--line);border-radius:10px;padding:9px;min-height:230px;background:var(--panel2)">
+      <div style="font-weight:600;font-size:13px;border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:2px">
+        ${DAYS_FULL[i]} <span class="muted" style="font-weight:400">${d.getDate()}/${d.getMonth() + 1}</span>
+        ${evs.length ? `<span class="muted" style="font-size:11px">· ${evs.length}</span>` : ''}
+      </div>${items}</div>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div class="row-between" style="margin-bottom:12px">
+      <h2>יומן שבועי — ${days[0].getDate()}/${days[0].getMonth() + 1} עד ${days[6].getDate()}/${days[6].getMonth() + 1}</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${viewToggle()}
+        <span style="font-size:12px" class="muted"><span style="color:#7ff0cf">●</span> יומן גוגל &nbsp; <span style="color:#bcd0ff">●</span> ווטסאפ</span>
+        <button class="btn ghost" onclick="shiftWeek(-1)">← שבוע קודם</button>
+        <button class="btn ghost" onclick="shiftWeek(1)">שבוע הבא →</button>
+      </div>
+    </div>
+    ${data.calendarError ? `<div class="warn-banner">${data.calendarError}</div>` : ''}
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:8px">${cols}</div>`;
+}
+
+// תצוגה חודשית (תמונה גדולה)
 function shiftMonth(delta) {
+  if (!state.calMonth) state.calMonth = new Date().toISOString().slice(0, 7);
   const [y, m] = state.calMonth.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);
   state.calMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -70,37 +135,37 @@ window.shiftMonth = shiftMonth;
 
 async function renderMonthCalendar() {
   const wrap = $('#calWrap'); if (!wrap) return;
+  if (!state.calMonth) state.calMonth = new Date().toISOString().slice(0, 7);
   const month = state.calMonth;
   const data = await api(`/api/calendar/events?companyId=${state.company}&month=${month}`);
   const [y, m] = month.split('-').map(Number);
-  const first = new Date(y, m - 1, 1);
   const daysInMonth = new Date(y, m, 0).getDate();
-  const startDow = first.getDay(); // 0=ראשון
-  // מיפוי אירועים לפי יום
+  const startDow = new Date(y, m - 1, 1).getDay();
   const byDay = {};
-  const add = (ev, cls) => { const d = ev.date; if (!d) return; (byDay[d] = byDay[d] || []).push({ ...ev, cls }); };
+  const add = (ev, cls) => { if (!ev.date) return; (byDay[ev.date] = byDay[ev.date] || []).push({ ...ev, cls }); };
   (data.calendar || []).forEach(e => add(e, 'cal'));
   (data.whatsapp || []).forEach(e => add(e, 'wa'));
 
   let cells = '';
-  for (let i = 0; i < startDow; i++) cells += '<div style="min-height:84px"></div>';
+  for (let i = 0; i < startDow; i++) cells += '<div style="min-height:88px"></div>';
   for (let day = 1; day <= daysInMonth; day++) {
     const iso = `${month}-${String(day).padStart(2, '0')}`;
     const evs = byDay[iso] || [];
     const items = evs.slice(0, 4).map(e =>
       `<div title="${(e.title || '').replace(/"/g, '')} ${e.location || ''}" style="font-size:11px;padding:1px 5px;margin-top:2px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${e.cls === 'wa' ? 'rgba(91,140,255,.25)' : 'rgba(56,211,159,.2)'};color:${e.cls === 'wa' ? '#bcd0ff' : '#7ff0cf'}">${e.title || 'אירוע'}</div>`).join('');
     const more = evs.length > 4 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">+${evs.length - 4} עוד</div>` : '';
-    cells += `<div style="min-height:84px;border:1px solid var(--line);border-radius:8px;padding:5px;background:${evs.length ? 'var(--panel2)' : 'transparent'}">
+    cells += `<div style="min-height:88px;border:1px solid var(--line);border-radius:8px;padding:5px;background:${evs.length ? 'var(--panel2)' : 'transparent'}">
       <div style="font-size:12px;color:var(--muted)">${day}</div>${items}${more}</div>`;
   }
 
   wrap.innerHTML = `
     <div class="row-between" style="margin-bottom:12px">
-      <h2>יומן — ${MONTHS_HE[m - 1]} ${y}</h2>
-      <div style="display:flex;gap:8px;align-items:center">
+      <h2>יומן חודשי — ${MONTHS_HE[m - 1]} ${y}</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${viewToggle()}
         <span style="font-size:12px" class="muted"><span style="color:#7ff0cf">●</span> יומן גוגל &nbsp; <span style="color:#bcd0ff">●</span> ווטסאפ</span>
-        <button class="btn ghost" onclick="shiftMonth(-1)">← קודם</button>
-        <button class="btn ghost" onclick="shiftMonth(1)">הבא →</button>
+        <button class="btn ghost" onclick="shiftMonth(-1)">← חודש קודם</button>
+        <button class="btn ghost" onclick="shiftMonth(1)">חודש הבא →</button>
       </div>
     </div>
     ${data.calendarError ? `<div class="warn-banner">${data.calendarError}</div>` : ''}
@@ -122,25 +187,28 @@ function rowEvent(e) {
     <td>${miss}</td></tr>`;
 }
 
-// ---- התאמת יומן ----
+// ---- יומן והתאמות (למעלה אי-התאמות, מתחת יומן) ----
 async function renderCalendar(c) {
   const m = await api(`/api/calendar/match?companyId=${state.company}`);
-  const banner = m.calendarError ? `<div class="warn-banner">יומן גוגל לא מחובר עדיין (${m.calendarError}). חבר Access Token כדי לראות התאמות אמיתיות.</div>` : '';
-  c.innerHTML = `<div class="panel">${banner}
-    <h2>התאמת אירועים מול יומן גוגל</h2>
-    <p class="muted">מזהה אירועים שנקלטו בווטסאפ אך חסרים ביומן, ולהיפך.</p>
+  const misses = m.matched.filter(x => !x.calendar);
+  c.innerHTML = `<div class="panel">
+    <h2>אי-התאמות מול יומן גוגל</h2>
+    <p class="muted">אירועים שנקלטו בווטסאפ אך חסרים ביומן (או להיפך). כאן נגדיר בהמשך את הטיפול בכל אחד.</p>
     <div class="cards" style="margin:14px 0">
       <div class="card"><div class="label">חסר ביומן (יש בווטסאפ)</div><div class="big" style="color:var(--danger)">${m.missingInCalendar.length}</div></div>
       <div class="card"><div class="label">חסר בווטסאפ (יש ביומן)</div><div class="big" style="color:var(--warn)">${m.missingInWhatsapp.length}</div></div>
       <div class="card"><div class="label">הותאמו</div><div class="big" style="color:var(--accent2)">${m.matched.filter(x => x.calendar).length}</div></div>
     </div>
-    <table><thead><tr><th>תאריך</th><th>אירוע (ווטסאפ)</th><th>אירוע (יומן)</th><th>סטטוס</th></tr></thead>
-    <tbody>${m.matched.map(x => `<tr>
+    ${misses.length ? `<table><thead><tr><th>תאריך</th><th>אירוע (ווטסאפ)</th><th>סטטוס</th></tr></thead>
+    <tbody>${misses.map(x => `<tr>
       <td>${x.whatsapp.date || '—'}</td>
       <td>${x.whatsapp.artist || '—'} / ${x.whatsapp.location || ''}</td>
-      <td>${x.calendar ? x.calendar.title : '—'}</td>
-      <td>${x.calendar ? `<span class="tag match">הותאם (${x.score})</span>` : `<span class="tag miss">חסר ביומן</span>`}</td>
-    </tr>`).join('')}</tbody></table></div>`;
+      <td><span class="tag miss">חסר ביומן</span></td>
+    </tr>`).join('')}</tbody></table>`
+    : `<div class="empty">אין אי-התאמות כרגע 👌</div>`}
+  </div>
+  <div class="panel" id="calWrap"><div class="empty">טוען יומן…</div></div>`;
+  renderCalView();
 }
 
 // ---- חיוב ----

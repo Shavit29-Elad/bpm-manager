@@ -92,24 +92,30 @@ add('GET', /^\/api\/calendar\/match$/, async (req, res, _p, q) => {
   }
 });
 
-// GET /api/calendar/events?companyId=&month=YYYY-MM  (לתצוגת יומן חודשית)
+// GET /api/calendar/events?companyId=&from=YYYY-MM-DD&to=YYYY-MM-DD  (טווח שבועי)
+//     או ?month=YYYY-MM  (תאימות לאחור)
 add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
   const db = load();
-  const month = q.month || new Date().toISOString().slice(0, 7);
+  // מסנן טווח: from<=date<=to. אם ניתן month — כל החודש.
+  const inRange = (d) => {
+    if (!d) return false;
+    if (q.from && q.to) return d >= q.from && d <= q.to;
+    return d.startsWith(q.month || new Date().toISOString().slice(0, 7));
+  };
   const wa = (q.companyId ? companyEvents(db, q.companyId) : db.events)
-    .filter(e => (e.date || '').startsWith(month))
+    .filter(e => inRange(e.date))
     .map(e => ({ date: e.date, title: e.artist || 'אירוע', location: e.location || '', source: 'whatsapp' }));
   let cal = [];
   let calendarError = null;
   try {
     if (hasCalendar()) {
       cal = (await fetchCalendarEvents())
-        .filter(e => (e.date || '').startsWith(month))
+        .filter(e => inRange(e.date))
         .map(e => ({ date: e.date, title: e.title, location: e.location, source: 'calendar' }));
     } else { calendarError = 'יומן גוגל לא מחובר'; }
   } catch (e) { calendarError = e.message; }
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify({ month, whatsapp: wa, calendar: cal, calendarError }));
+  res.end(JSON.stringify({ from: q.from, to: q.to, whatsapp: wa, calendar: cal, calendarError }));
 });
 
 // GET /api/invoicing/pending?companyId=
