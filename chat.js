@@ -10,25 +10,32 @@ export function chatConfigured() {
 // --- Google Gemini (חינמי) ---
 async function callGemini(system, messages) {
   const key = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  // רשימת מודלים לניסיון (מהחדש לישן) — עמידה בפני שינויי שמות/פרישת מודלים
+  const candidates = process.env.GEMINI_MODEL
+    ? [process.env.GEMINI_MODEL]
+    : ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash-latest'];
   const contents = messages.map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }],
   }));
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: system }] },
-      contents,
-      generationConfig: { maxOutputTokens: 1200, temperature: 0.7 },
-    }),
+  const body = JSON.stringify({
+    system_instruction: { parts: [{ text: system }] },
+    contents,
+    generationConfig: { maxOutputTokens: 1200, temperature: 0.7 },
   });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`שגיאת צ'אט (${res.status}): ${text.slice(0, 300)}`);
-  let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מהשירות'); }
-  const parts = data.candidates?.[0]?.content?.parts || [];
-  return parts.map(p => p.text).filter(Boolean).join('') || '(אין תשובה)';
+  let lastErr = '';
+  for (const model of candidates) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body,
+    });
+    const text = await res.text();
+    if (res.status === 404) { lastErr = text.slice(0, 150); continue; } // מודל לא קיים — ננסה את הבא
+    if (!res.ok) throw new Error(`שגיאת צ'אט (${res.status}): ${text.slice(0, 300)}`);
+    let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מהשירות'); }
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    return parts.map(p => p.text).filter(Boolean).join('') || '(אין תשובה)';
+  }
+  throw new Error(`אף מודל Gemini לא זמין במפתח הזה. אפשר לקבוע GEMINI_MODEL ידנית. פרט: ${lastErr}`);
 }
 
 // --- Anthropic Claude (בתשלום) ---
