@@ -83,6 +83,7 @@ const DAYS_FULL = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמיש
 const DAYS_HE = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
 const MONTHS_HE = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
 const isoDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const todayIso = () => isoDate(new Date());
 
 function viewToggle() {
   const week = state.calView !== 'month';
@@ -120,15 +121,18 @@ async function renderWeekCalendar() {
   (data.calendar || []).forEach(e => add(e, 'cal'));
   (data.whatsapp || []).forEach(e => add(e, 'wa'));
 
+  const today = todayIso();
   const cols = days.map((d, i) => {
     const iso = isoDate(d);
+    const isToday = iso === today;
     const evs = byDay[iso] || [];
     const items = evs.length ? evs.map(e =>
       `<div style="font-size:12px;padding:4px 7px;margin-top:4px;border-radius:6px;line-height:1.3;background:${e.cls === 'wa' ? 'rgba(91,140,255,.22)' : 'rgba(56,211,159,.18)'};color:${e.cls === 'wa' ? '#bcd0ff' : '#7ff0cf'}">${e.title || 'אירוע'}${e.location ? `<div style="font-size:10px;opacity:.75">${e.location}</div>` : ''}</div>`).join('')
       : `<div class="muted" style="font-size:11px;margin-top:8px">—</div>`;
-    return `<div style="border:1px solid var(--line);border-radius:10px;padding:9px;min-height:230px;background:var(--panel2)">
+    return `<div style="border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:10px;padding:9px;min-height:230px;background:${isToday ? 'rgba(91,140,255,.10)' : 'var(--panel2)'}">
       <div style="font-weight:600;font-size:13px;border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:2px">
         ${DAYS_FULL[i]} <span class="muted" style="font-weight:400">${d.getDate()}/${d.getMonth() + 1}</span>
+        ${isToday ? '<span style="color:var(--accent);font-size:11px;font-weight:700">· היום</span>' : ''}
         ${evs.length ? `<span class="muted" style="font-size:11px">· ${evs.length}</span>` : ''}
       </div>${items}</div>`;
   }).join('');
@@ -139,8 +143,8 @@ async function renderWeekCalendar() {
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         ${viewToggle()}
         <span style="font-size:12px" class="muted"><span style="color:#7ff0cf">●</span> יומן גוגל &nbsp; <span style="color:#bcd0ff">●</span> ווטסאפ</span>
-        <button class="btn ghost" onclick="shiftWeek(-1)">← שבוע קודם</button>
-        <button class="btn ghost" onclick="shiftWeek(1)">שבוע הבא →</button>
+        <button class="btn ghost" onclick="shiftWeek(-1)">שבוע קודם →</button>
+        <button class="btn ghost" onclick="shiftWeek(1)">← שבוע הבא</button>
       </div>
     </div>
     ${data.calendarError ? `<div class="warn-banner">${data.calendarError}</div>` : ''}
@@ -170,16 +174,18 @@ async function renderMonthCalendar() {
   (data.calendar || []).forEach(e => add(e, 'cal'));
   (data.whatsapp || []).forEach(e => add(e, 'wa'));
 
+  const today = todayIso();
   let cells = '';
   for (let i = 0; i < startDow; i++) cells += '<div style="min-height:88px"></div>';
   for (let day = 1; day <= daysInMonth; day++) {
     const iso = `${month}-${String(day).padStart(2, '0')}`;
+    const isToday = iso === today;
     const evs = byDay[iso] || [];
     const items = evs.slice(0, 4).map(e =>
       `<div title="${(e.title || '').replace(/"/g, '')} ${e.location || ''}" style="font-size:11px;padding:1px 5px;margin-top:2px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${e.cls === 'wa' ? 'rgba(91,140,255,.25)' : 'rgba(56,211,159,.2)'};color:${e.cls === 'wa' ? '#bcd0ff' : '#7ff0cf'}">${e.title || 'אירוע'}</div>`).join('');
     const more = evs.length > 4 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">+${evs.length - 4} עוד</div>` : '';
-    cells += `<div style="min-height:88px;border:1px solid var(--line);border-radius:8px;padding:5px;background:${evs.length ? 'var(--panel2)' : 'transparent'}">
-      <div style="font-size:12px;color:var(--muted)">${day}</div>${items}${more}</div>`;
+    cells += `<div style="min-height:88px;border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:8px;padding:5px;background:${isToday ? 'rgba(91,140,255,.10)' : (evs.length ? 'var(--panel2)' : 'transparent')}">
+      <div style="font-size:12px;color:${isToday ? 'var(--accent)' : 'var(--muted)'};font-weight:${isToday ? '700' : '400'}">${day}${isToday ? ' • היום' : ''}</div>${items}${more}</div>`;
   }
 
   wrap.innerHTML = `
@@ -188,8 +194,8 @@ async function renderMonthCalendar() {
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         ${viewToggle()}
         <span style="font-size:12px" class="muted"><span style="color:#7ff0cf">●</span> יומן גוגל &nbsp; <span style="color:#bcd0ff">●</span> ווטסאפ</span>
-        <button class="btn ghost" onclick="shiftMonth(-1)">← חודש קודם</button>
-        <button class="btn ghost" onclick="shiftMonth(1)">חודש הבא →</button>
+        <button class="btn ghost" onclick="shiftMonth(-1)">חודש קודם →</button>
+        <button class="btn ghost" onclick="shiftMonth(1)">← חודש הבא</button>
       </div>
     </div>
     ${data.calendarError ? `<div class="warn-banner">${data.calendarError}</div>` : ''}
