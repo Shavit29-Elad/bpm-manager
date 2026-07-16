@@ -1006,19 +1006,9 @@ window.setBankIgnore = (id, ig) => bankAction(id, { matchStatus: ig ? 'ignored' 
 window.saveBankNotes = (id, val) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: val }) });
 
 // ---- שיוך ידני של חשבונית/קבלה לתנועת בנק ----
-let _linkTxId = null, _linkSel = [], _linkClients = null, _linkRecs = [];
-// חיפוש קבלה (400) התואמת לחשבונית לפי סכום (מלא או פחות 5% ניכוי), שלא נוצלה כבר בבחירה
-function findReceiptFor(inv) {
-  const usedNums = new Set(_linkSel.map(x => x.receipt && String(x.receipt.number)).filter(Boolean));
-  const t = Math.max(3, (inv.amount || 0) * 0.004);
-  let best = null, bestDiff = Infinity;
-  for (const r of _linkRecs) {
-    if (usedNums.has(String(r.number))) continue;
-    const diff = Math.min(Math.abs(r.amount - inv.amount), Math.abs(r.amount - inv.amount * 0.95));
-    if (diff <= t && diff < bestDiff) { bestDiff = diff; best = r; }
-  }
-  return best ? { number: best.number, url: best.url || null, amount: best.amount } : null;
-}
+let _linkTxId = null, _linkSel = [], _linkClients = null, _linkClientDocs = [], _linkClientName = '';
+// התאמת סכום בין קבלה לחשבונית (מלא או פחות 5% ניכוי)
+const _amtClose = (a, b) => { const t = Math.max(3, (a || 0) * 0.004); return Math.min(Math.abs(a - b), Math.abs(a - b * 0.95)) <= t; };
 function linkSelHtml() {
   if (!_linkSel.length) return '<span class="muted">אין מסמכים מקושרים.</span>';
   return _linkSel.map((d, i) => `<div style="padding:3px 0">
@@ -1033,7 +1023,7 @@ window.openLinkModal = async (txId) => {
   const tx = (_bankList || []).find(t => t.id === txId);
   _linkTxId = txId;
   _linkSel = tx ? JSON.parse(JSON.stringify(tx.matchedInvoices || [])) : [];
-  _linkRecs = [];
+  _linkClientDocs = []; _linkClientName = '';
   let m = document.getElementById('linkModal');
   if (!m) { m = document.createElement('div'); m.id = 'linkModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
@@ -1074,35 +1064,48 @@ window.linkPickClient = async (id, name) => {
   const box = document.getElementById('linkDocs'); if (!box) return;
   box.innerHTML = '<div class="muted" style="font-size:13px">טוען מסמכים…</div>';
   const docs = await api(`/api/clients/${id}/documents`);
+  _linkClientDocs = Array.isArray(docs) ? docs : [];
+  _linkClientName = decodeURIComponent(name);
+  renderLinkDocs();
+};
+// מציג רק מסמכים פנויים (חשבונית מס / מס-קבלה / קבלה) שלא שויכו עדיין
+window.renderLinkDocs = () => {
+  const box = document.getElementById('linkDocs'); if (!box) return;
   const { ids, recs } = linkedDocIds();
-  const all = Array.isArray(docs) ? docs : [];
-  // מציגים לשיוך רק חשבוניות פנויות (מס / מס-קבלה). הקבלה תצורף אוטומטית לפי הסכום.
-  const invoices = all.filter(d => [305, 320].includes(Number(d.type)) && !ids.has(d.id));
-  // קבלות פנויות של הלקוח — נשמרות לצירוף אוטומטי לחשבונית שנבחרת
-  _linkRecs = all.filter(d => Number(d.type) === 400 && !recs.has(String(d.number)))
-    .map(d => ({ number: d.number, url: d.url, amount: d.amountIncVat }));
-  const rows = invoices.map(d => {
+  const allowed = [305, 320, 400];
+  const avail = _linkClientDocs.filter(d => allowed.includes(Number(d.type)) && !ids.has(d.id)
+    && !(Number(d.type) === 400 && recs.has(String(d.number))));
+  const rows = avail.map(d => {
     const j = encodeURIComponent(JSON.stringify({ id: d.id, number: d.number, type: d.type, clientName: d.clientName, amount: d.amountIncVat, date: d.date, url: d.url }));
     const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
-    const dl = d.url ? `<a href="${d.url}" target="_blank" class="muted" style="font-size:11px;white-space:nowrap">הורדה ↓</a>` : '';
+    const dl = d.url ? `<a href="${d.url}" target="_blank" class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none;white-space:nowrap">להורדה ↓</a>` : '';
     return `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
       <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${fmtDate(d.date)} · ${money(d.amountIncVat)}</span>
       ${pv}${dl}<button class="btn primary" style="padding:2px 12px;font-size:11px" onclick="linkAdd('${j}')">הוסף</button></div>`;
   }).join('');
-  box.innerHTML = `<b style="font-size:13px">חשבוניות פנויות של ${decodeURIComponent(name)}:</b>
-    <div class="muted" style="font-size:11.5px;margin:2px 0 4px">מוצגות רק חשבוניות שאינן משויכות עדיין · הקבלה התואמת תצורף אוטומטית.</div>
-    ${rows || '<div class="muted" style="font-size:13px;margin-top:4px">אין חשבוניות פנויות — כולן כבר משויכות לתנועות אחרות.</div>'}`;
+  box.innerHTML = `<b style="font-size:13px">מסמכים פנויים של ${escapeHtml(_linkClientName)} (חשבונית מס / מס-קבלה / קבלה):</b>
+    <div class="muted" style="font-size:11.5px;margin:2px 0 4px">מוצגים רק מסמכים שאינם משויכים עדיין. קבלה שתוסיף תצורף אוטומטית לחשבונית התואמת.</div>
+    ${rows || '<div class="muted" style="font-size:13px;margin-top:4px">אין מסמכים פנויים — כולם כבר משויכים לתנועות אחרות.</div>'}`;
 };
+const _refreshLink = () => { const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml(); if (_linkClientDocs.length) renderLinkDocs(); };
 window.linkAdd = (j) => {
   const d = JSON.parse(decodeURIComponent(j));
-  if (!_linkSel.find(x => x.id === d.id)) {
-    if (Number(d.type) === 305) { const rec = findReceiptFor(d); if (rec) d.receipt = rec; }  // צירוף קבלה אוטומטי
+  if (_linkSel.find(x => x.id === d.id)) return;
+  if (Number(d.type) === 400) {
+    // קבלה — לצרף לחשבונית שנבחרה ללא קבלה, לפי סכום; אחרת להוסיף כשורה נפרדת
+    const inv = _linkSel.find(x => Number(x.type) !== 400 && !x.receipt && _amtClose(x.amount, d.amount));
+    if (inv) inv.receipt = { number: d.number, url: d.url || null, amount: d.amount };
+    else _linkSel.push(d);
+  } else {
+    // חשבונית — לצרף אליה קבלה תואמת שכבר נבחרה (אם יש)
+    const rIdx = _linkSel.findIndex(x => Number(x.type) === 400 && _amtClose(d.amount, x.amount));
+    if (rIdx >= 0) { const r = _linkSel[rIdx]; d.receipt = { number: r.number, url: r.url || null, amount: r.amount }; _linkSel.splice(rIdx, 1); }
     _linkSel.push(d);
   }
-  const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml();
+  _refreshLink();
 };
-window.linkRemove = (i) => { _linkSel.splice(i, 1); const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml(); };
-window.linkDetachRec = (i) => { if (_linkSel[i]) delete _linkSel[i].receipt; const b = document.getElementById('linkSelBox'); if (b) b.innerHTML = linkSelHtml(); };
+window.linkRemove = (i) => { _linkSel.splice(i, 1); _refreshLink(); };
+window.linkDetachRec = (i) => { if (_linkSel[i]) delete _linkSel[i].receipt; _refreshLink(); };
 window.linkSave = async () => {
   const r = await fetch(`/api/bank/${_linkTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: _linkSel.length ? 'manual' : 'unmatched', matchedInvoices: _linkSel }) }).then(x => x.json()).catch(() => null);
   const m = document.getElementById('linkModal'); if (m) m.classList.add('hidden');
