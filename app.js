@@ -33,23 +33,40 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ home: renderHome, events: renderCombined, invoicing: renderInvoicing, team: renderTeam,
+  ({ home: renderHome, events: renderCombined, clients: renderClients, team: renderTeam,
      contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
 const MONTHS_FULL = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+function shiftDashMonth(delta) {
+  if (!state.dashMonth) state.dashMonth = new Date().toISOString().slice(0, 7);
+  const [y, m] = state.dashMonth.split('-').map(Number);
+  const dt = new Date(y, m - 1 + delta, 1);
+  state.dashMonth = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+  renderHome($('#content'));
+}
+window.shiftDashMonth = shiftDashMonth;
+
 async function renderHome(c) {
+  if (!state.dashMonth) state.dashMonth = new Date().toISOString().slice(0, 7);
   c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מחשבונית ירוקה…</div></div>`;
-  const d = await api(`/api/dashboard?companyId=${state.company}`);
-  const [y, m] = (d.month || new Date().toISOString().slice(0, 7)).split('-').map(Number);
+  const d = await api(`/api/dashboard?companyId=${state.company}&month=${state.dashMonth}`);
+  const [y, m] = (d.month || state.dashMonth).split('-').map(Number);
   const monthName = `${MONTHS_FULL[m - 1]} ${y}`;
   const err = d.errors || {};
   const kpi = (label, val, sub, color) => `<div class="card"><div class="label">${label}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
   const otherErrs = Object.keys(err).filter(k => k !== 'greenInvoice').map(k => err[k]);
+  const docs = d.docs || [];
   c.innerHTML = `
     <div class="panel">
-      <div class="row-between"><div><h2>דף הבית — סקירת ${monthName}</h2><span class="muted">נתונים חיים מחשבונית ירוקה</span></div></div>
+      <div class="row-between">
+        <div><h2>דף הבית — סקירת ${monthName}</h2><span class="muted">נתונים חיים מחשבונית ירוקה</span></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn ghost" onclick="shiftDashMonth(-1)">חודש קודם →</button>
+          <button class="btn ghost" onclick="shiftDashMonth(1)">← חודש הבא</button>
+        </div>
+      </div>
       ${err.greenInvoice ? `<div class="warn-banner">חשבונית ירוקה לא מחוברת — חבר אותה בלשונית 🔌 חיבורים כדי לראות נתונים.</div>` : ''}
       <div class="cards" style="margin-top:14px">
         ${kpi('הכנסה החודש', money(d.income), d.monthDocs != null ? `${d.monthDocs} חשבוניות מס/מס-קבלה` : '', 'var(--accent2)')}
@@ -60,12 +77,72 @@ async function renderHome(c) {
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
     </div>
     <div class="panel">
-      <div class="row-between"><h2>לקוחות</h2><span class="muted">${(d.clients || []).length} לקוחות</span></div>
-      ${(d.clients || []).length
-        ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${d.clients.slice(0, 80).map(cl => `<span class="chip" style="padding:7px 12px;font-size:13px">${cl.name}</span>`).join('')}</div>`
-        : `<div class="empty">אין לקוחות להצגה עדיין.</div>`}
+      <div class="row-between"><h2>חשבוניות ${monthName}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
+      ${docs.length ? `<table><thead><tr><th>תאריך</th><th>לקוח</th><th>סוג</th><th>מספר</th><th>סכום</th><th></th></tr></thead>
+        <tbody>${docs.map(x => `<tr>
+          <td>${x.date || '—'}</td>
+          <td>${x.clientName || '—'}</td>
+          <td>${DOC_TYPE_NAMES[x.type] || `סוג ${x.type}`}</td>
+          <td>${x.number ?? '—'}</td>
+          <td>${money(x.amount)}</td>
+          <td>${x.url ? `<a href="${x.url}" target="_blank" class="muted">פתח ↗</a>` : ''}</td>
+        </tr>`).join('')}</tbody></table>`
+        : `<div class="empty">אין חשבוניות בחודש זה.</div>`}
     </div>`;
 }
+
+// ---- לקוחות (רשימה עם חיפוש; לחיצה מציגה את כל מסמכי הלקוח) ----
+const DOC_TYPE_NAMES = { 10: 'חשבון עסקה', 20: 'הזמנה', 100: 'חשבון', 300: 'הצעת מחיר', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 330: 'חשבונית זיכוי', 400: 'קבלה', 405: 'קבלה על תרומה' };
+async function renderClients(c) {
+  if (!state.clientsList) {
+    c.innerHTML = `<div class="panel"><div class="empty">טוען לקוחות…</div></div>`;
+    const list = await api(`/api/clients`);
+    state.clientsList = Array.isArray(list) ? list : [];
+  }
+  drawClients(c, '');
+}
+function drawClients(c, filter) {
+  const list = (state.clientsList || []).filter(cl => !filter || (cl.name || '').includes(filter));
+  c.innerHTML = `<div class="panel">
+    <div class="row-between"><div><h2>לקוחות</h2><span class="muted">${state.clientsList.length} לקוחות</span></div></div>
+    <input id="clientSearch" placeholder="חיפוש לקוח…" style="width:100%;margin-bottom:14px" value="${filter.replace(/"/g, '&quot;')}"/>
+    <div id="clientsList">${clientRows(list)}</div>
+  </div>`;
+  const inp = $('#clientSearch');
+  inp.oninput = () => { $('#clientsList').innerHTML = clientRows((state.clientsList || []).filter(cl => !inp.value || (cl.name || '').includes(inp.value))); };
+  inp.focus();
+}
+function clientRows(list) {
+  if (!list.length) return `<div class="empty">לא נמצאו לקוחות.</div>`;
+  return `<div style="display:flex;flex-direction:column;gap:2px">${list.map(cl => `
+    <div class="chat-item" onclick="openClientDocs('${cl.id}', '${(cl.name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;')}')">
+      <span style="font-size:16px">🏢</span><div style="font-weight:600">${cl.name}</div>
+      <span class="muted" style="margin-inline-start:auto;font-size:12px">כל המסמכים ←</span>
+    </div>`).join('')}</div>`;
+}
+window.openClientDocs = async (id, name) => {
+  const c = $('#content');
+  c.innerHTML = `<div class="panel"><button class="btn ghost" onclick="renderClients($('#content'))">→ חזרה ללקוחות</button>
+    <h2 style="margin-top:12px">מסמכים — ${name}</h2><div class="empty">טוען מסמכים…</div></div>`;
+  const docs = await api(`/api/clients/${id}/documents`);
+  const rows = (Array.isArray(docs) ? docs : []);
+  const total = rows.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  c.innerHTML = `<div class="panel">
+    <button class="btn ghost" onclick="renderClients($('#content'))">→ חזרה ללקוחות</button>
+    <div class="row-between" style="margin-top:12px"><h2>מסמכים — ${name}</h2><span class="muted">${rows.length} מסמכים · סה"כ ${money(total)}</span></div>
+    ${docs.error ? `<div class="warn-banner">${docs.error}</div>` : ''}
+    ${rows.length ? `<table><thead><tr><th>תאריך</th><th>סוג</th><th>מספר</th><th>סכום</th><th></th></tr></thead>
+      <tbody>${rows.map(d => `<tr>
+        <td>${d.date || '—'}</td>
+        <td>${DOC_TYPE_NAMES[d.type] || `סוג ${d.type}`}</td>
+        <td>${d.number ?? '—'}</td>
+        <td>${money(d.amount)}</td>
+        <td>${d.url ? `<a href="${d.url}" target="_blank" class="muted">פתח ↗</a>` : ''}</td>
+      </tr>`).join('')}</tbody></table>`
+      : `<div class="empty">אין מסמכים ללקוח זה.</div>`}
+  </div>`;
+};
+window.renderClients = renderClients;
 
 // ---- אירועים + אי-התאמות + יומן (לשונית אחת מאוחדת) ----
 async function renderCombined(c) {

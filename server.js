@@ -306,14 +306,24 @@ add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body
 // GET /api/dashboard?month=YYYY-MM  — נתוני דף הבית מחשבונית ירוקה
 add('GET', /^\/api\/dashboard$/, async (req, res, _p, q) => {
   const month = q.month || new Date().toISOString().slice(0, 7);
-  const out = { month, income: null, vat: null, openInvoices: null, monthDocs: null, clients: [], bank: null, errors: {} };
+  const out = { month, income: null, vat: null, openInvoices: null, monthDocs: null, docs: [], clients: [], bank: null, errors: {} };
   if (greenInvoice.haveCredentials()) {
-    try { const m = await greenInvoice.monthlyIncome(month); out.income = m.income; out.vat = m.vat; out.monthDocs = m.count; }
+    try { const m = await greenInvoice.monthlyIncome(month); out.income = m.income; out.vat = m.vat; out.monthDocs = m.count; out.docs = m.docs; }
     catch (e) { out.errors.income = e.message; }
     try { out.openInvoices = await greenInvoice.openInvoicesCount(); } catch (e) { out.errors.open = e.message; }
     try { out.clients = await greenInvoice.listClients(); } catch (e) { out.errors.clients = e.message; }
   } else { out.errors.greenInvoice = 'חשבונית ירוקה לא מחוברת'; }
   json(res, out);
+});
+
+// GET /api/clients — רשימת לקוחות
+add('GET', /^\/api\/clients$/, async (req, res) => {
+  try { json(res, await greenInvoice.listClients()); } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// GET /api/clients/:id/documents — כל המסמכים של לקוח
+add('GET', /^\/api\/clients\/([^/]+)\/documents$/, async (req, res, params) => {
+  try { json(res, await greenInvoice.clientDocuments(params[0])); } catch (e) { json(res, { error: e.message }, 500); }
 });
 
 // GET /api/health

@@ -108,7 +108,18 @@ function lastDay(month) {
   return `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
 }
 
-// הכנסה חודשית מחשבוניות מס (305) + מס/קבלה (320), וצפי מע"מ
+// מיפוי מסמך לתצוגה
+function mapDoc(d) {
+  return {
+    id: d.id, number: d.number, type: d.type, date: d.documentDate,
+    amount: num(d.amount ?? d.total ?? d.sum),
+    clientName: d.client?.name || d.clientName || d.client_name || '—',
+    url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null),
+    amountDue: d.amountDue,
+  };
+}
+
+// הכנסה חודשית מחשבוניות מס (305) + מס/קבלה (320), וצפי מע"מ + פירוט המסמכים
 export async function monthlyIncome(month) {
   const fromDate = `${month}-01`, toDate = lastDay(month);
   const res = await api('/documents/search', {
@@ -122,7 +133,26 @@ export async function monthlyIncome(month) {
     income += amt;
     vat += (d.vat != null ? num(d.vat) : amt - amt / 1.18); // מע"מ 18% אם לא סופק
   }
-  return { income, vat, count: items.length };
+  return { income, vat, count: items.length, docs: items.map(mapDoc) };
+}
+
+// כל המסמכים של לקוח מסוים (כל הסוגים, כל התאריכים)
+export async function clientDocuments(clientId) {
+  const all = [];
+  let page = 1;
+  for (let i = 0; i < 10; i++) { // עד ~1000 מסמכים
+    const res = await api('/documents/search', {
+      method: 'POST',
+      body: { clientId, page, pageSize: 100, sort: 'documentDate' },
+    });
+    const items = res.items || [];
+    all.push(...items);
+    if (items.length < 100) break;
+    page++;
+  }
+  // סינון הגנתי למקרה שה-API לא סינן לפי לקוח
+  const filtered = all.filter(d => !d.client || !d.client.id || d.client.id === clientId);
+  return (filtered.length ? filtered : all).map(mapDoc);
 }
 
 // כמות חשבוניות מס פתוחות (לא שולמו במלואן)
@@ -146,5 +176,5 @@ export async function listClients() {
   return (res.items || []).map(c => ({ id: c.id, name: c.name })).filter(c => c.name);
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, openInvoicesCount, listClients, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, openInvoicesCount, listClients, clientDocuments, DOC_TYPES };
 export default greenInvoice;
