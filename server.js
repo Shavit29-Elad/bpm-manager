@@ -315,9 +315,10 @@ add('GET', /^\/api\/dashboard$/, async (req, res, _p, q) => {
     const month = q.month || new Date().toISOString().slice(0, 7);
     fromDate = `${month}-01`; toDate = lastDay(month);
   }
-  const out = { month: q.month || null, fromDate, toDate, income: null, vat: null, openInvoices: null, monthDocs: null, docs: [], clients: [], bank: null, errors: {} };
+  const types = q.types ? String(q.types).split(',').map(Number).filter(Boolean) : [305, 320];
+  const out = { month: q.month || null, fromDate, toDate, types, income: null, vat: null, openInvoices: null, monthDocs: null, docs: [], clients: [], bank: null, errors: {} };
   if (greenInvoice.haveCredentials()) {
-    try { const m = await greenInvoice.incomeForRange(fromDate, toDate); out.income = m.income; out.vat = m.vat; out.monthDocs = m.count; out.docs = m.docs; }
+    try { const m = await greenInvoice.incomeForRange(fromDate, toDate, types); out.income = m.income; out.vat = m.vat; out.monthDocs = m.count; out.docs = m.docs; }
     catch (e) { out.errors.income = e.message; }
     try { out.openInvoices = await greenInvoice.openInvoicesCount(); } catch (e) { out.errors.open = e.message; }
     try { out.clients = await greenInvoice.listClients(); } catch (e) { out.errors.clients = e.message; }

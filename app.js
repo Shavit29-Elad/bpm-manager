@@ -39,14 +39,26 @@ function render() {
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
 const MONTHS_FULL = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+const DOC_TYPE_OPTIONS = [
+  { v: '305,320', label: 'חשבוניות (מס + מס-קבלה)' },
+  { v: '305', label: 'חשבונית מס' },
+  { v: '320', label: 'חשבונית מס-קבלה' },
+  { v: '400', label: 'קבלה' },
+  { v: '300', label: 'הצעת מחיר' },
+  { v: '330', label: 'חשבונית זיכוי' },
+  { v: '10', label: 'חשבון עסקה' },
+  { v: '305,320,300,400,330,10', label: 'כל המסמכים' },
+];
 function initPeriod() {
   const now = new Date();
-  if (!state.period) state.period = 'month';
+  if (!state.period) state.period = 'year';
   if (!state.dashMonth) state.dashMonth = now.toISOString().slice(0, 7);
   if (!state.dashYear) state.dashYear = now.getFullYear();
   if (!state.rangeFrom) state.rangeFrom = state.dashMonth;
   if (!state.rangeTo) state.rangeTo = state.dashMonth;
+  if (!state.docType) state.docType = '305,320';
 }
+window.setDocType = (v) => { state.docType = v; renderHome($('#content')); };
 window.setPeriod = (p) => { state.period = p; renderHome($('#content')); };
 window.shiftDashMonth = (delta) => {
   const [y, m] = state.dashMonth.split('-').map(Number);
@@ -56,15 +68,34 @@ window.shiftDashMonth = (delta) => {
 };
 window.shiftDashYear = (delta) => { state.dashYear = Number(state.dashYear) + delta; renderHome($('#content')); };
 window.pickDashMonth = (v) => { if (v) { state.dashMonth = v; renderHome($('#content')); } };
+window.pickDashMonthPart = (part, val) => {
+  let [y, m] = state.dashMonth.split('-').map(Number);
+  if (part === 'm') m = Number(val); else y = Number(val);
+  state.dashMonth = `${y}-${String(m).padStart(2, '0')}`;
+  renderHome($('#content'));
+};
+window.pickDashYear = (v) => { state.dashYear = Number(v); renderHome($('#content')); };
+window.setRangePart = (which, part, val) => {
+  const key = which === 'from' ? 'rangeFrom' : 'rangeTo';
+  let [y, m] = state[key].split('-').map(Number);
+  if (part === 'm') m = Number(val); else y = Number(val);
+  state[key] = `${y}-${String(m).padStart(2, '0')}`;
+  renderHome($('#content'));
+};
 window.applyRange = () => {
   state.rangeFrom = $('#rngFrom').value || state.rangeFrom;
   state.rangeTo = $('#rngTo').value || state.rangeTo;
   renderHome($('#content'));
 };
 function periodQuery() {
-  if (state.period === 'year') return `from=${state.dashYear}-01&to=${state.dashYear}-12`;
-  if (state.period === 'range') return `from=${state.rangeFrom}&to=${state.rangeTo}`;
-  return `month=${state.dashMonth}`;
+  const t = `&types=${encodeURIComponent(state.docType || '305,320')}`;
+  if (state.period === 'year') return `from=${state.dashYear}-01&to=${state.dashYear}-12${t}`;
+  if (state.period === 'range') return `from=${state.rangeFrom}&to=${state.rangeTo}${t}`;
+  return `month=${state.dashMonth}${t}`;
+}
+function docTypeSelect() {
+  const opts = DOC_TYPE_OPTIONS.map(o => `<option value="${o.v}" ${state.docType === o.v ? 'selected' : ''}>${o.label}</option>`).join('');
+  return `<select onchange="setDocType(this.value)" style="padding:7px 12px">${opts}</select>`;
 }
 function periodLabel() {
   if (state.period === 'year') return `שנת ${state.dashYear}`;
@@ -75,31 +106,65 @@ function periodControls() {
   const seg = (p, label) => `<button class="btn ${state.period === p ? 'primary' : 'ghost'}" style="padding:6px 13px" onclick="setPeriod('${p}')">${label}</button>`;
   const toggle = `<div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('month', 'חודשי')}${seg('range', 'טווח')}${seg('year', 'שנתי')}</div>`;
   let nav = '';
-  if (state.period === 'month') nav = `<button class="btn ghost" style="padding:6px 12px" onclick="shiftDashMonth(-1)">→</button><input type="month" id="dashMonthPick" value="${state.dashMonth}" onchange="pickDashMonth(this.value)"/><button class="btn ghost" style="padding:6px 12px" onclick="shiftDashMonth(1)">←</button>`;
-  else if (state.period === 'year') nav = `<button class="btn ghost" onclick="shiftDashYear(-1)">שנה קודמת →</button><button class="btn ghost" onclick="shiftDashYear(1)">← שנה הבאה</button>`;
-  else nav = `<input type="month" id="rngFrom" value="${state.rangeFrom}"/><span class="muted">עד</span><input type="month" id="rngTo" value="${state.rangeTo}"/><button class="btn primary" style="padding:6px 13px" onclick="applyRange()">הצג</button>`;
+  if (state.period === 'month') {
+    const [my, mm] = state.dashMonth.split('-').map(Number);
+    nav = `<button class="btn ghost" style="padding:6px 12px" onclick="shiftDashMonth(-1)">→</button>
+      <select onchange="pickDashMonthPart('m',this.value)" style="padding:7px 10px">${monthOptions(mm)}</select>
+      <select onchange="pickDashMonthPart('y',this.value)" style="padding:7px 10px">${yearOptions(my)}</select>
+      <button class="btn ghost" style="padding:6px 12px" onclick="shiftDashMonth(1)">←</button>`;
+  } else if (state.period === 'year') {
+    nav = `<button class="btn ghost" style="padding:6px 12px" onclick="shiftDashYear(-1)">→</button>
+      <select onchange="pickDashYear(this.value)" style="padding:7px 10px">${yearOptions(Number(state.dashYear))}</select>
+      <button class="btn ghost" style="padding:6px 12px" onclick="shiftDashYear(1)">←</button>`;
+  } else {
+    const [ff, fm] = state.rangeFrom.split('-').map(Number);
+    const [tf, tm] = state.rangeTo.split('-').map(Number);
+    nav = `<span class="muted">מ־</span>
+      <select onchange="setRangePart('from','m',this.value)" style="padding:7px 10px">${monthOptions(fm)}</select>
+      <select onchange="setRangePart('from','y',this.value)" style="padding:7px 10px">${yearOptions(ff)}</select>
+      <span class="muted">עד</span>
+      <select onchange="setRangePart('to','m',this.value)" style="padding:7px 10px">${monthOptions(tm)}</select>
+      <select onchange="setRangePart('to','y',this.value)" style="padding:7px 10px">${yearOptions(tf)}</select>`;
+  }
   return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${toggle}${nav}</div>`;
 }
+function monthOptions(sel) { return MONTHS_FULL.map((n, i) => `<option value="${i + 1}" ${sel === i + 1 ? 'selected' : ''}>${n}</option>`).join(''); }
+function yearOptions(sel) { const now = new Date().getFullYear(); let o = ''; for (let y = now + 1; y >= now - 6; y--) o += `<option value="${y}" ${sel === y ? 'selected' : ''}>${y}</option>`; return o; }
+function fmtDate(s) { if (!s) return '—'; const m = String(s).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}/${m[2]}/${m[1]}` : s; }
 
-// תצוגה מקדימה של מסמך (PDF) בחלון קופץ, בלי להוריד קובץ
-window.previewDoc = (url) => {
+// תצוגה מקדימה של מסמך (PDF) בחלון קופץ — מושכים את הקובץ כ-blob ומציגים בתוך המסך (בלי הורדה)
+let _previewBlobUrl = null;
+window.previewDoc = async (url) => {
   if (!url) return;
   let m = document.getElementById('docPreview');
   if (!m) { m = document.createElement('div'); m.id = 'docPreview'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(920px,95vw);height:90vh;padding:0;display:flex;flex-direction:column;overflow:hidden">
+  const shell = (inner) => `<div class="modal-card" style="width:min(920px,95vw);height:90vh;padding:0;display:flex;flex-direction:column;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">
       <b>תצוגה מקדימה של המסמך</b>
       <div style="display:flex;gap:8px;align-items:center">
-        <a href="${url}" target="_blank" class="btn ghost" style="padding:6px 13px;text-decoration:none">פתח בכרטיסייה ↗</a>
+        <a href="${url}" target="_blank" class="btn ghost" style="padding:6px 13px;text-decoration:none">הורדה ↓</a>
         <button class="btn primary" style="padding:6px 13px" onclick="closePreview()">סגור</button>
       </div>
-    </div>
-    <iframe src="${url}" style="flex:1;width:100%;border:none;background:#fff"></iframe>
-  </div>`;
+    </div>${inner}</div>`;
+  m.innerHTML = shell(`<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען מסמך…</div>`);
   m.onclick = (e) => { if (e.target === m) closePreview(); };
+  try {
+    const r = await fetch(url);
+    const buf = await r.arrayBuffer();
+    if (_previewBlobUrl) URL.revokeObjectURL(_previewBlobUrl);
+    _previewBlobUrl = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
+    const cur = document.getElementById('docPreview');
+    if (cur && !cur.classList.contains('hidden')) cur.innerHTML = shell(`<iframe src="${_previewBlobUrl}#toolbar=1" style="flex:1;width:100%;border:none;background:#fff"></iframe>`);
+  } catch (e) {
+    const cur = document.getElementById('docPreview');
+    if (cur) cur.innerHTML = shell(`<div class="empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px"><div>לא ניתן להציג את המסמך כאן.</div><a href="${url}" target="_blank" class="btn primary" style="text-decoration:none">פתח בכרטיסייה חדשה ↗</a></div>`);
+  }
 };
-window.closePreview = () => { const m = document.getElementById('docPreview'); if (m) m.classList.add('hidden'); };
+window.closePreview = () => {
+  const m = document.getElementById('docPreview'); if (m) m.classList.add('hidden');
+  if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
+};
 
 // טבלת מסמכים משותפת (עם פירוק מע"מ). opts.showClient מוסיף עמודת לקוח.
 function docsTable(docs, opts = {}) {
@@ -111,7 +176,7 @@ function docsTable(docs, opts = {}) {
   const cc = opts.showClient;
   return `<table><thead><tr><th>תאריך</th>${cc ? '<th>לקוח</th>' : ''}<th>סוג</th><th>מספר</th><th>ללא מע"מ</th><th>כולל מע"מ</th><th></th></tr></thead>
     <tbody>${rows.map(d => `<tr>
-      <td>${d.date || '—'}</td>${cc ? `<td>${d.clientName || '—'}</td>` : ''}
+      <td>${fmtDate(d.date)}</td>${cc ? `<td>${d.clientName || '—'}</td>` : ''}
       <td>${DOC_TYPE_NAMES[d.type] || `סוג ${d.type}`}</td>
       <td>${d.number ?? '—'}</td>
       <td>${money(d.amountExVat)}</td>
@@ -136,21 +201,49 @@ async function renderHome(c) {
     <div class="panel">
       <div class="row-between">
         <div><h2>דף הבית — ${label}</h2><span class="muted">נתונים חיים מחשבונית ירוקה</span></div>
-        ${periodControls()}
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${docTypeSelect()}${periodControls()}</div>
       </div>
       ${err.greenInvoice ? `<div class="warn-banner">חשבונית ירוקה לא מחוברת — חבר אותה בלשונית 🔌 חיבורים כדי לראות נתונים.</div>` : ''}
       <div class="cards" style="margin-top:14px">
-        ${kpi(incomeLabel, money(d.income), d.monthDocs != null ? `${d.monthDocs} חשבוניות מס/מס-קבלה` : '', 'var(--accent2)')}
+        ${kpi(incomeLabel, money(d.income), d.monthDocs != null ? `${d.monthDocs} מסמכים` : '', 'var(--accent2)')}
         ${kpi('צפי מע"מ (18%)', money(d.vat), 'מתוך ההכנסה', 'var(--warn)')}
         ${kpi('חשבוניות מס פתוחות', d.openInvoices != null ? d.openInvoices : '—', 'טרם שולמו במלואן', 'var(--danger)')}
         ${kpi('יתרת עו"ש', '—', 'יש לחבר חשבון בנק', 'var(--muted)')}
       </div>
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
     </div>
+    ${state.period !== 'month' ? `<div class="panel">
+      <div class="row-between"><h2>פירוט לפי חודש</h2><span class="muted">${label}</span></div>
+      ${monthlyBreakdown(docs)}
+    </div>` : ''}
     <div class="panel">
-      <div class="row-between"><h2>חשבוניות — ${label}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
+      <div class="row-between"><h2>מסמכים — ${label}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
       ${docsTable(docs, { showClient: true })}
     </div>`;
+}
+
+// פירוט הכנסה לפי חודש (לתצוגה שנתית / טווח)
+function monthlyBreakdown(docs) {
+  const rows = Array.isArray(docs) ? docs : [];
+  if (!rows.length) return `<div class="empty">אין נתונים.</div>`;
+  const byMonth = {};
+  for (const d of rows) {
+    const key = (d.date || '').slice(0, 7); if (!key) continue;
+    if (!byMonth[key]) byMonth[key] = { ex: 0, inc: 0, n: 0 };
+    byMonth[key].ex += Number(d.amountExVat) || 0;
+    byMonth[key].inc += Number(d.amountIncVat) || 0;
+    byMonth[key].n++;
+  }
+  const keys = Object.keys(byMonth).sort();
+  if (!keys.length) return `<div class="empty">אין נתונים.</div>`;
+  const tEx = keys.reduce((s, k) => s + byMonth[k].ex, 0);
+  const tInc = keys.reduce((s, k) => s + byMonth[k].inc, 0);
+  const tN = keys.reduce((s, k) => s + byMonth[k].n, 0);
+  const mName = (k) => { const [y, m] = k.split('-').map(Number); return `${MONTHS_FULL[m - 1]} ${y}`; };
+  return `<table><thead><tr><th>חודש</th><th>מסמכים</th><th>ללא מע"מ</th><th>כולל מע"מ</th></tr></thead><tbody>
+    ${keys.map(k => `<tr><td>${mName(k)}</td><td>${byMonth[k].n}</td><td>${money(byMonth[k].ex)}</td><td>${money(byMonth[k].inc)}</td></tr>`).join('')}
+    <tr style="background:var(--panel2)"><td><b>סה"כ</b></td><td><b>${tN}</b></td><td><b>${money(tEx)}</b></td><td><b>${money(tInc)}</b></td></tr>
+  </tbody></table>`;
 }
 
 // ---- לקוחות (רשימה עם חיפוש; לחיצה מציגה את כל מסמכי הלקוח) ----
@@ -185,6 +278,7 @@ function clientRows(list) {
       <span class="muted" style="margin-inline-start:auto;font-size:14px">‹</span>
     </div>`).join('');
 }
+let _clientDocs = [], _clientName = '', _clientSort = { key: 'date', dir: 'desc' };
 window.selectClient = async (id, name) => {
   name = decodeURIComponent(name);
   document.querySelectorAll('#clientsList .chat-item').forEach(el => el.classList.remove('active'));
@@ -193,9 +287,42 @@ window.selectClient = async (id, name) => {
   if (!detail) return;
   detail.innerHTML = `<div class="muted" style="font-size:13px">טוען מסמכים…</div>`;
   const docs = await api(`/api/clients/${id}/documents`);
-  const count = Array.isArray(docs) ? docs.length : 0;
-  detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${name}</h2><span class="muted">${count} מסמכים</span></div>${docsTable(docs, { showClient: false })}`;
+  _clientDocs = Array.isArray(docs) ? docs : [];
+  _clientName = name;
+  _clientSort = { key: 'date', dir: 'desc' };
+  renderClientDetail();
 };
+function sortClientDocs(docs, s) {
+  const dir = s.dir === 'asc' ? 1 : -1;
+  return [...docs].sort((a, b) => {
+    let av, bv;
+    if (s.key === 'number') { av = Number(a.number) || 0; bv = Number(b.number) || 0; }
+    else if (s.key === 'amount') { av = Number(a.amountIncVat) || 0; bv = Number(b.amountIncVat) || 0; }
+    else if (s.key === 'type') { av = Number(a.type) || 0; bv = Number(b.type) || 0; }
+    else if (s.key === 'client') { av = a.clientName || ''; bv = b.clientName || ''; }
+    else { av = a.date || ''; bv = b.date || ''; }
+    if (av < bv) return -1 * dir; if (av > bv) return 1 * dir; return 0;
+  });
+}
+function sortBar() {
+  const btn = (key, label) => {
+    const on = _clientSort.key === key;
+    const arw = on ? (_clientSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<button class="btn ${on ? 'primary' : 'ghost'}" style="padding:5px 11px;font-size:13px" onclick="setClientSort('${key}')">${label}${arw}</button>`;
+  };
+  return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:10px 0"><span class="muted" style="font-size:13px">מיון:</span>${btn('date', 'תאריך')}${btn('number', 'מספר')}${btn('amount', 'סכום')}${btn('type', 'סוג')}</div>`;
+}
+window.setClientSort = (key) => {
+  if (_clientSort.key === key) _clientSort.dir = _clientSort.dir === 'asc' ? 'desc' : 'asc';
+  else _clientSort = { key, dir: key === 'date' || key === 'amount' || key === 'number' ? 'desc' : 'asc' };
+  renderClientDetail();
+};
+function renderClientDetail() {
+  const detail = document.getElementById('clientDetail');
+  if (!detail) return;
+  const docs = sortClientDocs(_clientDocs, _clientSort);
+  detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${_clientName}</h2><span class="muted">${docs.length} מסמכים</span></div>${sortBar()}${docsTable(docs, { showClient: false })}`;
+}
 
 // ---- אירועים + אי-התאמות + יומן (לשונית אחת מאוחדת) ----
 async function renderCombined(c) {

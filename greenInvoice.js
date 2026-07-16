@@ -142,8 +142,8 @@ async function documentsInRange(fromDate, toDate, types) {
 }
 
 // הכנסה בטווח מחשבוניות מס (305) + מס/קבלה (320), צפי מע"מ + פירוט
-export async function incomeForRange(fromDate, toDate) {
-  const items = await documentsInRange(fromDate, toDate, [305, 320]);
+export async function incomeForRange(fromDate, toDate, types = [305, 320]) {
+  const items = await documentsInRange(fromDate, toDate, types);
   const docs = items.map(mapDoc);
   const income = docs.reduce((s, d) => s + d.amountIncVat, 0);
   const vat = docs.reduce((s, d) => s + d.vat, 0);
