@@ -29,7 +29,7 @@ async function callGemini(system, messages) {
       method: 'POST', headers: { 'content-type': 'application/json' }, body,
     });
     const text = await res.text();
-    if (res.status === 404) { lastErr = text.slice(0, 150); continue; } // מודל לא קיים — ננסה את הבא
+    if (res.status === 404 || res.status === 429) { lastErr = `(${res.status}) ${text.slice(0, 120)}`; continue; } // לא קיים/מכסה — ננסה את הבא
     if (!res.ok) throw new Error(`שגיאת צ'אט (${res.status}): ${text.slice(0, 300)}`);
     let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מהשירות'); }
     const parts = data.candidates?.[0]?.content?.parts || [];
@@ -54,8 +54,9 @@ async function callAnthropic(system, messages) {
 }
 
 async function complete(system, messages) {
-  if (!chatConfigured()) throw new Error('הצ\'אט לא מוגדר — הוסף ANTHROPIC_API_KEY (Claude) או GEMINI_API_KEY ב-Render');
-  return process.env.GEMINI_API_KEY ? callGemini(system, messages) : callAnthropic(system, messages);
+  if (!chatConfigured()) throw new Error('הצ\'אט לא מוגדר — הוסף ANTHROPIC_API_KEY (Claude) ב-Render');
+  // עדיפות ל-Claude (ממשפחת Anthropic). Gemini רק כגיבוי אם אין מפתח Claude.
+  return process.env.ANTHROPIC_API_KEY ? callAnthropic(system, messages) : callGemini(system, messages);
 }
 
 // שילוב הזיכרון המתמשך לתוך פרומפט המערכת של הדמות
