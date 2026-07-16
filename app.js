@@ -163,8 +163,15 @@ async function renderClients(c) {
   }
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>לקוחות</h2><span class="muted">${state.clientsList.length} לקוחות</span></div></div>
-    <input id="clientSearch" placeholder="חיפוש לקוח…" style="width:100%;margin-bottom:14px"/>
-    <div id="clientsList">${clientRows(state.clientsList)}</div>
+    <div style="display:flex;gap:16px;align-items:stretch;min-height:64vh">
+      <div style="flex:0 0 300px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden">
+        <input id="clientSearch" placeholder="חיפוש לקוח…" style="border:none;border-bottom:1px solid var(--line);border-radius:0"/>
+        <div id="clientsList" style="overflow-y:auto;flex:1;max-height:70vh">${clientRows(state.clientsList)}</div>
+      </div>
+      <div id="clientDetail" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;max-height:70vh">
+        <div class="empty">בחר לקוח כדי לראות את כל המסמכים שלו</div>
+      </div>
+    </div>
   </div>`;
   const inp = $('#clientSearch');
   inp.oninput = () => { $('#clientsList').innerHTML = clientRows((state.clientsList || []).filter(cl => !inp.value || (cl.name || '').includes(inp.value))); };
@@ -173,27 +180,21 @@ async function renderClients(c) {
 function clientRows(list) {
   if (!list.length) return `<div class="empty">לא נמצאו לקוחות.</div>`;
   return list.map(cl => `
-    <div style="border:1px solid var(--line);border-radius:12px;margin-bottom:8px;overflow:hidden">
-      <div class="chat-item" style="margin:0;border-radius:0" onclick="toggleClient('${cl.id}')">
-        <span style="font-size:16px">🏢</span><div style="font-weight:600">${cl.name}</div>
-        <span class="muted" id="arw-${cl.id}" style="margin-inline-start:auto;font-size:12px">הצג מסמכים ▾</span>
-      </div>
-      <div id="body-${cl.id}" style="display:none;padding:10px 14px;background:var(--bg)"></div>
+    <div class="chat-item" id="cli-${cl.id}" style="margin:0;border-radius:0;border-bottom:1px solid var(--line)" onclick="selectClient('${cl.id}','${(cl.name || '').replace(/'/g, '%27')}')">
+      <span style="font-size:15px">🏢</span><div style="font-weight:600;font-size:14px">${cl.name}</div>
+      <span class="muted" style="margin-inline-start:auto;font-size:14px">‹</span>
     </div>`).join('');
 }
-window.toggleClient = async (id) => {
-  const body = document.getElementById('body-' + id);
-  const arw = document.getElementById('arw-' + id);
-  if (!body) return;
-  if (body.style.display === 'none') {
-    if (!body.dataset.loaded) {
-      body.innerHTML = `<div class="muted" style="font-size:13px">טוען מסמכים…</div>`;
-      const docs = await api(`/api/clients/${id}/documents`);
-      body.innerHTML = docsTable(docs, { showClient: false });
-      body.dataset.loaded = '1';
-    }
-    body.style.display = 'block'; arw.textContent = 'הסתר ▴';
-  } else { body.style.display = 'none'; arw.textContent = 'הצג מסמכים ▾'; }
+window.selectClient = async (id, name) => {
+  name = decodeURIComponent(name);
+  document.querySelectorAll('#clientsList .chat-item').forEach(el => el.classList.remove('active'));
+  const item = document.getElementById('cli-' + id); if (item) item.classList.add('active');
+  const detail = document.getElementById('clientDetail');
+  if (!detail) return;
+  detail.innerHTML = `<div class="muted" style="font-size:13px">טוען מסמכים…</div>`;
+  const docs = await api(`/api/clients/${id}/documents`);
+  const count = Array.isArray(docs) ? docs.length : 0;
+  detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${name}</h2><span class="muted">${count} מסמכים</span></div>${docsTable(docs, { showClient: false })}`;
 };
 
 // ---- אירועים + אי-התאמות + יומן (לשונית אחת מאוחדת) ----
