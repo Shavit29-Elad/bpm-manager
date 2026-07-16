@@ -85,10 +85,16 @@ add('GET', /^\/api\/calendar\/match$/, async (req, res, _p, q) => {
     const timeMin = dates[0] ? `${dates[0]}T00:00:00Z` : undefined;
     const timeMax = dates.length ? `${dates[dates.length - 1]}T23:59:59Z` : undefined;
     const cal = await fetchCalendarEvents({ timeMin, timeMax });
-    json(res, matchEvents(waEvents, cal));
+    const r = matchEvents(waEvents, cal);
+    // שולחים רק ספירה של "חסר בווטסאפ" (יכול להיות אלפי אירועים) — לא את כל המערך
+    json(res, {
+      matched: r.matched,
+      missingInCalendar: r.missingInCalendar,
+      missingInWhatsappCount: r.missingInWhatsapp.length,
+    });
   } catch (e) {
     json(res, { matched: waEvents.map(w => ({ whatsapp: w, calendar: null, score: 0 })),
-      missingInCalendar: waEvents, missingInWhatsapp: [], calendarError: e.message });
+      missingInCalendar: waEvents, missingInWhatsappCount: 0, calendarError: e.message });
   }
 });
 

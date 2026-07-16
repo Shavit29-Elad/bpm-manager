@@ -100,18 +100,26 @@ function icalUrls() {
 // האם יומן כלשהו הוגדר
 export function hasCalendar() { return icalUrls().length > 0; }
 
-// שליפת אירועים מכל היומנים דרך קישורי ה-iCal (ממוזגים יחד)
-export async function fetchCalendarEvents() {
+// מטמון בזיכרון: מונע הורדה+ניתוח מחדש של אלפי אירועים בכל בקשה.
+let _cache = { at: 0, key: '', events: null };
+const CACHE_TTL = 5 * 60 * 1000; // 5 דקות
+
+// שליפת אירועים מכל היומנים דרך קישורי ה-iCal (ממוזגים יחד, עם מטמון)
+export async function fetchCalendarEvents({ force = false } = {}) {
   const urls = icalUrls();
   if (!urls.length) throw new Error('לא הוגדר קישור iCal ליומן (GOOGLE_ICAL_URL)');
+  const key = urls.join('|');
+  if (!force && _cache.events && _cache.key === key && Date.now() - _cache.at < CACHE_TTL) {
+    return _cache.events;
+  }
   const all = [];
   for (let i = 0; i < urls.length; i++) {
     const res = await fetch(urls[i]);
     if (!res.ok) throw new Error(`יומן ${i + 1} (iCal): ${res.status}`);
     const text = await res.text();
-    // קידומת למזהה לפי אינדקס היומן כדי למנוע התנגשויות בין יומנים
     parseIcs(text).forEach(e => all.push({ ...e, id: `c${i}_${e.id}`, calendarIndex: i }));
   }
+  _cache = { at: Date.now(), key, events: all };
   return all;
 }
 
