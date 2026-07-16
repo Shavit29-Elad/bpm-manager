@@ -372,6 +372,7 @@ async function renderTeam(c) {
   const data = await api('/api/team');
   if (!state.activeChat) state.activeChat = 'group';
   const members = data.members || [];
+  state.members = members;
   const item = (id, emoji, name, sub, active) => `
     <div class="chat-item ${active ? 'active' : ''}" onclick="openChat('${id}')">
       <span style="font-size:20px">${emoji}</span>
@@ -407,7 +408,9 @@ async function loadChat() {
 
 function bubble(m) {
   const mine = m.role === 'user';
-  const who = mine ? 'אתה' : `${m.emoji || '🤖'} ${m.name || 'עוזר'}`;
+  // בצ'אט אישי אין name בהודעה — נשלים משם החבר הפעיל (תקף גם לעובדים עתידיים)
+  const mem = (state.members || []).find(x => x.id === state.activeChat);
+  const who = mine ? 'אתה' : `${m.emoji || mem?.emoji || '🤖'} ${m.name || mem?.name || 'עוזר'}`;
   return `<div style="align-self:${mine ? 'flex-start' : 'flex-end'};max-width:80%;background:${mine ? 'var(--panel2)' : 'var(--grad-soft)'};border:1px solid var(--line);border-radius:14px;padding:10px 14px">
     <div class="muted" style="font-size:11px;margin-bottom:4px">${who}</div>
     <div style="white-space:pre-wrap;line-height:1.55">${escapeHtml(m.content)}</div></div>`;
