@@ -795,60 +795,82 @@ window.deleteReq = async (id) => {
 // ---- בנק: התאמת תנועות לחשבוניות ----
 const BANK_META = { auto: { t: 'הותאם אוטומטית', cls: 'invoiced' }, manual: { t: 'אושר', cls: 'match' }, unmatched: { t: 'ממתין לאישור', cls: 'pending' }, ignored: { t: 'ללא התאמה', cls: 'miss' } };
 
+const BANK_SORT = {
+  date: t => (t.date || '').split('/').reverse().join(''),
+  amount: t => t.absAmount || 0,
+  name: t => (t.nameHint || t.description || ''),
+  status: t => ({ unmatched: 0, auto: 1, manual: 2, ignored: 3, skip: 9 }[t.matchStatus] ?? 5),
+};
+function sortBankRows(rows) {
+  const s = state.bankSort || { key: 'date', dir: 'desc' };
+  const f = BANK_SORT[s.key] || BANK_SORT.date;
+  const dir = s.dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => { const av = f(a), bv = f(b); return av < bv ? -dir : av > bv ? dir : 0; });
+}
+window.setBankSort = (key) => {
+  const s = state.bankSort || { key: 'date', dir: 'desc' };
+  if (s.key === key) s.dir = s.dir === 'asc' ? 'desc' : 'asc'; else { s.key = key; s.dir = 'asc'; }
+  state.bankSort = s; renderBank($('#content'));
+};
+
 async function renderBank(c) {
   c.innerHTML = `<div class="panel"><div class="empty">טוען תנועות…</div></div>`;
   const list = await api(`/api/bank?companyId=${state.company}`);
   const credits = list.filter(t => t.direction === 'credit');
   const matched = credits.filter(t => t.matchStatus === 'auto' || t.matchStatus === 'manual').length;
   const pending = credits.filter(t => t.matchStatus === 'unmatched').length;
-  const rows = state.bankShowAll ? list : credits;
+  const rows = sortBankRows(state.bankShowAll ? list : credits);
+  const bs = state.bankSort || { key: 'date', dir: 'desc' };
+  const th = (key, label) => { const on = bs.key === key; const arw = on ? (bs.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'; return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="setBankSort('${key}')">${label}<span class="muted" style="font-size:11px">${arw}</span></th>`; };
+  const table = rows.length ? `<table style="margin-top:14px"><thead><tr>
+      ${th('date', 'תאריך')}${th('amount', 'סכום')}${th('name', 'לקוח / תיאור')}${th('status', 'סטטוס')}<th>חשבונית מותאמת</th><th></th>
+    </tr></thead><tbody>${rows.map(bankTr).join('')}</tbody></table>`
+    : `<div class="empty" style="margin-top:14px">אין תנועות עדיין. לחץ "ייבא תנועות".</div>`;
   c.innerHTML = `<div class="panel">
     <div class="row-between">
-      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">${credits.length} תנועות זכות · ${matched} מותאמות · ${pending} ממתינות</span></div>
+      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">${credits.length} תנועות זכות · ${matched} מותאמות · <span style="color:var(--danger)">${pending} לא מותאמות</span></span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost" onclick="toggleBankAll()">${state.bankShowAll ? 'רק זכות (הכנסות)' : 'הצג גם חיובים'}</button>
         <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
       </div>
     </div>
-    <p class="muted" style="font-size:13px;margin-top:4px">מדביקים (או אני קורא מהמסך) את התנועות מאתר הבנק. המערכת מתאימה כל תנועת זכות לחשבונית ההכנסה לפי מספר/סכום/שם — ואתה מאשר.</p>
-    <div style="margin-top:14px">${rows.length ? rows.map(bankRow).join('') : `<div class="empty">אין תנועות עדיין. לחץ "ייבא תנועות".</div>`}</div>
+    <p class="muted" style="font-size:13px;margin-top:4px">מסמנים ומעתיקים את התנועות מאתר הבנק (התצוגה המפורטת) ומדביקים ב"ייבא תנועות". לחיצה על כותרת ממיינת. תנועות בלי התאמה מסומנות באדום — בחר להן חשבונית מההצעות.</p>
+    ${table}
   </div>`;
 }
-function bankRow(t) {
+function bankTr(t) {
   const credit = t.direction === 'credit';
   const amt = `${credit ? '+' : '−'}${money(t.absAmount)}`;
-  const meta = credit ? (BANK_META[t.matchStatus] || BANK_META.unmatched) : null;
-  let block = '';
+  const meta = credit ? (BANK_META[t.matchStatus] || BANK_META.unmatched) : { t: 'חיוב', cls: 'pending' };
+  const name = `${escapeHtml(t.nameHint || t.description || '')}${t.invoiceNumber ? ` <span class="muted" style="font-size:11px">· ח.מס ${t.invoiceNumber}</span>` : ''}`;
+  let invCell = '<span class="muted">—</span>', actionCell = '';
   if (credit) {
     const m = t.matchedInvoice;
     if (m && (t.matchStatus === 'auto' || t.matchStatus === 'manual')) {
-      block = `<div style="margin-top:8px;padding:8px 11px;background:var(--grad-soft);border:1px solid var(--line);border-radius:10px;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <span>✓ חשבונית <b>#${m.number}</b> · ${escapeHtml(m.clientName || '')} · ${money(m.amount)}</span>
-        <span style="margin-inline-start:auto;display:flex;gap:6px">
-          ${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 10px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button>` : ''}
-          <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>
-        </span></div>`;
+      const pv = m.url ? `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="previewDoc('${String(m.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
+      const dl = m.url ? `<a href="${m.url}" target="_blank" class="muted" style="white-space:nowrap;font-size:12px">הורדה ↓</a>` : '';
+      invCell = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span>✓ <b>#${m.number}</b> · ${escapeHtml(m.clientName || '')} · ${money(m.amount)}</span>${pv}${dl}</div>`;
+      actionCell = `${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
     } else if (t.matchStatus === 'ignored') {
-      block = `<div class="muted" style="margin-top:8px;font-size:13px">סומן ללא התאמה · <a href="#" onclick="setBankIgnore('${t.id}',false);return false" style="color:var(--accent)">החזר</a></div>`;
+      invCell = `<span class="muted">ללא התאמה</span>`;
+      actionCell = `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',false)">החזר</button>`;
     } else {
       const sugg = (t.suggestions || []).map(s => {
         const j = encodeURIComponent(JSON.stringify(s));
-        return `<button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`;
-      }).join('');
-      block = `<div style="margin-top:8px;font-size:13px">
-        ${sugg ? `<div class="muted" style="margin-bottom:5px">הצעות התאמה — לחץ לבחירה:</div><div style="display:flex;gap:6px;flex-wrap:wrap">${sugg}</div>` : '<span class="muted">לא נמצאה חשבונית תואמת.</span>'}
-        <button class="btn ghost" style="padding:3px 10px;font-size:12px;margin-top:7px" onclick="setBankIgnore('${t.id}',true)">התעלם</button>
-      </div>`;
+        return `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`;
+      }).join(' ');
+      invCell = sugg ? `<div style="font-size:12px"><span class="muted">בחר חשבונית:</span><div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px">${sugg}</div></div>` : `<span class="muted" style="font-size:12px">לא נמצאה חשבונית תואמת — בדוק ידנית בחשבונית ירוקה.</span>`;
+      actionCell = `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',true)">התעלם</button>`;
     }
   }
-  return `<div class="card" style="margin-bottom:10px">
-    <div class="row-between" style="margin:0">
-      <div><b style="color:${credit ? 'var(--accent2)' : 'var(--danger)'};font-size:15px">${amt}</b> <span class="muted" style="font-size:12.5px">· ${t.date}</span></div>
-      ${meta ? `<span class="tag ${meta.cls}">${meta.t}</span>` : '<span class="tag pending">חיוב</span>'}
-    </div>
-    <div style="font-size:13px;margin-top:4px">${escapeHtml(t.nameHint || t.description || '')}${t.invoiceNumber ? ` <span class="muted">· ח.מס ${t.invoiceNumber}</span>` : ''}</div>
-    ${block}
-  </div>`;
+  return `<tr>
+    <td style="white-space:nowrap">${t.date}</td>
+    <td style="white-space:nowrap;color:${credit ? 'var(--accent2)' : 'var(--danger)'};font-weight:600">${amt}</td>
+    <td>${name}</td>
+    <td><span class="tag ${meta.cls}">${meta.t}</span></td>
+    <td>${invCell}</td>
+    <td style="white-space:nowrap">${actionCell}</td>
+  </tr>`;
 }
 window.toggleBankAll = () => { state.bankShowAll = !state.bankShowAll; renderBank($('#content')); };
 const bankPut = (id, body) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(() => renderBank($('#content')));
@@ -864,21 +886,33 @@ window.openBankImport = () => {
     <h3>ייבוא תנועות בנק</h3>
     <p class="muted" style="font-size:13px">הדבק את התנועות כפי שהן מופיעות באתר הבנק (מזרחי — התצוגה המפורטת). אני אזהה, אתאים לחשבוניות ההכנסה, ואבקש ממך לאשר.</p>
     <textarea id="bankText" rows="10" placeholder="הדבק כאן את התנועות…" style="width:100%;margin:10px 0"></textarea>
+    <div id="bankStatus" style="font-size:13px;margin-bottom:8px;min-height:18px"></div>
     <div class="modal-actions">
-      <button class="btn ghost" onclick="document.getElementById('bankModal').classList.add('hidden')">ביטול</button>
-      <button class="btn primary" onclick="doBankImport(this)">ייבא והתאם</button>
+      <button class="btn ghost" onclick="document.getElementById('bankModal').classList.add('hidden')">סגור</button>
+      <button class="btn primary" id="bankImportBtn" onclick="doBankImport(this)">ייבא והתאם</button>
     </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  setTimeout(() => { const ta = document.getElementById('bankText'); if (ta) ta.focus(); }, 50);
 };
 window.doBankImport = async (btn) => {
-  const text = $('#bankText').value.trim(); if (!text) return;
+  const ta = document.getElementById('bankText');
+  const text = (ta?.value || '').trim();
+  const status = document.getElementById('bankStatus');
+  if (!text) { if (status) status.innerHTML = '<span style="color:var(--warn)">הדבק קודם את התנועות.</span>'; return; }
   btn.disabled = true; btn.textContent = 'מייבא ומתאים…';
-  const r = await fetch('/api/bank/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, companyId: state.company }) }).then(x => x.json());
-  document.getElementById('bankModal').classList.add('hidden');
-  await renderBank($('#content'));
-  if (r.error) alert(r.error);
-  else alert(`נוספו ${r.added} תנועות. מתוך ${r.credits} תנועות זכות, ${r.autoMatched} הותאמו אוטומטית לחשבוניות.`);
+  if (status) status.innerHTML = '<span class="muted">מייבא ומצליב מול חשבונית ירוקה… זה עשוי לקחת כמה שניות.</span>';
+  try {
+    const r = await fetch('/api/bank/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, companyId: state.company }) }).then(x => x.json());
+    btn.disabled = false; btn.textContent = 'ייבא והתאם';
+    if (r.error) { if (status) status.innerHTML = `<span style="color:var(--danger)">${r.error}</span>`; return; }
+    if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות · מתוך ${r.credits} זכות, ${r.autoMatched} הותאמו אוטומטית.</span>`;
+    await renderBank($('#content'));
+    setTimeout(() => { const mm = document.getElementById('bankModal'); if (mm) mm.classList.add('hidden'); }, 1400);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'ייבא והתאם';
+    if (status) status.innerHTML = `<span style="color:var(--danger)">שגיאה: ${e.message}</span>`;
+  }
 };
 
 // ---- מודל הדבקה ----

@@ -51,7 +51,7 @@ export function scoreMatch(tx, inv) {
   return { score, reasons, days: dd };
 }
 
-const toSug = (inv, s) => ({ id: inv.id, number: inv.number, clientName: inv.clientName, amount: inv.amountIncVat, date: inv.date, score: s.score, reasons: s.reasons });
+const toSug = (inv, s) => ({ id: inv.id, number: inv.number, clientName: inv.clientName, amount: inv.amountIncVat, date: inv.date, url: inv.url || null, score: s.score, reasons: s.reasons });
 
 // מתאים רשימת תנועות מול רשימת חשבוניות. הקצאה חמדנית — חשבונית לא מותאמת פעמיים.
 export function matchCredits(txns, invoices) {
