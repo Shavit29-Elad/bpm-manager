@@ -72,6 +72,43 @@ add('POST', /^\/api\/events\/ingest$/, (req, res, _p, _q, body) => {
   json(res, ingestText(body.text, body.companyId));
 });
 
+// POST /api/events  — יצירה ידנית או "אימוץ" אירוע מיומן גוגל לרשומה שניתן לערוך
+add('POST', /^\/api\/events$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const b = body || {};
+  const companyId = b.companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
+  // מניעת כפילות: אם כבר אומץ אירוע יומן זה — מחזירים אותו
+  if (b.gcalId) {
+    const exist = db.events.find(e => e.gcalId === b.gcalId && e.companyId === companyId);
+    if (exist) return json(res, exist);
+  }
+  const event = {
+    id: id('ev'), companyId,
+    date: b.date || null, dateRaw: b.date || null,
+    artist: b.artist || b.title || null,
+    location: b.location || null,
+    sound: b.sound || null,
+    price: b.price ?? null, priceSound: b.priceSound ?? null, priceExtras: b.priceExtras ?? null,
+    employees: b.employees || [], employeeBonusRaw: b.employeeBonusRaw || null,
+    contractors: b.contractors || [],
+    employeeDetails: b.employeeDetails || [],
+    contractorDetails: b.contractorDetails || [],
+    clientId: b.clientId || null, clientName: b.clientName || null,
+    gcalId: b.gcalId || null,
+    source: b.source || 'manual',
+    invoiceStatus: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+  upsertEvent(db, event); save(db); json(res, event);
+});
+
+// GET /api/events/:id — אירוע בודד
+add('GET', /^\/api\/events\/([^/]+)$/, (req, res, params) => {
+  const ev = load().events.find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  json(res, ev);
+});
+
 // PUT /api/events/:id
 add('PUT', /^\/api\/events\/([^/]+)$/, (req, res, params, _q, body) => {
   const db = load();
@@ -112,16 +149,19 @@ add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
     if (q.from && q.to) return d >= q.from && d <= q.to;
     return d.startsWith(q.month || new Date().toISOString().slice(0, 7));
   };
-  const wa = (q.companyId ? companyEvents(db, q.companyId) : db.events)
+  const dbEvents = (q.companyId ? companyEvents(db, q.companyId) : db.events);
+  const adoptedGcal = new Set(dbEvents.map(e => e.gcalId).filter(Boolean));
+  const wa = dbEvents
     .filter(e => inRange(e.date))
-    .map(e => ({ date: e.date, title: e.artist || 'אירוע', location: e.location || '', source: 'whatsapp' }));
+    .map(e => ({ eventId: e.id, date: e.date, title: e.artist || 'אירוע', location: e.location || '',
+      clientName: e.clientName || null, price: e.price ?? null, source: 'whatsapp' }));
   let cal = [];
   let calendarError = null;
   try {
     if (hasCalendar()) {
       cal = (await fetchCalendarEvents())
-        .filter(e => inRange(e.date))
-        .map(e => ({ date: e.date, title: e.title, location: e.location, source: 'calendar' }));
+        .filter(e => inRange(e.date) && !adoptedGcal.has(e.id))   // מסתירים אירועי יומן שכבר אומצו
+        .map(e => ({ gcalId: e.id, date: e.date, title: e.title, location: e.location, source: 'calendar' }));
     } else { calendarError = 'יומן גוגל לא מחובר'; }
   } catch (e) { calendarError = e.message; }
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });

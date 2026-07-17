@@ -349,9 +349,9 @@ async function renderCombined(c) {
         <div><h2>אירועים</h2><span class="muted">${events.length} אירועים</span></div>
         <button class="btn primary" id="addEvent">+ הדבק הודעת ווטסאפ</button>
       </div>
-      ${events.length ? `<table>
-        <thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>איכות קליטה</th></tr></thead>
-        <tbody>${events.map(rowEvent).join('')}</tbody></table>`
+      ${events.length ? `<div style="overflow-x:auto"><table style="min-width:960px">
+        <thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>איכות קליטה</th><th>עריכה</th></tr></thead>
+        <tbody>${events.map(rowEvent).join('')}</tbody></table></div>`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
     </div>
 
@@ -426,7 +426,7 @@ async function renderWeekCalendar() {
     const isToday = iso === today;
     const evs = byDay[iso] || [];
     const items = evs.length ? evs.map(e =>
-      `<div style="font-size:12px;padding:4px 7px;margin-top:4px;border-radius:6px;line-height:1.3;background:${e.cls === 'wa' ? 'var(--ev-wa-bg)' : 'var(--ev-cal-bg)'};color:${e.cls === 'wa' ? 'var(--ev-wa)' : 'var(--ev-cal)'}">${e.title || 'אירוע'}${e.location ? `<div style="font-size:10px;opacity:.75">${e.location}</div>` : ''}</div>`).join('')
+      `<div ${evClickAttr(e)} title="לחץ לעריכה" style="cursor:pointer;font-size:12px;padding:4px 7px;margin-top:4px;border-radius:6px;line-height:1.3;background:${e.cls === 'wa' ? 'var(--ev-wa-bg)' : 'var(--ev-cal-bg)'};color:${e.cls === 'wa' ? 'var(--ev-wa)' : 'var(--ev-cal)'}">${e.title || 'אירוע'}${e.location ? `<div style="font-size:10px;opacity:.75">${e.location}</div>` : ''}</div>`).join('')
       : `<div class="muted" style="font-size:11px;margin-top:8px">—</div>`;
     return `<div style="border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:10px;padding:9px;min-height:230px;background:${isToday ? 'rgba(79,70,229,.08)' : 'var(--panel2)'}">
       <div style="font-weight:600;font-size:13px;border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:2px">
@@ -481,7 +481,7 @@ async function renderMonthCalendar() {
     const isToday = iso === today;
     const evs = byDay[iso] || [];
     const items = evs.slice(0, 4).map(e =>
-      `<div title="${(e.title || '').replace(/"/g, '')} ${e.location || ''}" style="font-size:11px;padding:1px 5px;margin-top:2px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${e.cls === 'wa' ? 'var(--ev-wa-bg)' : 'var(--ev-cal-bg)'};color:${e.cls === 'wa' ? 'var(--ev-wa)' : 'var(--ev-cal)'}">${e.title || 'אירוע'}</div>`).join('');
+      `<div ${evClickAttr(e)} title="${(e.title || '').replace(/"/g, '')} ${e.location || ''} — לחץ לעריכה" style="cursor:pointer;font-size:11px;padding:1px 5px;margin-top:2px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${e.cls === 'wa' ? 'var(--ev-wa-bg)' : 'var(--ev-cal-bg)'};color:${e.cls === 'wa' ? 'var(--ev-wa)' : 'var(--ev-cal)'}">${e.title || 'אירוע'}</div>`).join('');
     const more = evs.length > 4 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">+${evs.length - 4} עוד</div>` : '';
     cells += `<div style="min-height:88px;border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:8px;padding:5px;background:${isToday ? 'rgba(79,70,229,.08)' : (evs.length ? 'var(--panel2)' : 'transparent')}">
       <div style="font-size:12px;color:${isToday ? 'var(--accent)' : 'var(--muted)'};font-weight:${isToday ? '700' : '400'}">${day}${isToday ? ' • היום' : ''}</div>${items}${more}</div>`;
@@ -509,12 +509,105 @@ function rowEvent(e) {
     <td>${e.date || e.dateRaw || '—'}</td>
     <td>${e.artist || '—'}</td>
     <td>${e.location || '—'}</td>
-    <td>${money(e.price)}</td>
+    <td>${e.clientName ? escapeHtml(e.clientName) : '<span class="muted">—</span>'}</td>
+    <td>${money(e.price)}${(e.priceSound || e.priceExtras) ? `<div class="muted" style="font-size:11px">סאונד ${money(e.priceSound || 0)} · תוספות ${money(e.priceExtras || 0)}</div>` : ''}</td>
     <td>${(e.employees || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td>${(e.contractors || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td><span class="tag ${e.invoiceStatus === 'invoiced' ? 'invoiced' : 'pending'}">${e.invoiceStatus === 'invoiced' ? 'חויב' : 'ממתין'}</span></td>
-    <td>${miss}</td></tr>`;
+    <td>${miss}</td>
+    <td><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button></td></tr>`;
 }
+
+// ================= עורך אירוע (תבנית מלאה + מחירים + שיוך לקוח) =================
+let _evEditing = null, _evCtr = [], _evClients = null;
+function evClickAttr(e) {
+  const p = encodeURIComponent(JSON.stringify({ eventId: e.eventId || null, gcalId: e.gcalId || null, date: e.date, title: e.title, location: e.location }));
+  return `onclick="openEventFromCal('${p}')"`;
+}
+async function fetchEventById(id) {
+  const list = await api(`/api/events?companyId=${state.company}`);
+  return (list || []).find(e => e.id === id) || null;
+}
+window.openEventFromCal = async (enc) => {
+  const p = JSON.parse(decodeURIComponent(enc));
+  let ev = null;
+  if (p.eventId) ev = await fetchEventById(p.eventId);
+  if (!ev) {
+    ev = await fetch('/api/events', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ companyId: state.company, date: p.date, artist: p.title, location: p.location, gcalId: p.gcalId || null, source: p.gcalId ? 'calendar' : 'manual' }),
+    }).then(r => r.json()).catch(() => null);
+  }
+  if (ev && ev.id) openEventEditor(ev);
+};
+async function openEventEditor(ev) {
+  _evEditing = ev;
+  _evCtr = (ev.contractorDetails && ev.contractorDetails.length ? ev.contractorDetails
+    : (ev.contractors || []).map(n => ({ name: n, amount: null }))).map(c => ({ name: c.name || '', amount: c.amount ?? '' }));
+  if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
+  let m = document.getElementById('evModal');
+  if (!m) { m = document.createElement('div'); m.id = 'evModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  const v = (x) => x == null ? '' : String(x).replace(/"/g, '&quot;');
+  const fld = (lbl, inner, span) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted)${span ? ';grid-column:1/3' : ''}">${lbl}${inner}</label>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(700px,95vw);max-height:90vh;overflow:auto">
+    <h3>עריכת אירוע${ev.gcalId && ev.source === 'calendar' ? ' <span class="muted" style="font-size:12px;font-weight:400">(מיומן גוגל)</span>' : ''}</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">
+      ${fld('תאריך', `<input id="evDate" type="date" value="${ev.date || ''}"/>`)}
+      ${fld('זמר / מופע', `<input id="evArtist" value="${v(ev.artist)}"/>`)}
+      ${fld('מיקום', `<input id="evLocation" value="${v(ev.location)}"/>`, true)}
+      ${fld('סאונד (תיאור)', `<input id="evSound" value="${v(ev.sound)}"/>`, true)}
+      ${fld('מחיר אירוע ₪', `<input id="evPrice" type="number" inputmode="decimal" value="${ev.price ?? ''}"/>`)}
+      ${fld('מחיר סאונד ₪', `<input id="evPriceSound" type="number" inputmode="decimal" value="${ev.priceSound ?? ''}"/>`)}
+      ${fld('מחיר תוספות ₪', `<input id="evPriceExtras" type="number" inputmode="decimal" value="${ev.priceExtras ?? ''}"/>`)}
+      ${fld('שיוך ללקוח (לחיוב חודשי)', `<input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…"/>`)}
+      ${fld('עובדים (מופרד בפסיקים)', `<input id="evEmployees" value="${v((ev.employees || []).join(', '))}"/>`, true)}
+      ${fld('תוספת לעובדים', `<input id="evBonus" value="${v(ev.employeeBonusRaw)}"/>`, true)}
+    </div>
+    <datalist id="evClientList">${(_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
+    <div style="margin-top:14px">
+      <div class="row-between" style="margin-bottom:6px"><b style="font-size:14px">קבלנים</b>
+        <button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="evAddCtr()">+ הוסף קבלן</button></div>
+      <div id="evCtrBox">${evCtrHtml()}</div>
+    </div>
+    <div class="modal-actions" style="margin-top:18px">
+      <button class="btn ghost" onclick="document.getElementById('evModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="saveEvent(this)">שמור</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+}
+function evCtrHtml() {
+  if (!_evCtr.length) return '<span class="muted" style="font-size:13px">אין קבלנים. הוסף אם רלוונטי לתשלום.</span>';
+  return _evCtr.map((c, i) => `<div style="display:flex;gap:8px;margin-bottom:6px">
+    <input value="${(c.name || '').replace(/"/g, '&quot;')}" placeholder="שם קבלן" oninput="_evCtr[${i}].name=this.value" style="flex:1"/>
+    <input type="number" inputmode="decimal" value="${c.amount ?? ''}" placeholder="סכום לתשלום ₪" oninput="_evCtr[${i}].amount=this.value" style="width:150px"/>
+    <button class="btn ghost" style="padding:4px 11px" onclick="evRemoveCtr(${i})" title="הסר">×</button></div>`).join('');
+}
+window.evAddCtr = () => { _evCtr.push({ name: '', amount: '' }); document.getElementById('evCtrBox').innerHTML = evCtrHtml(); };
+window.evRemoveCtr = (i) => { _evCtr.splice(i, 1); document.getElementById('evCtrBox').innerHTML = evCtrHtml(); };
+window.saveEvent = async (btn) => {
+  const g = (id) => document.getElementById(id);
+  const num = (x) => { const s = String(x ?? '').trim(); return s === '' || isNaN(+s) ? null : +s; };
+  const clientName = g('evClient').value.trim() || null;
+  const clientId = (_evClients || []).find(c => c.name === clientName)?.id || _evEditing.clientId || null;
+  const ctr = _evCtr.filter(c => (c.name || '').trim()).map(c => ({ name: c.name.trim(), amount: num(c.amount) }));
+  const body = {
+    date: g('evDate').value || null, dateRaw: g('evDate').value || _evEditing.dateRaw || null,
+    artist: g('evArtist').value.trim() || null,
+    location: g('evLocation').value.trim() || null,
+    sound: g('evSound').value.trim() || null,
+    price: num(g('evPrice').value), priceSound: num(g('evPriceSound').value), priceExtras: num(g('evPriceExtras').value),
+    employees: g('evEmployees').value.split(',').map(s => s.trim()).filter(Boolean),
+    employeeBonusRaw: g('evBonus').value.trim() || null,
+    contractors: ctr.map(c => c.name), contractorDetails: ctr,
+    clientName, clientId,
+  };
+  if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
+  await fetch(`/api/events/${_evEditing.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+  const m = document.getElementById('evModal'); if (m) m.classList.add('hidden');
+  renderCombined($('#content'));
+};
 
 // ---- יומן והתאמות (למעלה אי-התאמות, מתחת יומן) ----
 async function renderCalendar(c) {
