@@ -109,6 +109,24 @@ ${transcript}`;
   }
 }
 
+// פענוח JSON עמיד: מסיר גדרות קוד, ואם המערך נחתך — משחזר את האובייקטים השלמים
+function parseEventsJson(raw) {
+  if (!raw) return [];
+  let s = String(raw).replace(/```json/gi, '').replace(/```/g, '').trim();
+  const arrMatch = s.match(/\[[\s\S]*\]/);
+  if (arrMatch) { try { const a = JSON.parse(arrMatch[0]); if (Array.isArray(a)) return a; } catch { } }
+  // שחזור: מפרקים כל אובייקט ברמה העליונה בנפרד (עמיד לחיתוך באמצע)
+  const objs = []; let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '{') { if (depth === 0) start = i; depth++; }
+    else if (c === '}') { depth--; if (depth === 0 && start >= 0) { try { objs.push(JSON.parse(s.slice(start, i + 1))); } catch { } start = -1; } }
+  }
+  return objs;
+}
+
 // חילוץ אירועים מהודעה (מובנית או חופשית) לרשימת אירועים מובנית — עם AI
 export async function extractEvents(text, defaultYear) {
   const yr = defaultYear || new Date().getFullYear();
@@ -130,10 +148,9 @@ export async function extractEvents(text, defaultYear) {
 
 הטקסט:
 ${text}`;
-  const raw = await complete(system, [{ role: 'user', content: prompt }], { maxTokens: 4000 });
-  const jsonStr = (raw.match(/\[[\s\S]*\]/) || ['[]'])[0];
-  let arr; try { arr = JSON.parse(jsonStr); } catch { arr = []; }
-  if (!Array.isArray(arr)) arr = [];
+  const raw = await complete(system, [{ role: 'user', content: prompt }], { maxTokens: 8000 });
+  const arr = parseEventsJson(raw);
+  globalThis.__lastExtractRaw = raw; // לצורך דיבוג בלבד
   const n = (v) => (v == null || v === '' || isNaN(+String(v).replace(/[^\d.\-]/g, ''))) ? null : +String(v).replace(/[^\d.\-]/g, '');
   return arr.map(e => {
     const ctr = Array.isArray(e.contractors) ? e.contractors.filter(c => c && c.name).map(c => ({ name: String(c.name).trim(), amount: n(c.amount) })) : [];

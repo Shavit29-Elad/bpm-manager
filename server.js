@@ -85,6 +85,15 @@ add('POST', /^\/api\/events\/ingest$/, async (req, res, _p, _q, body) => {
   catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// DEBUG זמני — בדיקת חילוץ אירועים ב-AI בלי לשמור
+add('POST', /^\/api\/debug\/extract$/, async (req, res, _p, _q, body) => {
+  try {
+    const evs = await extractEvents(body?.text || '', 2026);
+    const raw = String(globalThis.__lastExtractRaw || '');
+    json(res, { count: evs.length, rawLen: raw.length, rawHead: raw.slice(0, 1200), rawTail: raw.slice(-500) });
+  } catch (e) { json(res, { error: e.message, rawHead: String(globalThis.__lastExtractRaw || '').slice(0, 1200) }); }
+});
+
 // POST /api/events  — יצירה ידנית או "אימוץ" אירוע מיומן גוגל לרשומה שניתן לערוך
 add('POST', /^\/api\/events$/, (req, res, _p, _q, body) => {
   const db = load();
