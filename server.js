@@ -19,7 +19,7 @@ import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
-import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest } from './chat.js';
+import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents } from './chat.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
 
@@ -30,20 +30,28 @@ const STATIC_ALLOW = new Set(['index.html', 'styles.css', 'app.js']);
 const PORT = process.env.PORT || 3000;
 
 // ---- קליטת אירוע/ים מטקסט (ווטסאפ / הדבקה ידנית) — תומך בכמה אירועים בהודעה אחת ----
-function ingestText(text, companyId) {
+// קודם ניסיון עם AI (מטפל גם בפורמט חופשי), ואם אין AI/נכשל — פרסור regex מובנה.
+async function ingestText(text, companyId) {
   const db = load();
   const cid = companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
-  const list = parseEventMessages(text);
+  let list = null;
+  if (chatConfigured()) {
+    try { const ai = await extractEvents(text, 2026); if (ai && ai.length) list = ai; } catch { /* נופל ל-regex */ }
+  }
+  if (!list || !list.length) list = parseEventMessages(text);
   const created = list.map(parsed => {
+    const ctrDetails = (parsed.contractorDetails && parsed.contractorDetails.length)
+      ? parsed.contractorDetails
+      : (parsed.contractors || []).map(name => ({ name, amount: null }));
     const event = {
       id: id('ev'), companyId: cid,
       ...parsed,
       client: parsed.artist, clientName: null, clientId: null,
-      priceSound: null, priceExtras: null,
+      priceSound: parsed.priceSound ?? null, priceExtras: parsed.priceExtras ?? null,
       invoiceStatus: 'pending',
       createdAt: new Date().toISOString(),
-      employeeDetails: parsed.employees.map(name => ({ name, rate: null, bonus: null })),
-      contractorDetails: parsed.contractors.map(name => ({ name, amount: null })),
+      employeeDetails: (parsed.employees || []).map(name => ({ name, rate: null, bonus: null })),
+      contractorDetails: ctrDetails,
     };
     upsertEvent(db, event);
     return event;
@@ -71,9 +79,10 @@ add('GET', /^\/api\/events$/, (req, res, _p, q) => {
 });
 
 // POST /api/events/ingest
-add('POST', /^\/api\/events\/ingest$/, (req, res, _p, _q, body) => {
+add('POST', /^\/api\/events\/ingest$/, async (req, res, _p, _q, body) => {
   if (!body?.text) return json(res, { error: 'חסר טקסט' }, 400);
-  json(res, ingestText(body.text, body.companyId));
+  try { json(res, await ingestText(body.text, body.companyId)); }
+  catch (e) { json(res, { error: e.message }, 500); }
 });
 
 // POST /api/events  — יצירה ידנית או "אימוץ" אירוע מיומן גוגל לרשומה שניתן לערוך
@@ -598,6 +607,6 @@ server.listen(PORT, async () => {
   seedIfEmpty();
   autoVerifyConnections();
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);
-  startWhatsappBridge(async (text) => { ingestText(text); })
+  startWhatsappBridge(async (text) => { try { await ingestText(text); } catch {} })
     .then(r => { if (r && !r.ok) console.log('ווטסאפ:', r.reason); });
 });

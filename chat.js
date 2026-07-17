@@ -8,7 +8,7 @@ export function chatConfigured() {
 }
 
 // --- Google Gemini (חינמי) ---
-async function callGemini(system, messages) {
+async function callGemini(system, messages, { maxTokens = 1200 } = {}) {
   const key = process.env.GEMINI_API_KEY;
   // רשימת מודלים לניסיון (מהחדש לישן) — עמידה בפני שינויי שמות/פרישת מודלים
   const candidates = process.env.GEMINI_MODEL
@@ -21,7 +21,7 @@ async function callGemini(system, messages) {
   const body = JSON.stringify({
     system_instruction: { parts: [{ text: system }] },
     contents,
-    generationConfig: { maxOutputTokens: 1200, temperature: 0.7 },
+    generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 },
   });
   let lastErr = '';
   for (const model of candidates) {
@@ -39,13 +39,13 @@ async function callGemini(system, messages) {
 }
 
 // --- Anthropic Claude (בתשלום) ---
-async function callAnthropic(system, messages) {
+async function callAnthropic(system, messages, { maxTokens = 1200 } = {}) {
   const key = process.env.ANTHROPIC_API_KEY;
   // רשימת מודלים לניסיון (מהחכם/עדכני לישן) — עמידה בפני שינויי שמות
   const candidates = process.env.CHAT_MODEL
     ? [process.env.CHAT_MODEL]
     : ['claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-latest'];
-  const bodyBase = { max_tokens: 1200, system, messages };
+  const bodyBase = { max_tokens: maxTokens, system, messages };
   let lastErr = '';
   for (const model of candidates) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -62,10 +62,10 @@ async function callAnthropic(system, messages) {
   throw new Error(`אף מודל Claude לא זמין. אפשר לקבוע CHAT_MODEL ידנית. פרט: ${lastErr}`);
 }
 
-async function complete(system, messages) {
+async function complete(system, messages, opts = {}) {
   if (!chatConfigured()) throw new Error('הצ\'אט לא מוגדר — הוסף ANTHROPIC_API_KEY (Claude) ב-Render');
   // עדיפות ל-Claude (ממשפחת Anthropic). Gemini רק כגיבוי אם אין מפתח Claude.
-  return process.env.ANTHROPIC_API_KEY ? callAnthropic(system, messages) : callGemini(system, messages);
+  return process.env.ANTHROPIC_API_KEY ? callAnthropic(system, messages, opts) : callGemini(system, messages, opts);
 }
 
 // שילוב הזיכרון המתמשך לתוך פרומפט המערכת של הדמות
@@ -107,6 +107,50 @@ ${transcript}`;
   } catch {
     return { title: 'בקשת פיתוח', summary: raw.slice(0, 300), details: [], priority: 'medium' };
   }
+}
+
+// חילוץ אירועים מהודעה (מובנית או חופשית) לרשימת אירועים מובנית — עם AI
+export async function extractEvents(text, defaultYear) {
+  const yr = defaultYear || new Date().getFullYear();
+  const system = `אתה מנתח הודעות אירועים של חברת הגברה ותאורה (BPM). תפקידך להמיר טקסט למערך JSON של אירועים. ענה אך ורק ב-JSON תקין, בלי טקסט לפני או אחרי.`;
+  const prompt = `הטקסט מכיל כמה אירועים — לפעמים בפורמט מובנה (תאריך:/זמר:/תמחור:/מיקום:/סאונד:/עובדים:/תוספת:/קבלן:) ולפעמים בפורמט חופשי (למשל: "6/7 שרית חדד אולמי אמארה 5500 עובדים אביעד נדב ומתניה בונוס 250"). חלץ כל אירוע בנפרד.
+
+לכל אירוע החזר אובייקט עם השדות:
+- "date": תאריך בפורמט YYYY-MM-DD. פענח "6/7" או "01.07.26" וכו'; אם השנה חסרה השתמש ב-${yr}.
+- "artist": שם הזמר/המופע (אפשר לכלול "- גאגא בוקינג" אם מופיע).
+- "price": מחיר האירוע ללקוח כמספר בלבד (בלי ש"ח/פסיקים). אם כתוב "אין"/"???"/"תשלום במזומן"/חסר — null.
+- "location": מיקום/אולם.
+- "sound": שם איש הסאונד או תיאור קצר (למשל "אליאב"). אם אין — null.
+- "priceSound": עלות הסאונד כמספר אם צוינה (למשל "אליאב - 1500" → 1500; "1800 סאונד + 400 דלק" → 2200). אחרת null.
+- "employees": מערך שמות העובדים בלבד (בלי תפקידים/הערות). תקן שגיאות כתיב ברורות (למשל "אביעעד"→"אביעד").
+- "employeeBonusRaw": טקסט חופשי שמתאר בונוסים/התאמות לעובדים (למשל "כפיר - כפולה, נתנאל - יומית רגילה" או "בונוס כפיר 250, נתנאל 350"). אם אין — null.
+- "contractors": מערך אובייקטים {"name":"שם","amount":מספר או null} (למשל "סויסה - 7500" → {"name":"סויסה","amount":7500}; "קבלן שרון שאלתיאל 4500" → {"name":"שרון שאלתיאל","amount":4500}). אם אין — [].
+
+החזר אך ורק מערך JSON. אם אין אירועים — [].
+
+הטקסט:
+${text}`;
+  const raw = await complete(system, [{ role: 'user', content: prompt }], { maxTokens: 4000 });
+  const jsonStr = (raw.match(/\[[\s\S]*\]/) || ['[]'])[0];
+  let arr; try { arr = JSON.parse(jsonStr); } catch { arr = []; }
+  if (!Array.isArray(arr)) arr = [];
+  const n = (v) => (v == null || v === '' || isNaN(+String(v).replace(/[^\d.\-]/g, ''))) ? null : +String(v).replace(/[^\d.\-]/g, '');
+  return arr.map(e => {
+    const ctr = Array.isArray(e.contractors) ? e.contractors.filter(c => c && c.name).map(c => ({ name: String(c.name).trim(), amount: n(c.amount) })) : [];
+    return {
+      date: e.date || null, dateRaw: e.date || null,
+      artist: e.artist || null,
+      price: n(e.price), priceRaw: e.price != null ? String(e.price) : null,
+      location: e.location || null,
+      sound: e.sound || null, priceSound: n(e.priceSound),
+      employees: Array.isArray(e.employees) ? e.employees.map(x => String(x).trim()).filter(Boolean) : [],
+      employeeBonusRaw: e.employeeBonusRaw || null,
+      contractors: ctr.map(c => c.name),
+      contractorDetails: ctr,
+      confidence: 1, missingFields: [],
+      source: 'whatsapp-ai',
+    };
+  }).filter(e => e.date || e.artist);
 }
 
 // למידה: מפיק "עובדות לזכור" מתוך חילופי ההודעות האחרונים (לזיכרון המתמשך)
