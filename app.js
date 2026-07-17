@@ -349,9 +349,7 @@ async function renderCombined(c) {
         <div><h2>אירועים</h2><span class="muted">${events.length} אירועים</span></div>
         <button class="btn primary" id="addEvent">+ הדבק הודעת ווטסאפ</button>
       </div>
-      ${events.length ? `<div style="overflow-x:auto"><table style="min-width:960px">
-        <thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>איכות קליטה</th><th>עריכה</th></tr></thead>
-        <tbody>${events.map(rowEvent).join('')}</tbody></table></div>`
+      ${events.length ? eventsByMonthHtml(events)
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
     </div>
 
@@ -503,6 +501,26 @@ async function renderMonthCalendar() {
       ${cells}
     </div>`;
 }
+const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>איכות קליטה</th><th>עריכה</th></tr></thead>`;
+// אירועים מקובצים לפי חודש — כל חודש בטבלה נפרדת עם סיכום
+function eventsByMonthHtml(events) {
+  const groups = {};
+  for (const e of events) { const k = (e.date || e.dateRaw || '').slice(0, 7) || 'ללא תאריך'; (groups[k] = groups[k] || []).push(e); }
+  const keys = Object.keys(groups).sort((a, b) => b.localeCompare(a));
+  const monthLabel = (k) => { const m = k.match(/^(\d{4})-(\d{2})$/); return m ? `${MONTHS_HE[+m[2] - 1]} ${m[1]}` : k; };
+  return keys.map(k => {
+    const list = groups[k];
+    const total = list.reduce((s, e) => s + (Number(e.price) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceExtras) || 0), 0);
+    return `<div style="margin-top:18px">
+      <div class="row-between" style="margin-bottom:6px">
+        <h3 style="margin:0;font-size:15px">${monthLabel(k)} <span class="muted" style="font-weight:400;font-size:13px">· ${list.length} אירועים</span></h3>
+        <span class="muted" style="font-size:13px">סה"כ הכנסה: <b style="color:var(--accent2)">${money(total)}</b></span>
+      </div>
+      <div style="overflow-x:auto"><table style="min-width:960px">${EVENTS_THEAD}
+        <tbody>${list.map(rowEvent).join('')}</tbody></table></div>
+    </div>`;
+  }).join('');
+}
 function rowEvent(e) {
   const miss = e.missingFields?.length ? `<span class="tag miss">חסר: ${e.missingFields.join(', ')}</span>` : `<span class="tag match">מלא</span>`;
   return `<tr>
@@ -570,13 +588,23 @@ async function openEventEditor(ev) {
         <button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="evAddCtr()">+ הוסף קבלן</button></div>
       <div id="evCtrBox">${evCtrHtml()}</div>
     </div>
-    <div class="modal-actions" style="margin-top:18px">
-      <button class="btn ghost" onclick="document.getElementById('evModal').classList.add('hidden')">ביטול</button>
-      <button class="btn primary" onclick="saveEvent(this)">שמור</button>
+    <div class="modal-actions" style="margin-top:18px;justify-content:space-between">
+      <button class="btn ghost" style="color:var(--danger);border-color:rgba(225,29,72,.3)" onclick="deleteEvent()">🗑 מחק מהרשימה</button>
+      <div style="display:flex;gap:10px">
+        <button class="btn ghost" onclick="document.getElementById('evModal').classList.add('hidden')">ביטול</button>
+        <button class="btn primary" onclick="saveEvent(this)">שמור</button>
+      </div>
     </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
 }
+window.deleteEvent = async () => {
+  if (!_evEditing) return;
+  if (!confirm('למחוק את האירוע מרשימת האירועים שלך? (לא נמחק מיומן גוגל)')) return;
+  await fetch(`/api/events/${_evEditing.id}`, { method: 'DELETE' }).catch(() => {});
+  const m = document.getElementById('evModal'); if (m) m.classList.add('hidden');
+  renderCombined($('#content'));
+};
 function evCtrHtml() {
   if (!_evCtr.length) return '<span class="muted" style="font-size:13px">אין קבלנים. הוסף אם רלוונטי לתשלום.</span>';
   return _evCtr.map((c, i) => `<div style="display:flex;gap:8px;margin-bottom:6px">
@@ -1256,12 +1284,16 @@ window.doBankImport = async (btn) => {
 // ---- מודל הדבקה ----
 function setupModal() {
   $('#ingestCancel').onclick = () => $('#ingestModal').classList.add('hidden');
-  $('#ingestSave').onclick = async () => {
+  $('#ingestSave').onclick = async (e) => {
     const text = $('#ingestText').value.trim();
     if (!text) return;
-    await fetch('/api/events/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, companyId: state.company }) });
+    const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'מנתח…';
+    const r = await fetch('/api/events/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, companyId: state.company }) }).then(x => x.json()).catch(() => null);
+    btn.disabled = false; btn.textContent = 'נתח ושמור';
+    const n = Array.isArray(r) ? r.length : (r ? 1 : 0);
     $('#ingestText').value = ''; $('#ingestModal').classList.add('hidden');
+    if (n) alert(`נוספו ${n} אירועים.`);
     state.tab = 'events'; render();
   };
 }

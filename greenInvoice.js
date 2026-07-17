@@ -19,7 +19,7 @@ function haveCredentials() {
 }
 
 // איפוס טוקן מטמון (למשל אחרי שינוי מפתחות מהממשק)
-function resetToken() { cachedToken = null; tokenExpiry = 0; }
+function resetToken() { cachedToken = null; tokenExpiry = 0; try { clearDataCache(); } catch {} }
 
 // בדיקת חיבור אמיתית: מנסה להשיג טוקן מול חשבונית ירוקה
 async function verify() {
@@ -65,6 +65,19 @@ async function api(pathName, { method = 'GET', body } = {}) {
   if (!res.ok) throw new Error(`חשבונית ירוקה ${method} ${pathName}: ${res.status} ${text}`);
   return json;
 }
+
+// ===== מטמון קריאה (מונע דפדוף חוזר על אלפי מסמכים בכל לחיצה) =====
+const _dataCache = new Map();       // key -> { at, val (Promise) }
+const DATA_TTL = 3 * 60 * 1000;     // 3 דקות
+function cached(key, fn, ttl = DATA_TTL) {
+  const hit = _dataCache.get(key);
+  if (hit && Date.now() - hit.at < ttl) return hit.val;
+  const p = Promise.resolve().then(fn);
+  _dataCache.set(key, { at: Date.now(), val: p });
+  p.catch(() => { if (_dataCache.get(key)?.val === p) _dataCache.delete(key); }); // בכשל — לא לשמור
+  return p;
+}
+export function clearDataCache() { _dataCache.clear(); }
 
 // סוגי מסמכים בחשבונית ירוקה (type): 305=חשבונית מס, 320=חשבונית מס/קבלה, 400=קבלה, 300=הצעת מחיר...
 export const DOC_TYPES = { INVOICE: 305, INVOICE_RECEIPT: 320, RECEIPT: 400, PRICE_QUOTE: 300 };
@@ -143,11 +156,13 @@ async function documentsInRange(fromDate, toDate, types) {
 
 // הכנסה בטווח מחשבוניות מס (305) + מס/קבלה (320), צפי מע"מ + פירוט
 export async function incomeForRange(fromDate, toDate, types = [305, 320]) {
-  const items = await documentsInRange(fromDate, toDate, types);
-  const docs = items.map(mapDoc);
-  const income = docs.reduce((s, d) => s + d.amountIncVat, 0);
-  const vat = docs.reduce((s, d) => s + d.vat, 0);
-  return { income, vat, count: docs.length, docs };
+  return cached(`income:${fromDate}:${toDate}:${types.join(',')}`, async () => {
+    const items = await documentsInRange(fromDate, toDate, types);
+    const docs = items.map(mapDoc);
+    const income = docs.reduce((s, d) => s + d.amountIncVat, 0);
+    const vat = docs.reduce((s, d) => s + d.vat, 0);
+    return { income, vat, count: docs.length, docs };
+  });
 }
 
 // תאימות לאחור — חודש בודד
@@ -157,48 +172,56 @@ export async function monthlyIncome(month) {
 
 // קבלות (סוג 400) בטווח — לצורך קישור קבלה לחשבונית מס בהתאמות בנק
 export async function receiptsForRange(fromDate, toDate) {
-  const items = await documentsInRange(fromDate, toDate, [400]);
-  return items.map(mapDoc);
+  return cached(`receipts:${fromDate}:${toDate}`, async () => {
+    const items = await documentsInRange(fromDate, toDate, [400]);
+    return items.map(mapDoc);
+  });
 }
 
 // כל המסמכים של לקוח מסוים (כל הסוגים, כל התאריכים)
 export async function clientDocuments(clientId) {
-  const all = [];
-  let page = 1;
-  for (let i = 0; i < 10; i++) { // עד ~1000 מסמכים
-    const res = await api('/documents/search', {
-      method: 'POST',
-      body: { clientId, page, pageSize: 100, sort: 'documentDate' },
-    });
-    const items = res.items || [];
-    all.push(...items);
-    if (items.length < 100) break;
-    page++;
-  }
-  // סינון הגנתי למקרה שה-API לא סינן לפי לקוח
-  const filtered = all.filter(d => !d.client || !d.client.id || d.client.id === clientId);
-  return (filtered.length ? filtered : all).map(mapDoc);
+  return cached(`clientDocs:${clientId}`, async () => {
+    const all = [];
+    let page = 1;
+    for (let i = 0; i < 10; i++) { // עד ~1000 מסמכים
+      const res = await api('/documents/search', {
+        method: 'POST',
+        body: { clientId, page, pageSize: 100, sort: 'documentDate' },
+      });
+      const items = res.items || [];
+      all.push(...items);
+      if (items.length < 100) break;
+      page++;
+    }
+    // סינון הגנתי למקרה שה-API לא סינן לפי לקוח
+    const filtered = all.filter(d => !d.client || !d.client.id || d.client.id === clientId);
+    return (filtered.length ? filtered : all).map(mapDoc);
+  });
 }
 
 // כמות חשבוניות מס פתוחות (לא שולמו במלואן)
 export async function openInvoicesCount() {
-  const res = await api('/documents/search', {
-    method: 'POST',
-    body: { page: 1, pageSize: 100, type: [305], sort: 'documentDate' },
+  return cached('openInvoices', async () => {
+    const res = await api('/documents/search', {
+      method: 'POST',
+      body: { page: 1, pageSize: 100, type: [305], sort: 'documentDate' },
+    });
+    const items = res.items || [];
+    return items.filter(d => {
+      if (d.amountDue != null) return num(d.amountDue) > 0.01;
+      if (d.paid != null) return !d.paid;
+      if (d.paymentStatus != null) return num(d.paymentStatus) === 0;
+      return false;
+    }).length;
   });
-  const items = res.items || [];
-  return items.filter(d => {
-    if (d.amountDue != null) return num(d.amountDue) > 0.01;
-    if (d.paid != null) return !d.paid;
-    if (d.paymentStatus != null) return num(d.paymentStatus) === 0;
-    return false;
-  }).length;
 }
 
 // רשימת לקוחות (ממורנינג / חשבונית ירוקה)
 export async function listClients() {
-  const res = await api('/clients/search', { method: 'POST', body: { page: 1, pageSize: 200 } });
-  return (res.items || []).map(c => ({ id: c.id, name: c.name })).filter(c => c.name);
+  return cached('clients', async () => {
+    const res = await api('/clients/search', { method: 'POST', body: { page: 1, pageSize: 200 } });
+    return (res.items || []).map(c => ({ id: c.id, name: c.name })).filter(c => c.name);
+  });
 }
 
 export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, listClients, clientDocuments, DOC_TYPES };

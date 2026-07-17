@@ -115,3 +115,27 @@ export function parseEventMessage(text) {
 
   return parsed;
 }
+
+// הודעה אחת עם כמה אירועים: מפצלים לפי שורת "תאריך:" (כל אירוע מתחיל בתאריך),
+// גם אם יש שגיאת כתיב כמו "אתאריך:" — מנקים את הקידומת. מחזיר מערך אירועים.
+export function parseEventMessages(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const isDateLine = (l) => /תאריך\s*[:：]/.test(l);
+  const blocks = [];
+  let cur = null;
+  for (const line of lines) {
+    if (isDateLine(line)) {
+      if (cur) blocks.push(cur);
+      cur = [line.replace(/^[^\n]*?(תאריך\s*[:：])/, '$1')]; // מנקה קידומת לפני "תאריך:"
+    } else if (cur) {
+      cur.push(line);
+    }
+    // שורות לפני התאריך הראשון — מתעלמים
+  }
+  if (cur) blocks.push(cur);
+  const events = blocks
+    .map(b => parseEventMessage(b.join('\n')))
+    .filter(e => e.date || e.artist || e.priceRaw || e.location);
+  // נפילה חיננית: אם לא זוהו בלוקים — מנתחים כאירוע יחיד
+  return events.length ? events : [parseEventMessage(text)];
+}

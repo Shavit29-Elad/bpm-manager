@@ -8,7 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { init as initStore, load, save, id, upsertEvent, companyEvents } from './store.js';
-import { parseEventMessage } from './whatsappParser.js';
+import { parseEventMessage, parseEventMessages } from './whatsappParser.js';
 import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar } from './googleCalendar.js';
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
@@ -29,23 +29,27 @@ const PUBLIC = __dirname; // בגרסה השטוחה קובצי הממשק יו�
 const STATIC_ALLOW = new Set(['index.html', 'styles.css', 'app.js']);
 const PORT = process.env.PORT || 3000;
 
-// ---- קליטת אירוע מטקסט (ווטסאפ / הדבקה ידנית) ----
+// ---- קליטת אירוע/ים מטקסט (ווטסאפ / הדבקה ידנית) — תומך בכמה אירועים בהודעה אחת ----
 function ingestText(text, companyId) {
   const db = load();
-  const parsed = parseEventMessage(text);
-  const event = {
-    id: id('ev'),
-    companyId: companyId || (db.companies.find(c => c.active) || db.companies[0])?.id,
-    ...parsed,
-    client: parsed.artist,
-    invoiceStatus: 'pending',
-    createdAt: new Date().toISOString(),
-    employeeDetails: parsed.employees.map(name => ({ name, rate: null, bonus: null })),
-    contractorDetails: parsed.contractors.map(name => ({ name, amount: null })),
-  };
-  upsertEvent(db, event);
+  const cid = companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
+  const list = parseEventMessages(text);
+  const created = list.map(parsed => {
+    const event = {
+      id: id('ev'), companyId: cid,
+      ...parsed,
+      client: parsed.artist, clientName: null, clientId: null,
+      priceSound: null, priceExtras: null,
+      invoiceStatus: 'pending',
+      createdAt: new Date().toISOString(),
+      employeeDetails: parsed.employees.map(name => ({ name, rate: null, bonus: null })),
+      contractorDetails: parsed.contractors.map(name => ({ name, amount: null })),
+    };
+    upsertEvent(db, event);
+    return event;
+  });
   save(db);
-  return event;
+  return created;
 }
 
 // ---- ראוטר מינימלי ----
@@ -115,6 +119,15 @@ add('PUT', /^\/api\/events\/([^/]+)$/, (req, res, params, _q, body) => {
   const ev = db.events.find(e => e.id === params[0]);
   if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
   Object.assign(ev, body); save(db); json(res, ev);
+});
+
+// DELETE /api/events/:id — מוחק רק מרשימת האירועים שלנו (לא מיומן גוגל)
+add('DELETE', /^\/api\/events\/([^/]+)$/, (req, res, params) => {
+  const db = load();
+  const before = db.events.length;
+  db.events = db.events.filter(e => e.id !== params[0]);
+  if (db.events.length === before) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  save(db); json(res, { ok: true });
 });
 
 // GET /api/calendar/match?companyId=
