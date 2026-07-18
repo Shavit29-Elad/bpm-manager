@@ -989,33 +989,52 @@ function invClientCard(g) {
 
 // ---- תצוגה מקדימה + הפקה ----
 let _invPreview = null;
-// קישור אירועים נבחרים לחשבונית עסקה/מס קיימת של הלקוח (במקום להפיק חדשה)
-window.openLinkExisting = async (safe, clientEnc, clientId) => {
-  const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
-  if (!ids.length) { alert('לא נבחרו אירועים לשיוך'); return; }
-  const client = decodeURIComponent(clientEnc);
-  let m = document.getElementById('linkModal');
-  if (!m) { m = document.createElement('div'); m.id = 'linkModal'; m.className = 'modal'; document.body.appendChild(m); }
-  m.classList.remove('hidden'); m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
-  m.innerHTML = `<div class="modal-card" style="width:min(680px,95vw)"><div class="empty">טוען חשבוניות פתוחות של ${escapeHtml(client)}…</div></div>`;
-  const r = await api(`/api/invoicing/open-for-client?clientName=${encodeURIComponent(client)}`).catch(() => ({ docs: [] }));
-  const docs = r.docs || [];
-  const idsEnc = encodeURIComponent(JSON.stringify(ids));
-  const rows = docs.length ? docs.map(d => `<div class="card" style="padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+let _linkCtx = null; // { ids, client, clientId, idsEnc }
+function linkDocRow(d, idsEnc) {
+  return `<div class="card" style="padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}</span>
       <span style="white-space:nowrap">#${d.number}</span>
       <span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
       <span style="flex:1;min-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.description ? escapeHtml(d.description) : ''}</span>
       <span style="font-weight:600;white-space:nowrap">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>
       <button class="btn success" style="padding:4px 12px;font-size:13px" onclick="linkToExisting('${d.id}','${escAttr(String(d.number))}',${d.type},'${idsEnc}')">קשר לכאן</button>
-    </div>`).join('') : `<div class="empty">אין חשבוניות עסקה/מס פתוחות ללקוח זה.</div>`;
+    </div>`;
+}
+// קישור אירועים נבחרים לחשבונית קיימת של הלקוח (במקום להפיק חדשה)
+window.openLinkExisting = async (safe, clientEnc, clientId) => {
+  const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
+  if (!ids.length) { alert('לא נבחרו אירועים לשיוך'); return; }
+  const client = decodeURIComponent(clientEnc);
+  const idsEnc = encodeURIComponent(JSON.stringify(ids));
+  _linkCtx = { ids, client, clientId: clientId || '', idsEnc };
+  let m = document.getElementById('linkModal');
+  if (!m) { m = document.createElement('div'); m.id = 'linkModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden'); m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  m.innerHTML = `<div class="modal-card" style="width:min(680px,95vw)"><div class="empty">טוען חשבוניות פתוחות של ${escapeHtml(client)}…</div></div>`;
+  const r = await api(`/api/invoicing/open-for-client?clientName=${encodeURIComponent(client)}`).catch(() => ({ docs: [] }));
+  const docs = r.docs || [];
+  const body = docs.length
+    ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">${docs.map(d => linkDocRow(d, idsEnc)).join('')}</div>`
+    : `<div class="empty" style="margin-top:10px">אין חשבוניות עסקה/מס פתוחות ללקוח זה.</div>`;
   m.innerHTML = `<div class="modal-card" style="width:min(680px,95vw);max-height:88vh;overflow:auto">
     <div class="row-between"><h3>קישור ${ids.length} אירועים לחשבונית קיימת</h3><span class="muted">${escapeHtml(client)}</span></div>
-    <p class="muted" style="font-size:12.5px">בחר חשבונית עסקה/מס פתוחה של הלקוח כדי לשייך אליה את האירועים הנבחרים (יסומנו כחויבו).</p>
-    <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">${rows}</div>
+    <p class="muted" style="font-size:12.5px">בחר חשבונית עסקה/מס פתוחה של הלקוח לשיוך האירועים (יסומנו כחויבו), או הצג את המסמכים האחרונים לשיוך להצעת מחיר / עסקה / מס / קבלה.</p>
+    <div id="linkBody">${body}</div>
+    <div style="margin-top:10px"><button class="btn ghost" onclick="loadRecentDocs()">📄 הצג מסמכים אחרונים (הצעות מחיר / עסקה / מס / קבלה)</button></div>
     <div id="linkStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
     <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('linkModal').classList.add('hidden')">סגור</button></div>
   </div>`;
+};
+// מציג את המסמכים האחרונים של הלקוח (כל הסוגים) לשיוך
+window.loadRecentDocs = async () => {
+  if (!_linkCtx) return;
+  const box = document.getElementById('linkBody'); if (box) box.innerHTML = '<div class="empty">טוען מסמכים אחרונים…</div>';
+  const q = `clientName=${encodeURIComponent(_linkCtx.client)}${_linkCtx.clientId ? `&clientId=${encodeURIComponent(_linkCtx.clientId)}` : ''}`;
+  const r = await api(`/api/invoicing/recent-for-client?${q}`).catch(() => ({ docs: [] }));
+  const docs = r.docs || [];
+  if (box) box.innerHTML = docs.length
+    ? `<div class="muted" style="font-size:12px;margin:6px 0">מסמכים אחרונים של הלקוח:</div><div style="display:flex;flex-direction:column;gap:8px">${docs.map(d => linkDocRow(d, _linkCtx.idsEnc)).join('')}</div>`
+    : `<div class="empty">לא נמצאו מסמכים אחרונים ללקוח זה.</div>`;
 };
 window.linkToExisting = async (docId, docNumber, docType, idsEnc) => {
   const eventIds = JSON.parse(decodeURIComponent(idsEnc));

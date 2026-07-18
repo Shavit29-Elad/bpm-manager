@@ -282,6 +282,27 @@ add('GET', /^\/api\/invoicing\/open-for-client$/, async (req, res, _p, q) => {
   } catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
+// GET /api/invoicing/recent-for-client?clientId=&clientName= — מסמכים אחרונים של הלקוח (כל הסוגים לשיוך)
+add('GET', /^\/api\/invoicing\/recent-for-client$/, async (req, res, _p, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
+  try {
+    let clientId = q.clientId || null;
+    const name = (q.clientName || '').trim();
+    if (!clientId && name) {
+      const clients = await greenInvoice.listClients();
+      const c = clients.find(cl => (cl.name || '').trim() === name);
+      clientId = c?.id || null;
+    }
+    if (!clientId) return json(res, { docs: [] });
+    const all = await greenInvoice.clientDocuments(clientId);
+    const types = [10, 300, 305, 320, 400]; // הצעת מחיר, עסקה, מס, מס-קבלה, קבלה
+    const docs = all.filter(d => types.includes(Number(d.type)))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .slice(0, 30);
+    json(res, { docs });
+  } catch (e) { json(res, { docs: [], error: e.message }, 500); }
+});
+
 // POST /api/invoicing/link { eventIds, docId, docNumber, docType } — שיוך אירועים לחשבונית קיימת
 add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
   const db = load();
