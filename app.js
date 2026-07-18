@@ -266,7 +266,8 @@ function openInvClientHtml(cl) {
     <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}</span>
     <span>#${d.number}</span><span class="muted">${fmtDate(d.date)}</span>
     <span style="margin-inline-start:auto;font-weight:600">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>
-    ${d.url ? `<a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">↗</a>` : ''}
+    ${d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
+    <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : ''}
   </div>`).join('');
   return `<div class="card" style="padding:0;overflow:hidden">
     <div class="row-between" style="margin:0;padding:11px 13px;cursor:pointer" onclick="document.getElementById('${rid}').classList.toggle('hidden')">
