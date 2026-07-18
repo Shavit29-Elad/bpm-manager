@@ -454,9 +454,9 @@ async function renderCombined(c) {
       </div>
       ${events.length ? `
         <h3 style="margin:16px 0 4px;font-size:15px">🕓 אירועים לאישור <span class="muted" style="font-weight:400;font-size:13px">· ${pending.length}</span></h3>
-        ${pending.length ? eventsByMonthHtml(pending) : `<div class="empty">אין אירועים הממתינים לאישור 👌</div>`}
+        ${pending.length ? eventsByMonthHtml(pending, 'pending') : `<div class="empty">אין אירועים הממתינים לאישור 👌</div>`}
         <h3 style="margin:22px 0 4px;font-size:15px">✓ אירועים מאושרים <span class="muted" style="font-weight:400;font-size:13px">· ${approved.length}</span></h3>
-        ${approved.length ? eventsByMonthHtml(approved) : `<div class="empty">עדיין אין אירועים מאושרים</div>`}`
+        ${approved.length ? eventsByMonthHtml(approved, 'approved') : `<div class="empty">עדיין אין אירועים מאושרים</div>`}`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
     </div>
 
@@ -637,7 +637,7 @@ async function renderMonthCalendar() {
       ${cells}
     </div>`;
 }
-const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>אישור</th><th>עריכה</th></tr></thead>`;
+const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור (ללא מע"מ)</th><th>תמחור כולל מע"מ</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>אישור</th><th>עריכה</th></tr></thead>`;
 let _evMonthFilter = 'all';
 window.setEvMonth = (v) => { _evMonthFilter = v; renderCombined($('#content')); };
 const monthKeyLabel = (k) => { const m = String(k).match(/^(\d{4})-(\d{2})$/); return m ? `${MONTHS_HE[+m[2] - 1]} ${m[1]}` : k; };
@@ -663,7 +663,8 @@ window.confirmEventRow = async (id, val) => {
   renderCombined($('#content'));
 };
 // אירועים מקובצים לפי חודש — כל חודש בטבלה נפרדת עם סיכום
-function eventsByMonthHtml(events) {
+const VAT_RATE = 0.18; // מע"מ בישראל
+function eventsByMonthHtml(events, mode = 'approved') {
   const groups = {};
   for (const e of events) { const k = (e.date || e.dateRaw || '').slice(0, 7) || 'ללא תאריך'; (groups[k] = groups[k] || []).push(e); }
   const keys = Object.keys(groups).sort((a, b) => b.localeCompare(a));
@@ -672,12 +673,17 @@ function eventsByMonthHtml(events) {
     // מיון בתוך החודש לפי תאריך האירוע — מתחילת החודש (מוקדם) לסופו (מאוחר)
     const list = groups[k].slice().sort((a, b) => (a.date || a.dateRaw || '').localeCompare(b.date || b.dateRaw || ''));
     const total = list.reduce((s, e) => s + (Number(e.price) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceExtras) || 0), 0);
+    const withVat = +(total * (1 + VAT_RATE)).toFixed(2);   // הסכומים מוזנים ללא מע"מ — מחושב אוטומטית
     const ctrCost = list.reduce((s, e) => s + (e.contractorDetails || []).reduce((t, c) => t + (Number(c.amount) || 0), 0), 0);
     const net = total - ctrCost;
+    // לאישור: רק הכנסה צפויה (ללא מע"מ + כולל מע"מ). מאושרים: כולל קבלנים ונטו.
+    const summary = mode === 'pending'
+      ? `סה"כ הכנסה צפויה (ללא מע"מ): <b style="color:var(--accent2)">${money(total)}</b> · כולל מע"מ: <b style="color:var(--text)">${money(withVat)}</b>`
+      : `סה"כ הכנסה (ללא מע"מ): <b style="color:var(--accent2)">${money(total)}</b> · כולל מע"מ: <b style="color:var(--text)">${money(withVat)}</b> · תשלומי קבלנים: <b style="color:var(--danger)">${money(ctrCost)}</b> · נטו לאחר קבלנים: <b style="color:var(--text)">${money(net)}</b>`;
     return `<div style="margin-top:18px">
       <div class="row-between" style="margin-bottom:6px">
         <h3 style="margin:0;font-size:15px">${monthLabel(k)} <span class="muted" style="font-weight:400;font-size:13px">· ${list.length} אירועים</span></h3>
-        <span class="muted" style="font-size:13px">סה"כ הכנסה: <b style="color:var(--accent2)">${money(total)}</b> · תשלומי קבלנים: <b style="color:var(--danger)">${money(ctrCost)}</b> · נטו לאחר קבלנים: <b style="color:var(--text)">${money(net)}</b></span>
+        <span class="muted" style="font-size:13px">${summary}</span>
       </div>
       <div style="overflow-x:auto"><table style="min-width:960px">${EVENTS_THEAD}
         <tbody>${list.map(rowEvent).join('')}</tbody></table></div>
@@ -685,9 +691,10 @@ function eventsByMonthHtml(events) {
   }).join('');
 }
 function rowEvent(e) {
+  // אישור נעשה רק דרך העריכה (כדי לוודא פרטים) — בשורה לא מאושרת יש כפתור שפותח עריכה
   const confBtn = e.confirmed
     ? `<button class="btn success" style="padding:4px 12px;font-size:12px" onclick="confirmEventRow('${e.id}',false)">מאושר ✓</button>`
-    : `<button class="btn ghost" style="padding:4px 16px;font-size:12px" onclick="confirmEventRow('${e.id}',true)">אשר</button>`;
+    : `<button class="btn ghost" style="padding:4px 12px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">ערוך ואשר →</button>`;
   const rowBg = isOverdueUnbilled(e) ? 'background:rgba(225,29,72,.06)' : (e.confirmed ? 'background:rgba(14,164,114,.05)' : '');
   return `<tr${rowBg ? ` style="${rowBg}"` : ''}>
     <td style="white-space:nowrap">${ddmy(e.date || e.dateRaw)}</td>
@@ -695,6 +702,7 @@ function rowEvent(e) {
     <td>${e.location || '—'}</td>
     <td>${e.clientName ? escapeHtml(e.clientName) : '<span class="muted">—</span>'}</td>
     <td>${money(e.price)}${(e.priceSound || e.priceExtras) ? `<div class="muted" style="font-size:11px">סאונד ${money(e.priceSound || 0)} · תוספות ${money(e.priceExtras || 0)}</div>` : ''}</td>
+    <td style="white-space:nowrap;font-weight:600">${money(((Number(e.price) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceExtras) || 0)) * (1 + VAT_RATE))}</td>
     <td>${(e.employees || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td>${(e.contractors || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td>${invoiceCell(e)}</td>
@@ -770,6 +778,9 @@ async function openEventEditor(ev) {
       <button class="btn ghost" style="color:var(--danger);border-color:rgba(225,29,72,.3)" onclick="deleteEvent()">🗑 מחק מהרשימה</button>
       <div style="display:flex;gap:12px;align-items:center">
         <span id="evSaveState" class="muted" style="font-size:12.5px">✓ נשמר אוטומטית</span>
+        ${ev.confirmed
+      ? '<button class="btn ghost" onclick="unapproveFromEditor(this)">בטל אישור</button>'
+      : '<button class="btn success" onclick="approveFromEditor(this)">✓ אשר אירוע</button>'}
         <button class="btn primary" onclick="saveEvent(this)">סגור</button>
       </div>
     </div>
@@ -858,6 +869,24 @@ window.autoSaveEvent = () => { clearTimeout(_evSaveT); _evSaveT = setTimeout(sav
 window.saveEvent = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
   await saveEventCore();
+  const m = document.getElementById('evModal'); if (m) m.classList.add('hidden');
+  renderCombined($('#content'));
+};
+// אישור אירוע מתוך העריכה — שומר את הפרטים ומסמן כמאושר
+window.approveFromEditor = async (btn) => {
+  if (!_evEditing) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'מאשר…'; }
+  await saveEventCore();
+  _evEditing.confirmed = true;
+  await fetch(`/api/events/${_evEditing.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: true }) }).catch(() => {});
+  const m = document.getElementById('evModal'); if (m) m.classList.add('hidden');
+  renderCombined($('#content'));
+};
+window.unapproveFromEditor = async (btn) => {
+  if (!_evEditing) return;
+  if (btn) { btn.disabled = true; }
+  _evEditing.confirmed = false;
+  await fetch(`/api/events/${_evEditing.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: false }) }).catch(() => {});
   const m = document.getElementById('evModal'); if (m) m.classList.add('hidden');
   renderCombined($('#content'));
 };
