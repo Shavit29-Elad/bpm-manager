@@ -239,7 +239,7 @@ add('POST', /^\/api\/employees$/, (req, res, _p, _q, body) => {
   if (!name) return json(res, { error: 'חסר שם עובד' }, 400);
   let emp = (db.employees || []).find(e => e.name === name && (!e.companyId || e.companyId === cid));
   if (emp) { emp.baseRate = body.baseRate ?? emp.baseRate; }
-  else { emp = { id: id('emp'), companyId: cid, name, baseRate: body.baseRate ?? null, active: true }; db.employees.push(emp); }
+  else { emp = { id: id('emp'), companyId: cid, name, baseRate: body.baseRate ?? null, salaryType: body.salaryType || 'gross', active: true }; db.employees.push(emp); }
   save(db); json(res, emp);
 });
 // PUT /api/employees/:id
@@ -266,7 +266,7 @@ add('POST', /^\/api\/employees\/sync$/, (req, res, _p, q, body) => {
   for (const ev of companyEvents(db, cid)) for (const w of (ev.employeeDetails || [])) if (w.name) names.add(String(w.name).trim());
   const existing = new Set((db.employees || []).filter(e => !e.companyId || e.companyId === cid).map(e => e.name));
   let added = 0;
-  for (const name of names) { if (name && !existing.has(name)) { db.employees.push({ id: id('emp'), companyId: cid, name, baseRate: null, active: true }); added++; } }
+  for (const name of names) { if (name && !existing.has(name)) { db.employees.push({ id: id('emp'), companyId: cid, name, baseRate: null, salaryType: 'gross', active: true }); added++; } }
   save(db); json(res, { added });
 });
 

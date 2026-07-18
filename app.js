@@ -347,7 +347,10 @@ async function renderCombined(c) {
     <div class="panel">
       <div class="row-between">
         <div><h2>אירועים</h2><span class="muted">${events.length} אירועים</span></div>
-        <button class="btn primary" id="addEvent">+ הדבק הודעת ווטסאפ</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn primary" id="addEvent">+ הדבק הודעת ווטסאפ</button>
+          <button class="btn ghost" id="addEventManual">+ הוסף אירוע</button>
+        </div>
       </div>
       ${events.length ? eventsByMonthHtml(events)
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
@@ -372,6 +375,10 @@ async function renderCombined(c) {
 
     <div class="panel" id="calWrap"><div class="empty">טוען יומן…</div></div>`;
   $('#addEvent').onclick = () => $('#ingestModal').classList.remove('hidden');
+  $('#addEventManual').onclick = async () => {
+    const ev = await fetch('/api/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, source: 'manual', date: todayIso() }) }).then(r => r.json()).catch(() => null);
+    if (ev && ev.id) openEventEditor(ev);
+  };
   renderCalView();
 }
 
@@ -749,46 +756,84 @@ window.empDelDoc = async (fid) => { if (!confirm('למחוק מסמך?')) return
 window.empJobs = async (empId, nameEnc) => { const r = await api(`/api/employees/${empId}/jobs?month=${state.payMonth}`); openEmpJobsModal(decodeURIComponent(nameEnc), r); };
 window.empJobsByName = (nameEnc) => { const name = decodeURIComponent(nameEnc); const e = (window._payEmps || []).find(x => x.name === name); if (e) empJobs(e.id, nameEnc); else alert('העובד לא נמצא ברשימת העובדים. לחץ "ייבא מהאירועים".'); };
 const dmy = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}.${m[2]}.${m[1].slice(2)}` : (iso || ''); };
+let _report = null;
 function openEmpJobsModal(name, r) {
+  const emp = r.employee || {};
   const shifts = (r.pay && r.pay.shifts) || [];
-  const pay = r.pay || { base: 0, bonus: 0, food: 0, total: 0 };
-  const nis = (n) => '₪' + (Number(n) || 0).toLocaleString('he-IL');
-  // דוח מסודר, נקי לצילום/הדפסה ושליחה לרו"ח ולעובד
-  const th = (t, w) => `<th style="border:1px solid #d8dced;padding:9px 11px;text-align:right;background:#eef0fb;font-size:13px;font-weight:700${w ? `;width:${w}` : ''}">${t}</th>`;
-  const td = (t, opt = '') => `<td style="border:1px solid #d8dced;padding:8px 11px;text-align:right;font-size:13.5px;${opt}">${t}</td>`;
-  const report = shifts.length ? `
-    <table style="width:100%;border-collapse:collapse;background:#fff">
-      <thead><tr>${th('#', '34px')}${th('אמן')}${th('תאריך', '92px')}${th('מיקום')}${th('תשלום', '90px')}${th('בונוס', '80px')}${th('אוכל', '80px')}${th('הערות')}</tr></thead>
-      <tbody>
-        ${shifts.map((s, i) => `<tr${i % 2 ? ' style="background:#fafbff"' : ''}>${td(i + 1)}${td(escapeHtml(s.artist || ''))}${td(dmy(s.date), 'white-space:nowrap')}${td(escapeHtml(s.location || ''))}${td(nis(s.base))}${td(s.bonus ? nis(s.bonus) : '₪0')}${td(s.food ? nis(s.food) : '₪0')}${td(escapeHtml(s.note || ''))}</tr>`).join('')}
-        <tr>${td('<b>בונוסים</b>', 'border-top:2px solid #c7cce0')}<td colspan="4" style="border:1px solid #d8dced"></td>${td('<b>' + nis(pay.bonus) + '</b>', 'border-top:2px solid #c7cce0')}<td colspan="2" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
-        <tr>${td('<b>החזר אוכל</b>')}<td colspan="5" style="border:1px solid #d8dced"></td>${td('<b>' + nis(pay.food) + '</b>')}<td style="border:1px solid #d8dced"></td></tr>
-        <tr style="background:#eef0fb">${td('<b>סה"כ כולל הכל (נטו)</b>')}<td colspan="6" style="border:1px solid #d8dced"></td>${td('<b style="color:#4338ca;font-size:15px">' + nis(pay.total) + '</b>')}</tr>
-      </tbody>
-    </table>` : `<div class="empty">אין עבודות לחודש זה.</div>`;
+  _report = {
+    empId: emp.id, empName: name, month: state.payMonth,
+    salaryType: emp.salaryType || 'gross',
+    rows: shifts.map(s => ({ eventId: s.eventId, artist: s.artist || '', date: s.date, location: s.location || '', payment: Number(s.base) || 0, bonus: Number(s.bonus) || 0, food: Number(s.food) || 0, note: s.note || '' })),
+  };
   let m = document.getElementById('jobsModal'); if (!m) { m = document.createElement('div'); m.id = 'jobsModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(880px,96vw);max-height:90vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(900px,96vw);max-height:90vh;overflow:auto">
     <div class="row-between" style="align-items:center">
-      <div><h3 style="margin:0">${escapeHtml(name)}</h3><span class="muted" style="font-size:13.5px">דוח עבודות · ${monthLabelFromKey(state.payMonth)}</span></div>
+      <div><h3 style="margin:0">${escapeHtml(name)}</h3><span class="muted" style="font-size:13.5px">דוח עבודות · ${monthLabelFromKey(_report.month)} · ${_report.salaryType === 'net' ? 'נטו' : 'ברוטו'} · לחיצה על תא לעריכה</span></div>
       <button class="btn ghost" style="padding:6px 13px" onclick="printJobsReport()">🖨 הדפס / PDF</button>
     </div>
-    <div id="jobsReport" style="margin-top:14px;background:#fff;border-radius:10px;padding:16px">
-      <div style="font-size:16px;font-weight:800;margin-bottom:2px">${escapeHtml(name)}</div>
-      <div style="color:#6b7488;font-size:13px;margin-bottom:12px">דוח עבודות חודשי · ${monthLabelFromKey(state.payMonth)}</div>
-      <div style="overflow-x:auto">${report}</div>
-    </div>
+    <div id="jobsReport" style="margin-top:14px;background:#fff;border-radius:10px;padding:16px"></div>
     <div class="modal-actions" style="margin-top:14px"><button class="btn primary" onclick="document.getElementById('jobsModal').classList.add('hidden')">סגור</button></div>
   </div>`;
+  renderJobsReport();
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
 }
+const _nisFmt = (n) => '₪' + (Number(n) || 0).toLocaleString('he-IL');
+function renderJobsReport() {
+  const el = document.getElementById('jobsReport'); if (!el || !_report) return;
+  const rows = _report.rows;
+  const label = _report.salaryType === 'net' ? 'נטו' : 'ברוטו';
+  const th = (t, w) => `<th style="border:1px solid #d8dced;padding:9px 10px;text-align:right;background:#eef0fb;font-size:13px;font-weight:700${w ? `;width:${w}` : ''}">${t}</th>`;
+  const cell = (inner, opt = '', id = '') => `<td${id ? ` id="${id}"` : ''} style="border:1px solid #d8dced;padding:6px 9px;text-align:right;font-size:13.5px;${opt}">${inner}</td>`;
+  const inTxt = (i, f) => `<input value="${String(_report.rows[i][f] || '').replace(/"/g, '&quot;')}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;width:100%;text-align:right;font:inherit;color:inherit;padding:2px 0"/>`;
+  const inNum = (i, f) => `<input type="number" inputmode="decimal" value="${_report.rows[i][f] || 0}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;width:100%;text-align:right;font:inherit;color:inherit;padding:2px 0"/>`;
+  const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const grand = sum('payment') + sum('bonus') + sum('food');
+  const head = `<div style="font-size:16px;font-weight:800;margin-bottom:2px">${escapeHtml(_report.empName)}</div>
+    <div style="color:#6b7488;font-size:13px;margin-bottom:12px">דוח עבודות חודשי · ${monthLabelFromKey(_report.month)} · ${label}</div>`;
+  if (!rows.length) { el.innerHTML = head + `<div class="empty">אין עבודות לחודש זה.</div>`; return; }
+  el.innerHTML = head + `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#fff">
+      <thead><tr>${th('#', '34px')}${th('אמן')}${th('תאריך', '92px')}${th('מיקום')}${th('תשלום', '96px')}${th('בונוס', '88px')}${th('אוכל', '88px')}${th('הערות')}</tr></thead>
+      <tbody>
+        ${rows.map((r, i) => `<tr${i % 2 ? ' style="background:#fafbff"' : ''}>${cell(i + 1)}${cell(inTxt(i, 'artist'))}${cell(dmy(r.date), 'white-space:nowrap')}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${cell(inTxt(i, 'note'))}</tr>`).join('')}
+        <tr>${cell('<b>סה"כ</b>', 'border-top:2px solid #c7cce0;text-align:center')}<td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0', 'sumPay')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0', 'sumBonus')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0', 'sumFood')}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
+        <tr style="background:#eef0fb">${cell(`<b>סה"כ כולל הכל (${label})</b>`, 'text-align:start')}<td colspan="6" style="border:1px solid #d8dced"></td>${cell('<b style="color:#4338ca;font-size:15px">' + _nisFmt(grand) + '</b>', '', 'grandTotal')}</tr>
+      </tbody>
+    </table></div>`;
+}
+window.editReport = async (i, f, val) => {
+  const row = _report.rows[i]; if (!row) return;
+  if (['payment', 'bonus', 'food'].includes(f)) row[f] = val === '' ? 0 : +val; else row[f] = val;
+  // עדכון הסכומים בלבד (שומר על הפוקוס)
+  const sum = (k) => _report.rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const grand = sum('payment') + sum('bonus') + sum('food');
+  const set = (id, v) => { const e = document.getElementById(id); if (e) e.innerHTML = v; };
+  set('sumPay', '<b>' + _nisFmt(sum('payment')) + '</b>'); set('sumBonus', '<b>' + _nisFmt(sum('bonus')) + '</b>'); set('sumFood', '<b>' + _nisFmt(sum('food')) + '</b>');
+  set('grandTotal', '<b style="color:#4338ca;font-size:15px">' + _nisFmt(grand) + '</b>');
+  // שמירה לשרת: שדות משותפים על האירוע, שדות עובד על employeeDetails
+  const ev = await fetchEventById(row.eventId); if (!ev) return;
+  if (f === 'artist' || f === 'location') { ev[f] = val; }
+  else {
+    ev.employeeDetails = ev.employeeDetails || [];
+    let d = ev.employeeDetails.find(x => x.name === _report.empName);
+    if (!d) { d = { name: _report.empName }; ev.employeeDetails.push(d); ev.employees = ev.employees || []; if (!ev.employees.includes(_report.empName)) ev.employees.push(_report.empName); }
+    if (f === 'payment') d.rate = val === '' ? null : +val;
+    else if (f === 'bonus') d.bonus = val === '' ? null : +val;
+    else if (f === 'food') d.food = val === '' ? null : +val;
+    else if (f === 'note') d.note = val;
+  }
+  await fetch(`/api/events/${row.eventId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ev) }).catch(() => {});
+};
 window.printJobsReport = () => {
   const el = document.getElementById('jobsReport'); if (!el) return;
   const w = window.open('', '_blank', 'width=820,height=940');
   if (!w) { alert('כדי להדפיס — אשר חלונות קופצים בדפדפן, או פשוט צלם מסך את הדוח.'); return; }
+  // ממירים שדות קלט לטקסט להדפסה נקייה
+  const clone = el.cloneNode(true);
+  clone.querySelectorAll('input').forEach(inp => { const span = document.createElement('span'); span.textContent = inp.value; inp.replaceWith(span); });
   w.document.write(`<!doctype html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>דוח עבודות</title>
     <style>body{font-family:'Heebo',Arial,sans-serif;color:#1c2333;padding:26px;margin:0}</style></head>
-    <body>${el.innerHTML}</body></html>`);
+    <body>${clone.innerHTML}</body></html>`);
   w.document.close();
   setTimeout(() => { w.focus(); w.print(); }, 350);
 };
@@ -803,6 +848,7 @@ function empRow(e) {
   return `<tr>
     <td><button class="btn ghost" style="padding:4px 10px;font-size:13px;font-weight:600" title="ראה עבודות לחודש" onclick="empJobs('${e.id}','${encodeURIComponent(e.name || '')}')">${escapeHtml(e.name || '')}</button></td>
     <td><input type="number" value="${e.baseRate ?? ''}" placeholder="₪ ליום" onchange="saveEmp('${e.id}',{baseRate:this.value===''?null:+this.value})" style="width:95px"/></td>
+    <td><select onchange="saveEmp('${e.id}',{salaryType:this.value})" style="width:88px"><option value="gross"${(e.salaryType || 'gross') === 'gross' ? ' selected' : ''}>ברוטו</option><option value="net"${e.salaryType === 'net' ? ' selected' : ''}>נטו</option></select></td>
     <td><input type="number" value="${e.travel ?? ''}" placeholder="₪" onchange="saveEmp('${e.id}',{travel:this.value===''?null:+this.value})" style="width:85px"/></td>
     <td><input value="${val('idNumber')}" placeholder="מספר זהות" onchange="saveEmp('${e.id}',{idNumber:this.value})" style="width:120px" dir="ltr"/></td>
     <td><input type="email" value="${val('email')}" placeholder="מייל" onchange="saveEmp('${e.id}',{email:this.value})" style="width:150px" dir="ltr"/></td>
@@ -852,8 +898,8 @@ async function renderPayroll(c) {
         </div>
       </div>
       <div style="overflow-x:auto"><table style="min-width:1080px"><thead><tr>
-        <th>שם עובד</th><th>שכר בסיס</th><th>החזר נסיעות</th><th>מס ת"ז</th><th>מייל</th><th>ת"ז (קדמי/אחורי/ספח)</th><th>אישור ניהול חשבון</th><th>טופס 101</th><th>רישיון (קדמי/אחורי)</th><th></th></tr></thead>
-        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="10"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
+        <th>שם עובד</th><th>שכר בסיס</th><th>סוג שכר</th><th>החזר נסיעות</th><th>מס ת"ז</th><th>מייל</th><th>ת"ז (קדמי/אחורי/ספח)</th><th>אישור ניהול חשבון</th><th>טופס 101</th><th>רישיון (קדמי/אחורי)</th><th></th></tr></thead>
+        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="11"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
     </div>`;
 }
 
