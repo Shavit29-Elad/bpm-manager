@@ -14,9 +14,9 @@ function ddmyDots(iso) {
 }
 const num = (v) => Number(v) || 0;
 
-// סכום כולל של אירוע = הגברה + סאונד + נוסף (עם נפילה ל-price בלבד אם אין פירוק)
+// סכום כולל של אירוע = הגברה + סאונד + בקליין + נוסף (עם נפילה ל-price בלבד אם אין פירוק)
 export function eventTotal(ev) {
-  const parts = num(ev.price) + num(ev.priceSound) + num(ev.priceExtras);
+  const parts = num(ev.price) + num(ev.priceSound) + num(ev.priceBackline) + num(ev.priceExtras);
   return parts || num(ev.price);
 }
 function isBilled(ev) { return Boolean(ev.invoiceId) || ev.invoiceStatus === 'invoiced'; }
@@ -36,6 +36,7 @@ export function eventInvoiceLines(ev) {
   const lines = [];
   if (num(ev.price)) lines.push(line('הגברה', ev.price));
   if (num(ev.priceSound)) lines.push(line('סאונד', ev.priceSound));
+  if (num(ev.priceBackline)) lines.push(line('בקליין', ev.priceBackline));
   if (num(ev.priceExtras)) lines.push(line('נוסף', ev.priceExtras));
   if (!lines.length && eventTotal(ev)) lines.push(line('הגברה', eventTotal(ev)));
   return lines;
@@ -71,7 +72,7 @@ export function eventsByClient(events) {
     const billed = isBilled(ev);
     g.events.push({
       id: ev.id, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '',
-      price: num(ev.price), priceSound: num(ev.priceSound), priceExtras: num(ev.priceExtras), total: t,
+      price: num(ev.price), priceSound: num(ev.priceSound), priceBackline: num(ev.priceBackline), priceExtras: num(ev.priceExtras), total: t,
       billed, invoiceId: ev.invoiceId || null, invoiceNumber: ev.invoiceNumber || null, invoiceType: ev.invoiceType || null,
     });
     g.total += t;

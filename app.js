@@ -442,6 +442,11 @@ async function renderCombined(c) {
   const approved = filtered.filter(e => e.confirmed);
   const overdue = events.filter(isOverdueUnbilled).length;
   const monthSel = `<select onchange="setEvMonth(this.value)" style="padding:6px 10px"><option value="all" ${_evMonthFilter === 'all' ? 'selected' : ''}>כל החודשים</option>${monthsSet.map(k => `<option value="${k}" ${_evMonthFilter === k ? 'selected' : ''}>${monthKeyLabel(k)}</option>`).join('')}</select>`;
+  // סינון לפי לקוח — בחלק של האירועים המאושרים בלבד
+  const approvedClients = [...new Set(approved.map(e => (e.clientName || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he'));
+  if (_evClientFilter !== 'all' && !approvedClients.includes(_evClientFilter)) _evClientFilter = 'all';
+  const approvedShown = _evClientFilter === 'all' ? approved : approved.filter(e => (e.clientName || '').trim() === _evClientFilter);
+  const evClientSel = approvedClients.length ? `<select onchange="setEvClient(this.value)" style="padding:5px 10px;font-size:13px"><option value="all" ${_evClientFilter === 'all' ? 'selected' : ''}>כל הלקוחות</option>${approvedClients.map(cn => `<option value="${escAttr(cn)}" ${_evClientFilter === cn ? 'selected' : ''}>${escapeHtml(cn)}</option>`).join('')}</select>` : '';
   c.innerHTML = `
     <div class="panel">
       <div class="row-between">
@@ -455,8 +460,11 @@ async function renderCombined(c) {
       ${events.length ? `
         <h3 style="margin:16px 0 4px;font-size:15px">🕓 אירועים לאישור <span class="muted" style="font-weight:400;font-size:13px">· ${pending.length}</span></h3>
         ${pending.length ? eventsByMonthHtml(pending, 'pending') : `<div class="empty">אין אירועים הממתינים לאישור 👌</div>`}
-        <h3 style="margin:22px 0 4px;font-size:15px">✓ אירועים מאושרים <span class="muted" style="font-weight:400;font-size:13px">· ${approved.length}</span></h3>
-        ${approved.length ? eventsByMonthHtml(approved, 'approved') : `<div class="empty">עדיין אין אירועים מאושרים</div>`}`
+        <div class="row-between" style="margin:22px 0 4px;align-items:center;flex-wrap:wrap;gap:8px">
+          <h3 style="margin:0;font-size:15px">✓ אירועים מאושרים <span class="muted" style="font-weight:400;font-size:13px">· ${approvedShown.length}${_evClientFilter !== 'all' ? ` מתוך ${approved.length}` : ''}</span></h3>
+          ${approvedClients.length ? `<div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">לקוח:</span>${evClientSel}</div>` : ''}
+        </div>
+        ${approvedShown.length ? eventsByMonthHtml(approvedShown, 'approved') : `<div class="empty">${_evClientFilter === 'all' ? 'עדיין אין אירועים מאושרים' : 'אין אירועים מאושרים ללקוח זה'}</div>`}`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
     </div>
 
@@ -640,6 +648,8 @@ async function renderMonthCalendar() {
 const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור (ללא מע"מ)</th><th>תמחור כולל מע"מ</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>אישור</th><th>עריכה</th></tr></thead>`;
 let _evMonthFilter = 'all';
 window.setEvMonth = (v) => { _evMonthFilter = v; renderCombined($('#content')); };
+let _evClientFilter = 'all';
+window.setEvClient = (v) => { _evClientFilter = v; renderCombined($('#content')); };
 const monthKeyLabel = (k) => { const m = String(k).match(/^(\d{4})-(\d{2})$/); return m ? `${MONTHS_HE[+m[2] - 1]} ${m[1]}` : k; };
 const curMonthKey = () => new Date().toISOString().slice(0, 7);
 const isNoInvoiceEv = (e) => Boolean(e.noInvoice) || /ללא\s*-?\s*שול[םמ]/.test(e.clientName || '');
@@ -672,7 +682,7 @@ function eventsByMonthHtml(events, mode = 'approved') {
   return keys.map(k => {
     // מיון בתוך החודש לפי תאריך האירוע — מתחילת החודש (מוקדם) לסופו (מאוחר)
     const list = groups[k].slice().sort((a, b) => (a.date || a.dateRaw || '').localeCompare(b.date || b.dateRaw || ''));
-    const total = list.reduce((s, e) => s + (Number(e.price) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceExtras) || 0), 0);
+    const total = list.reduce((s, e) => s + (Number(e.price) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceBackline) || 0) + (Number(e.priceExtras) || 0), 0);
     const withVat = +(total * (1 + VAT_RATE)).toFixed(2);   // הסכומים מוזנים ללא מע"מ — מחושב אוטומטית
     const ctrCost = list.reduce((s, e) => s + (e.contractorDetails || []).reduce((t, c) => t + (Number(c.amount) || 0), 0), 0);
     const net = total - ctrCost;
@@ -701,8 +711,8 @@ function rowEvent(e) {
     <td>${e.artist || '—'}</td>
     <td>${e.location || '—'}</td>
     <td>${e.clientName ? escapeHtml(e.clientName) : '<span class="muted">—</span>'}</td>
-    <td>${money(e.price)}${(e.priceSound || e.priceExtras) ? `<div class="muted" style="font-size:11px">סאונד ${money(e.priceSound || 0)} · תוספות ${money(e.priceExtras || 0)}</div>` : ''}</td>
-    <td style="white-space:nowrap;font-weight:600">${money(((Number(e.price) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceExtras) || 0)) * (1 + VAT_RATE))}</td>
+    <td>${money(e.price)}${(e.priceSound || e.priceBackline || e.priceExtras) ? `<div class="muted" style="font-size:11px">${e.priceSound ? `סאונד ${money(e.priceSound)}` : ''}${e.priceBackline ? ` · בקליין ${money(e.priceBackline)}` : ''}${e.priceExtras ? ` · תוספות ${money(e.priceExtras)}` : ''}</div>` : ''}</td>
+    <td style="white-space:nowrap;font-weight:600">${money(((Number(e.price) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceBackline) || 0) + (Number(e.priceExtras) || 0)) * (1 + VAT_RATE))}</td>
     <td>${(e.employees || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td>${(e.contractors || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td>${invoiceCell(e)}</td>
@@ -754,8 +764,9 @@ async function openEventEditor(ev) {
       ${fld('זמר / מופע', `<input id="evArtist" value="${v(ev.artist)}"/>`)}
       ${fld('מיקום', `<input id="evLocation" value="${v(ev.location)}"/>`, true)}
       ${fld('סאונד (תיאור)', `<input id="evSound" value="${v(ev.sound)}"/>`, true)}
-      ${fld('מחיר אירוע ₪', `<input id="evPrice" type="number" inputmode="decimal" value="${ev.price ?? ''}"/>`)}
+      ${fld('מחיר אירוע (הגברה) ₪', `<input id="evPrice" type="number" inputmode="decimal" value="${ev.price ?? ''}"/>`)}
       ${fld('מחיר סאונד ₪', `<input id="evPriceSound" type="number" inputmode="decimal" value="${ev.priceSound ?? ''}"/>`)}
+      ${fld('מחיר בקליין ₪', `<input id="evPriceBackline" type="number" inputmode="decimal" value="${ev.priceBackline ?? ''}"/>`)}
       ${fld('מחיר תוספות ₪', `<input id="evPriceExtras" type="number" inputmode="decimal" value="${ev.priceExtras ?? ''}"/>`)}
       ${fld('שיוך ללקוח (לחיוב חודשי)', `<input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…"/>`)}
       <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted);grid-column:1/3"><input id="evNoInvoice" type="checkbox" ${ev.noInvoice ? 'checked' : ''}/> לא צריך להוציא חשבונית על אירוע זה (שולם במזומן / ללא חיוב)</label>
@@ -848,7 +859,7 @@ function collectEventBody() {
     artist: g('evArtist').value.trim() || null,
     location: g('evLocation').value.trim() || null,
     sound: g('evSound').value.trim() || null,
-    price: num(g('evPrice').value), priceSound: num(g('evPriceSound').value), priceExtras: num(g('evPriceExtras').value),
+    price: num(g('evPrice').value), priceSound: num(g('evPriceSound').value), priceBackline: num(g('evPriceBackline')?.value), priceExtras: num(g('evPriceExtras').value),
     employees: emp.map(w => w.name), employeeDetails: emp,
     employeeBonusRaw: g('evBonus').value.trim() || null,
     contractors: ctr.map(c => c.name), contractorDetails: ctr,
