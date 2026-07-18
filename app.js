@@ -831,7 +831,7 @@ function renderJobsReport() {
       <tbody>
         ${rows.map((r, i) => `<tr${i % 2 ? ' style="background:#fafbff"' : ''}>${cell(i + 1)}${cell(inTxt(i, 'artist'))}${cell(dmy(r.date), 'white-space:nowrap')}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${cell(inTxt(i, 'note'))}</tr>`).join('')}
         <tr>${cell('<b>סה"כ</b>', 'border-top:2px solid #c7cce0;text-align:center')}<td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0', 'sumPay')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0', 'sumBonus')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0', 'sumFood')}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
-        <tr style="background:#eef0fb">${cell(`<b>סה"כ כולל הכל (${label})</b>`, 'text-align:start')}<td colspan="6" style="border:1px solid #d8dced"></td>${cell('<b style="color:#4338ca;font-size:15px">' + _nisFmt(grand) + '</b>', '', 'grandTotal')}</tr>
+        <tr style="background:#eef0fb"><td colspan="4" style="border:1px solid #d8dced;padding:8px 10px;text-align:start;white-space:nowrap"><b>סה"כ כולל הכל (${label})</b></td><td colspan="4" id="grandTotal" style="border:1px solid #d8dced;padding:8px 10px;text-align:right"><b style="color:#4338ca;font-size:15.5px">${_nisFmt(grand)}</b></td></tr>
       </tbody>
     </table></div>`;
 }
