@@ -674,6 +674,8 @@ window.confirmEventRow = async (id, val) => {
 };
 // אירועים מקובצים לפי חודש — כל חודש בטבלה נפרדת עם סיכום
 const VAT_RATE = 0.18; // מע"מ בישראל
+// סכום ברוטו של אירוע (ללא מע"מ) — הגברה+תאורה+סאונד+בקליין+מסך לד(מ'×מחיר)+תוספות
+const evGross = (e) => (Number(e.price) || 0) + (Number(e.priceLighting) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceBackline) || 0) + ((Number(e.ledPricePerMeter) || 0) * (Number(e.ledMeters) || 0)) + (Number(e.priceExtras) || 0);
 function eventsByMonthHtml(events, mode = 'approved') {
   const groups = {};
   for (const e of events) { const k = (e.date || e.dateRaw || '').slice(0, 7) || 'ללא תאריך'; (groups[k] = groups[k] || []).push(e); }
@@ -682,7 +684,7 @@ function eventsByMonthHtml(events, mode = 'approved') {
   return keys.map(k => {
     // מיון בתוך החודש לפי תאריך האירוע — מתחילת החודש (מוקדם) לסופו (מאוחר)
     const list = groups[k].slice().sort((a, b) => (a.date || a.dateRaw || '').localeCompare(b.date || b.dateRaw || ''));
-    const total = list.reduce((s, e) => s + (Number(e.price) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceBackline) || 0) + (Number(e.priceExtras) || 0), 0);
+    const total = list.reduce((s, e) => s + evGross(e), 0);
     const withVat = +(total * (1 + VAT_RATE)).toFixed(2);   // הסכומים מוזנים ללא מע"מ — מחושב אוטומטית
     const ctrCost = list.reduce((s, e) => s + (e.contractorDetails || []).reduce((t, c) => t + (Number(c.amount) || 0), 0), 0);
     const net = total - ctrCost;
@@ -711,8 +713,8 @@ function rowEvent(e) {
     <td>${e.artist || '—'}</td>
     <td>${e.location || '—'}</td>
     <td>${e.clientName ? escapeHtml(e.clientName) : '<span class="muted">—</span>'}</td>
-    <td>${money(e.price)}${(e.priceSound || e.priceBackline || e.priceExtras) ? `<div class="muted" style="font-size:11px">${e.priceSound ? `סאונד ${money(e.priceSound)}` : ''}${e.priceBackline ? ` · בקליין ${money(e.priceBackline)}` : ''}${e.priceExtras ? ` · תוספות ${money(e.priceExtras)}` : ''}</div>` : ''}</td>
-    <td style="white-space:nowrap;font-weight:600">${money(((Number(e.price) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceBackline) || 0) + (Number(e.priceExtras) || 0)) * (1 + VAT_RATE))}</td>
+    <td>${money(e.price)}${(e.priceLighting || e.priceSound || e.priceBackline || (e.ledMeters && e.ledPricePerMeter) || e.priceExtras) ? `<div class="muted" style="font-size:11px">${e.priceLighting ? `תאורה ${money(e.priceLighting)} · ` : ''}${e.priceSound ? `סאונד ${money(e.priceSound)}` : ''}${e.priceBackline ? ` · בקליין ${money(e.priceBackline)}` : ''}${(e.ledMeters && e.ledPricePerMeter) ? ` · לד ${e.ledMeters}מ׳×${money(e.ledPricePerMeter)}` : ''}${e.priceExtras ? ` · תוספות ${money(e.priceExtras)}` : ''}</div>` : ''}</td>
+    <td style="white-space:nowrap;font-weight:600">${money(evGross(e) * (1 + VAT_RATE))}</td>
     <td>${(e.employees || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td>${(e.contractors || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td>${invoiceCell(e)}</td>
@@ -765,8 +767,11 @@ async function openEventEditor(ev) {
       ${fld('מיקום', `<input id="evLocation" value="${v(ev.location)}"/>`, true)}
       ${fld('סאונד (תיאור)', `<input id="evSound" value="${v(ev.sound)}"/>`, true)}
       ${fld('מחיר אירוע (הגברה) ₪', `<input id="evPrice" type="number" inputmode="decimal" value="${ev.price ?? ''}"/>`)}
+      ${fld('מחיר תאורה ₪', `<input id="evPriceLighting" type="number" inputmode="decimal" value="${ev.priceLighting ?? ''}"/>`)}
       ${fld('מחיר סאונד ₪', `<input id="evPriceSound" type="number" inputmode="decimal" value="${ev.priceSound ?? ''}"/>`)}
       ${fld('מחיר בקליין ₪', `<input id="evPriceBackline" type="number" inputmode="decimal" value="${ev.priceBackline ?? ''}"/>`)}
+      ${fld('מסך לד — מחיר למ׳ ₪', `<input id="evLedPrice" type="number" inputmode="decimal" value="${ev.ledPricePerMeter ?? ''}"/>`)}
+      ${fld('מסך לד — כמות (מ׳)', `<input id="evLedMeters" type="number" inputmode="decimal" value="${ev.ledMeters ?? ''}"/>`)}
       ${fld('מחיר תוספות ₪', `<input id="evPriceExtras" type="number" inputmode="decimal" value="${ev.priceExtras ?? ''}"/>`)}
       ${fld('שיוך ללקוח (לחיוב חודשי)', `<input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…"/>`)}
       <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted);grid-column:1/3"><input id="evNoInvoice" type="checkbox" ${ev.noInvoice ? 'checked' : ''}/> לא צריך להוציא חשבונית על אירוע זה (שולם במזומן / ללא חיוב)</label>
@@ -859,7 +864,7 @@ function collectEventBody() {
     artist: g('evArtist').value.trim() || null,
     location: g('evLocation').value.trim() || null,
     sound: g('evSound').value.trim() || null,
-    price: num(g('evPrice').value), priceSound: num(g('evPriceSound').value), priceBackline: num(g('evPriceBackline')?.value), priceExtras: num(g('evPriceExtras').value),
+    price: num(g('evPrice').value), priceLighting: num(g('evPriceLighting')?.value), priceSound: num(g('evPriceSound').value), priceBackline: num(g('evPriceBackline')?.value), ledPricePerMeter: num(g('evLedPrice')?.value), ledMeters: num(g('evLedMeters')?.value), priceExtras: num(g('evPriceExtras').value),
     employees: emp.map(w => w.name), employeeDetails: emp,
     employeeBonusRaw: g('evBonus').value.trim() || null,
     contractors: ctr.map(c => c.name), contractorDetails: ctr,
@@ -963,7 +968,8 @@ function invClientCard(g) {
     <div id="${bodyId}" class="${collapsed ? 'hidden' : ''}">
       <table style="margin:0"><thead><tr><th style="width:64px">בחר</th><th>תאריך</th><th>אמן</th><th>מיקום</th><th>סכום</th></tr></thead>
         <tbody>${rows}</tbody></table>
-      <div style="padding:10px 14px;display:flex;justify-content:flex-end">
+      <div style="padding:10px 14px;display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
+        <button class="btn ghost" onclick="openLinkExisting('${safe}','${encodeURIComponent(g.client)}','${g.clientId || ''}')">🔗 קשר לחשבונית קיימת</button>
         <button class="btn success" onclick="openInvoicePreview('${safe}','${encodeURIComponent(g.client)}','${g.clientId || ''}')">הפק חשבונית מהנבחרים ←</button>
       </div>
     </div>
@@ -972,6 +978,43 @@ function invClientCard(g) {
 
 // ---- תצוגה מקדימה + הפקה ----
 let _invPreview = null;
+// קישור אירועים נבחרים לחשבונית עסקה/מס קיימת של הלקוח (במקום להפיק חדשה)
+window.openLinkExisting = async (safe, clientEnc, clientId) => {
+  const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
+  if (!ids.length) { alert('לא נבחרו אירועים לשיוך'); return; }
+  const client = decodeURIComponent(clientEnc);
+  let m = document.getElementById('linkModal');
+  if (!m) { m = document.createElement('div'); m.id = 'linkModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden'); m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  m.innerHTML = `<div class="modal-card" style="width:min(680px,95vw)"><div class="empty">טוען חשבוניות פתוחות של ${escapeHtml(client)}…</div></div>`;
+  const r = await api(`/api/invoicing/open-for-client?clientName=${encodeURIComponent(client)}`).catch(() => ({ docs: [] }));
+  const docs = r.docs || [];
+  const idsEnc = encodeURIComponent(JSON.stringify(ids));
+  const rows = docs.length ? docs.map(d => `<div class="card" style="padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}</span>
+      <span style="white-space:nowrap">#${d.number}</span>
+      <span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
+      <span style="flex:1;min-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.description ? escapeHtml(d.description) : ''}</span>
+      <span style="font-weight:600;white-space:nowrap">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>
+      <button class="btn success" style="padding:4px 12px;font-size:13px" onclick="linkToExisting('${d.id}','${escAttr(String(d.number))}',${d.type},'${idsEnc}')">קשר לכאן</button>
+    </div>`).join('') : `<div class="empty">אין חשבוניות עסקה/מס פתוחות ללקוח זה.</div>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(680px,95vw);max-height:88vh;overflow:auto">
+    <div class="row-between"><h3>קישור ${ids.length} אירועים לחשבונית קיימת</h3><span class="muted">${escapeHtml(client)}</span></div>
+    <p class="muted" style="font-size:12.5px">בחר חשבונית עסקה/מס פתוחה של הלקוח כדי לשייך אליה את האירועים הנבחרים (יסומנו כחויבו).</p>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">${rows}</div>
+    <div id="linkStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('linkModal').classList.add('hidden')">סגור</button></div>
+  </div>`;
+};
+window.linkToExisting = async (docId, docNumber, docType, idsEnc) => {
+  const eventIds = JSON.parse(decodeURIComponent(idsEnc));
+  const st = document.getElementById('linkStatus'); if (st) st.innerHTML = '<span class="muted">משייך…</span>';
+  const r = await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventIds, docId, docNumber, docType }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) {
+    if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ ${r.linked} אירועים שויכו לחשבונית #${docNumber}</span>`;
+    setTimeout(() => { document.getElementById('linkModal').classList.add('hidden'); renderInvoicing($('#content')); }, 1200);
+  } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
+};
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
   if (!ids.length) { alert('לא נבחרו אירועים לחיוב'); return; }

@@ -14,9 +14,11 @@ function ddmyDots(iso) {
 }
 const num = (v) => Number(v) || 0;
 
-// סכום כולל של אירוע = הגברה + סאונד + בקליין + נוסף (עם נפילה ל-price בלבד אם אין פירוק)
+// סכום מסך לד = מחיר למ' × כמות מ'
+function ledTotal(ev) { return num(ev.ledPricePerMeter) * num(ev.ledMeters); }
+// סכום כולל של אירוע = הגברה + תאורה + סאונד + בקליין + מסך לד + תוספות (עם נפילה ל-price בלבד)
 export function eventTotal(ev) {
-  const parts = num(ev.price) + num(ev.priceSound) + num(ev.priceBackline) + num(ev.priceExtras);
+  const parts = num(ev.price) + num(ev.priceLighting) + num(ev.priceSound) + num(ev.priceBackline) + ledTotal(ev) + num(ev.priceExtras);
   return parts || num(ev.price);
 }
 function isBilled(ev) { return Boolean(ev.invoiceId) || ev.invoiceStatus === 'invoiced'; }
@@ -32,11 +34,15 @@ export function eventInvoiceLines(ev) {
   const date = ddmyDots(ev.date || ev.dateRaw);
   const loc = (ev.location || ev.artist || '').trim();
   const suffix = `${date}${loc ? ' - ' + loc : ''}`.trim();
-  const line = (label, price) => ({ description: `${label} ${suffix}`.trim(), quantity: 1, price: num(price), eventId: ev.id });
+  const line = (label, price, qty = 1) => ({ description: `${label} ${suffix}`.trim(), quantity: qty, price: num(price), eventId: ev.id });
   const lines = [];
   if (num(ev.price)) lines.push(line('הגברה', ev.price));
+  if (num(ev.priceLighting)) lines.push(line('תאורה', ev.priceLighting));
   if (num(ev.priceSound)) lines.push(line('סאונד', ev.priceSound));
   if (num(ev.priceBackline)) lines.push(line('בקליין', ev.priceBackline));
+  // מסך לד — כמות מטרים × מחיר ליחידה (מוצג בחשבונית ככמות × מחיר יחידה)
+  const ledQty = num(ev.ledMeters), ledUnit = num(ev.ledPricePerMeter);
+  if (ledQty && ledUnit) lines.push(line('מסך לד', ledUnit, ledQty));
   if (num(ev.priceExtras)) lines.push(line('תוספות', ev.priceExtras));
   if (!lines.length && eventTotal(ev)) lines.push(line('הגברה', eventTotal(ev)));
   return lines;
@@ -72,7 +78,7 @@ export function eventsByClient(events) {
     const billed = isBilled(ev);
     g.events.push({
       id: ev.id, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '',
-      price: num(ev.price), priceSound: num(ev.priceSound), priceBackline: num(ev.priceBackline), priceExtras: num(ev.priceExtras), total: t,
+      price: num(ev.price), priceLighting: num(ev.priceLighting), priceSound: num(ev.priceSound), priceBackline: num(ev.priceBackline), ledMeters: num(ev.ledMeters), ledPricePerMeter: num(ev.ledPricePerMeter), priceExtras: num(ev.priceExtras), total: t,
       billed, invoiceId: ev.invoiceId || null, invoiceNumber: ev.invoiceNumber || null, invoiceType: ev.invoiceType || null,
     });
     g.total += t;

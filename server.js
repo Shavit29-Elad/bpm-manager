@@ -271,6 +271,31 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/invoicing/open-for-client?clientName= — חשבוניות עסקה/מס פתוחות של לקוח (לשיוך אירועים)
+add('GET', /^\/api\/invoicing\/open-for-client$/, async (req, res, _p, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
+  try {
+    const name = (q.clientName || '').trim();
+    const all = await greenInvoice.openDocuments();
+    const docs = all.filter(d => [300, 305].includes(Number(d.type)) && (!name || (d.clientName || '').trim() === name));
+    json(res, { docs });
+  } catch (e) { json(res, { docs: [], error: e.message }, 500); }
+});
+
+// POST /api/invoicing/link { eventIds, docId, docNumber, docType } — שיוך אירועים לחשבונית קיימת
+add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const ids = body.eventIds || [];
+  if (!ids.length || !body.docId) return json(res, { error: 'חסרים נתונים לשיוך' }, 400);
+  let n = 0;
+  for (const id of ids) {
+    const e = db.events.find(x => x.id === id);
+    if (e) { e.invoiceStatus = 'invoiced'; e.invoiceId = body.docId; e.invoiceNumber = body.docNumber || null; e.invoiceType = Number(body.docType) || null; n++; }
+  }
+  save(db);
+  json(res, { ok: true, linked: n });
+});
+
 // GET /api/open-quotes — הצעות מחיר פתוחות
 add('GET', /^\/api\/open-quotes$/, async (req, res) => {
   if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
