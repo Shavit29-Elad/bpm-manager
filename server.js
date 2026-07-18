@@ -277,20 +277,30 @@ add('POST', /^\/api\/quotes\/close-bulk$/, async (req, res, _p, _q, body) => {
   json(res, { ok: true, closed: results.filter(r => r.ok).length, results });
 });
 
-// GET /api/debug/expense — זמני: מחזור בדיקה — יוצר הוצאת בדיקה, מקבל URL להעלאה, ומוחק
+// GET /api/debug/expense — זמני: מנסה כמה וריאנטים של גוף POST /expenses עד הצלחה, מקבל URL, מוחק
 add('GET', /^\/api\/debug\/expense$/, async (req, res) => {
-  const out = {};
   const supplierId = 'fdb981d0-bdc8-439c-9602-114e84ddee86'; // שי סויסה
-  const body = { supplier: { id: supplierId }, documentType: 305, date: '2026-07-01', currency: 'ILS', paymentType: 4, amount: 1.18, amountExcludeVat: 1, vat: 0.18, description: 'בדיקה טכנית - יימחק' };
-  try {
-    const created = await greenInvoice.createExpense(body);
-    out.created = created;
-    const eid = created?.id;
-    if (eid) {
-      try { out.fileInfo = await greenInvoice.getExpenseUploadInfo(eid); } catch (e) { out.fileErr = e.message; }
-      try { out.deleted = await greenInvoice.deleteExpense(eid); } catch (e) { out.delErr = e.message; }
-    }
-  } catch (e) { out.createErr = e.message; out.attempted = body; }
+  const base = { supplier: { id: supplierId }, currency: 'ILS', paymentType: 4, amount: 1.18, amountExcludeVat: 1, vat: 0.18, description: 'בדיקה טכנית - יימחק', number: '990001', date: '2026-07-01' };
+  const variants = [
+    { ...base, documentType: 305 },
+    { ...base, documentType: 305, reportingDate: '2026-07-01' },
+    { ...base, documentType: 40, reportingDate: '2026-07-01' },
+    { ...base, type: 305, reportingDate: '2026-07-01' },
+    { ...base, documentType: 320, reportingDate: '2026-07-01', vatType: 1 },
+  ];
+  const out = { tries: [] };
+  for (const body of variants) {
+    try {
+      const created = await greenInvoice.createExpense(body);
+      out.success = { body, created };
+      const eid = created?.id;
+      if (eid) {
+        try { out.fileInfo = await greenInvoice.getExpenseUploadInfo(eid); } catch (e) { out.fileErr = e.message; }
+        try { await greenInvoice.deleteExpense(eid); out.deleted = true; } catch (e) { out.delErr = e.message; }
+      }
+      break;
+    } catch (e) { out.tries.push({ variant: Object.keys(body).join(','), error: e.message }); }
+  }
   json(res, out);
 });
 
