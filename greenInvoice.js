@@ -278,19 +278,52 @@ export async function openDocuments({ months = 18 } = {}) {
   });
 }
 
-// רשימת לקוחות (ממורנינג / חשבונית ירוקה)
+// זמני — לומד את שדות הסטטוס האמיתיים מהמסמכים כדי לקבוע פתוח/סגור
+export async function debugDocStatus() {
+  const to = new Date();
+  const from = new Date(); from.setMonth(from.getMonth() - 18);
+  const fromDate = from.toISOString().slice(0, 10);
+  const toDate = to.toISOString().slice(0, 10);
+  const out = {};
+  for (const type of [300, 305]) {
+    const items = await documentsInRange(fromDate, toDate, [type]);
+    const statusHist = {};
+    for (const d of items) { const k = JSON.stringify(d.status); statusHist[k] = (statusHist[k] || 0) + 1; }
+    out[type] = {
+      total: items.length,
+      statusHist,
+      sampleKeys: items[0] ? Object.keys(items[0]) : [],
+      samples: items.slice(0, 4).map(d => ({ number: d.number, status: d.status, paid: d.paid, paymentStatus: d.paymentStatus, amount: d.amount, amountDue: d.amountDue, cancelled: d.cancelled, open: d.open })),
+    };
+  }
+  return out;
+}
+
+// שליפת כל העמודים מ-endpoint חיפוש (לקוחות/ספקים) — עד שמגיעים לסוף
+async function searchAllPages(pathName, extraBody = {}) {
+  const all = [];
+  for (let page = 1; page <= 40; page++) { // עד ~8000 רשומות
+    const res = await api(pathName, { method: 'POST', body: { page, pageSize: 200, ...extraBody } });
+    const items = res.items || [];
+    all.push(...items);
+    if (items.length < 200) break;
+  }
+  return all;
+}
+
+// רשימת לקוחות (כל העמודים)
 export async function listClients() {
   return cached('clients', async () => {
-    const res = await api('/clients/search', { method: 'POST', body: { page: 1, pageSize: 200 } });
-    return (res.items || []).map(c => ({ id: c.id, name: c.name })).filter(c => c.name);
+    const items = await searchAllPages('/clients/search');
+    return items.map(c => ({ id: c.id, name: c.name })).filter(c => c.name);
   });
 }
 
-// רשימת ספקים מחשבונית ירוקה (לשיוך קבלנים)
+// רשימת ספקים מחשבונית ירוקה (כל העמודים) — כולל פרטי קשר
 export async function listSuppliers() {
   return cached('suppliers', async () => {
-    const res = await api('/suppliers/search', { method: 'POST', body: { page: 1, pageSize: 200 } });
-    return (res.items || []).map(s => ({ id: s.id, name: s.name })).filter(s => s.name);
+    const items = await searchAllPages('/suppliers/search');
+    return items.map(s => ({ id: s.id, name: s.name, taxId: s.taxId || null, phone: s.phone || null, emails: s.emails || [] })).filter(s => s.name);
   });
 }
 
@@ -316,5 +349,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, listClients, listSuppliers, clientDocuments, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, debugDocStatus, listClients, listSuppliers, clientDocuments, clearDataCache, DOC_TYPES };
 export default greenInvoice;

@@ -258,6 +258,13 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/debug/docstatus — זמני: ללמוד את שדה הסטטוס האמיתי של חשבונית ירוקה
+add('GET', /^\/api\/debug\/docstatus$/, async (req, res) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'לא מחובר' }, 400);
+  try { json(res, await greenInvoice.debugDocStatus()); }
+  catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה
 add('GET', /^\/api\/open-invoices$/, async (req, res) => {
   if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
@@ -383,8 +390,9 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, _q, body) => {
   catch (e) { json(res, { error: e.message }, 200); }
 });
 
-// GET /api/suppliers — ספקים מחשבונית ירוקה (לשיוך קבלנים)
-add('GET', /^\/api\/suppliers$/, async (req, res) => {
+// GET /api/suppliers — ספקים מחשבונית ירוקה (fresh=1 מרענן)
+add('GET', /^\/api\/suppliers$/, async (req, res, _p, q) => {
+  if (q.fresh) greenInvoice.clearDataCache();
   try { json(res, await greenInvoice.listSuppliers()); }
   catch (e) { json(res, { error: e.message }, 200); }
 });
@@ -623,8 +631,9 @@ add('GET', /^\/api\/dashboard$/, async (req, res, _p, q) => {
   json(res, out);
 });
 
-// GET /api/clients — רשימת לקוחות
-add('GET', /^\/api\/clients$/, async (req, res) => {
+// GET /api/clients — רשימת לקוחות (fresh=1 מרענן מחשבונית ירוקה)
+add('GET', /^\/api\/clients$/, async (req, res, _p, q) => {
+  if (q.fresh) greenInvoice.clearDataCache();
   try { json(res, await greenInvoice.listClients()); } catch (e) { json(res, { error: e.message }, 500); }
 });
 
