@@ -266,6 +266,20 @@ export async function openDocuments({ months = 24 } = {}) {
   });
 }
 
+// הצעות מחיר פתוחות (type 10, status 0)
+export async function openQuotes({ months = 36 } = {}) {
+  return cached(`openQuotes:${months}`, async () => {
+    const to = new Date(); const from = new Date(); from.setMonth(from.getMonth() - months);
+    const items = await documentsInRange(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10), [10]);
+    return items.filter(d => Number(d.status) === 0).map(d => {
+      const amount = num(d.amount ?? d.total ?? d.sum);
+      return { id: d.id, number: d.number, type: d.type, date: d.documentDate, clientName: d.client?.name || d.clientName || '—', amount, status: d.status, url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null) };
+    });
+  });
+}
+// מסמך מלא לפי מזהה (לומדים שדות קישור/סגירה)
+export async function getDocument(id) { return api(`/documents/${encodeURIComponent(id)}`); }
+
 // מיפוי מסמך הוצאה (ספק/קבלן)
 function mapExpense(e) {
   const amount = num(e.amount ?? e.total ?? e.sum);
@@ -369,5 +383,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, listClients, listSuppliers, clientDocuments, supplierExpenses, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, clearDataCache, DOC_TYPES };
 export default greenInvoice;

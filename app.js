@@ -32,7 +32,7 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ home: renderHome, events: renderCombined, clients: renderClients, invoicing: renderInvoicing, team: renderTeam,
+  ({ home: renderHome, events: renderCombined, clients: renderClients, invoicing: renderInvoicing, quotes: renderQuotes, team: renderTeam,
      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
 }
 
@@ -964,6 +964,29 @@ window.generateInvoice = async (btn) => {
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }
 };
+
+// ---- הצעות מחיר ----
+async function renderQuotes(c) {
+  c.innerHTML = `<div class="panel"><div class="empty">טוען הצעות מחיר…</div></div>`;
+  const r = await api('/api/open-quotes').catch(() => ({ docs: [], error: 'שגיאת טעינה' }));
+  const docs = r.docs || [];
+  const total = docs.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  c.innerHTML = `<div class="panel">
+    <div class="row-between"><div><h2>הצעות מחיר פתוחות</h2>
+      <span class="muted">${docs.length} הצעות · ${money(total)}. כל ההצעות שהסטטוס שלהן פתוח בחשבונית ירוקה.</span></div></div>
+    ${r.error ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(r.error)}</div>` : ''}
+    ${docs.length ? `<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th>תאריך</th><th>מספר</th><th>לקוח</th><th>סכום</th><th></th></tr></thead>
+      <tbody>${docs.map(quoteRow).join('')}</tbody></table></div>`
+      : `<div class="empty">אין הצעות מחיר פתוחות 👌</div>`}
+  </div>`;
+}
+function quoteRow(d) {
+  const acts = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
+    <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : '';
+  return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>#${d.number}</td>
+    <td>${escapeHtml(d.clientName || '')}</td><td style="white-space:nowrap;font-weight:600">${money(d.amount)}</td>
+    <td style="text-align:left">${acts}</td></tr>`;
+}
 
 // ---- קבלנים ----
 let _suppliers = [];
