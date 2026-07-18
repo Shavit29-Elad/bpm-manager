@@ -32,7 +32,7 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ home: renderHome, events: renderCombined, clients: renderClients, team: renderTeam,
+  ({ home: renderHome, events: renderCombined, clients: renderClients, invoicing: renderInvoicing, team: renderTeam,
      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
 }
 
@@ -222,10 +222,59 @@ async function renderHome(c) {
       <div class="row-between"><h2>פירוט לפי חודש</h2><span class="muted">${label}</span></div>
       ${monthlyBreakdown(docs)}
     </div>` : ''}
+    <div class="panel" id="openInvWrap"><div class="empty">טוען חשבוניות פתוחות…</div></div>
     <div class="panel">
       <div class="row-between"><h2>מסמכים — ${label}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
       ${docsTable(docs, { showClient: true })}
     </div>`;
+  loadOpenInvoices();
+}
+
+// ---- חשבוניות פתוחות בדף הבית (כמו "חיובים קרובים" בחשבונית ירוקה) ----
+let _openInv = null, _openInvErr = null, _openInvFilter = 'all';
+async function loadOpenInvoices() {
+  const wrap = document.getElementById('openInvWrap'); if (!wrap) return;
+  const r = await api('/api/open-invoices').catch(() => ({ docs: [], error: 'שגיאת טעינה' }));
+  _openInv = r.docs || []; _openInvErr = r.error || null;
+  renderOpenInvoices();
+}
+window.setOpenInvFilter = (v) => { _openInvFilter = v; renderOpenInvoices(); };
+function renderOpenInvoices() {
+  const wrap = document.getElementById('openInvWrap'); if (!wrap) return;
+  const openAmt = (d) => (d.amountDue != null ? Number(d.amountDue) : Number(d.amount) || 0);
+  const docs = (_openInv || []).filter(d => _openInvFilter === 'all' ? true
+    : _openInvFilter === 'proforma' ? Number(d.type) === 300 : Number(d.type) === 305);
+  const groups = {};
+  for (const d of docs) { const k = d.clientName || '—'; (groups[k] = groups[k] || []).push(d); }
+  const clients = Object.entries(groups)
+    .map(([name, ds]) => ({ name, ds, total: ds.reduce((s, x) => s + openAmt(x), 0) }))
+    .sort((a, b) => b.total - a.total);
+  const totalAll = clients.reduce((s, c) => s + c.total, 0);
+  const chip = (v, lbl) => `<button class="btn ${_openInvFilter === v ? 'primary' : 'ghost'}" style="padding:4px 12px;font-size:13px" onclick="setOpenInvFilter('${v}')">${lbl}</button>`;
+  wrap.innerHTML = `
+    <div class="row-between"><div><h2>חשבוניות פתוחות</h2>
+      <span class="muted">${docs.length} מסמכים · ${money(totalAll)} · מקובץ לפי לקוח</span></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
+    </div>
+    ${_openInvErr ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(_openInvErr)}</div>` : ''}
+    ${clients.length ? `<div style="margin-top:12px;display:flex;flex-direction:column;gap:8px">${clients.map(openInvClientHtml).join('')}</div>`
+      : `<div class="empty">אין חשבוניות פתוחות 👌</div>`}`;
+}
+function openInvClientHtml(cl) {
+  const rid = 'oig_' + Math.random().toString(36).slice(2, 8);
+  const rows = cl.ds.map(d => `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
+    <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}</span>
+    <span>#${d.number}</span><span class="muted">${fmtDate(d.date)}</span>
+    <span style="margin-inline-start:auto;font-weight:600">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>
+    ${d.url ? `<a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">↗</a>` : ''}
+  </div>`).join('');
+  return `<div class="card" style="padding:0;overflow:hidden">
+    <div class="row-between" style="margin:0;padding:11px 13px;cursor:pointer" onclick="document.getElementById('${rid}').classList.toggle('hidden')">
+      <div><b>${escapeHtml(cl.name)}</b> <span class="muted">· ${cl.ds.length} מסמכים</span></div>
+      <div style="font-weight:700">${money(cl.total)}</div>
+    </div>
+    <div id="${rid}" class="${cl.ds.length > 1 ? 'hidden' : ''}">${rows}</div>
+  </div>`;
 }
 
 // פירוט הכנסה לפי חודש (לתצוגה שנתית / טווח)
@@ -253,7 +302,7 @@ function monthlyBreakdown(docs) {
 }
 
 // ---- לקוחות (רשימה עם חיפוש; לחיצה מציגה את כל מסמכי הלקוח) ----
-const DOC_TYPE_NAMES = { 10: 'חשבון עסקה', 20: 'הזמנה', 100: 'חשבון', 300: 'הצעת מחיר', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 330: 'חשבונית זיכוי', 400: 'קבלה', 405: 'קבלה על תרומה' };
+const DOC_TYPE_NAMES = { 10: 'הצעת מחיר', 100: 'הזמנה', 200: 'תעודת משלוח', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 330: 'חשבונית זיכוי', 400: 'קבלה', 405: 'קבלה על תרומה' };
 async function renderClients(c) {
   if (!state.clientsList) {
     c.innerHTML = `<div class="panel"><div class="empty">טוען לקוחות…</div></div>`;
@@ -261,7 +310,8 @@ async function renderClients(c) {
     state.clientsList = Array.isArray(list) ? list : [];
   }
   c.innerHTML = `<div class="panel">
-    <div class="row-between"><div><h2>לקוחות</h2><span class="muted">${state.clientsList.length} לקוחות</span></div></div>
+    <div class="row-between"><div><h2>לקוחות</h2><span class="muted">${state.clientsList.length} לקוחות</span></div>
+      <button class="btn primary" onclick="openContactForm('client')">+ הוסף לקוח</button></div>
     <div style="display:flex;gap:16px;align-items:stretch;min-height:64vh">
       <div style="flex:0 0 300px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden">
         <input id="clientSearch" placeholder="חיפוש לקוח…" style="border:none;border-bottom:1px solid var(--line);border-radius:0"/>
@@ -733,38 +783,193 @@ async function renderCalendar(c) {
   renderCalView();
 }
 
-// ---- חיוב ----
+// ---- חיוב: בחירת אירועים לפי לקוח והפקת מסמך ----
+const escAttr = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+const INV_TYPES = [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
+let _invClients = [];
 async function renderInvoicing(c) {
-  const groups = await api(`/api/invoicing/pending?companyId=${state.company}`);
+  c.innerHTML = `<div class="panel"><div class="empty">טוען אירועים…</div></div>`;
+  _invClients = await api(`/api/invoicing/clients?companyId=${state.company}`) || [];
   c.innerHTML = `<div class="panel">
-    <h2>חיוב לקוחות — חשבונית חודשית מקובצת</h2>
-    <p class="muted">כל האירועים של אותו לקוח באותו חודש מקובצים לחשבונית אחת.</p>
-    ${groups.length ? groups.map(g => `
-      <div class="card" style="margin-top:12px">
-        <div class="row-between" style="margin:0">
-          <div><b>${g.client}</b> · חודש ${g.month} · ${g.events.length} אירועים</div>
-          <div><span class="big">${money(g.total)}</span>
-            <button class="btn success" onclick="createInvoice('${g.client}','${g.month}')">הפק חשבונית</button></div>
-        </div>
-      </div>`).join('') : `<div class="empty">אין אירועים ממתינים לחיוב.</div>`}
+    <div class="row-between"><div><h2>הפקת חשבוניות ללקוחות</h2>
+      <span class="muted">בחר אירועים של לקוח והפק חשבון עסקה / חשבונית מס / מס-קבלה / קבלה. אפשר לפצל לכמה חשבוניות — אירוע שכבר חויב מסומן ולא נבחר שוב.</span></div></div>
+    ${_invClients.length ? _invClients.map(invClientCard).join('') : `<div class="empty">אין אירועים. הוסף אירועים ושייך להם לקוח בלשונית האירועים.</div>`}
   </div>`;
 }
-window.createInvoice = async (client, month) => {
-  const r = await fetch('/api/invoicing/create', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ companyId: state.company, client, month }) }).then(r => r.json());
-  if (r.ok) { alert('חשבונית הופקה בהצלחה'); render(); }
-  else alert('תצוגה מקדימה (חסרים מפתחות חשבונית ירוקה):\n' + JSON.stringify(r.preview || r.error, null, 2));
+function invClientCard(g) {
+  const safe = 'c' + (g.clientId || g.client).replace(/[^a-zA-Z0-9֐-׿]/g, '_');
+  const bodyId = 'invbody_' + safe;
+  const rows = g.events.map(ev => {
+    const sel = ev.billed
+      ? `<span class="tag invoiced">חויב${ev.invoiceNumber ? ` #${ev.invoiceNumber}` : ''}</span>`
+      : `<input type="checkbox" class="invchk" data-c="${safe}" value="${ev.id}" checked/>`;
+    return `<tr style="${ev.billed ? 'opacity:.55' : ''}">
+      <td style="text-align:center">${sel}</td>
+      <td>${ddmy(ev.date)}</td>
+      <td>${escapeHtml(ev.artist || '')}</td>
+      <td>${escapeHtml(ev.location || '')}</td>
+      <td style="white-space:nowrap">${money(ev.total)}</td>
+    </tr>`;
+  }).join('');
+  const collapsed = g.unbilledCount === 0;
+  return `<div class="card" style="margin-top:12px;padding:0;overflow:hidden">
+    <div class="row-between" style="margin:0;padding:12px 14px;cursor:pointer" onclick="document.getElementById('${bodyId}').classList.toggle('hidden')">
+      <div><b>${escapeHtml(g.client)}</b> <span class="muted">· ${g.unbilledCount} לחיוב · ${g.events.length} סה"כ אירועים</span></div>
+      <div style="font-weight:700">${money(g.unbilledTotal)}</div>
+    </div>
+    <div id="${bodyId}" class="${collapsed ? 'hidden' : ''}">
+      <table style="margin:0"><thead><tr><th style="width:64px">בחר</th><th>תאריך</th><th>אמן</th><th>מיקום</th><th>סכום</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      <div style="padding:10px 14px;display:flex;justify-content:flex-end">
+        <button class="btn success" onclick="openInvoicePreview('${safe}','${encodeURIComponent(g.client)}','${g.clientId || ''}')">הפק חשבונית מהנבחרים ←</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ---- תצוגה מקדימה + הפקה ----
+let _invPreview = null;
+window.openInvoicePreview = async (safe, clientEnc, clientId) => {
+  const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
+  if (!ids.length) { alert('לא נבחרו אירועים לחיוב'); return; }
+  const pv = await fetch('/api/invoicing/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ companyId: state.company, eventIds: ids }) }).then(r => r.json()).catch(() => null);
+  if (!pv) { alert('שגיאה בטעינת התצוגה המקדימה'); return; }
+  _invPreview = { ids, client: decodeURIComponent(clientEnc), clientId: clientId || null,
+    items: (pv.items || []).map(it => ({ description: it.description, quantity: it.quantity ?? 1, price: it.price ?? 0 })),
+    subject: pv.subject || '', type: 305, dueDate: '' };
+  showInvoicePreviewModal();
+};
+function invTotals() {
+  const sub = _invPreview.items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
+  return { sub, vat: sub * 0.18, total: sub * 1.18 };
+}
+function showInvoicePreviewModal() {
+  let m = document.getElementById('invPvModal');
+  if (!m) { m = document.createElement('div'); m.id = 'invPvModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  renderInvoicePreviewModal();
+}
+function renderInvoicePreviewModal() {
+  const m = document.getElementById('invPvModal'); if (!m) return;
+  const p = _invPreview; const t = invTotals();
+  const needDue = [300, 305].includes(+p.type);
+  const isReceipt = [320, 400].includes(+p.type);
+  const rows = p.items.map((it, i) => `<tr>
+    <td><input value="${escAttr(it.description)}" oninput="invEdit(${i},'description',this.value)" style="width:100%"/></td>
+    <td><input type="number" value="${it.quantity ?? 1}" oninput="invEdit(${i},'quantity',this.value)" style="width:56px" dir="ltr"/></td>
+    <td><input type="number" value="${it.price ?? 0}" oninput="invEdit(${i},'price',this.value)" style="width:96px" dir="ltr"/></td>
+    <td id="rt_${i}" style="white-space:nowrap">${money((Number(it.price) || 0) * (Number(it.quantity) || 1))}</td>
+    <td><button class="btn ghost" style="padding:2px 8px" onclick="invDelRow(${i})">✕</button></td>
+  </tr>`).join('');
+  m.innerHTML = `<div class="modal-card" style="width:min(780px,96vw);max-height:92vh;overflow:auto">
+    <div class="row-between"><h3>תצוגה מקדימה — הפקת מסמך</h3><span class="muted">${escapeHtml(p.client)}</span></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0">
+      <label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted)">סוג מסמך
+        <select id="invType" onchange="invSetType(this.value)">${INV_TYPES.map(([v, l]) => `<option value="${v}" ${+p.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted);flex:1;min-width:220px">נושא / תיאור המסמך
+        <input value="${escAttr(p.subject)}" oninput="_invPreview.subject=this.value"/></label>
+      ${needDue ? `<label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted)">לתשלום עד
+        <input type="date" value="${p.dueDate || ''}" oninput="_invPreview.dueDate=this.value"/></label>` : ''}
+    </div>
+    ${isReceipt ? `<div class="warn-banner" style="margin-bottom:10px">שים לב: ${DOC_TYPE_SHORT[+p.type]} מתעדת קבלת תשלום. תיווצר שורת תקבול של העברה בנקאית על מלוא הסכום.</div>` : ''}
+    <table><thead><tr><th>פירוט</th><th>כמות</th><th>מחיר</th><th>סה"כ</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <div style="margin-top:8px"><button class="btn ghost" onclick="invAddRow()">+ הוסף שורה</button></div>
+    <div id="invSummary" style="margin-top:12px;text-align:left;font-size:14px">${invSummaryHtml(t)}</div>
+    <div id="invPvStatus" style="min-height:18px;font-size:13px;margin:6px 0"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('invPvModal').classList.add('hidden')">ביטול</button>
+      <button class="btn success" onclick="generateInvoice(this)">✓ הפק בחשבונית ירוקה</button>
+    </div>
+  </div>`;
+}
+function invSummaryHtml(t) {
+  return `<div>סכום ביניים: <b>${money(t.sub)}</b></div>
+    <div>מע"מ 18%: <b>${money(t.vat)}</b></div>
+    <div style="font-size:16px">סה"כ לתשלום: <b>${money(t.total)}</b></div>`;
+}
+window.invEdit = (i, k, v) => {
+  _invPreview.items[i][k] = (k === 'description') ? v : (v === '' ? 0 : +v);
+  const it = _invPreview.items[i];
+  const rt = document.getElementById('rt_' + i); if (rt) rt.textContent = money((Number(it.price) || 0) * (Number(it.quantity) || 1));
+  const sum = document.getElementById('invSummary'); if (sum) sum.innerHTML = invSummaryHtml(invTotals());
+};
+window.invSetType = (v) => { _invPreview.type = +v; renderInvoicePreviewModal(); };
+window.invAddRow = () => { _invPreview.items.push({ description: '', quantity: 1, price: 0 }); renderInvoicePreviewModal(); };
+window.invDelRow = (i) => { _invPreview.items.splice(i, 1); renderInvoicePreviewModal(); };
+window.generateInvoice = async (btn) => {
+  const p = _invPreview;
+  const items = p.items.filter(it => (it.description || '').trim() && (Number(it.price) || 0) !== 0);
+  if (!items.length) { document.getElementById('invPvStatus').innerHTML = '<span style="color:var(--danger)">אין שורות תקינות.</span>'; return; }
+  const typeName = (INV_TYPES.find(x => x[0] === +p.type) || [, ''])[1];
+  if (!confirm(`להפיק ${typeName} על סך ${money(invTotals().total)} עבור ${p.client}?\nהמסמך ייווצר בחשבונית ירוקה ולא ניתן למחיקה (רק לזכות).`)) return;
+  btn.disabled = true; btn.textContent = 'מפיק…';
+  const st = document.getElementById('invPvStatus'); st.innerHTML = '<span class="muted">יוצר מסמך בחשבונית ירוקה…</span>';
+  const r = await fetch('/api/invoicing/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ companyId: state.company, eventIds: p.ids, clientName: p.client, clientId: p.clientId,
+      type: p.type, items, description: p.subject, dueDate: p.dueDate || null }) }).then(r => r.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false; btn.textContent = '✓ הפק בחשבונית ירוקה';
+  if (r.ok) {
+    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
+    setTimeout(() => { document.getElementById('invPvModal').classList.add('hidden'); renderInvoicing($('#content')); }, 1100);
+  } else {
+    st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
+  }
 };
 
 // ---- קבלנים ----
 async function renderContractors(c) {
   const list = await api(`/api/contractors/payables?companyId=${state.company}`);
-  c.innerHTML = `<div class="panel"><h2>קבלנים לתשלום</h2>
-    <p class="muted">כמה אנחנו אמורים לשלם לכל קבלן, ולמעקב אחר חשבוניות שהם צריכים להוציא לנו.</p>
+  c.innerHTML = `<div class="panel">
+    <div class="row-between"><div><h2>קבלנים לתשלום</h2><span class="muted">כמה אנחנו אמורים לשלם לכל קבלן, ולמעקב אחר חשבוניות שהם צריכים להוציא לנו.</span></div>
+      <button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div>
     ${list.length ? `<table><thead><tr><th>קבלן</th><th>מס' אירועים</th><th>סכום לתשלום</th></tr></thead>
       <tbody>${list.map(x => `<tr><td>${x.name}</td><td>${x.events.length}</td><td>${money(x.total)}</td></tr>`).join('')}</tbody></table>`
     : `<div class="empty">אין קבלנים משויכים עם סכומים עדיין. הוסף סכום לכל קבלן באירוע.</div>`}</div>`;
 }
+
+// טופס הוספת לקוח/ספק לחשבונית ירוקה
+window.openContactForm = (kind) => {
+  const isClient = kind === 'client';
+  let m = document.getElementById('contactModal');
+  if (!m) { m = document.createElement('div'); m.id = 'contactModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  const fld = (lbl, inner) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px">${lbl}${inner}</label>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(480px,94vw)">
+    <h3>${isClient ? 'הוספת לקוח לחשבונית ירוקה' : 'הוספת ספק / קבלן לחשבונית ירוקה'}</h3>
+    <div style="margin-top:12px">
+      ${fld('שם חברה *', `<input id="ctName" placeholder="שם החברה / העסק"/>`)}
+      ${fld('מס\' ח.פ / ע.מ / ע.פ / ת"ז', `<input id="ctTax" dir="ltr" placeholder="מספר"/>`)}
+      ${fld('איש קשר', `<input id="ctContact" placeholder="שם איש קשר"/>`)}
+      ${fld('מס\' טלפון', `<input id="ctPhone" type="tel" dir="ltr" placeholder="050-0000000"/>`)}
+      ${fld('כתובת מייל', `<input id="ctEmail" type="email" dir="ltr" placeholder="mail@example.com"/>`)}
+    </div>
+    <div id="ctStatus" style="font-size:13px;min-height:18px;margin:4px 0"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('contactModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="saveContact('${kind}',this)">שמור ל-Green Invoice</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  setTimeout(() => document.getElementById('ctName')?.focus(), 60);
+};
+window.saveContact = async (kind, btn) => {
+  const g = (id) => document.getElementById(id);
+  const st = g('ctStatus');
+  const name = g('ctName').value.trim();
+  if (!name) { st.innerHTML = '<span style="color:var(--danger)">חובה להזין שם חברה.</span>'; return; }
+  const body = { name, taxId: g('ctTax').value.trim() || null, contactPerson: g('ctContact').value.trim() || null, phone: g('ctPhone').value.trim() || null, emails: [g('ctEmail').value.trim()].filter(Boolean) };
+  btn.disabled = true; btn.textContent = 'שומר…'; st.innerHTML = '<span class="muted">שולח ל-Green Invoice…</span>';
+  const url = kind === 'client' ? '/api/clients' : '/api/suppliers';
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false; btn.textContent = 'שמור ל-Green Invoice';
+  if (r.ok) {
+    st.innerHTML = '<span style="color:var(--accent2)">✓ נוסף בהצלחה ל-Green Invoice!</span>';
+    if (kind === 'client') { state.clientsList = null; _evClients = null; _linkClients = null; } else { _evSuppliers = null; }
+    setTimeout(() => { document.getElementById('contactModal').classList.add('hidden'); render(); }, 1000);
+  } else { st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא נשמר'))}</span>`; }
+};
 
 // ---- עובדים ----
 const monthLabelFromKey = (k) => { const m = String(k || '').match(/^(\d{4})-(\d{2})$/); return m ? `${MONTHS_HE[+m[2] - 1]} ${m[1]}` : k; };
@@ -1165,7 +1370,7 @@ window.setBankSort = (key) => {
   state.bankSort = s; renderBank($('#content'));
 };
 
-const DOC_TYPE_SHORT = { 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 300: 'הצעת מחיר', 330: 'זיכוי', 10: 'חשבון עסקה' };
+const DOC_TYPE_SHORT = { 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 300: 'חשבון עסקה', 330: 'זיכוי', 10: 'הצעת מחיר' };
 let _bankList = [];
 
 function bankPeriodMatch(t) {

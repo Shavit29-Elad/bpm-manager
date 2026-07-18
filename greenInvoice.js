@@ -79,26 +79,60 @@ function cached(key, fn, ttl = DATA_TTL) {
 }
 export function clearDataCache() { _dataCache.clear(); }
 
-// סוגי מסמכים בחשבונית ירוקה (type): 305=חשבונית מס, 320=חשבונית מס/קבלה, 400=קבלה, 300=הצעת מחיר...
-export const DOC_TYPES = { INVOICE: 305, INVOICE_RECEIPT: 320, RECEIPT: 400, PRICE_QUOTE: 300 };
+// סוגי מסמכים בחשבונית ירוקה (type) — לפי דוקומנטציית מורנינג/חשבונית ירוקה:
+//   10=הצעת מחיר, 100=הזמנה, 300=חשבון עסקה (עסקה), 305=חשבונית מס,
+//   320=חשבונית מס/קבלה, 330=חשבונית זיכוי, 400=קבלה
+export const DOC_TYPES = { PRICE_QUOTE: 10, PROFORMA: 300, INVOICE: 305, INVOICE_RECEIPT: 320, RECEIPT: 400 };
+// סוגים שמחייבים מערך תשלום (payment) ביצירה
+const PAYMENT_REQUIRED = new Set([320, 400, 405]);
 
-// הפקת חשבונית. items = [{ description, quantity, price }], client = { name, taxId?, emails? }
-export async function createInvoice({ client, items, type = DOC_TYPES.INVOICE, remarks, dueDate }) {
+// בונה גוף מסמך. items = [{ description, quantity, price }].
+// client = { id? , name, taxId?, emails? } — אם יש id משתמשים בו (נמנע כפילות לקוח).
+function documentBody({ client, items, type, remarks, description, dueDate, date, payment }) {
+  const total = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
   const body = {
     type,
-    client: { name: client.name, taxId: client.taxId, add: true, emails: client.emails || [] },
-    income: items.map(it => ({
-      description: it.description,
-      quantity: it.quantity ?? 1,
-      price: it.price,
-      vatType: 0, // 0=חייב מעמ
-    })),
-    remarks,
-    dueDate,
     lang: 'he',
     currency: 'ILS',
+    date: date || new Date().toISOString().slice(0, 10),
+    client: client?.id
+      ? { id: client.id }
+      : { name: client?.name, taxId: client?.taxId, add: true, emails: client?.emails || [] },
+    income: items.map(it => {
+      const line = {
+        description: it.description,
+        quantity: Number(it.quantity) || 1,
+        price: Number(it.price) || 0,
+        currency: 'ILS',
+        vatType: 0, // 0 = חייב מע"מ (המע"מ מתווסף מעל המחיר)
+      };
+      if (it.catalogNum) line.catalogNum = String(it.catalogNum); // מק"ט (לא חובה)
+      return line;
+    }),
   };
-  return api('/documents', { method: 'POST', body });
+  // אין שליחת מייל אוטומטית ללקוח — שליחה בשם המשתמש דורשת אישור מפורש בממשק
+  if (description) body.description = description;   // כותרת/נושא המסמך
+  if (remarks) body.remarks = remarks;              // הערה בתחתית
+  if (dueDate) body.dueDate = dueDate;
+  // מסמכים מסוג קבלה/מס-קבלה מחייבים תיעוד תשלום
+  if (PAYMENT_REQUIRED.has(type)) {
+    body.payment = payment && payment.length ? payment
+      : [{ date: body.date, type: 4 /* העברה בנקאית */, price: total, currency: 'ILS' }];
+  }
+  return body;
+}
+
+// יצירת מסמך גנרי (עסקה/מס/מס-קבלה/קבלה) והחזרת גרסה ממופה
+export async function createDocument(opts) {
+  const raw = await api('/documents', { method: 'POST', body: documentBody(opts) });
+  clearDataCache();
+  const url = (raw.url && (raw.url.he || raw.url.origin || raw.url.pdf)) || (typeof raw.url === 'string' ? raw.url : null);
+  return { id: raw.id, number: raw.number, type: raw.type, url, raw };
+}
+
+// תאימות לאחור — הפקת חשבונית מס (או סוג אחר עם type)
+export async function createInvoice({ client, items, type = DOC_TYPES.INVOICE, remarks, description, dueDate, payment }) {
+  return createDocument({ client, items, type, remarks, description, dueDate, payment });
 }
 
 // חיפוש מסמכים בטווח תאריכים (למעקב תשלומים/התאמות)
@@ -216,6 +250,33 @@ export async function openInvoicesCount() {
   });
 }
 
+// מסמכים פתוחים לתצוגת "חשבוניות פתוחות" בדף הבית (כמו "חיובים קרובים" בחשבונית ירוקה).
+// מחזיר חשבון עסקה (300) + חשבונית מס (305) שעדיין פתוחים, ממופים לתצוגה.
+export async function openDocuments({ months = 18 } = {}) {
+  return cached(`openDocs:${months}`, async () => {
+    const to = new Date();
+    const from = new Date(); from.setMonth(from.getMonth() - months);
+    const fromDate = from.toISOString().slice(0, 10);
+    const toDate = to.toISOString().slice(0, 10);
+    const items = await documentsInRange(fromDate, toDate, [300, 305]);
+    const isOpen = (d) => {
+      if (Number(d.type) === 305) { // חשבונית מס — פתוחה אם נותר סכום לתשלום
+        if (d.amountDue != null) return num(d.amountDue) > 0.01;
+        if (d.paid != null) return !d.paid;
+        if (d.paymentStatus != null) return num(d.paymentStatus) < 2;
+        return true;
+      }
+      // חשבון עסקה — פתוח כל עוד לא נסגר/הומר לחשבונית
+      if (d.status != null) return num(d.status) === 0;
+      if (d.paid != null) return !d.paid;
+      return true;
+    };
+    return items.filter(isOpen).map(d => ({
+      ...mapDoc(d), status: d.status ?? null, paid: d.paid ?? null, paymentStatus: d.paymentStatus ?? null,
+    }));
+  });
+}
+
 // רשימת לקוחות (ממורנינג / חשבונית ירוקה)
 export async function listClients() {
   return cached('clients', async () => {
@@ -232,5 +293,27 @@ export async function listSuppliers() {
   });
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, listClients, listSuppliers, clientDocuments, DOC_TYPES };
+// בונה גוף בקשה ליצירת לקוח/ספק — שדות: שם, ח.פ/ע.מ/ת"ז, איש קשר, טלפון
+function contactBody({ name, taxId, contactPerson, phone, emails }) {
+  const body = { name: String(name || '').trim(), active: true };
+  if (taxId) body.taxId = String(taxId).trim();
+  if (phone) body.phone = String(phone).trim();
+  if (Array.isArray(emails) && emails.filter(Boolean).length) body.emails = emails.filter(Boolean);
+  if (contactPerson) body.remarks = `איש קשר: ${String(contactPerson).trim()}`;
+  return body;
+}
+// יצירת לקוח חדש בחשבונית ירוקה
+export async function createClient(data) {
+  const r = await api('/clients', { method: 'POST', body: contactBody(data) });
+  clearDataCache();
+  return r;
+}
+// יצירת ספק חדש בחשבונית ירוקה
+export async function createSupplier(data) {
+  const r = await api('/suppliers', { method: 'POST', body: contactBody(data) });
+  clearDataCache();
+  return r;
+}
+
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, listClients, listSuppliers, clientDocuments, DOC_TYPES };
 export default greenInvoice;

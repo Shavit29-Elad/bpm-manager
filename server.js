@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import { init as initStore, load, save, id, upsertEvent, companyEvents, saveFile, getFile, deleteFile } from './store.js';
 import { parseEventMessage, parseEventMessages } from './whatsappParser.js';
 import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar } from './googleCalendar.js';
-import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables } from './invoicing.js';
+import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
 import { parseBank } from './bankParser.js';
@@ -215,6 +215,55 @@ add('POST', /^\/api\/invoicing\/create$/, async (req, res, _p, _q, body) => {
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/invoicing/clients?companyId= — כל האירועים מקובצים לפי לקוח (עם סימון מחויבים)
+add('GET', /^\/api\/invoicing\/clients$/, (req, res, _p, q) =>
+  json(res, eventsByClient(companyEvents(load(), q.companyId))));
+
+// POST /api/invoicing/preview — { eventIds } → שורות ברירת מחדל + נושא + סכומים (בלי ליצור מסמך)
+add('POST', /^\/api\/invoicing\/preview$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(Boolean);
+  const items = invoiceItemsFromEvents(evs);
+  const subtotal = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
+  json(res, { items, subtotal, vat: +(subtotal * 0.18).toFixed(2), total: +(subtotal * 1.18).toFixed(2), subject: subjectForEvents(evs) });
+});
+
+// POST /api/invoicing/generate — יוצר מסמך בחשבונית ירוקה ומסמן את האירועים כמחויבים
+add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
+  const db = load();
+  const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(Boolean);
+  const items = (body.items && body.items.length) ? body.items : invoiceItemsFromEvents(evs);
+  const type = Number(body.type) || greenInvoice.DOC_TYPES.INVOICE;
+  const subtotal = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
+  if (!items.length) return json(res, { error: 'אין שורות לחיוב' }, 400);
+  if (!greenInvoice.haveCredentials()) {
+    return json(res, { error: 'חסרים מפתחות חשבונית ירוקה — הוסף אותם כדי להפיק בפועל',
+      preview: { type, items, subtotal, subject: subjectForEvents(evs) } }, 400);
+  }
+  try {
+    const client = body.clientId ? { id: body.clientId } : { name: body.clientName || 'לקוח' };
+    const doc = await greenInvoice.createDocument({
+      type, client, items,
+      description: body.description || subjectForEvents(evs),
+      remarks: body.remarks || null,
+      dueDate: [300, 305].includes(type) ? (body.dueDate || null) : null,
+    });
+    for (const ev of evs) {
+      const e = db.events.find(x => x.id === ev.id);
+      if (e) { e.invoiceStatus = 'invoiced'; e.invoiceId = doc.id; e.invoiceNumber = doc.number; e.invoiceType = type; }
+    }
+    save(db);
+    json(res, { ok: true, doc });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה
+add('GET', /^\/api\/open-invoices$/, async (req, res) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
+  try { json(res, { docs: await greenInvoice.openDocuments() }); }
+  catch (e) { json(res, { docs: [], error: e.message }, 500); }
+});
+
 // GET /api/contractors/payables?companyId=
 add('GET', /^\/api\/contractors\/payables$/, (req, res, _p, q) =>
   json(res, contractorPayables(companyEvents(load(), q.companyId))));
@@ -328,6 +377,22 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, _q, body) => {
 add('GET', /^\/api\/suppliers$/, async (req, res) => {
   try { json(res, await greenInvoice.listSuppliers()); }
   catch (e) { json(res, { error: e.message }, 200); }
+});
+
+// POST /api/clients — יצירת לקוח חדש בחשבונית ירוקה
+add('POST', /^\/api\/clients$/, async (req, res, _p, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  if (!body?.name) return json(res, { error: 'חסר שם' }, 400);
+  try { json(res, { ok: true, client: await greenInvoice.createClient(body) }); }
+  catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/suppliers — יצירת ספק חדש בחשבונית ירוקה
+add('POST', /^\/api\/suppliers$/, async (req, res, _p, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  if (!body?.name) return json(res, { error: 'חסר שם' }, 400);
+  try { json(res, { ok: true, supplier: await greenInvoice.createSupplier(body) }); }
+  catch (e) { json(res, { error: e.message }, 500); }
 });
 
 // GET /api/whatsapp/status
