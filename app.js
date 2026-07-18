@@ -1224,33 +1224,55 @@ window.dismissDraft = async (id) => {
   _drafts = _drafts.filter(x => x.id !== id);
   const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
 };
+// סוגי מסמך להוצאה (כמו בחשבונית ירוקה): חשבון עסקה / מס / מס-קבלה / קבלה
+const APPROVE_DOC_TYPES = [[20, 'חשבון עסקה / אישור תשלום'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
+window.recalcApprVat = () => {
+  const g = (x) => document.getElementById(x);
+  const amount = +(g('apAmount')?.value) || 0;
+  const netIn = g('apNet')?.value;
+  const net = netIn !== '' && netIn != null ? +netIn : (amount ? +(amount / 1.18).toFixed(2) : 0);
+  const vat = +(amount - net).toFixed(2);
+  const el = g('apVat'); if (el) el.textContent = amount ? `מע"מ מחושב: ${money(vat)} · ללא מע"מ: ${money(net)}` : '';
+};
 window.openApproveDraft = (id) => {
   const d = (_drafts || []).find(x => x.id === id); if (!d) return;
   let m = document.getElementById('apprModal');
   if (!m) { m = document.createElement('div'); m.id = 'apprModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  const fld = (l, i) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px">${l}${i}</label>`;
+  const fld = (l, i) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted);margin-bottom:9px">${l}${i}</label>`;
   const supOpts = (_suppliers || []).map(s => `<option value="${s.id}" ${s.id === d.supplierId ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('');
-  const typeSel = EXPENSE_DOC_TYPES.map(([v, l]) => `<option value="${v}" ${v === d.documentType ? 'selected' : ''}>${l}</option>`).join('');
-  m.innerHTML = `<div class="modal-card" style="width:min(480px,94vw)">
-    <h3>אישור טיוטת הוצאה</h3>
-    <p class="muted" style="font-size:12.5px">הנתונים מולאו לפי הזיהוי האוטומטי. בדוק, תקן אם צריך, ואשר — תיווצר הוצאה בחשבונית ירוקה ותשויך לספק.</p>
-    <div style="margin-top:10px">
-      ${fld('ספק *', `<select id="apSup"><option value="">— בחר ספק —</option>${supOpts}</select>`)}
-      ${fld('מספר חשבונית *', `<input id="apNum" dir="ltr" value="${escapeHtml(String(d.number || ''))}" placeholder="מספר"/>`)}
-      ${fld('סכום כולל מע"מ ₪ *', `<input id="apAmount" type="number" inputmode="decimal" dir="ltr" value="${d.amount != null ? d.amount : ''}" placeholder="0"/>`)}
-      ${fld('תאריך', `<input id="apDate" type="date" value="${d.date || todayIso()}"/>`)}
-      ${fld('סוג מסמך', `<select id="apType">${typeSel}</select>`)}
-      ${fld('תיאור', `<input id="apDesc" value="${escapeHtml(String(d.description || ''))}" placeholder="תיאור ההוצאה"/>`)}
-    </div>
-    ${d.url ? `<a href="${d.url}" target="_blank" rel="noopener" class="muted" style="font-size:12.5px">📄 פתח את הקובץ שהועלה לצפייה</a>` : ''}
-    <div id="apStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
-    <div class="modal-actions">
-      <button class="btn ghost" onclick="document.getElementById('apprModal').classList.add('hidden')">ביטול</button>
-      <button class="btn primary" onclick="approveDraft('${d.id}',this)">✓ אשר וצור הוצאה</button>
+  const typeSel = APPROVE_DOC_TYPES.map(([v, l]) => `<option value="${v}" ${v === d.documentType ? 'selected' : ''}>${l}</option>`).join('');
+  const preview = d.url
+    ? `<iframe src="${d.url}#toolbar=1&navpanes=0" style="width:100%;height:100%;border:0;background:#fff" title="תצוגה מקדימה"></iframe>`
+    : `<div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">אין קובץ לתצוגה</div>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-width:97vw">
+    <div class="row-between" style="margin-bottom:6px"><h3 style="margin:0">אישור וקליטת הוצאה</h3>
+      <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('apprModal').classList.add('hidden')">✕</button></div>
+    <p class="muted" style="font-size:12.5px;margin:0 0 10px">בדוק מול הקובץ, תקן את הקליטה אם צריך, ואשר — תיווצר הוצאה בחשבונית ירוקה ותשויך לספק.</p>
+    <div style="display:flex;gap:16px;align-items:stretch;flex-wrap:wrap">
+      <div style="flex:1 1 340px;min-width:300px;border:1px solid var(--line);border-radius:10px;overflow:hidden;height:64vh">${preview}</div>
+      <div style="flex:1 1 320px;min-width:280px;display:flex;flex-direction:column">
+        <div style="overflow:auto;padding-inline-start:2px">
+          ${fld('שם הספק / קבלן *', `<select id="apSup"><option value="">— בחר ספק —</option>${supOpts}</select>`)}
+          ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
+          ${fld('סוג המסמך *', `<select id="apType">${typeSel}</select>`)}
+          ${fld('מספר המסמך *', `<input id="apNum" dir="ltr" value="${escAttr(String(d.number || ''))}" placeholder="מספר"/>`)}
+          ${fld('תאריך המסמך *', `<input id="apDate" type="date" value="${d.date || todayIso()}"/>`)}
+          ${fld('סכום ההוצאה (כולל מע"מ) ₪ *', `<input id="apAmount" type="number" inputmode="decimal" dir="ltr" value="${d.amount != null ? d.amount : ''}" placeholder="0" oninput="recalcApprVat()"/>`)}
+          ${fld('סכום ללא מע"מ ₪', `<input id="apNet" type="number" inputmode="decimal" dir="ltr" value="${d.amountExcludeVat != null ? d.amountExcludeVat : ''}" placeholder="ריק = חישוב אוטומטי 18%" oninput="recalcApprVat()"/>`)}
+          <div id="apVat" class="muted" style="font-size:12.5px;margin:-2px 0 10px"></div>
+          ${fld('תיאור ההוצאה', `<input id="apDesc" value="${escAttr(String(d.description || ''))}" placeholder="תיאור"/>`)}
+        </div>
+        <div id="apStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
+        <div class="modal-actions" style="margin-top:auto">
+          <button class="btn ghost" onclick="document.getElementById('apprModal').classList.add('hidden')">ביטול</button>
+          <button class="btn primary" onclick="approveDraft('${d.id}',this)">✓ אשר וצור הוצאה</button>
+        </div>
+      </div>
     </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  setTimeout(recalcApprVat, 30);
 };
 window.approveDraft = async (id, btn) => {
   const g = (x) => document.getElementById(x);
@@ -1258,10 +1280,11 @@ window.approveDraft = async (id, btn) => {
   const supplierId = g('apSup').value;
   const number = g('apNum').value.trim();
   const amount = +g('apAmount').value;
+  const net = g('apNet').value !== '' ? +g('apNet').value : null;
   if (!supplierId) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור ספק.</span>'; return; }
-  if (!number) { st.innerHTML = '<span style="color:var(--danger)">חסר מספר חשבונית.</span>'; return; }
+  if (!number) { st.innerHTML = '<span style="color:var(--danger)">חסר מספר מסמך.</span>'; return; }
   if (!amount || amount <= 0) { st.innerHTML = '<span style="color:var(--danger)">חסר סכום תקין.</span>'; return; }
-  const body = { supplierId, number, amount, vatIncluded: true, date: g('apDate').value || todayIso(), documentType: +g('apType').value, description: g('apDesc').value.trim() };
+  const body = { supplierId, number, amount, amountExcludeVat: net, taxId: g('apTax').value.trim() || null, date: g('apDate').value || todayIso(), documentType: +g('apType').value, description: g('apDesc').value.trim() };
   btn.disabled = true; btn.textContent = 'מאשר…'; st.innerHTML = '<span class="muted">יוצר הוצאה בחשבונית ירוקה…</span>';
   const r = await fetch(`/api/expense-drafts/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ אשר וצור הוצאה';

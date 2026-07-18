@@ -320,11 +320,17 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     }
     if (!classId) return json(res, { error: 'לספק אין סיווג הוצאה מוגדר בחשבונית ירוקה. הגדר לו "סיווג חשבונאי" בכרטיס הספק ונסה שוב.' }, 400);
 
-    const total = Number(body.amount != null ? body.amount : draft.amount) || 0;
-    if (total <= 0) return json(res, { error: 'סכום לא תקין' }, 400);
-    const net = body.vatIncluded === false ? total : +(total / 1.18).toFixed(2);
-    const vat = body.vatIncluded === false ? +(total * 0.18).toFixed(2) : +(total - net).toFixed(2);
-    const amount = body.vatIncluded === false ? +(total + vat).toFixed(2) : total;
+    const amount = Number(body.amount != null ? body.amount : draft.amount) || 0; // כולל מע"מ
+    if (amount <= 0) return json(res, { error: 'סכום לא תקין' }, 400);
+    // אם המשתמש הזין סכום ללא מע"מ מפורש — נשתמש בו; אחרת נחשב לפי 18%
+    let net, vat;
+    if (body.amountExcludeVat != null && Number(body.amountExcludeVat) > 0) {
+      net = +Number(body.amountExcludeVat).toFixed(2);
+      vat = +(amount - net).toFixed(2);
+    } else {
+      net = +(amount / 1.18).toFixed(2);
+      vat = +(amount - net).toFixed(2);
+    }
     const date = body.date || draft.date || new Date().toISOString().slice(0, 10);
     const number = String(body.number || draft.number || '').trim();
     if (!number) return json(res, { error: 'חסר מספר חשבונית של הספק' }, 400);
