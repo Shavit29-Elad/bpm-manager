@@ -237,44 +237,65 @@ export async function clientDocuments(clientId) {
 // כמות חשבוניות מס פתוחות (לא שולמו במלואן)
 export async function openInvoicesCount() {
   return cached('openInvoices', async () => {
-    const res = await api('/documents/search', {
-      method: 'POST',
-      body: { page: 1, pageSize: 100, type: [305], sort: 'documentDate' },
-    });
-    const items = res.items || [];
-    return items.filter(d => {
-      if (d.amountDue != null) return num(d.amountDue) > 0.01;
-      if (d.paid != null) return !d.paid;
-      if (d.paymentStatus != null) return num(d.paymentStatus) === 0;
-      return false;
-    }).length;
+    const to = new Date();
+    const from = new Date(); from.setMonth(from.getMonth() - 24);
+    const items = await documentsInRange(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10), [305]);
+    return items.filter(d => Number(d.status) === 0).length; // status 0 = פתוח
   });
 }
 
 // מסמכים פתוחים לתצוגת "חשבוניות פתוחות" בדף הבית (כמו "חיובים קרובים" בחשבונית ירוקה).
-// מחזיר חשבון עסקה (300) + חשבונית מס (305) שעדיין פתוחים, ממופים לתצוגה.
-export async function openDocuments({ months = 18 } = {}) {
+// בחשבונית ירוקה status===0 = פתוח, status===1 = סגור (שולם/הומר), 2/4 = מבוטל/אחר.
+export async function openDocuments({ months = 24 } = {}) {
   return cached(`openDocs:${months}`, async () => {
     const to = new Date();
     const from = new Date(); from.setMonth(from.getMonth() - months);
     const fromDate = from.toISOString().slice(0, 10);
     const toDate = to.toISOString().slice(0, 10);
     const items = await documentsInRange(fromDate, toDate, [300, 305]);
-    const isOpen = (d) => {
-      if (Number(d.type) === 305) { // חשבונית מס — פתוחה אם נותר סכום לתשלום
-        if (d.amountDue != null) return num(d.amountDue) > 0.01;
-        if (d.paid != null) return !d.paid;
-        if (d.paymentStatus != null) return num(d.paymentStatus) < 2;
-        return true;
-      }
-      // חשבון עסקה — פתוח כל עוד לא נסגר/הומר לחשבונית
-      if (d.status != null) return num(d.status) === 0;
-      if (d.paid != null) return !d.paid;
-      return true;
-    };
-    return items.filter(isOpen).map(d => ({
-      ...mapDoc(d), status: d.status ?? null, paid: d.paid ?? null, paymentStatus: d.paymentStatus ?? null,
-    }));
+    return items.filter(d => Number(d.status) === 0).map(d => {
+      const amount = num(d.amount ?? d.total ?? d.sum);
+      const openAmt = d.amountOpened != null ? num(d.amountOpened)
+        : (d.amountDueVat != null ? num(d.amountDueVat) : amount);
+      return {
+        id: d.id, number: d.number, type: d.type, date: d.documentDate,
+        clientName: d.client?.name || d.clientName || '—',
+        amount, amountDue: openAmt, status: d.status,
+        url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null),
+      };
+    });
+  });
+}
+
+// מיפוי מסמך הוצאה (ספק/קבלן)
+function mapExpense(e) {
+  const amount = num(e.amount ?? e.total ?? e.sum);
+  return {
+    id: e.id,
+    number: e.number ?? e.documentNumber ?? e.reference ?? e.ref ?? '',
+    type: e.type ?? e.documentType ?? e.expenseType ?? null,
+    date: e.documentDate ?? e.date ?? e.paymentDate ?? null,
+    supplierName: e.supplier?.name || e.supplierName || '—',
+    supplierId: e.supplier?.id || e.supplierId || null,
+    amount, amountIncVat: amount,
+    amountExVat: e.amountExcludeVat != null ? num(e.amountExcludeVat) : amount,
+    category: e.category?.name || e.categoryName || e.description || '',
+    url: (e.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e.url === 'string' ? e.url : null),
+  };
+}
+// כל מסמכי ההוצאה של ספק מסוים (מקבלן)
+export async function supplierExpenses(supplierId) {
+  return cached(`supExp:${supplierId}`, async () => {
+    const all = [];
+    for (let page = 1; page <= 15; page++) {
+      const res = await api('/expenses/search', { method: 'POST', body: { supplierId, page, pageSize: 100, sort: 'documentDate' } });
+      const items = res.items || [];
+      all.push(...items);
+      if (items.length < 100) break;
+    }
+    const mapped = all.map(mapExpense);
+    const filtered = mapped.filter(x => !x.supplierId || x.supplierId === supplierId);
+    return filtered.length ? filtered : mapped;
   });
 }
 
@@ -349,5 +370,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, debugDocStatus, listClients, listSuppliers, clientDocuments, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, listClients, listSuppliers, clientDocuments, supplierExpenses, clearDataCache, DOC_TYPES };
 export default greenInvoice;

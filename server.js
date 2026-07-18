@@ -258,13 +258,6 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
-// GET /api/debug/docstatus — זמני: ללמוד את שדה הסטטוס האמיתי של חשבונית ירוקה
-add('GET', /^\/api\/debug\/docstatus$/, async (req, res) => {
-  if (!greenInvoice.haveCredentials()) return json(res, { error: 'לא מחובר' }, 400);
-  try { json(res, await greenInvoice.debugDocStatus()); }
-  catch (e) { json(res, { error: e.message }, 500); }
-});
-
 // GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה
 add('GET', /^\/api\/open-invoices$/, async (req, res) => {
   if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
@@ -282,7 +275,31 @@ add('POST', /^\/api\/contractors\/toggle-paid$/, (req, res, _p, _q, body) => {
   const ev = db.events.find(e => e.id === body.eventId);
   if (!ev || !ev.contractorDetails || !ev.contractorDetails[body.index]) return json(res, { error: 'לא נמצא' }, 404);
   ev.contractorDetails[body.index].paid = Boolean(body.paid);
+  if (!body.paid) ev.contractorDetails[body.index].paidInvoice = null;
   save(db); json(res, { ok: true });
+});
+
+// POST /api/contractors/mark-paid-bulk — סימון תשלום למספר אירועים עם מספר חשבונית
+add('POST', /^\/api\/contractors\/mark-paid-bulk$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const items = Array.isArray(body.items) ? body.items : [];
+  const paid = body.paid !== false;
+  let n = 0;
+  for (const it of items) {
+    const ev = db.events.find(e => e.id === it.eventId);
+    if (ev && ev.contractorDetails && ev.contractorDetails[it.index]) {
+      ev.contractorDetails[it.index].paid = paid;
+      ev.contractorDetails[it.index].paidInvoice = paid ? (body.invoiceNumber || null) : null;
+      n++;
+    }
+  }
+  save(db); json(res, { ok: true, updated: n });
+});
+
+// GET /api/contractors/:id/documents — מסמכי הוצאה של קבלן/ספק מחשבונית ירוקה
+add('GET', /^\/api\/contractors\/([^/]+)\/documents$/, async (req, res, params) => {
+  try { json(res, await greenInvoice.supplierExpenses(params[0])); }
+  catch (e) { json(res, { error: e.message }, 500); }
 });
 
 // GET /api/payroll?companyId=&month=

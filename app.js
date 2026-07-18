@@ -965,6 +965,7 @@ window.generateInvoice = async (btn) => {
 };
 
 // ---- קבלנים ----
+let _suppliers = [];
 async function renderContractors(c) {
   c.innerHTML = `<div class="panel"><div class="empty">טוען קבלנים…</div></div>`;
   const [pay, sup] = await Promise.all([
@@ -972,43 +973,120 @@ async function renderContractors(c) {
     api('/api/suppliers').catch(() => []),
   ]);
   const payables = Array.isArray(pay) ? pay : [];
-  const suppliers = Array.isArray(sup) ? sup : [];
+  _suppliers = Array.isArray(sup) ? sup : [];
   const totalUnpaid = payables.reduce((s, x) => s + (x.unpaidTotal || 0), 0);
   const totalPaid = payables.reduce((s, x) => s + (x.paidTotal || 0), 0);
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>קבלנים לתשלום</h2>
-      <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום <b style="color:var(--danger)">${money(totalUnpaid)}</b>. לחיצה על קבלן פותחת את האירועים שלו וסימון שולם/לא שולם לכל אחד.</span></div>
+      <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום <b style="color:var(--danger)">${money(totalUnpaid)}</b>. סמן אירועים (או הכל), לחץ "סמן כשולם" והזן מספר חשבונית.</span></div>
       <button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div>
     ${payables.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${payables.map(contractorCard).join('')}</div>`
       : `<div class="empty">אין קבלנים עם סכומים עדיין. הוסף סכום לקבלן באירוע.</div>`}
   </div>
   <div class="panel">
-    <div class="row-between"><div><h2>כל הקבלנים / הספקים</h2>
-      <span class="muted">מתוך רשימת הספקים בחשבונית ירוקה · ${suppliers.length}</span></div></div>
-    ${suppliers.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${suppliers.map(s => `<span class="chip" style="font-size:13px">🎛️ ${escapeHtml(s.name)}</span>`).join('')}</div>`
-      : `<div class="empty">לא נטענו ספקים מחשבונית ירוקה (ודא שהחיבור פעיל).</div>`}
+    <div class="row-between"><div><h2>רשימת קבלנים</h2>
+      <span class="muted">${_suppliers.length} קבלנים · מתוך הספקים בחשבונית ירוקה. לחיצה על קבלן מציגה את כל המסמכים שלו.</span></div>
+      <button class="btn ghost" onclick="refreshSuppliers(this)">↻ רענן מחשבונית ירוקה</button></div>
+    <div style="display:flex;gap:16px;align-items:stretch;min-height:56vh;margin-top:12px">
+      <div style="flex:0 0 300px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden">
+        <input id="supSearch" placeholder="חיפוש קבלן…" style="border:none;border-bottom:1px solid var(--line);border-radius:0"/>
+        <div id="supList" style="overflow-y:auto;flex:1;max-height:62vh">${supplierRows(_suppliers)}</div>
+      </div>
+      <div id="supDetail" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;max-height:66vh">
+        <div class="empty">בחר קבלן כדי לראות את כל המסמכים שלו</div>
+      </div>
+    </div>
   </div>`;
+  const inp = $('#supSearch');
+  if (inp) inp.oninput = () => { $('#supList').innerHTML = supplierRows((_suppliers || []).filter(s => !inp.value || (s.name || '').includes(inp.value))); };
 }
 function contractorCard(x) {
   const safe = 'ct_' + String(x.name).replace(/[^a-zA-Z0-9֐-׿]/g, '_');
-  const rows = x.events.map(ev => `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
-    <span class="muted" style="white-space:nowrap">${ddmy(ev.date)}</span>
-    <span>${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''}</span>
-    <span style="margin-inline-start:auto;font-weight:600">${money(ev.amount)}</span>
-    <button class="btn ${ev.paid ? 'success' : 'ghost'}" style="padding:3px 10px;font-size:12px" onclick="toggleContractorPaid('${ev.eventId}',${ev.index},${ev.paid ? 0 : 1})">${ev.paid ? 'שולם ✓' : 'לא שולם'}</button>
-  </div>`).join('');
+  const rows = x.events.map(ev => {
+    const sel = ev.paid
+      ? `<span class="tag invoiced" style="white-space:nowrap">שולם${ev.paidInvoice ? ` · חשבונית ${escapeHtml(String(ev.paidInvoice))}` : ''}</span>`
+      : `<input type="checkbox" class="ctchk" data-c="${safe}" data-ev="${ev.eventId}" data-ix="${ev.index}"/>`;
+    return `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
+      <span style="width:28px;text-align:center">${sel}</span>
+      <span class="muted" style="white-space:nowrap">${ddmy(ev.date)}</span>
+      <span>${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''}</span>
+      <span style="margin-inline-start:auto;font-weight:600">${money(ev.amount)}</span>
+      <button class="btn ${ev.paid ? 'success' : 'ghost'}" style="padding:3px 10px;font-size:12px" onclick="toggleContractorPaid('${ev.eventId}',${ev.index},${ev.paid ? 0 : 1})">${ev.paid ? 'בטל תשלום' : 'שולם'}</button>
+    </div>`;
+  }).join('');
   return `<div class="card" style="padding:0;overflow:hidden">
     <div class="row-between" style="margin:0;padding:11px 13px;cursor:pointer" onclick="document.getElementById('${safe}').classList.toggle('hidden')">
       <div><b>${escapeHtml(x.name)}</b> <span class="muted">· ${x.events.length} אירועים</span></div>
       <div style="font-size:13px">שולם ${money(x.paidTotal)} · <span style="color:var(--danger)">נותר ${money(x.unpaidTotal)}</span></div>
     </div>
-    <div id="${safe}" class="${x.events.length > 3 ? 'hidden' : ''}">${rows}</div>
+    <div id="${safe}" class="${x.events.length > 3 ? 'hidden' : ''}">
+      <div style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-top:1px solid var(--line);background:var(--panel2)">
+        <label style="font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" onchange="ctSelectAll('${safe}',this.checked)"/> בחר הכל</label>
+        <button class="btn success" style="margin-inline-start:auto;padding:4px 12px;font-size:12px" onclick="ctMarkPaid('${safe}')">✓ סמן נבחרים כשולם + מס' חשבונית</button>
+      </div>
+      ${rows}
+    </div>
   </div>`;
 }
+window.ctSelectAll = (safe, on) => { document.querySelectorAll(`.ctchk[data-c="${safe}"]`).forEach(x => { x.checked = on; }); };
+window.ctMarkPaid = async (safe) => {
+  const boxes = [...document.querySelectorAll(`.ctchk[data-c="${safe}"]:checked`)];
+  if (!boxes.length) { alert('לא נבחרו אירועים'); return; }
+  const inv = prompt(`מספר חשבונית הקבלן עבור ${boxes.length} אירועים (אפשר להשאיר ריק):`, '');
+  if (inv === null) return;
+  const items = boxes.map(b => ({ eventId: b.dataset.ev, index: +b.dataset.ix }));
+  await fetch('/api/contractors/mark-paid-bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items, invoiceNumber: inv.trim() || null, paid: true }) }).catch(() => {});
+  renderContractors($('#content'));
+};
 window.toggleContractorPaid = async (eventId, index, paid) => {
   await fetch('/api/contractors/toggle-paid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId, index, paid: !!paid }) }).catch(() => {});
   renderContractors($('#content'));
 };
+window.refreshSuppliers = async (btn) => {
+  if (btn) { btn.disabled = true; btn.textContent = 'מרענן…'; }
+  _suppliers = await api('/api/suppliers?fresh=1').catch(() => _suppliers);
+  const list = $('#supList'); if (list) list.innerHTML = supplierRows(_suppliers || []);
+  if (btn) { btn.disabled = false; btn.textContent = '↻ רענן מחשבונית ירוקה'; }
+};
+function supplierRows(list) {
+  if (!list.length) return `<div class="empty">לא נמצאו קבלנים.</div>`;
+  return list.map(s => `<div class="chat-item" id="sup-${s.id}" style="margin:0;border-radius:0;border-bottom:1px solid var(--line)" onclick="selectSupplier('${s.id}','${encodeURIComponent(s.name || '')}')">
+    <span style="font-size:15px">🎛️</span><div style="font-weight:600;font-size:14px">${escapeHtml(s.name)}</div>
+    <span class="muted" style="margin-inline-start:auto;font-size:14px">‹</span></div>`).join('');
+}
+let _supDocs = [], _supName = '', _supYear = 'all';
+window.selectSupplier = async (id, nameEnc) => {
+  document.querySelectorAll('.chat-item.active').forEach(x => x.classList.remove('active'));
+  const item = document.getElementById('sup-' + id); if (item) item.classList.add('active');
+  const detail = document.getElementById('supDetail'); if (!detail) return;
+  detail.innerHTML = `<div class="muted" style="font-size:13px">טוען מסמכים…</div>`;
+  _supName = decodeURIComponent(nameEnc); _supYear = 'all';
+  const docs = await api(`/api/contractors/${id}/documents`).catch(() => []);
+  _supDocs = Array.isArray(docs) ? docs : [];
+  renderSupplierDetail();
+};
+window.setSupYear = (v) => { _supYear = v; renderSupplierDetail(); };
+function renderSupplierDetail() {
+  const detail = document.getElementById('supDetail'); if (!detail) return;
+  const years = [...new Set(_supDocs.map(d => (d.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  let docs = _supDocs;
+  if (_supYear !== 'all') docs = docs.filter(d => (d.date || '').slice(0, 4) === _supYear);
+  docs = [...docs].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const total = docs.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const yearSel = `<select onchange="setSupYear(this.value)" style="padding:6px 10px"><option value="all" ${_supYear === 'all' ? 'selected' : ''}>כל השנים</option>${years.map(y => `<option value="${y}" ${_supYear === y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
+  detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${escapeHtml(_supName)}</h2>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים · ${money(total)}</span></div></div>
+    ${docs.length ? `<div style="overflow-x:auto;margin-top:10px"><table style="min-width:520px"><thead><tr><th>תאריך</th><th>מספר</th><th>קטגוריה</th><th>סכום</th><th></th></tr></thead>
+      <tbody>${docs.map(supDocRow).join('')}</tbody></table></div>`
+      : `<div class="empty">לא נמצאו מסמכי הוצאה לקבלן זה בחשבונית ירוקה.</div>`}`;
+}
+function supDocRow(d) {
+  const acts = d.url ? `<div style="display:flex;gap:6px"><a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">תצוגה 👁</a>
+    <a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" download target="_blank" rel="noopener">הורדה ↓</a></div>` : '<span class="muted">—</span>';
+  return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>${escapeHtml(String(d.number || '—'))}</td>
+    <td>${escapeHtml(d.category || '')}</td><td style="white-space:nowrap">${money(d.amount)}</td><td>${acts}</td></tr>`;
+}
 
 // טופס הוספת לקוח/ספק לחשבונית ירוקה
 window.openContactForm = (kind) => {
