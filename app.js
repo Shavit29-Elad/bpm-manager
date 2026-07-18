@@ -382,6 +382,8 @@ async function renderCombined(c) {
   renderCalView();
 }
 
+// תאריך בפורמט DD/MM/YY (למשל 09/07/26)
+const ddmy = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : (iso || '—'); };
 // ---- תצוגת יומן: שבועית (ברירת מחדל) או חודשית, עם מתג ----
 const DAYS_FULL = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const DAYS_HE = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
@@ -537,7 +539,7 @@ function rowEvent(e) {
     ? `<button class="btn success" style="padding:4px 12px;font-size:12px" onclick="confirmEventRow('${e.id}',false)">מאושר ✓</button>`
     : `<button class="btn ghost" style="padding:4px 16px;font-size:12px" onclick="confirmEventRow('${e.id}',true)">אשר</button>`;
   return `<tr${e.confirmed ? ' style="background:rgba(14,164,114,.05)"' : ''}>
-    <td>${e.date || e.dateRaw || '—'}</td>
+    <td style="white-space:nowrap">${ddmy(e.date || e.dateRaw)}</td>
     <td>${e.artist || '—'}</td>
     <td>${e.location || '—'}</td>
     <td>${e.clientName ? escapeHtml(e.clientName) : '<span class="muted">—</span>'}</td>
@@ -612,15 +614,16 @@ async function openEventEditor(ev) {
         <button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="evAddCtr()">+ הוסף קבלן</button></div>
       <div id="evCtrBox">${evCtrHtml()}</div>
     </div>
-    <div class="modal-actions" style="margin-top:18px;justify-content:space-between">
+    <div class="modal-actions" style="margin-top:18px;justify-content:space-between;align-items:center">
       <button class="btn ghost" style="color:var(--danger);border-color:rgba(225,29,72,.3)" onclick="deleteEvent()">🗑 מחק מהרשימה</button>
-      <div style="display:flex;gap:10px">
-        <button class="btn ghost" onclick="document.getElementById('evModal').classList.add('hidden')">ביטול</button>
-        <button class="btn primary" onclick="saveEvent(this)">שמור</button>
+      <div style="display:flex;gap:12px;align-items:center">
+        <span id="evSaveState" class="muted" style="font-size:12.5px">✓ נשמר אוטומטית</span>
+        <button class="btn primary" onclick="saveEvent(this)">סגור</button>
       </div>
     </div>
   </div>`;
-  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  const card = m.querySelector('.modal-card'); if (card) card.addEventListener('change', window.autoSaveEvent);
+  m.onclick = (e) => { if (e.target === m) { saveEventCore(); m.classList.add('hidden'); renderCombined($('#content')); } };
 }
 window.deleteEvent = async () => {
   if (!_evEditing) return;
@@ -666,17 +669,18 @@ window.applyBonusNote = async (btn) => {
       if (w) { if (a.bonus != null) w.bonus = a.bonus; if (a.bonusFactor != null) w.bonusFactor = a.bonusFactor; if (a.factor != null) w.factor = String(a.factor); applied++; }
     });
     document.getElementById('evEmpBox').innerHTML = evEmpHtml();
-    alert(`הוחל על ${applied} עובדים. בדוק ולחץ "שמור".`);
+    await saveEventCore();
+    alert(`הוחל ונשמר עבור ${applied} עובדים.`);
   } else { alert('לא זוהתה הוראת בונוס/תשלום תקפה בהערה.'); }
 };
-window.saveEvent = async (btn) => {
+function collectEventBody() {
   const g = (id) => document.getElementById(id);
   const num = (x) => { const s = String(x ?? '').trim(); return s === '' || isNaN(+s) ? null : +s; };
-  const clientName = g('evClient').value.trim() || null;
+  const clientName = (g('evClient')?.value || '').trim() || null;
   const clientId = (_evClients || []).find(c => c.name === clientName)?.id || _evEditing.clientId || null;
   const ctr = _evCtr.filter(c => (c.name || '').trim()).map(c => ({ name: c.name.trim(), amount: num(c.amount) }));
   const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus), bonusFactor: (w.bonusFactor == null || w.bonusFactor === '') ? null : +w.bonusFactor, food: num(w.food), note: (w.note || '').trim() || null }));
-  const body = {
+  return {
     date: g('evDate').value || null, dateRaw: g('evDate').value || _evEditing.dateRaw || null,
     artist: g('evArtist').value.trim() || null,
     location: g('evLocation').value.trim() || null,
@@ -687,8 +691,20 @@ window.saveEvent = async (btn) => {
     contractors: ctr.map(c => c.name), contractorDetails: ctr,
     clientName, clientId,
   };
-  if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
+}
+let _evSaveT = null;
+async function saveEventCore() {
+  if (!_evEditing || !document.getElementById('evDate')) return;
+  const body = collectEventBody();
+  Object.assign(_evEditing, body);
+  const ind = document.getElementById('evSaveState'); if (ind) ind.textContent = 'שומר…';
   await fetch(`/api/events/${_evEditing.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+  if (ind) { ind.textContent = '✓ נשמר'; }
+}
+window.autoSaveEvent = () => { clearTimeout(_evSaveT); _evSaveT = setTimeout(saveEventCore, 350); };
+window.saveEvent = async (btn) => {
+  if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
+  await saveEventCore();
   const m = document.getElementById('evModal'); if (m) m.classList.add('hidden');
   renderCombined($('#content'));
 };
