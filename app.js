@@ -1050,12 +1050,14 @@ window.doFollowup = async (id, type, btn) => {
 let _suppliers = [];
 async function renderContractors(c) {
   c.innerHTML = `<div class="panel"><div class="empty">טוען קבלנים…</div></div>`;
-  const [pay, sup] = await Promise.all([
+  const [pay, sup, dr] = await Promise.all([
     api(`/api/contractors/payables?companyId=${state.company}`),
     api('/api/suppliers').catch(() => []),
+    api('/api/expense-drafts').catch(() => ({ drafts: [] })),
   ]);
   const payables = Array.isArray(pay) ? pay : [];
   _suppliers = Array.isArray(sup) ? sup : [];
+  _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
   const totalUnpaid = payables.reduce((s, x) => s + (x.unpaidTotal || 0), 0);
   const totalPaid = payables.reduce((s, x) => s + (x.paidTotal || 0), 0);
   c.innerHTML = `<div class="panel">
@@ -1065,6 +1067,7 @@ async function renderContractors(c) {
     ${payables.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${payables.map(contractorCard).join('')}</div>`
       : `<div class="empty">אין קבלנים עם סכומים עדיין. הוסף סכום לקבלן באירוע.</div>`}
   </div>
+  <div class="panel" id="draftsPanel">${draftsSection()}</div>
   <div class="panel">
     <div class="row-between"><div><h2>רשימת קבלנים</h2>
       <span class="muted">${_suppliers.length} קבלנים · מתוך הספקים בחשבונית ירוקה. לחיצה על קבלן מציגה את כל המסמכים שלו.</span></div>
@@ -1138,6 +1141,95 @@ function supplierRows(list) {
     <span class="muted" style="margin-inline-start:auto;font-size:14px">‹</span></div>`).join('');
 }
 let _supDocs = [], _supName = '', _supYear = 'all', _supId = '';
+let _drafts = [];
+// ===== טיוטות הוצאה (OCR) — צפייה ואישור מתוך האתר =====
+const DRAFT_TYPE_NAMES = { 20: 'חשבון/אישור', 305: 'חשבונית מס', 320: 'מס-קבלה', 330: 'זיכוי', 400: 'קבלה', 405: 'קבלה תרומה' };
+function draftsSection() {
+  const list = _drafts || [];
+  return `<div class="row-between"><div><h2>🧾 טיוטות הוצאה לאישור</h2>
+      <span class="muted">${list.length ? `${list.length} טיוטות שהעלית וממתינות לאישור. בדוק את מה שהזיהוי האוטומטי קלט, תקן אם צריך, ואשר — תיווצר הוצאה אמיתית שמשויכת לספק.` : 'אין טיוטות ממתינות. העלה קובץ הוצאה כדי שיופיע כאן אחרי זיהוי אוטומטי (OCR).'}</span></div>
+      <button class="btn ghost" onclick="reloadDrafts(this)">↻ רענן</button></div>
+    ${list.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${list.map(draftCard).join('')}</div>` : `<div class="empty">אין טיוטות ממתינות לאישור.</div>`}`;
+}
+function draftCard(d) {
+  const failed = d.status === 50 || d.status === 200;
+  const amt = d.amount != null ? money(d.amount) : '<span class="muted">סכום לא זוהה</span>';
+  const supTxt = d.supplierName ? escapeHtml(d.supplierName) : '<span class="muted">ספק לא זוהה — יש לבחור באישור</span>';
+  const typeTxt = DRAFT_TYPE_NAMES[d.documentType] || '';
+  const file = d.url ? `<a class="btn ghost" style="padding:3px 10px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">📄 צפה בקובץ</a>` : '';
+  const statusTag = failed ? `<span class="tag" style="background:#fde8e8;color:var(--danger)">${escapeHtml(d.statusText)}</span>` : `<span class="tag">${escapeHtml(d.statusText)}</span>`;
+  return `<div class="card" style="padding:12px 14px">
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="min-width:180px"><b>${supTxt}</b> ${statusTag}<br><span class="muted" style="font-size:12.5px">${typeTxt}${d.number ? ` · מס' ${escapeHtml(String(d.number))}` : ''}${d.date ? ` · ${ddmy(d.date)}` : ''}</span></div>
+      <div style="font-weight:700;font-size:15px;min-width:90px">${amt}</div>
+      <div style="flex:1;min-width:120px" class="muted">${escapeHtml(d.description || '')}</div>
+      <div style="display:flex;gap:6px;margin-inline-start:auto">
+        ${file}
+        <button class="btn success" style="padding:4px 12px;font-size:13px" onclick="openApproveDraft('${d.id}')">✓ אשר</button>
+        <button class="btn ghost" style="padding:4px 10px;font-size:13px" onclick="dismissDraft('${d.id}')">התעלם</button>
+      </div>
+    </div>
+  </div>`;
+}
+window.reloadDrafts = async (btn) => {
+  if (btn) { btn.disabled = true; btn.textContent = 'מרענן…'; }
+  const dr = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
+  _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
+  const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
+};
+window.dismissDraft = async (id) => {
+  if (!confirm('להסתיר את הטיוטה הזו מהרשימה? (הקובץ יישאר בחשבונית ירוקה, לא תיווצר הוצאה)')) return;
+  await fetch(`/api/expense-drafts/${id}/dismiss`, { method: 'POST' }).catch(() => {});
+  _drafts = _drafts.filter(x => x.id !== id);
+  const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
+};
+window.openApproveDraft = (id) => {
+  const d = (_drafts || []).find(x => x.id === id); if (!d) return;
+  let m = document.getElementById('apprModal');
+  if (!m) { m = document.createElement('div'); m.id = 'apprModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  const fld = (l, i) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px">${l}${i}</label>`;
+  const supOpts = (_suppliers || []).map(s => `<option value="${s.id}" ${s.id === d.supplierId ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('');
+  const typeSel = EXPENSE_DOC_TYPES.map(([v, l]) => `<option value="${v}" ${v === d.documentType ? 'selected' : ''}>${l}</option>`).join('');
+  m.innerHTML = `<div class="modal-card" style="width:min(480px,94vw)">
+    <h3>אישור טיוטת הוצאה</h3>
+    <p class="muted" style="font-size:12.5px">הנתונים מולאו לפי הזיהוי האוטומטי. בדוק, תקן אם צריך, ואשר — תיווצר הוצאה בחשבונית ירוקה ותשויך לספק.</p>
+    <div style="margin-top:10px">
+      ${fld('ספק *', `<select id="apSup"><option value="">— בחר ספק —</option>${supOpts}</select>`)}
+      ${fld('מספר חשבונית *', `<input id="apNum" dir="ltr" value="${escapeHtml(String(d.number || ''))}" placeholder="מספר"/>`)}
+      ${fld('סכום כולל מע"מ ₪ *', `<input id="apAmount" type="number" inputmode="decimal" dir="ltr" value="${d.amount != null ? d.amount : ''}" placeholder="0"/>`)}
+      ${fld('תאריך', `<input id="apDate" type="date" value="${d.date || todayIso()}"/>`)}
+      ${fld('סוג מסמך', `<select id="apType">${typeSel}</select>`)}
+      ${fld('תיאור', `<input id="apDesc" value="${escapeHtml(String(d.description || ''))}" placeholder="תיאור ההוצאה"/>`)}
+    </div>
+    ${d.url ? `<a href="${d.url}" target="_blank" rel="noopener" class="muted" style="font-size:12.5px">📄 פתח את הקובץ שהועלה לצפייה</a>` : ''}
+    <div id="apStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('apprModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="approveDraft('${d.id}',this)">✓ אשר וצור הוצאה</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+};
+window.approveDraft = async (id, btn) => {
+  const g = (x) => document.getElementById(x);
+  const st = g('apStatus');
+  const supplierId = g('apSup').value;
+  const number = g('apNum').value.trim();
+  const amount = +g('apAmount').value;
+  if (!supplierId) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור ספק.</span>'; return; }
+  if (!number) { st.innerHTML = '<span style="color:var(--danger)">חסר מספר חשבונית.</span>'; return; }
+  if (!amount || amount <= 0) { st.innerHTML = '<span style="color:var(--danger)">חסר סכום תקין.</span>'; return; }
+  const body = { supplierId, number, amount, vatIncluded: true, date: g('apDate').value || todayIso(), documentType: +g('apType').value, description: g('apDesc').value.trim() };
+  btn.disabled = true; btn.textContent = 'מאשר…'; st.innerHTML = '<span class="muted">יוצר הוצאה בחשבונית ירוקה…</span>';
+  const r = await fetch(`/api/expense-drafts/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false; btn.textContent = '✓ אשר וצור הוצאה';
+  if (r.ok) {
+    st.innerHTML = '<span style="color:var(--accent2)">✓ ההוצאה נוצרה ושויכה לספק!</span>';
+    _drafts = _drafts.filter(x => x.id !== id);
+    setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection(); }, 1100);
+  } else st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
+};
 window.selectSupplier = async (id, nameEnc) => {
   document.querySelectorAll('.chat-item.active').forEach(x => x.classList.remove('active'));
   const item = document.getElementById('sup-' + id); if (item) item.classList.add('active');
@@ -1183,8 +1275,8 @@ window.pickExpenseFile = () => {
     const r = await fetch('/api/expenses/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fileBase64: data, fileName: f.name, mime: f.type || 'application/pdf' }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (r.ok) {
-      toast.innerHTML = '✓ הקובץ הועלה! הוא ממתין לאישור כטיוטת הוצאה בחשבונית ירוקה (הזיהוי האוטומטי לוקח כמה שניות).';
-      setTimeout(() => { toast.style.display = 'none'; if (_supId) selectSupplier(_supId, encodeURIComponent(_supName)); }, 4000);
+      toast.innerHTML = '✓ הקובץ הועלה! ממתין לזיהוי אוטומטי (OCR) — יופיע ב"טיוטות הוצאה לאישור" בעוד כמה שניות.';
+      setTimeout(() => { toast.style.display = 'none'; if (typeof reloadDrafts === 'function') reloadDrafts(); }, 6000);
     } else { toast.innerHTML = `<span style="color:var(--danger)">שגיאה בהעלאה: ${escapeHtml(String(r.error || ''))}</span>`; setTimeout(() => { toast.style.display = 'none'; }, 5000); }
   };
   inp.click();

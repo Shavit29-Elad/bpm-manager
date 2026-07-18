@@ -341,6 +341,59 @@ export async function expenseStatuses() { return api('/expenses/statuses'); }
 export async function createExpense(body) { const r = await api('/expenses', { method: 'POST', body }); clearDataCache(); return r; }
 export async function deleteExpense(id) { const r = await api(`/expenses/${encodeURIComponent(id)}`, { method: 'DELETE' }); clearDataCache(); return r; }
 
+// ===== טיוטות הוצאה (מה שהעלינו וממתין ל-OCR/אישור) =====
+const DRAFT_STATUS = { 10: 'ממתין לאישור', 50: 'נכשל', 200: 'נדחה' };
+function mapDraft(d) {
+  const e = d.expense || {};
+  const sup = e.supplier || {};
+  return {
+    id: d.id,
+    status: Number(d.status),
+    statusText: DRAFT_STATUS[Number(d.status)] || `סטטוס ${d.status}`,
+    url: d.url || null,                              // קישור לצפייה בקובץ שהועלה
+    creationDate: d.creationDate || null,
+    description: e.description || '',
+    supplierId: sup.id || e.supplierId || null,
+    supplierName: sup.name || '',
+    supplierTaxId: sup.taxId || null,
+    documentType: e.documentType || null,
+    number: e.number || '',
+    date: e.date ? String(e.date).slice(0, 10) : '',
+    reportingDate: e.reportingDate ? String(e.reportingDate).slice(0, 10) : '',
+    currency: e.currency || 'ILS',
+    paymentType: e.paymentType || null,
+    amount: e.amount ?? null,                         // כולל מע"מ
+    amountExcludeVat: e.amountExcludeVat ?? null,
+    vat: e.vat ?? null,
+    accountingClassificationId: e.accountingClassification?.id || e.accountingClassificationId || null,
+    raw: e,
+  };
+}
+// רשימת טיוטות ההוצאה (מדפדף על כל העמודים)
+export async function expenseDrafts() {
+  return cached('expenseDrafts', async () => {
+    const all = [];
+    for (let page = 1; page <= 15; page++) {
+      const res = await api('/expenses/drafts/search', { method: 'POST', body: { page, pageSize: 100 } });
+      const items = res.items || [];
+      all.push(...items);
+      if (items.length < 100) break;
+    }
+    return all.map(mapDraft);
+  });
+}
+// שליפת טיוטה בודדת (מתוך החיפוש) לפי מזהה
+export async function getExpenseDraft(id) {
+  const drafts = await expenseDrafts();
+  return drafts.find(d => String(d.id) === String(id)) || null;
+}
+// ניסיון למחוק טיוטה (ייתכן שלא נתמך ב-API — המבצע מטפל בשגיאה)
+export async function deleteExpenseDraft(id) {
+  const r = await api(`/expenses/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  clearDataCache();
+  return r;
+}
+
 // כל מסמכי ההוצאה של ספק מסוים (מקבלן)
 export async function supplierExpenses(supplierId) {
   return cached(`supExp:${supplierId}`, async () => {
@@ -428,5 +481,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, createExpense, deleteExpense, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;

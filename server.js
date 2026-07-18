@@ -286,6 +286,85 @@ add('POST', /^\/api\/expenses\/upload-file$/, async (req, res, _p, _q, body) => 
   catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/expense-drafts — טיוטות הוצאה שהעלינו (OCR) שממתינות לאישור, ללא כאלה שכבר אושרו/נדחו אצלנו
+add('GET', /^\/api\/expense-drafts$/, async (req, res, _p, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { drafts: [], error: 'חשבונית ירוקה לא מחוברת' });
+  if (q.fresh) greenInvoice.clearDataCache();
+  try {
+    const db = load();
+    const approved = db.approvedDrafts || {};
+    const dismissed = db.dismissedDrafts || [];
+    const all = await greenInvoice.expenseDrafts();
+    const drafts = all
+      .filter(d => !approved[d.id] && !dismissed.includes(d.id))
+      .map(d => ({ ...d, raw: undefined }));
+    json(res, { drafts });
+  } catch (e) { json(res, { drafts: [], error: e.message }, 500); }
+});
+
+// POST /api/expense-drafts/:id/approve — אישור טיוטה → יצירת הוצאה אמיתית מנתוני ה-OCR (עם תיקונים)
+// body: { supplierId, number, date, documentType, amount, vatIncluded, description, accountingClassificationId? }
+add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const draftId = params[0];
+  try {
+    const draft = await greenInvoice.getExpenseDraft(draftId);
+    if (!draft) return json(res, { error: 'הטיוטה לא נמצאה (ייתכן שכבר טופלה)' }, 404);
+    const supplierId = body.supplierId || draft.supplierId;
+    if (!supplierId) return json(res, { error: 'יש לבחור ספק עבור ההוצאה' }, 400);
+
+    // סיווג חשבונאי — מהטיוטה, מהבקשה, או מברירת המחדל של הספק
+    let classId = body.accountingClassificationId || draft.accountingClassificationId || null;
+    if (!classId) {
+      try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { }
+    }
+    if (!classId) return json(res, { error: 'לספק אין סיווג הוצאה מוגדר בחשבונית ירוקה. הגדר לו "סיווג חשבונאי" בכרטיס הספק ונסה שוב.' }, 400);
+
+    const total = Number(body.amount != null ? body.amount : draft.amount) || 0;
+    if (total <= 0) return json(res, { error: 'סכום לא תקין' }, 400);
+    const net = body.vatIncluded === false ? total : +(total / 1.18).toFixed(2);
+    const vat = body.vatIncluded === false ? +(total * 0.18).toFixed(2) : +(total - net).toFixed(2);
+    const amount = body.vatIncluded === false ? +(total + vat).toFixed(2) : total;
+    const date = body.date || draft.date || new Date().toISOString().slice(0, 10);
+    const number = String(body.number || draft.number || '').trim();
+    if (!number) return json(res, { error: 'חסר מספר חשבונית של הספק' }, 400);
+
+    const expBody = {
+      supplier: { id: supplierId },
+      documentType: Number(body.documentType || draft.documentType) || 305,
+      number,
+      date, reportingDate: date,
+      currency: 'ILS', paymentType: 4,
+      amount, amountExcludeVat: net, vat,
+      accountingClassification: { id: classId },
+      description: (body.description || draft.description || '').trim() || 'הוצאת ספק',
+    };
+    const created = await greenInvoice.createExpense(expBody);
+
+    // ננסה למחוק את הטיוטה במורנינג; אם לא נתמך — נסמן אצלנו כמאושרת כדי שלא תופיע שוב
+    let draftRemoved = false;
+    try { await greenInvoice.deleteExpenseDraft(draftId); draftRemoved = true; } catch { }
+    const db = load();
+    db.approvedDrafts = db.approvedDrafts || {};
+    db.approvedDrafts[draftId] = { expenseId: created?.id || null, at: new Date().toISOString() };
+    save(db);
+
+    json(res, { ok: true, expense: created, draftRemoved });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/expense-drafts/:id/dismiss — התעלמות מטיוטה (מסתירה אותה אצלנו, לא מוחקת במורנינג)
+add('POST', /^\/api\/expense-drafts\/([^/]+)\/dismiss$/, async (req, res, params) => {
+  const draftId = params[0];
+  try {
+    const db = load();
+    db.dismissedDrafts = db.dismissedDrafts || [];
+    if (!db.dismissedDrafts.includes(draftId)) db.dismissedDrafts.push(draftId);
+    save(db);
+    json(res, { ok: true });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // POST /api/contractors/:id/expense — רישום הוצאה של קבלן ישירות בחשבונית ירוקה
 // body: { number, date, documentType, amount, vatIncluded, description }
 add('POST', /^\/api\/contractors\/([^/]+)\/expense$/, async (req, res, params, _q, body) => {
