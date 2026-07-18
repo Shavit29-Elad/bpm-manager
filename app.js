@@ -577,7 +577,7 @@ async function openEventEditor(ev) {
   _evCtr = (ev.contractorDetails && ev.contractorDetails.length ? ev.contractorDetails
     : (ev.contractors || []).map(n => ({ name: n, amount: null }))).map(c => ({ name: c.name || '', amount: c.amount ?? '' }));
   _evEmp = (ev.employeeDetails && ev.employeeDetails.length ? ev.employeeDetails
-    : (ev.employees || []).map(n => ({ name: n }))).map(w => ({ name: w.name || '', factor: w.factor ?? '1', bonus: w.bonus ?? '', food: w.food ?? '', note: w.note ?? '' }));
+    : (ev.employees || []).map(n => ({ name: n }))).map(w => ({ name: w.name || '', factor: w.factor ?? '1', bonus: w.bonus ?? '', food: w.food ?? '', note: w.note ?? '', bonusFactor: w.bonusFactor ?? null }));
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
   if (!_evEmployees) { try { _evEmployees = await api(`/api/employees?companyId=${state.company}`); } catch { _evEmployees = []; } }
   if (!_evSuppliers) { try { const s = await api('/api/suppliers'); _evSuppliers = Array.isArray(s) ? s : []; } catch { _evSuppliers = []; } }
@@ -657,7 +657,7 @@ window.saveEvent = async (btn) => {
   const clientName = g('evClient').value.trim() || null;
   const clientId = (_evClients || []).find(c => c.name === clientName)?.id || _evEditing.clientId || null;
   const ctr = _evCtr.filter(c => (c.name || '').trim()).map(c => ({ name: c.name.trim(), amount: num(c.amount) }));
-  const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus), food: num(w.food), note: (w.note || '').trim() || null }));
+  const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus), bonusFactor: (w.bonusFactor == null || w.bonusFactor === '') ? null : +w.bonusFactor, food: num(w.food), note: (w.note || '').trim() || null }));
   const body = {
     date: g('evDate').value || null, dateRaw: g('evDate').value || _evEditing.dateRaw || null,
     artist: g('evArtist').value.trim() || null,

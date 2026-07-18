@@ -140,8 +140,14 @@ export async function extractEvents(text, defaultYear) {
 - "location": מיקום/אולם.
 - "sound": שם איש הסאונד או תיאור קצר (למשל "אליאב"). אם אין — null.
 - "priceSound": עלות הסאונד כמספר אם צוינה (למשל "אליאב - 1500" → 1500; "1800 סאונד + 400 דלק" → 2200). אחרת null.
-- "employees": מערך שמות העובדים בלבד (בלי תפקידים/הערות). תקן שגיאות כתיב ברורות (למשל "אביעעד"→"אביעד").
-- "employeeBonusRaw": טקסט חופשי שמתאר בונוסים/התאמות לעובדים (למשל "כפיר - כפולה, נתנאל - יומית רגילה" או "בונוס כפיר 250, נתנאל 350"). אם אין — null.
+- "employees": מערך אובייקטים, אחד לכל עובד, במבנה: {"name":"שם", "factor":מספר, "bonus":מספר או null, "bonusFactor":מספר או null}. תקן שגיאות כתיב ברורות (למשל "אביעעד"→"אביעד").
+  פענח את ההוראות על התשלום והבונוס לכל עובד:
+  • factor = מכפיל התשלום ליום: יומית/רגיל=1, חצי יומית=0.5, יומית וחצי=1.5, כפולה=2. "תשלום חצי יומית" לעובד → factor=0.5.
+  • bonus = בונוס בסכום קבוע בש"ח (מספר). "בונוס 250" → bonus=250.
+  • bonusFactor = בונוס כשבר של יומית (יחושב מאוחר יותר לפי שכר הבסיס). "בונוס חצי יומית" → bonusFactor=0.5, "בונוס יומית" → bonusFactor=1.
+  הוראות קבוצתיות חלות על כל העובדים המפורטים: "בונוס לשלושתם 250" / "בונוס לכולם 250" / "פלוס 250 לשלושתם" → bonus=250 לכל אחד; "בונוס חצי יומית לכולם" → bonusFactor=0.5 לכל אחד.
+  אם אין הוראה מיוחדת לעובד — factor=1, bonus=null, bonusFactor=null.
+- "employeeBonusRaw": הטקסט המקורי של ההערות על בונוסים (לתיעוד). אם אין — null.
 - "contractors": מערך אובייקטים {"name":"שם","amount":מספר או null} (למשל "סויסה - 7500" → {"name":"סויסה","amount":7500}; "קבלן שרון שאלתיאל 4500" → {"name":"שרון שאלתיאל","amount":4500}). אם אין — [].
 
 החזר אך ורק מערך JSON. אם אין אירועים — [].
@@ -154,13 +160,19 @@ ${text}`;
   const n = (v) => (v == null || v === '' || isNaN(+String(v).replace(/[^\d.\-]/g, ''))) ? null : +String(v).replace(/[^\d.\-]/g, '');
   return arr.map(e => {
     const ctr = Array.isArray(e.contractors) ? e.contractors.filter(c => c && c.name).map(c => ({ name: String(c.name).trim(), amount: n(c.amount) })) : [];
+    // עובדים: תומך גם במבנה חדש (אובייקטים עם factor/bonus/bonusFactor) וגם בשמות בלבד (תאימות)
+    const emps = Array.isArray(e.employees)
+      ? e.employees.map(w => (typeof w === 'string' ? { name: w } : w)).filter(w => w && w.name)
+        .map(w => ({ name: String(w.name).trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: n(w.bonus), bonusFactor: n(w.bonusFactor), food: null, note: null }))
+      : [];
     return {
       date: e.date || null, dateRaw: e.date || null,
       artist: e.artist || null,
       price: n(e.price), priceRaw: e.price != null ? String(e.price) : null,
       location: e.location || null,
       sound: e.sound || null, priceSound: n(e.priceSound),
-      employees: Array.isArray(e.employees) ? e.employees.map(x => String(x).trim()).filter(Boolean) : [],
+      employees: emps.map(w => w.name),
+      employeeDetails: emps,
       employeeBonusRaw: e.employeeBonusRaw || null,
       contractors: ctr.map(c => c.name),
       contractorDetails: ctr,

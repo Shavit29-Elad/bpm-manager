@@ -19,9 +19,11 @@ export function employeePayForMonth(events, month /* yyyy-mm */, employees = [])
       if (!byEmployee[name]) {
         byEmployee[name] = { name, month, base: 0, bonus: 0, food: 0, total: 0, baseRate: rateOf(name), shifts: [] };
       }
+      const rate = rateOf(name);
       const factor = w.factor != null && w.factor !== '' ? Number(w.factor) : 1;
-      const base = (w.rate != null && w.rate !== '' ? Number(w.rate) : rateOf(name) * factor) || 0;
-      const bonus = Number(w.bonus) || 0;
+      const base = (w.rate != null && w.rate !== '' ? Number(w.rate) : rate * factor) || 0;
+      // בונוס = סכום קבוע + (שבר יומית × שכר בסיס). "בונוס חצי יומית" → bonusFactor 0.5
+      const bonus = (Number(w.bonus) || 0) + (Number(w.bonusFactor) || 0) * rate;
       const food = Number(w.food) || 0;
       byEmployee[name].base += base;
       byEmployee[name].bonus += bonus;

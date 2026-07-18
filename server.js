@@ -50,7 +50,9 @@ async function ingestText(text, companyId) {
       priceSound: parsed.priceSound ?? null, priceExtras: parsed.priceExtras ?? null,
       invoiceStatus: 'pending',
       createdAt: new Date().toISOString(),
-      employeeDetails: (parsed.employees || []).map(name => ({ name, rate: null, bonus: null })),
+      employeeDetails: (parsed.employeeDetails && parsed.employeeDetails.length)
+        ? parsed.employeeDetails
+        : (parsed.employees || []).map(name => ({ name, rate: null, bonus: null })),
       contractorDetails: ctrDetails,
     };
     upsertEvent(db, event);
