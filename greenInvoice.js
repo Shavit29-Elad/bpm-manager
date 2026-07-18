@@ -304,6 +304,7 @@ function mapExpense(e) {
 // ===== הוצאות (קבלנים/ספקים) =====
 export async function getExpenseUploadInfo(id) { return api(`/expenses/file?id=${encodeURIComponent(id)}`); } // presigned URL להעלאת קובץ להוצאה קיימת
 export async function getExpense(id) { return api(`/expenses/${encodeURIComponent(id)}`); }
+export async function getSupplier(id) { return api(`/suppliers/${encodeURIComponent(id)}`); }
 export async function expenseStatuses() { return api('/expenses/statuses'); }
 export async function createExpense(body) { const r = await api('/expenses', { method: 'POST', body }); clearDataCache(); return r; }
 export async function deleteExpense(id) { const r = await api(`/expenses/${encodeURIComponent(id)}`, { method: 'DELETE' }); clearDataCache(); return r; }
@@ -369,7 +370,7 @@ export async function listClients() {
 export async function listSuppliers() {
   return cached('suppliers', async () => {
     const items = await searchAllPages('/suppliers/search');
-    return items.map(s => ({ id: s.id, name: s.name, taxId: s.taxId || null, phone: s.phone || null, emails: s.emails || [] })).filter(s => s.name);
+    return items.map(s => ({ id: s.id, name: s.name, taxId: s.taxId || null, phone: s.phone || null, emails: s.emails || [], accountingClassificationId: s.accountingClassificationId || s.accountingClassification?.id || null })).filter(s => s.name);
   });
 }
 
@@ -395,5 +396,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseUploadInfo, getExpense, expenseStatuses, createExpense, deleteExpense, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseUploadInfo, getExpense, getSupplier, expenseStatuses, createExpense, deleteExpense, clearDataCache, DOC_TYPES };
 export default greenInvoice;

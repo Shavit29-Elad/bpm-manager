@@ -277,33 +277,40 @@ add('POST', /^\/api\/quotes\/close-bulk$/, async (req, res, _p, _q, body) => {
   json(res, { ok: true, closed: results.filter(r => r.ok).length, results });
 });
 
-// GET /api/debug/expense — זמני: מנסה כמה וריאנטים של גוף POST /expenses עד הצלחה, מקבל URL, מוחק
-add('GET', /^\/api\/debug\/expense$/, async (req, res) => {
-  const supplierId = 'fdb981d0-bdc8-439c-9602-114e84ddee86'; // שי סויסה
-  const cls = '0904485a-c1c2-417c-bb41-35c7d990ff77'; // ספק תאורה (מהדגימה)
-  const base = { supplier: { id: supplierId }, currency: 'ILS', paymentType: 4, amount: 1.18, amountExcludeVat: 1, vat: 0.18, description: 'בדיקה טכנית - יימחק', number: '990001', date: '2026-07-01', reportingDate: '2026-07-01', documentType: 305 };
-  const variants = [
-    { ...base, accountingClassificationId: cls },
-    { ...base, expenseType: 'professional_services_and_subcontractors' },
-    { ...base, accountingClassificationId: cls, expenseType: 'professional_services_and_subcontractors' },
-    { ...base, accountingClassification: { id: cls } },
-    { ...base, classification: cls },
-    { ...base, accountingClassificationId: cls, allocationNumber: '990001' },
-  ];
-  const out = { tries: [] };
-  for (const body of variants) {
-    try {
-      const created = await greenInvoice.createExpense(body);
-      out.success = { body, created };
-      const eid = created?.id;
-      if (eid) {
-        try { out.fileInfo = await greenInvoice.getExpenseUploadInfo(eid); } catch (e) { out.fileErr = e.message; }
-        try { await greenInvoice.deleteExpense(eid); out.deleted = true; } catch (e) { out.delErr = e.message; }
-      }
-      break;
-    } catch (e) { out.tries.push({ variant: Object.keys(body).join(','), error: e.message }); }
-  }
-  json(res, out);
+// POST /api/contractors/:id/expense — רישום הוצאה של קבלן ישירות בחשבונית ירוקה
+// body: { number, date, documentType, amount, vatIncluded, description }
+add('POST', /^\/api\/contractors\/([^/]+)\/expense$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const supplierId = params[0];
+  try {
+    // סיווג חשבונאי — לפי ברירת המחדל של הספק
+    let classId = body.accountingClassificationId || null;
+    if (!classId) {
+      try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { }
+    }
+    if (!classId) return json(res, { error: 'לקבלן אין סיווג הוצאה מוגדר בחשבונית ירוקה. הגדר לו "סיווג חשבונאי" בכרטיס הספק ונסה שוב.' }, 400);
+
+    const total = Number(body.amount) || 0;
+    if (total <= 0) return json(res, { error: 'סכום לא תקין' }, 400);
+    const net = body.vatIncluded === false ? total : +(total / 1.18).toFixed(2);
+    const vat = body.vatIncluded === false ? +(total * 0.18).toFixed(2) : +(total - net).toFixed(2);
+    const amount = body.vatIncluded === false ? +(total + vat).toFixed(2) : total;
+    const date = body.date || new Date().toISOString().slice(0, 10);
+
+    const expBody = {
+      supplier: { id: supplierId },
+      documentType: Number(body.documentType) || 305,
+      number: String(body.number || '').trim() || undefined,
+      date, reportingDate: date,
+      currency: 'ILS', paymentType: 4,
+      amount, amountExcludeVat: net, vat,
+      accountingClassification: { id: classId },
+      description: (body.description || '').trim() || 'הוצאת קבלן',
+    };
+    if (!expBody.number) return json(res, { error: 'חסר מספר חשבונית של הקבלן' }, 400);
+    const created = await greenInvoice.createExpense(expBody);
+    json(res, { ok: true, expense: created });
+  } catch (e) { json(res, { error: e.message }, 500); }
 });
 
 // POST /api/quotes/:id/close — סגירת הצעת מחיר

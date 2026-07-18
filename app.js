@@ -1137,13 +1137,13 @@ function supplierRows(list) {
     <span style="font-size:15px">🎛️</span><div style="font-weight:600;font-size:14px">${escapeHtml(s.name)}</div>
     <span class="muted" style="margin-inline-start:auto;font-size:14px">‹</span></div>`).join('');
 }
-let _supDocs = [], _supName = '', _supYear = 'all';
+let _supDocs = [], _supName = '', _supYear = 'all', _supId = '';
 window.selectSupplier = async (id, nameEnc) => {
   document.querySelectorAll('.chat-item.active').forEach(x => x.classList.remove('active'));
   const item = document.getElementById('sup-' + id); if (item) item.classList.add('active');
   const detail = document.getElementById('supDetail'); if (!detail) return;
   detail.innerHTML = `<div class="muted" style="font-size:13px">טוען מסמכים…</div>`;
-  _supName = decodeURIComponent(nameEnc); _supYear = 'all';
+  _supName = decodeURIComponent(nameEnc); _supYear = 'all'; _supId = id;
   const docs = await api(`/api/contractors/${id}/documents`).catch(() => []);
   _supDocs = Array.isArray(docs) ? docs : [];
   renderSupplierDetail();
@@ -1158,7 +1158,7 @@ function renderSupplierDetail() {
   const total = docs.reduce((s, d) => s + (Number(d.amount) || 0), 0);
   const yearSel = `<select onchange="setSupYear(this.value)" style="padding:6px 10px"><option value="all" ${_supYear === 'all' ? 'selected' : ''}>כל השנים</option>${years.map(y => `<option value="${y}" ${_supYear === y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
   detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${escapeHtml(_supName)}</h2>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים · ${money(total)}</span></div></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn primary" style="padding:5px 12px;font-size:13px" onclick="openExpenseForm()">+ רשום הוצאה</button><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים · ${money(total)}</span></div></div>
     ${docs.length ? `<div style="overflow-x:auto;margin-top:10px"><table style="min-width:520px"><thead><tr><th>תאריך</th><th>מספר</th><th>קטגוריה</th><th>סכום</th><th></th></tr></thead>
       <tbody>${docs.map(supDocRow).join('')}</tbody></table></div>`
       : `<div class="empty">לא נמצאו מסמכי הוצאה לקבלן זה בחשבונית ירוקה.</div>`}`;
@@ -1169,6 +1169,47 @@ function supDocRow(d) {
   return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>${escapeHtml(String(d.number || '—'))}</td>
     <td>${escapeHtml(d.category || '')}</td><td style="white-space:nowrap">${money(d.amount)}</td><td>${acts}</td></tr>`;
 }
+// רישום הוצאה של קבלן ישירות בחשבונית ירוקה
+const EXPENSE_DOC_TYPES = [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
+window.openExpenseForm = () => {
+  if (!_supId) return;
+  let m = document.getElementById('expModal');
+  if (!m) { m = document.createElement('div'); m.id = 'expModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  const fld = (l, i) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px">${l}${i}</label>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)">
+    <h3>רישום הוצאה — ${escapeHtml(_supName)}</h3>
+    <p class="muted" style="font-size:12.5px">רושם הוצאה בחשבונית ירוקה עבור הקבלן, בלי להיכנס למערכת.</p>
+    <div style="margin-top:10px">
+      ${fld('מספר חשבונית של הקבלן *', `<input id="expNum" dir="ltr" placeholder="מספר"/>`)}
+      ${fld('סכום כולל מע"מ ₪ *', `<input id="expAmount" type="number" inputmode="decimal" dir="ltr" placeholder="0"/>`)}
+      ${fld('תאריך', `<input id="expDate" type="date" value="${todayIso()}"/>`)}
+      ${fld('סוג מסמך', `<select id="expType">${EXPENSE_DOC_TYPES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>`)}
+      ${fld('תיאור', `<input id="expDesc" placeholder="למשל: הגברה יוני"/>`)}
+    </div>
+    <div id="expStatus" style="font-size:13px;min-height:18px;margin:4px 0"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('expModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="saveExpense(this)">רשום הוצאה</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  setTimeout(() => document.getElementById('expNum')?.focus(), 50);
+};
+window.saveExpense = async (btn) => {
+  const g = (id) => document.getElementById(id);
+  const st = g('expStatus');
+  const number = g('expNum').value.trim();
+  const amount = +g('expAmount').value;
+  if (!number) { st.innerHTML = '<span style="color:var(--danger)">חסר מספר חשבונית.</span>'; return; }
+  if (!amount || amount <= 0) { st.innerHTML = '<span style="color:var(--danger)">חסר סכום תקין.</span>'; return; }
+  const body = { number, amount, vatIncluded: true, date: g('expDate').value || todayIso(), documentType: +g('expType').value, description: g('expDesc').value.trim() };
+  btn.disabled = true; btn.textContent = 'רושם…'; st.innerHTML = '<span class="muted">יוצר הוצאה בחשבונית ירוקה…</span>';
+  const r = await fetch(`/api/contractors/${_supId}/expense`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false; btn.textContent = 'רשום הוצאה';
+  if (r.ok) { st.innerHTML = '<span style="color:var(--accent2)">✓ ההוצאה נרשמה בחשבונית ירוקה!</span>'; setTimeout(() => { document.getElementById('expModal').classList.add('hidden'); selectSupplier(_supId, encodeURIComponent(_supName)); }, 1100); }
+  else st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
+};
 
 // טופס הוספת לקוח/ספק לחשבונית ירוקה
 window.openContactForm = (kind) => {
