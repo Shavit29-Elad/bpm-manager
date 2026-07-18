@@ -1329,9 +1329,11 @@ window.approveDraft = async (id, btn) => {
   const r = await fetch(`/api/expense-drafts/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ אשר וצור הוצאה';
   if (r.ok) {
-    st.innerHTML = '<span style="color:var(--accent2)">✓ ההוצאה נוצרה ושויכה לספק!</span>';
+    st.innerHTML = r.duplicate
+      ? '<span style="color:var(--accent2)">✓ החשבונית כבר נקלטה במערכת — הקובץ הכפול נמחק.</span>'
+      : '<span style="color:var(--accent2)">✓ ההוצאה נוצרה ושויכה לספק!</span>';
     _drafts = _drafts.filter(x => x.id !== id);
-    setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection(); }, 1100);
+    setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection(); }, 1400);
   } else st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
 window.selectSupplier = async (id, nameEnc) => {

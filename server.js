@@ -345,7 +345,22 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       accountingClassification: { id: classId },
       description: (body.description || draft.description || '').trim() || 'הוצאת ספק',
     };
-    const created = await greenInvoice.createExpense(expBody);
+    let created;
+    try {
+      created = await greenInvoice.createExpense(expBody);
+    } catch (err) {
+      // errorCode 1010 = הוצאה כפולה (כבר קיימת הוצאה עם אותו ספק/מספר) — לא שגיאה אמיתית.
+      // מטפלים כאילו נקלטה: מוחקים את הטיוטה הכפולה ומסמנים כטופלה.
+      if (/"errorCode"\s*:\s*1010/.test(err.message || '')) {
+        try { await greenInvoice.deleteExpenseDraft(draftId); } catch { }
+        const db = load();
+        db.approvedDrafts = db.approvedDrafts || {};
+        db.approvedDrafts[draftId] = { expenseId: null, at: new Date().toISOString(), duplicate: true };
+        save(db);
+        return json(res, { ok: true, duplicate: true, message: 'החשבונית כבר נקלטה במערכת — הקובץ הכפול נמחק.' });
+      }
+      throw err;
+    }
 
     // ננסה למחוק את הטיוטה במורנינג; אם לא נתמך — נסמן אצלנו כמאושרת כדי שלא תופיע שוב
     let draftRemoved = false;
