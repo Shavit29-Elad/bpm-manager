@@ -19,7 +19,7 @@ import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
-import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses } from './chat.js';
+import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields } from './chat.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
 
@@ -372,6 +372,38 @@ add('GET', /^\/api\/expense-drafts\/([^/]+)\/file$/, async (req, res, params) =>
     res.writeHead(200, { 'Content-Type': ct, 'Content-Disposition': 'inline', 'Cache-Control': 'private, max-age=300' });
     res.end(buf);
   } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/expense-drafts/:id/ai-extract — קורא את קובץ החשבונית עם AI ומחזיר שדות מוכנים לאישור
+add('POST', /^\/api\/expense-drafts\/([^/]+)\/ai-extract$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  if (!chatConfigured()) return json(res, { error: 'AI לא מוגדר. הוסף ANTHROPIC_API_KEY (או GEMINI_API_KEY) בהגדרות Render.' }, 400);
+  try {
+    const draft = await greenInvoice.getExpenseDraft(params[0]);
+    if (!draft?.url) return json(res, { error: 'אין קובץ לטיוטה' }, 404);
+    const fr = await fetch(draft.url, { redirect: 'follow' });
+    if (!fr.ok) return json(res, { error: `שגיאה בטעינת הקובץ: ${fr.status}` }, 502);
+    const mime = fr.headers.get('content-type') || 'application/pdf';
+    const b64 = Buffer.from(await fr.arrayBuffer()).toString('base64');
+    const suppliers = await greenInvoice.listSuppliers().catch(() => []);
+    const fields = await extractInvoiceFields(b64, mime, suppliers);
+    json(res, { ok: true, fields });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/expense-drafts/:id/delete — מחיקת טיוטת ההוצאה (במורנינג + הסתרה אצלנו)
+add('POST', /^\/api\/expense-drafts\/([^/]+)\/delete$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const draftId = params[0];
+  let removed = false;
+  try { await greenInvoice.deleteExpenseDraft(draftId); removed = true; } catch { }
+  try {
+    const db = load();
+    db.dismissedDrafts = db.dismissedDrafts || [];
+    if (!db.dismissedDrafts.includes(draftId)) db.dismissedDrafts.push(draftId);
+    save(db);
+  } catch { }
+  json(res, { ok: true, removed });
 });
 
 // POST /api/expense-drafts/:id/dismiss — התעלמות מטיוטה (מסתירה אותה אצלנו, לא מוחקת במורנינג)

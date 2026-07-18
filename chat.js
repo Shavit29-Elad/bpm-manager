@@ -203,6 +203,105 @@ export async function interpretBonuses(note, names) {
   } catch { return []; }
 }
 
+// ===== קליטת חשבונית ספק עם AI — קורא את ה-PDF/תמונה ומחלץ את השדות =====
+// קריאה מולטימודלית ל-Claude (מסמך/תמונה) — עם fallback למודלים
+async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = {}) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  const candidates = process.env.VISION_MODEL
+    ? [process.env.VISION_MODEL]
+    : ['claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-latest'];
+  let lastErr = '';
+  for (const model of candidates) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'pdfs-2024-09-25', 'content-type': 'application/json' },
+      body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: contentBlocks }] }),
+    });
+    const text = await res.text();
+    if (res.status === 404) { lastErr = `(404) ${text.slice(0, 120)}`; continue; }
+    if (!res.ok) throw new Error(`שגיאת AI (${res.status}): ${text.slice(0, 300)}`);
+    let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מ-AI'); }
+    return (data.content || []).map(c => c.text).filter(Boolean).join('');
+  }
+  throw new Error(`אף מודל Claude זמין לקריאת מסמכים. פרט: ${lastErr}`);
+}
+// קריאה מולטימודלית ל-Gemini (גיבוי)
+async function callGeminiVision(system, prompt, fileBase64, mime, { maxTokens = 900 } = {}) {
+  const key = process.env.GEMINI_API_KEY;
+  const candidates = process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+  const body = JSON.stringify({
+    system_instruction: { parts: [{ text: system }] },
+    contents: [{ role: 'user', parts: [{ inline_data: { mime_type: mime || 'application/pdf', data: fileBase64 } }, { text: prompt }] }],
+    generationConfig: { maxOutputTokens: maxTokens, temperature: 0 },
+  });
+  let lastErr = '';
+  for (const model of candidates) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body,
+    });
+    const text = await res.text();
+    if (res.status === 404 || res.status === 429) { lastErr = `(${res.status})`; continue; }
+    if (!res.ok) throw new Error(`שגיאת AI (${res.status}): ${text.slice(0, 300)}`);
+    let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מ-AI'); }
+    return (data.candidates?.[0]?.content?.parts || []).map(p => p.text).filter(Boolean).join('');
+  }
+  throw new Error(`אף מודל Gemini זמין לקריאת מסמכים. פרט: ${lastErr}`);
+}
+// חילוץ שדות חשבונית ספק מקובץ (PDF/תמונה) והתאמה לספק קיים
+export async function extractInvoiceFields(fileBase64, mime, suppliers = []) {
+  if (!chatConfigured()) throw new Error('AI לא מוגדר (חסר ANTHROPIC_API_KEY או GEMINI_API_KEY)');
+  const supList = (suppliers || []).slice(0, 500)
+    .map(s => `${s.id}\t${s.name}${s.taxId ? ' | ח.פ ' + s.taxId : ''}`).join('\n');
+  const system = 'אתה מומחה לקריאת חשבוניות ספק ישראליות (הוצאות). אתה מחלץ נתונים במדויק ומחזיר JSON תקין בלבד, בלי טקסט לפני או אחרי.';
+  const prompt = `זוהי חשבונית/קבלה של ספק (מסמך הוצאה של העסק). קרא את המסמך וחלץ את הנתונים.
+החזר אך ורק JSON במבנה המדויק:
+{"supplierName":"שם הספק המנפיק","taxId":"ח.פ/עוסק מורשה של הספק (ספרות בלבד) או ריק","invoiceNumber":"מספר המסמך/חשבונית","date":"YYYY-MM-DD","documentType":305,"amountInclVat":0,"amountExclVat":0,"vat":0,"description":"תיאור קצר של ההוצאה","supplierId":""}
+
+כללים:
+- documentType: 305=חשבונית מס, 320=חשבונית מס/קבלה, 400=קבלה, 20=חשבון עסקה/דרישת תשלום. בחר לפי כותרת המסמך.
+- amountInclVat = הסכום הכולל לתשלום (כולל מע"מ). amountExclVat = הסכום לפני מע"מ. vat = סכום המע"מ. אם רק חלק מהם מופיע — חשב את השאר (מע"מ בישראל 18%). כל הסכומים כמספרים בלבד.
+- הספק הוא מי שהנפיק את החשבונית (לא "בי פי אם" שהוא הלקוח/מקבל).
+- אם הספק תואם לאחד מהרשימה למטה (לפי שם או ח.פ), החזר את ה-id שלו ב-supplierId. אחרת supplierId ריק.
+- אם שדה לא נמצא — החזר ריק ("") למחרוזות ו-0 למספרים.
+
+רשימת ספקים קיימים (id<TAB>שם | ח.פ):
+${supList || '(אין)'}`;
+
+  let raw;
+  if (process.env.ANTHROPIC_API_KEY) {
+    const isPdf = String(mime || '').includes('pdf');
+    const block = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
+      : { type: 'image', source: { type: 'base64', media_type: mime || 'image/jpeg', data: fileBase64 } };
+    raw = await callAnthropicVision(system, [block, { type: 'text', text: prompt }]);
+  } else {
+    raw = await callGeminiVision(system, prompt, fileBase64, mime);
+  }
+  const jsonStr = (String(raw).replace(/```json/gi, '').replace(/```/g, '').match(/\{[\s\S]*\}/) || ['{}'])[0];
+  let out; try { out = JSON.parse(jsonStr); } catch { throw new Error('ה-AI לא החזיר נתונים תקינים'); }
+  const num = (v) => { const n = +String(v == null ? '' : v).replace(/[^\d.\-]/g, ''); return isNaN(n) ? 0 : n; };
+  let incl = num(out.amountInclVat), net = num(out.amountExclVat), vat = num(out.vat);
+  if (incl && !net) net = +(incl / 1.18).toFixed(2);
+  if (incl && !vat) vat = +(incl - net).toFixed(2);
+  if (!incl && net && vat) incl = +(net + vat).toFixed(2);
+  // ודא שהספק שהוחזר קיים באמת ברשימה; אחרת התאמה לפי ח.פ/שם
+  let supplierId = out.supplierId && (suppliers || []).some(s => String(s.id) === String(out.supplierId)) ? String(out.supplierId) : '';
+  if (!supplierId && out.taxId) { const m = (suppliers || []).find(s => s.taxId && String(s.taxId).replace(/\D/g, '') === String(out.taxId).replace(/\D/g, '')); if (m) supplierId = String(m.id); }
+  if (!supplierId && out.supplierName) { const nm = String(out.supplierName).trim(); const m = (suppliers || []).find(s => s.name && (s.name === nm || s.name.includes(nm) || nm.includes(s.name))); if (m) supplierId = String(m.id); }
+  return {
+    supplierId,
+    supplierName: String(out.supplierName || '').trim(),
+    taxId: String(out.taxId || '').replace(/[^\d]/g, ''),
+    invoiceNumber: String(out.invoiceNumber || '').trim(),
+    date: /^\d{4}-\d{2}-\d{2}$/.test(out.date || '') ? out.date : '',
+    documentType: [20, 305, 320, 400].includes(+out.documentType) ? +out.documentType : 305,
+    amountInclVat: incl || 0,
+    amountExcludeVat: net || 0,
+    vat: vat || 0,
+    description: String(out.description || '').trim(),
+  };
+}
+
 // למידה: מפיק "עובדות לזכור" מתוך חילופי ההודעות האחרונים (לזיכרון המתמשך)
 export async function learnFromExchange(member, exchangeText) {
   const system = `אתה עוזר שמתחזק זיכרון ארוך-טווח עבור ${member.name} (${member.role}). מטרתך לזקק עובדות/העדפות/החלטות יציבות ששווה לזכור לטווח ארוך.`;

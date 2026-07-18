@@ -1207,7 +1207,7 @@ function draftCard(d) {
       <div style="display:flex;gap:6px;margin-inline-start:auto">
         ${file}
         <button class="btn success" style="padding:4px 12px;font-size:13px" onclick="openApproveDraft('${d.id}')">📥 קליטת חשבונית</button>
-        <button class="btn ghost" style="padding:4px 10px;font-size:13px" onclick="dismissDraft('${d.id}')">התעלם</button>
+        <button class="btn ghost" style="padding:4px 10px;font-size:13px;color:var(--danger)" onclick="deleteDraft('${d.id}')">🗑 מחק</button>
       </div>
     </div>
   </div>`;
@@ -1248,10 +1248,14 @@ window.openApproveDraft = (id) => {
   m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-width:97vw">
     <div class="row-between" style="margin-bottom:6px"><h3 style="margin:0">אישור וקליטת הוצאה</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('apprModal').classList.add('hidden')">✕</button></div>
-    <p class="muted" style="font-size:12.5px;margin:0 0 10px">בדוק מול הקובץ, תקן את הקליטה אם צריך, ואשר — תיווצר הוצאה בחשבונית ירוקה ותשויך לספק.</p>
+    <p class="muted" style="font-size:12.5px;margin:0 0 10px">ה-AI קורא את החשבונית וממלא את השדות אוטומטית — עליך רק לוודא ולאשר. תיווצר הוצאה בחשבונית ירוקה שתשויך לספק.</p>
     <div style="display:flex;gap:16px;align-items:stretch;flex-wrap:wrap">
       <div style="flex:1 1 340px;min-width:300px;border:1px solid var(--line);border-radius:10px;overflow:hidden;height:64vh">${preview}</div>
       <div style="flex:1 1 320px;min-width:280px;display:flex;flex-direction:column">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <div id="apAi" style="font-size:12.5px;flex:1"></div>
+          <button class="btn ghost" style="padding:3px 10px;font-size:12px;white-space:nowrap" onclick="aiFillDraft('${d.id}',true)">🤖 קרא עם AI</button>
+        </div>
         <div style="overflow:auto;padding-inline-start:2px">
           ${fld('שם הספק / קבלן *', `<select id="apSup"><option value="">— בחר ספק —</option>${supOpts}</select>`)}
           ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
@@ -1272,7 +1276,43 @@ window.openApproveDraft = (id) => {
     </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
-  setTimeout(recalcApprVat, 30);
+  setTimeout(() => { recalcApprVat(); aiFillDraft(d.id); }, 30);
+};
+// קליטה חכמה: AI קורא את קובץ החשבונית וממלא את השדות (עם מטמון לכל טיוטה)
+function applyAiFields(f) {
+  const g = (x) => document.getElementById(x);
+  if (!g('apSup')) return;
+  if (f.supplierId && [...g('apSup').options].some(o => o.value === String(f.supplierId))) g('apSup').value = String(f.supplierId);
+  if (f.taxId && !g('apTax').value) g('apTax').value = f.taxId;
+  if (f.documentType && [...g('apType').options].some(o => +o.value === +f.documentType)) g('apType').value = String(f.documentType);
+  if (f.invoiceNumber) g('apNum').value = f.invoiceNumber;
+  if (f.date) g('apDate').value = f.date;
+  if (f.amountInclVat) g('apAmount').value = f.amountInclVat;
+  if (f.amountExcludeVat) g('apNet').value = f.amountExcludeVat;
+  if (f.description && !g('apDesc').value) g('apDesc').value = f.description;
+  recalcApprVat();
+}
+window.aiFillDraft = async (id, force) => {
+  const d = (_drafts || []).find(x => x.id === id); if (!d) return;
+  const el = document.getElementById('apAi');
+  if (d.ai && !force) { applyAiFields(d.ai); if (el) el.innerHTML = aiNote(d.ai); return; }
+  if (el) el.innerHTML = '<span class="muted">🤖 קורא את החשבונית עם AI…</span>';
+  const r = await fetch(`/api/expense-drafts/${id}/ai-extract`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!document.getElementById('apAi')) return; // המשתמש סגר
+  if (r.ok && r.fields) { d.ai = r.fields; applyAiFields(r.fields); if (el) el.innerHTML = aiNote(r.fields); }
+  else if (el) el.innerHTML = `<span style="color:var(--warn)">🤖 AI לא זמין (${escapeHtml(String(r.error || ''))}) — מלא ידנית</span>`;
+};
+function aiNote(f) {
+  const g = document.getElementById('apSup');
+  const matched = f.supplierId && g && [...g.options].some(o => o.value === String(f.supplierId));
+  if (f.supplierName && !matched) return `<span style="color:var(--warn)">🤖 זוהה ע"י AI · ספק "${escapeHtml(f.supplierName)}" לא קיים ברשימה — בחר או הוסף</span>`;
+  return '<span style="color:var(--accent2)">🤖 מולא ע"י AI — אנא ודא את הפרטים</span>';
+}
+window.deleteDraft = async (id) => {
+  if (!confirm('למחוק את מסמך ההוצאה הזה? הפעולה תמחק את הטיוטה מחשבונית ירוקה ולא תיווצר הוצאה.')) return;
+  await fetch(`/api/expense-drafts/${id}/delete`, { method: 'POST' }).catch(() => {});
+  _drafts = _drafts.filter(x => x.id !== id);
+  const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
 };
 window.approveDraft = async (id, btn) => {
   const g = (x) => document.getElementById(x);
