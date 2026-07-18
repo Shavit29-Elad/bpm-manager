@@ -469,9 +469,9 @@ async function renderCombined(c) {
         <div class="card"><div class="label">הותאמו</div><div class="big" style="color:var(--accent2)">${m.matched.filter(x => x.calendar).length}</div></div>
       </div>
       ${misses.length ? `<table><thead><tr><th>תאריך</th><th>אירוע (ווטסאפ)</th><th>סטטוס</th></tr></thead>
-      <tbody>${misses.map(x => `<tr>
-        <td>${x.whatsapp.date || '—'}</td>
-        <td>${x.whatsapp.artist || '—'} / ${x.whatsapp.location || ''}</td>
+      <tbody>${misses.slice().sort((a, b) => (a.whatsapp.date || '').localeCompare(b.whatsapp.date || '')).map(x => `<tr>
+        <td style="white-space:nowrap">${ddmy(x.whatsapp.date)}</td>
+        <td>${x.whatsapp.artist || '—'}${x.whatsapp.location ? ` / ${x.whatsapp.location}` : ''}</td>
         <td><span class="tag miss">חסר ביומן</span></td>
       </tr>`).join('')}</tbody></table>`
       : `<div class="empty">אין אי-התאמות כרגע 👌</div>`}
@@ -501,6 +501,23 @@ function viewToggle() {
     <button class="btn ${week ? 'primary' : 'ghost'}" style="padding:5px 13px" onclick="setCalView('week')">שבועי</button>
     <button class="btn ${!week ? 'primary' : 'ghost'}" style="padding:5px 13px" onclick="setCalView('month')">חודשי</button>
   </div>`;
+}
+// ---- מקורות יומן: צבעים, מקרא וסינון (ווטסאפ + כל יומני גוגל) ----
+const CAL_COLORS = [['var(--ev-cal-bg)', 'var(--ev-cal)'], ['#fce7f3', '#db2777'], ['#dcfce7', '#16a34a'], ['#fef9c3', '#ca8a04'], ['#e0f2fe', '#0284c7']];
+const WA_COLOR = ['var(--ev-wa-bg)', 'var(--ev-wa)'];
+function evSrcKey(e) { return (e.source === 'whatsapp' || e.cls === 'wa') ? 'wa' : 'cal' + (e.calendarIndex ?? 0); }
+function evSrcColor(e) { return evSrcKey(e) === 'wa' ? WA_COLOR : CAL_COLORS[(e.calendarIndex ?? 0) % CAL_COLORS.length]; }
+function calHidden() { state.calHidden = state.calHidden || {}; return state.calHidden; }
+window.toggleCalSrc = (k) => { const h = calHidden(); h[k] = !h[k]; renderCalView(); };
+// מקרא לחיץ: לוחצים על מקור כדי להציג/להסתיר אותו ביומן
+function calLegend(data) {
+  const cals = new Map();
+  (data.calendar || []).forEach(e => cals.set(e.calendarIndex ?? 0, e.calendarName || ('יומן ' + ((e.calendarIndex ?? 0) + 1))));
+  const h = calHidden();
+  const item = (key, label, colors) => `<button onclick="toggleCalSrc('${key}')" title="לחץ להצגה/הסתרה" style="display:inline-flex;align-items:center;gap:5px;background:none;border:0;cursor:pointer;font-size:12px;color:var(--muted);opacity:${h[key] ? 0.45 : 1}"><span style="width:11px;height:11px;border-radius:3px;background:${colors[1]};display:inline-block"></span>${escapeHtml(label)}${h[key] ? ' (מוסתר)' : ''}</button>`;
+  let out = item('wa', 'ווטסאפ', WA_COLOR);
+  [...cals.keys()].sort((a, b) => a - b).forEach(idx => { out += item('cal' + idx, cals.get(idx), CAL_COLORS[idx % CAL_COLORS.length]); });
+  return `<span style="display:inline-flex;gap:12px;flex-wrap:wrap;align-items:center">${out}</span>`;
 }
 function setCalView(v) { state.calView = v; renderCalView(); }
 window.setCalView = setCalView;
@@ -532,14 +549,17 @@ async function renderWeekCalendar() {
   (data.whatsapp || []).forEach(e => add(e, 'wa'));
 
   const today = todayIso();
+  const h = calHidden();
   const cols = days.map((d, i) => {
     const iso = isoDate(d);
     const isToday = iso === today;
-    const evs = byDay[iso] || [];
-    const items = evs.length ? evs.map(e =>
-      `<div ${evClickAttr(e)} title="לחץ לעריכה" style="cursor:pointer;font-size:12px;padding:4px 7px;margin-top:4px;border-radius:6px;line-height:1.3;background:${e.cls === 'wa' ? 'var(--ev-wa-bg)' : 'var(--ev-cal-bg)'};color:${e.cls === 'wa' ? 'var(--ev-wa)' : 'var(--ev-cal)'}">${e.title || 'אירוע'}${e.location ? `<div style="font-size:10px;opacity:.75">${e.location}</div>` : ''}</div>`).join('')
+    const evs = (byDay[iso] || []).filter(e => !h[evSrcKey(e)]);
+    const items = evs.length ? evs.map(e => {
+      const [bg, fg] = evSrcColor(e);
+      return `<div ${evClickAttr(e)} title="לחץ לעריכה" style="cursor:pointer;font-size:12px;padding:4px 7px;margin-top:4px;border-radius:6px;line-height:1.3;overflow:hidden;background:${bg};color:${fg}">${e.title || 'אירוע'}${e.location ? `<div style="font-size:10px;opacity:.75">${e.location}</div>` : ''}</div>`;
+    }).join('')
       : `<div class="muted" style="font-size:11px;margin-top:8px">—</div>`;
-    return `<div style="border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:10px;padding:9px;min-height:230px;background:${isToday ? 'rgba(79,70,229,.08)' : 'var(--panel2)'}">
+    return `<div style="min-width:0;overflow:hidden;border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:10px;padding:9px;min-height:230px;background:${isToday ? 'rgba(79,70,229,.08)' : 'var(--panel2)'}">
       <div style="font-weight:600;font-size:13px;border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:2px">
         ${DAYS_FULL[i]} <span class="muted" style="font-weight:400">${d.getDate()}/${d.getMonth() + 1}</span>
         ${isToday ? '<span style="color:var(--accent);font-size:11px;font-weight:700">· היום</span>' : ''}
@@ -552,11 +572,11 @@ async function renderWeekCalendar() {
       <h2>יומן שבועי — ${days[0].getDate()}/${days[0].getMonth() + 1} עד ${days[6].getDate()}/${days[6].getMonth() + 1}</h2>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         ${viewToggle()}
-        <span style="font-size:12px" class="muted"><span style="color:var(--ev-cal)">●</span> יומן גוגל &nbsp; <span style="color:var(--ev-wa)">●</span> ווטסאפ</span>
         <button class="btn ghost" onclick="shiftWeek(-1)">שבוע קודם →</button>
         <button class="btn ghost" onclick="shiftWeek(1)">← שבוע הבא</button>
       </div>
     </div>
+    <div style="margin-bottom:10px">${calLegend(data)}</div>
     ${data.calendarError ? `<div class="warn-banner">${data.calendarError}</div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:8px">${cols}</div>`;
 }
@@ -585,16 +605,19 @@ async function renderMonthCalendar() {
   (data.whatsapp || []).forEach(e => add(e, 'wa'));
 
   const today = todayIso();
+  const h = calHidden();
   let cells = '';
-  for (let i = 0; i < startDow; i++) cells += '<div style="min-height:88px"></div>';
+  for (let i = 0; i < startDow; i++) cells += '<div style="min-height:88px;min-width:0"></div>';
   for (let day = 1; day <= daysInMonth; day++) {
     const iso = `${month}-${String(day).padStart(2, '0')}`;
     const isToday = iso === today;
-    const evs = byDay[iso] || [];
-    const items = evs.slice(0, 4).map(e =>
-      `<div ${evClickAttr(e)} title="${(e.title || '').replace(/"/g, '')} ${e.location || ''} — לחץ לעריכה" style="cursor:pointer;font-size:11px;padding:1px 5px;margin-top:2px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${e.cls === 'wa' ? 'var(--ev-wa-bg)' : 'var(--ev-cal-bg)'};color:${e.cls === 'wa' ? 'var(--ev-wa)' : 'var(--ev-cal)'}">${e.title || 'אירוע'}</div>`).join('');
+    const evs = (byDay[iso] || []).filter(e => !h[evSrcKey(e)]);
+    const items = evs.slice(0, 4).map(e => {
+      const [bg, fg] = evSrcColor(e);
+      return `<div ${evClickAttr(e)} title="${(e.title || '').replace(/"/g, '')} ${e.location || ''} — לחץ לעריכה" style="cursor:pointer;font-size:11px;padding:1px 5px;margin-top:2px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${bg};color:${fg}">${e.title || 'אירוע'}</div>`;
+    }).join('');
     const more = evs.length > 4 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">+${evs.length - 4} עוד</div>` : '';
-    cells += `<div style="min-height:88px;border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:8px;padding:5px;background:${isToday ? 'rgba(79,70,229,.08)' : (evs.length ? 'var(--panel2)' : 'transparent')}">
+    cells += `<div style="min-height:88px;min-width:0;overflow:hidden;border:${isToday ? '2px solid var(--accent)' : '1px solid var(--line)'};border-radius:8px;padding:5px;background:${isToday ? 'rgba(79,70,229,.08)' : (evs.length ? 'var(--panel2)' : 'transparent')}">
       <div style="font-size:12px;color:${isToday ? 'var(--accent)' : 'var(--muted)'};font-weight:${isToday ? '700' : '400'}">${day}${isToday ? ' • היום' : ''}</div>${items}${more}</div>`;
   }
 
@@ -603,14 +626,14 @@ async function renderMonthCalendar() {
       <h2>יומן חודשי — ${MONTHS_HE[m - 1]} ${y}</h2>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         ${viewToggle()}
-        <span style="font-size:12px" class="muted"><span style="color:var(--ev-cal)">●</span> יומן גוגל &nbsp; <span style="color:var(--ev-wa)">●</span> ווטסאפ</span>
         <button class="btn ghost" onclick="shiftMonth(-1)">חודש קודם →</button>
         <button class="btn ghost" onclick="shiftMonth(1)">← חודש הבא</button>
       </div>
     </div>
+    <div style="margin-bottom:10px">${calLegend(data)}</div>
     ${data.calendarError ? `<div class="warn-banner">${data.calendarError}</div>` : ''}
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">
-      ${DAYS_HE.map(d => `<div style="text-align:center;color:var(--muted);font-size:12px;font-weight:600;padding-bottom:4px">${d}</div>`).join('')}
+    <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;width:100%">
+      ${DAYS_HE.map(d => `<div style="text-align:center;color:var(--muted);font-size:12px;font-weight:600;padding-bottom:4px;min-width:0">${d}</div>`).join('')}
       ${cells}
     </div>`;
 }
@@ -646,12 +669,15 @@ function eventsByMonthHtml(events) {
   const keys = Object.keys(groups).sort((a, b) => b.localeCompare(a));
   const monthLabel = (k) => { const m = k.match(/^(\d{4})-(\d{2})$/); return m ? `${MONTHS_HE[+m[2] - 1]} ${m[1]}` : k; };
   return keys.map(k => {
-    const list = groups[k];
+    // מיון בתוך החודש לפי תאריך האירוע — מתחילת החודש (מוקדם) לסופו (מאוחר)
+    const list = groups[k].slice().sort((a, b) => (a.date || a.dateRaw || '').localeCompare(b.date || b.dateRaw || ''));
     const total = list.reduce((s, e) => s + (Number(e.price) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceExtras) || 0), 0);
+    const ctrCost = list.reduce((s, e) => s + (e.contractorDetails || []).reduce((t, c) => t + (Number(c.amount) || 0), 0), 0);
+    const net = total - ctrCost;
     return `<div style="margin-top:18px">
       <div class="row-between" style="margin-bottom:6px">
         <h3 style="margin:0;font-size:15px">${monthLabel(k)} <span class="muted" style="font-weight:400;font-size:13px">· ${list.length} אירועים</span></h3>
-        <span class="muted" style="font-size:13px">סה"כ הכנסה: <b style="color:var(--accent2)">${money(total)}</b></span>
+        <span class="muted" style="font-size:13px">סה"כ הכנסה: <b style="color:var(--accent2)">${money(total)}</b> · תשלומי קבלנים: <b style="color:var(--danger)">${money(ctrCost)}</b> · נטו לאחר קבלנים: <b style="color:var(--text)">${money(net)}</b></span>
       </div>
       <div style="overflow-x:auto"><table style="min-width:960px">${EVENTS_THEAD}
         <tbody>${list.map(rowEvent).join('')}</tbody></table></div>

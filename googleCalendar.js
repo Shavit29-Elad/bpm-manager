@@ -17,7 +17,14 @@ function nameSimilar(a, b) {
   return hits / Math.max(wa.size, wb.length);
 }
 
-// הצלבה בין אירועי ווטסאפ לאירועי יומן
+// הפרש ימים בין שני תאריכים (yyyy-mm-dd)
+function dayDiff(a, b) {
+  if (!a || !b) return 99;
+  const d = Math.abs((new Date(a + 'T00:00:00') - new Date(b + 'T00:00:00')) / 86400000);
+  return isNaN(d) ? 99 : d;
+}
+
+// הצלבה בין אירועי ווטסאפ לאירועי יומן (עם סובלנות של עד יום הפרש בתאריך)
 export function matchEvents(whatsappEvents, calendarEvents) {
   const matched = [];
   const usedCal = new Set();
@@ -25,12 +32,15 @@ export function matchEvents(whatsappEvents, calendarEvents) {
     let best = null, bestScore = 0;
     for (const cal of calendarEvents) {
       if (usedCal.has(cal.id)) continue;
-      if (wa.date && cal.date && wa.date !== cal.date) continue;
-      const score = Math.max(
+      const dd = dayDiff(wa.date, cal.date);
+      if (dd > 1) continue; // מתירים עד יום הפרש (טעויות הקלדה/אזור זמן)
+      let score = Math.max(
         nameSimilar(wa.artist, cal.title),
         nameSimilar(wa.location, cal.location),
         nameSimilar(wa.location, cal.title),
+        nameSimilar(wa.artist, cal.location),
       );
+      if (dd === 0) score += 0.05; // עדיפות קלה להתאמת תאריך מדויקת
       if (score > bestScore) { bestScore = score; best = cal; }
     }
     if (best && bestScore >= 0.4) {
@@ -88,6 +98,13 @@ function unescapeIcs(v) {
   return v.replace(/\\n/gi, ' ').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\').trim();
 }
 
+// שם היומן מתוך ה-iCal (X-WR-CALNAME) — לשימוש במקרא ובצבעים
+function icsCalendarName(text) {
+  const unfolded = String(text || '').replace(/\r?\n[ \t]/g, '');
+  const m = unfolded.match(/^X-WR-CALNAME:(.+)$/mi);
+  return m ? unescapeIcs(m[1]) : '';
+}
+
 // תומך בכמה יומנים: משתנים נפרדים GOOGLE_ICAL_URL / _URL_2 / _URL_3,
 // וגם כמה כתובות מופרדות בפסיק בתוך כל אחד (גמישות מלאה).
 function icalUrls() {
@@ -117,7 +134,8 @@ export async function fetchCalendarEvents({ force = false } = {}) {
     const res = await fetch(urls[i]);
     if (!res.ok) throw new Error(`יומן ${i + 1} (iCal): ${res.status}`);
     const text = await res.text();
-    parseIcs(text).forEach(e => all.push({ ...e, id: `c${i}_${e.id}`, calendarIndex: i }));
+    const calName = icsCalendarName(text) || `יומן ${i + 1}`;
+    parseIcs(text).forEach(e => all.push({ ...e, id: `c${i}_${e.id}`, calendarIndex: i, calendarName: calName }));
   }
   _cache = { at: Date.now(), key, events: all };
   return all;

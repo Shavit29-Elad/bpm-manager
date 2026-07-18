@@ -141,15 +141,18 @@ add('DELETE', /^\/api\/events\/([^/]+)$/, (req, res, params) => {
   save(db); json(res, { ok: true });
 });
 
+// מתאריך זה והלאה מתבצעות ההתאמות מול היומן (לפני כן לא רלוונטי)
+const MATCH_START = process.env.MATCH_START_DATE || '2026-07-01';
 // GET /api/calendar/match?companyId=
 add('GET', /^\/api\/calendar\/match$/, async (req, res, _p, q) => {
   const db = load();
-  const waEvents = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  const allWa = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  const waEvents = allWa.filter(e => (e.date || '') >= MATCH_START); // רק מיולי 2026 והלאה
   try {
     const dates = waEvents.map(e => e.date).filter(Boolean).sort();
     const timeMin = dates[0] ? `${dates[0]}T00:00:00Z` : undefined;
     const timeMax = dates.length ? `${dates[dates.length - 1]}T23:59:59Z` : undefined;
-    const cal = await fetchCalendarEvents({ timeMin, timeMax });
+    const cal = (await fetchCalendarEvents({ timeMin, timeMax })).filter(e => (e.date || '') >= MATCH_START);
     const r = matchEvents(waEvents, cal);
     // שולחים רק ספירה של "חסר בווטסאפ" (יכול להיות אלפי אירועים) — לא את כל המערך
     json(res, {
@@ -185,7 +188,7 @@ add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
     if (hasCalendar()) {
       cal = (await fetchCalendarEvents())
         .filter(e => inRange(e.date) && !adoptedGcal.has(e.id))   // מסתירים אירועי יומן שכבר אומצו
-        .map(e => ({ gcalId: e.id, date: e.date, title: e.title, location: e.location, source: 'calendar' }));
+        .map(e => ({ gcalId: e.id, date: e.date, title: e.title, location: e.location, source: 'calendar', calendarIndex: e.calendarIndex ?? 0, calendarName: e.calendarName || `יומן ${(e.calendarIndex ?? 0) + 1}` }));
     } else { calendarError = 'יומן גוגל לא מחובר'; }
   } catch (e) { calendarError = e.message; }
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
