@@ -1206,7 +1206,7 @@ function draftCard(d) {
       <div style="flex:1;min-width:120px" class="muted">${escapeHtml(d.description || '')}</div>
       <div style="display:flex;gap:6px;margin-inline-start:auto">
         ${file}
-        <button class="btn success" style="padding:4px 12px;font-size:13px" onclick="openApproveDraft('${d.id}')">✓ אשר</button>
+        <button class="btn success" style="padding:4px 12px;font-size:13px" onclick="openApproveDraft('${d.id}')">📥 קליטת חשבונית</button>
         <button class="btn ghost" style="padding:4px 10px;font-size:13px" onclick="dismissDraft('${d.id}')">התעלם</button>
       </div>
     </div>
