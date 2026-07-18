@@ -982,13 +982,50 @@ async function renderQuotes(c) {
   </div>`;
 }
 function quoteRow(d) {
-  const acts = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
-    <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : '';
+  const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
+  const follow = `<button class="btn primary" style="padding:2px 9px;font-size:12px" onclick="quoteFollowup('${d.id}','${encodeURIComponent(d.clientName || '')}','${d.number}')">הפק מסמך המשך</button>`;
+  const close = `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="quoteClose('${d.id}','${d.number}')">סגור הצעה</button>`;
   return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>#${d.number}</td>
     <td>${escapeHtml(d.clientName || '')}</td><td>${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</td>
     <td style="white-space:nowrap;font-weight:600">${money(d.amount)}</td>
-    <td style="text-align:left">${acts}</td></tr>`;
+    <td style="text-align:left"><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">${pv}${follow}${close}</div></td></tr>`;
 }
+const FOLLOWUP_TYPES = [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
+window.quoteClose = async (id, number) => {
+  if (!confirm(`לסגור את הצעת מחיר #${number}?\nההצעה תסומן כסגורה ותוסר מהרשימה (אפשר לפתוח מחדש בחשבונית ירוקה).`)) return;
+  const r = await fetch(`/api/quotes/${id}/close`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) renderQuotes($('#content')); else alert('שגיאה בסגירה: ' + (r.error || ''));
+};
+window.quoteFollowup = (id, clientEnc, number) => {
+  let m = document.getElementById('fuModal');
+  if (!m) { m = document.createElement('div'); m.id = 'fuModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(440px,94vw)">
+    <h3>מסמך המשך מהצעה #${number}</h3>
+    <p class="muted" style="font-size:13px">${escapeHtml(decodeURIComponent(clientEnc))} — בחר את סוג המסמך שייווצר מההצעה (עם אותן שורות, מקושר להצעה):</p>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+      ${FOLLOWUP_TYPES.map(([v, l]) => `<button class="btn ghost" style="justify-content:flex-start;text-align:right" onclick="doFollowup('${id}',${v},this)">${l}</button>`).join('')}
+    </div>
+    <div id="fuStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
+    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('fuModal').classList.add('hidden')">ביטול</button></div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+};
+window.doFollowup = async (id, type, btn) => {
+  const st = document.getElementById('fuStatus');
+  const typeName = (FOLLOWUP_TYPES.find(x => x[0] === type) || [, ''])[1];
+  if (!confirm(`להפיק ${typeName} מההצעה?\nהמסמך ייווצר בחשבונית ירוקה עם שורות ההצעה ולא ניתן למחיקה (רק לזכות).`)) return;
+  [...document.querySelectorAll('#fuModal button')].forEach(b => b.disabled = true);
+  st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
+  const r = await fetch(`/api/quotes/${id}/followup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) {
+    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
+    setTimeout(() => { document.getElementById('fuModal').classList.add('hidden'); renderQuotes($('#content')); }, 1300);
+  } else {
+    [...document.querySelectorAll('#fuModal button')].forEach(b => b.disabled = false);
+    st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
+  }
+};
 
 // ---- קבלנים ----
 let _suppliers = [];

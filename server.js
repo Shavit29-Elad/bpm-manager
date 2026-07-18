@@ -265,6 +265,33 @@ add('GET', /^\/api\/open-quotes$/, async (req, res) => {
   catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
+// POST /api/quotes/:id/close — סגירת הצעת מחיר
+add('POST', /^\/api\/quotes\/([^/]+)\/close$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try { json(res, { ok: true, result: await greenInvoice.closeDocument(params[0]) }); }
+  catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/quotes/:id/followup { type } — יצירת מסמך המשך מהצעת מחיר (אותן שורות, מקושר)
+add('POST', /^\/api\/quotes\/([^/]+)\/followup$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const src = await greenInvoice.getDocument(params[0]);
+    const type = Number(body.type) || greenInvoice.DOC_TYPES.INVOICE;
+    const items = (src.income || []).map(it => ({
+      catalogNum: it.catalogNum || undefined, description: it.description,
+      quantity: it.quantity ?? 1, price: it.price ?? 0,
+    }));
+    if (!items.length) return json(res, { error: 'אין שורות בהצעה' }, 400);
+    const doc = await greenInvoice.createDocument({
+      type, client: src.client?.id ? { id: src.client.id } : { name: src.client?.name || 'לקוח' },
+      items, description: src.description || '', remarks: src.remarks || null,
+      linkedDocumentIds: [params[0]],
+    });
+    json(res, { ok: true, doc });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה
 add('GET', /^\/api\/open-invoices$/, async (req, res) => {
   if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });

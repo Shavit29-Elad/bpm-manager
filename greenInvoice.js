@@ -88,7 +88,7 @@ const PAYMENT_REQUIRED = new Set([320, 400, 405]);
 
 // בונה גוף מסמך. items = [{ description, quantity, price }].
 // client = { id? , name, taxId?, emails? } — אם יש id משתמשים בו (נמנע כפילות לקוח).
-function documentBody({ client, items, type, remarks, description, dueDate, date, payment, sendEmail, email }) {
+function documentBody({ client, items, type, remarks, description, dueDate, date, payment, sendEmail, email, linkedDocumentIds }) {
   const total = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
   const body = {
     type,
@@ -110,6 +110,8 @@ function documentBody({ client, items, type, remarks, description, dueDate, date
       return line;
     }),
   };
+  // מסמך המשך — קישור למסמך מקור (למשל הצעת מחיר → חשבונית)
+  if (Array.isArray(linkedDocumentIds) && linkedDocumentIds.length) body.linkedDocumentIds = linkedDocumentIds;
   // שליחת מייל ללקוח רק אם המשתמש ביקש במפורש (ברירת מחדל: לא נשלח)
   if (sendEmail && email) body.emails = [String(email).trim()];
   if (description) body.description = description;   // כותרת/נושא המסמך
@@ -278,8 +280,10 @@ export async function openQuotes({ months = 36 } = {}) {
     });
   });
 }
-// מסמך מלא לפי מזהה (לומדים שדות קישור/סגירה)
+// מסמך מלא לפי מזהה
 export async function getDocument(id) { return api(`/documents/${encodeURIComponent(id)}`); }
+// סגירת מסמך (למשל הצעת מחיר שכבר לא רלוונטית) — status → 2 (סגור ידנית)
+export async function closeDocument(id) { const r = await api(`/documents/${encodeURIComponent(id)}/close`, { method: 'POST' }); clearDataCache(); return r; }
 
 // מיפוי מסמך הוצאה (ספק/קבלן)
 function mapExpense(e) {
@@ -384,5 +388,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, clearDataCache, DOC_TYPES };
 export default greenInvoice;
