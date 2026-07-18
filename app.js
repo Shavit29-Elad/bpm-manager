@@ -460,7 +460,7 @@ async function renderCombined(c) {
       ${events.length ? `
         <h3 style="margin:16px 0 4px;font-size:15px">🕓 אירועים לאישור <span class="muted" style="font-weight:400;font-size:13px">· ${pending.length}</span></h3>
         ${pending.length ? eventsByMonthHtml(pending, 'pending') : `<div class="empty">אין אירועים הממתינים לאישור 👌</div>`}
-        <div class="row-between" style="margin:22px 0 4px;align-items:center;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:22px 0 4px">
           <h3 style="margin:0;font-size:15px">✓ אירועים מאושרים <span class="muted" style="font-weight:400;font-size:13px">· ${approvedShown.length}${_evClientFilter !== 'all' ? ` מתוך ${approved.length}` : ''}</span></h3>
           ${approvedClients.length ? `<div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">לקוח:</span>${evClientSel}</div>` : ''}
         </div>
@@ -689,7 +689,7 @@ function eventsByMonthHtml(events, mode = 'approved') {
     // לאישור: רק הכנסה צפויה (ללא מע"מ + כולל מע"מ). מאושרים: כולל קבלנים ונטו.
     const summary = mode === 'pending'
       ? `סה"כ הכנסה צפויה (ללא מע"מ): <b style="color:var(--accent2)">${money(total)}</b> · כולל מע"מ: <b style="color:var(--text)">${money(withVat)}</b>`
-      : `סה"כ הכנסה (ללא מע"מ): <b style="color:var(--accent2)">${money(total)}</b> · כולל מע"מ: <b style="color:var(--text)">${money(withVat)}</b> · תשלומי קבלנים: <b style="color:var(--danger)">${money(ctrCost)}</b> · נטו לאחר קבלנים: <b style="color:var(--text)">${money(net)}</b>`;
+      : `סה"כ הכנסה (ללא מע"מ): <b style="color:var(--accent2)">${money(total)}</b> · כולל מע"מ: <b style="color:var(--text)">${money(withVat)}</b> · תשלומי קבלנים: <b style="color:var(--danger)">${money(ctrCost)}</b> · סה"כ לאחר קבלנים: <b style="color:var(--text)">${money(net)}</b>`;
     return `<div style="margin-top:18px">
       <div class="row-between" style="margin-bottom:6px">
         <h3 style="margin:0;font-size:15px">${monthLabel(k)} <span class="muted" style="font-weight:400;font-size:13px">· ${list.length} אירועים</span></h3>
@@ -980,7 +980,7 @@ window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   if (!pv) { alert('שגיאה בטעינת התצוגה המקדימה'); return; }
   _invPreview = { ids, client: decodeURIComponent(clientEnc), clientId: clientId || null,
     items: (pv.items || []).map(it => ({ description: it.description, quantity: it.quantity ?? 1, price: it.price ?? 0 })),
-    subject: pv.subject || '', type: 305, dueDate: '', sendEmail: false, email: pv.clientEmail || '' };
+    subject: pv.subject || '', type: 305, docDate: todayIso(), sendEmail: false, email: pv.clientEmail || '' };
   showInvoicePreviewModal();
 };
 function invTotals() {
@@ -1013,8 +1013,8 @@ function renderInvoicePreviewModal() {
         <select id="invType" onchange="invSetType(this.value)">${INV_TYPES.map(([v, l]) => `<option value="${v}" ${+p.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted);flex:1;min-width:220px">נושא / תיאור המסמך
         <input value="${escAttr(p.subject)}" oninput="_invPreview.subject=this.value"/></label>
-      ${needDue ? `<label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted)">לתשלום עד
-        <input type="date" value="${p.dueDate || ''}" oninput="_invPreview.dueDate=this.value"/></label>` : ''}
+      <label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted)">תאריך המסמך
+        <input type="date" value="${p.docDate || todayIso()}" oninput="_invPreview.docDate=this.value"/></label>
     </div>
     ${isReceipt ? `<div class="warn-banner" style="margin-bottom:10px">שים לב: ${DOC_TYPE_SHORT[+p.type]} מתעדת קבלת תשלום. תיווצר שורת תקבול של העברה בנקאית על מלוא הסכום.</div>` : ''}
     <table><thead><tr><th>פירוט</th><th>כמות</th><th>מחיר</th><th>סה"כ</th><th></th></tr></thead><tbody>${rows}</tbody></table>
@@ -1062,16 +1062,33 @@ window.generateInvoice = async (btn) => {
   const st = document.getElementById('invPvStatus'); st.innerHTML = '<span class="muted">יוצר מסמך בחשבונית ירוקה…</span>';
   const r = await fetch('/api/invoicing/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ companyId: state.company, eventIds: p.ids, clientName: p.client, clientId: p.clientId,
-      type: p.type, items, description: p.subject, dueDate: p.dueDate || null,
+      type: p.type, items, description: p.subject, date: p.docDate || null,
       sendEmail: p.sendEmail, email: p.sendEmail ? p.email : null }) }).then(r => r.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ הפק בחשבונית ירוקה';
   if (r.ok) {
-    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
-    setTimeout(() => { document.getElementById('invPvModal').classList.add('hidden'); renderInvoicing($('#content')); }, 1100);
+    document.getElementById('invPvModal').classList.add('hidden');
+    showInvoiceDoneDialog(typeName, r.doc?.number, r.doc?.url);
+    renderInvoicing($('#content'));
   } else {
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }
 };
+// חלון "החשבונית הופקה בהצלחה" עם אפשרות הורדה מיידית
+function showInvoiceDoneDialog(typeName, number, url) {
+  let m = document.getElementById('invDoneModal');
+  if (!m) { m = document.createElement('div'); m.id = 'invDoneModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(420px,94vw);text-align:center">
+    <div style="font-size:42px;line-height:1">✅</div>
+    <h3 style="margin:8px 0 2px">החשבונית הופקה בהצלחה</h3>
+    <p class="muted" style="font-size:13.5px">${escapeHtml(typeName || 'מסמך')}${number ? ` #${escapeHtml(String(number))}` : ''}</p>
+    <div class="modal-actions" style="justify-content:center;gap:10px;margin-top:16px">
+      ${url ? `<a class="btn primary" href="${url}" target="_blank" rel="noopener" onclick="document.getElementById('invDoneModal').classList.add('hidden')">⬇ להורדה לחץ כאן</a>` : ''}
+      <button class="btn ghost" onclick="document.getElementById('invDoneModal').classList.add('hidden')">סגור</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+}
 
 // ---- הצעות מחיר ----
 async function renderQuotes(c) {
@@ -1707,16 +1724,13 @@ function empDocChip(e, kind, label) {
 function empRow(e) {
   const val = (f) => (e[f] == null ? '' : String(e[f])).replace(/"/g, '&quot;');
   return `<tr>
-    <td><button class="btn ghost" style="padding:4px 10px;font-size:13px;font-weight:600" title="ראה עבודות לחודש" onclick="empJobs('${e.id}','${encodeURIComponent(e.name || '')}')">${escapeHtml(e.name || '')}</button></td>
+    <td><div style="display:flex;gap:4px;align-items:center"><input value="${val('name')}" placeholder="שם פרטי" onchange="saveEmp('${e.id}',{name:this.value})" style="width:105px"/><button class="btn ghost" style="padding:4px 7px;font-size:13px" title="ראה עבודות לחודש" onclick="empJobs('${e.id}','${encodeURIComponent(e.name || '')}')">📋</button></div></td>
+    <td><input value="${val('lastName')}" placeholder="שם משפחה" onchange="saveEmp('${e.id}',{lastName:this.value})" style="width:110px"/></td>
     <td><input type="number" value="${e.baseRate ?? ''}" placeholder="₪ ליום" onchange="saveEmp('${e.id}',{baseRate:this.value===''?null:+this.value})" style="width:95px"/></td>
     <td><select onchange="saveEmp('${e.id}',{salaryType:this.value})" style="width:88px"><option value="gross"${(e.salaryType || 'gross') === 'gross' ? ' selected' : ''}>ברוטו</option><option value="net"${e.salaryType === 'net' ? ' selected' : ''}>נטו</option></select></td>
     <td><input type="number" value="${e.travel ?? ''}" placeholder="₪" onchange="saveEmp('${e.id}',{travel:this.value===''?null:+this.value})" style="width:85px"/></td>
     <td><input value="${val('idNumber')}" placeholder="מספר זהות" onchange="saveEmp('${e.id}',{idNumber:this.value})" style="width:120px" dir="ltr"/></td>
     <td><input type="email" value="${val('email')}" placeholder="מייל" onchange="saveEmp('${e.id}',{email:this.value})" style="width:150px" dir="ltr"/></td>
-    <td><div style="display:flex;gap:4px;flex-wrap:wrap">${empDocChip(e, 'idFront', 'קדמי')}${empDocChip(e, 'idBack', 'אחורי')}${empDocChip(e, 'idSpah', 'ספח')}</div></td>
-    <td>${empDocChip(e, 'bankApproval', 'אישור')}</td>
-    <td>${empDocChip(e, 'form101', '101')}</td>
-    <td><div style="display:flex;gap:4px;flex-wrap:wrap">${empDocChip(e, 'licenseFront', 'קדמי')}${empDocChip(e, 'licenseBack', 'אחורי')}</div></td>
     <td>${driveFolderCell(e)}</td>
     <td><button class="btn ghost" style="padding:4px 11px;color:var(--danger)" onclick="delEmp('${e.id}')">מחק</button></td></tr>`;
 }
@@ -1736,8 +1750,9 @@ window.empSetDrive = async (id) => {
 window.saveEmp = (id, patch) => fetch(`/api/employees/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).catch(() => {});
 window.delEmp = async (id) => { if (!confirm('למחוק עובד מהרשימה?')) return; await fetch(`/api/employees/${id}`, { method: 'DELETE' }); renderPayroll($('#content')); };
 window.addEmployeeRow = async () => {
-  const name = prompt('שם העובד:'); if (!name || !name.trim()) return;
-  await fetch('/api/employees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), baseRate: null, companyId: state.company }) });
+  const name = prompt('שם פרטי של העובד:'); if (!name || !name.trim()) return;
+  const lastName = (prompt('שם משפחה (לא חובה):') || '').trim();
+  await fetch('/api/employees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), lastName: lastName || null, baseRate: null, companyId: state.company }) });
   renderPayroll($('#content'));
 };
 window.syncEmployees = async (btn) => {
@@ -1766,15 +1781,15 @@ async function renderPayroll(c) {
     </div>
     <div class="panel">
       <div class="row-between">
-        <div><h2>רשימת עובדים</h2><span class="muted">שכר בסיס, פרטים ומסמכים. לחיצה על שם עובד — העבודות שלו לחודש שנבחר למעלה.</span></div>
+        <div><h2>רשימת עובדים</h2><span class="muted">שכר בסיס ופרטים. לחצן 📋 מציג את העבודות של העובד לחודש שנבחר למעלה. המסמכים (ת"ז/101/רישיון) בתיקיית הדרייב של כל עובד.</span></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn ghost" onclick="syncEmployees(this)">↺ ייבא מהאירועים</button>
           <button class="btn primary" onclick="addEmployeeRow()">+ עובד</button>
         </div>
       </div>
-      <div style="overflow-x:auto"><table style="min-width:1080px"><thead><tr>
-        <th>שם עובד</th><th>שכר בסיס</th><th>סוג שכר</th><th>החזר נסיעות</th><th>מס ת"ז</th><th>מייל</th><th>ת"ז (קדמי/אחורי/ספח)</th><th>אישור ניהול חשבון</th><th>טופס 101</th><th>רישיון (קדמי/אחורי)</th><th>תיקיית דרייב</th><th></th></tr></thead>
-        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="12"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
+      <div style="overflow-x:auto"><table style="min-width:820px"><thead><tr>
+        <th>שם פרטי</th><th>שם משפחה</th><th>שכר בסיס</th><th>סוג שכר</th><th>החזר נסיעות</th><th>מס ת"ז</th><th>מייל</th><th>תיקיית דרייב</th><th></th></tr></thead>
+        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="9"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
     </div>`;
 }
 

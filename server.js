@@ -259,7 +259,7 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
       type, client, items,
       description: body.description || subjectForEvents(evs),
       remarks: body.remarks || null,
-      dueDate: [300, 305].includes(type) ? (body.dueDate || null) : null,
+      date: body.date || undefined,   // תאריך המסמך שהמשתמש בחר (ברירת מחדל: היום)
       sendEmail: Boolean(body.sendEmail), email: body.email || null,
     });
     for (const ev of evs) {
