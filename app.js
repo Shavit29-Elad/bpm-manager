@@ -570,7 +570,7 @@ async function openEventEditor(ev) {
   _evCtr = (ev.contractorDetails && ev.contractorDetails.length ? ev.contractorDetails
     : (ev.contractors || []).map(n => ({ name: n, amount: null }))).map(c => ({ name: c.name || '', amount: c.amount ?? '' }));
   _evEmp = (ev.employeeDetails && ev.employeeDetails.length ? ev.employeeDetails
-    : (ev.employees || []).map(n => ({ name: n }))).map(w => ({ name: w.name || '', factor: w.factor ?? '1', bonus: w.bonus ?? '' }));
+    : (ev.employees || []).map(n => ({ name: n }))).map(w => ({ name: w.name || '', factor: w.factor ?? '1', bonus: w.bonus ?? '', food: w.food ?? '', note: w.note ?? '' }));
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
   if (!_evEmployees) { try { _evEmployees = await api(`/api/employees?companyId=${state.company}`); } catch { _evEmployees = []; } }
   if (!_evSuppliers) { try { const s = await api('/api/suppliers'); _evSuppliers = Array.isArray(s) ? s : []; } catch { _evSuppliers = []; } }
@@ -634,13 +634,15 @@ window.evRemoveCtr = (i) => { _evCtr.splice(i, 1); document.getElementById('evCt
 // שורות עובדים: שם (מרשימת עובדים) + פקטור (חצי/יומית/כפולה) + בונוס
 function evEmpHtml() {
   if (!_evEmp.length) return '<span class="muted" style="font-size:13px">אין עובדים. הוסף עובדים למשמרת.</span>';
-  return _evEmp.map((w, i) => `<div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
-    <input list="evEmpList" value="${(w.name || '').replace(/"/g, '&quot;')}" placeholder="שם עובד" oninput="_evEmp[${i}].name=this.value" style="flex:1"/>
-    <select onchange="_evEmp[${i}].factor=this.value" style="width:120px">${EV_FACTORS.map(([val, lbl]) => `<option value="${val}"${String(w.factor) === val ? ' selected' : ''}>${lbl}</option>`).join('')}</select>
-    <input type="number" inputmode="decimal" value="${w.bonus ?? ''}" placeholder="בונוס ₪" oninput="_evEmp[${i}].bonus=this.value" style="width:110px"/>
+  return _evEmp.map((w, i) => `<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;flex-wrap:wrap">
+    <input list="evEmpList" value="${(w.name || '').replace(/"/g, '&quot;')}" placeholder="שם עובד" oninput="_evEmp[${i}].name=this.value" style="flex:1;min-width:110px"/>
+    <select onchange="_evEmp[${i}].factor=this.value" style="width:105px">${EV_FACTORS.map(([val, lbl]) => `<option value="${val}"${String(w.factor) === val ? ' selected' : ''}>${lbl}</option>`).join('')}</select>
+    <input type="number" inputmode="decimal" value="${w.bonus ?? ''}" placeholder="בונוס ₪" oninput="_evEmp[${i}].bonus=this.value" style="width:82px"/>
+    <input type="number" inputmode="decimal" value="${w.food ?? ''}" placeholder="אוכל ₪" oninput="_evEmp[${i}].food=this.value" style="width:80px"/>
+    <input value="${(w.note || '').replace(/"/g, '&quot;')}" placeholder="הערה" oninput="_evEmp[${i}].note=this.value" style="width:120px"/>
     <button class="btn ghost" style="padding:4px 11px" onclick="evRemoveEmp(${i})" title="הסר">×</button></div>`).join('');
 }
-window.evAddEmp = () => { _evEmp.push({ name: '', factor: '1', bonus: '' }); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
+window.evAddEmp = () => { _evEmp.push({ name: '', factor: '1', bonus: '', food: '', note: '' }); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
 window.evRemoveEmp = (i) => { _evEmp.splice(i, 1); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
 window.saveEvent = async (btn) => {
   const g = (id) => document.getElementById(id);
@@ -648,7 +650,7 @@ window.saveEvent = async (btn) => {
   const clientName = g('evClient').value.trim() || null;
   const clientId = (_evClients || []).find(c => c.name === clientName)?.id || _evEditing.clientId || null;
   const ctr = _evCtr.filter(c => (c.name || '').trim()).map(c => ({ name: c.name.trim(), amount: num(c.amount) }));
-  const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus) }));
+  const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus), food: num(w.food), note: (w.note || '').trim() || null }));
   const body = {
     date: g('evDate').value || null, dateRaw: g('evDate').value || _evEditing.dateRaw || null,
     artist: g('evArtist').value.trim() || null,
@@ -746,20 +748,44 @@ window.empUploadDoc = (empId, kind) => {
 window.empDelDoc = async (fid) => { if (!confirm('למחוק מסמך?')) return; await fetch(`/api/files/${fid}`, { method: 'DELETE' }); renderPayroll($('#content')); };
 window.empJobs = async (empId, nameEnc) => { const r = await api(`/api/employees/${empId}/jobs?month=${state.payMonth}`); openEmpJobsModal(decodeURIComponent(nameEnc), r); };
 window.empJobsByName = (nameEnc) => { const name = decodeURIComponent(nameEnc); const e = (window._payEmps || []).find(x => x.name === name); if (e) empJobs(e.id, nameEnc); else alert('העובד לא נמצא ברשימת העובדים. לחץ "ייבא מהאירועים".'); };
+const dmy = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}.${m[2]}.${m[1].slice(2)}` : (iso || ''); };
 function openEmpJobsModal(name, r) {
   const shifts = (r.pay && r.pay.shifts) || [];
+  const pay = r.pay || { base: 0, bonus: 0, food: 0, total: 0 };
+  window._lastJobs = { name, month: state.payMonth, shifts, pay };
   let m = document.getElementById('jobsModal'); if (!m) { m = document.createElement('div'); m.id = 'jobsModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(780px,95vw);max-height:88vh;overflow:auto">
-    <h3>עבודות של ${escapeHtml(name)} — ${monthLabelFromKey(state.payMonth)}</h3>
-    ${shifts.length ? `<div style="overflow-x:auto"><table><thead><tr><th>תאריך</th><th>אירוע</th><th>סוג משמרת</th><th>בסיס</th><th>בונוס</th><th>סה"כ</th></tr></thead>
-      <tbody>${shifts.map(s => `<tr><td>${s.date || '—'}</td><td>${escapeHtml(s.artist || '—')}</td><td>${FACTOR_LABEL(s.factor)}</td><td>${money(s.base)}</td><td>${money(s.bonus)}</td><td><b>${money((s.base || 0) + (s.bonus || 0))}</b></td></tr>`).join('')}
-      <tr style="border-top:2px solid var(--line)"><td colspan="3"><b>סה"כ</b></td><td>${money(r.pay.base)}</td><td>${money(r.pay.bonus)}</td><td><b style="color:var(--accent)">${money(r.pay.total)}</b></td></tr>
+  m.innerHTML = `<div class="modal-card" style="width:min(900px,96vw);max-height:90vh;overflow:auto">
+    <div class="row-between"><h3>${escapeHtml(name)} — ${monthLabelFromKey(state.payMonth)}</h3>
+      <button class="btn ghost" style="padding:5px 12px" onclick="downloadJobsCsv()">⤓ הורד CSV</button></div>
+    ${shifts.length ? `<div style="overflow-x:auto"><table style="min-width:740px">
+      <thead><tr><th>#</th><th>אמן</th><th>תאריך</th><th>מיקום</th><th>תשלום</th><th>בונוס</th><th>אוכל</th><th>הערות</th></tr></thead>
+      <tbody>
+        ${shifts.map((s, i) => `<tr><td>${i + 1}</td><td>${escapeHtml(s.artist || '')}</td><td style="white-space:nowrap">${dmy(s.date)}</td><td>${escapeHtml(s.location || '')}</td><td>${money(s.base)}</td><td>${money(s.bonus)}</td><td>${money(s.food)}</td><td>${escapeHtml(s.note || '')}</td></tr>`).join('')}
+        <tr style="border-top:2px solid var(--line)"><td colspan="5" style="text-align:start"><b>בונוסים</b></td><td><b>${money(pay.bonus)}</b></td><td></td><td></td></tr>
+        <tr><td colspan="5" style="text-align:start"><b>החזר אוכל</b></td><td></td><td><b>${money(pay.food)}</b></td><td></td></tr>
+        <tr style="background:rgba(79,70,229,.07)"><td colspan="5" style="text-align:start"><b>סה"כ כולל הכל (נטו)</b></td><td colspan="3"><b style="color:var(--accent)">${money(pay.total)}</b></td></tr>
       </tbody></table></div>` : `<div class="empty">אין עבודות לחודש זה.</div>`}
     <div class="modal-actions" style="margin-top:14px"><button class="btn primary" onclick="document.getElementById('jobsModal').classList.add('hidden')">סגור</button></div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
 }
+window.downloadJobsCsv = () => {
+  const j = window._lastJobs; if (!j) return;
+  const esc = (v) => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lbl = monthLabelFromKey(j.month).split(' ');
+  const rows = [];
+  rows.push([j.name, '', '', '', lbl[0] || '', '', lbl[1] || '', '']);
+  rows.push(['', 'אמן', 'תאריך', 'מיקום', 'תשלום', 'בונוס', 'אוכל', 'הערות']);
+  j.shifts.forEach((s, i) => rows.push([i + 1, s.artist || '', dmy(s.date), s.location || '', s.base || 0, s.bonus || 0, s.food || 0, s.note || '']));
+  rows.push(['בונוסים', '', '', '', j.pay.bonus || 0]);
+  rows.push(['החזר אוכל', '', '', '', j.pay.food || 0]);
+  rows.push(['סה"כ כולל הכל (נטו)', '', '', '', j.pay.total || 0]);
+  const csv = '﻿' + rows.map(r => r.map(esc).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob); const a = document.createElement('a');
+  a.href = url; a.download = `${j.name} - ${monthLabelFromKey(j.month)}.csv`; a.click(); URL.revokeObjectURL(url);
+};
 function empDocChip(e, kind, label) {
   const fid = e.docs && e.docs[kind];
   return fid

@@ -17,19 +17,23 @@ export function employeePayForMonth(events, month /* yyyy-mm */, employees = [])
       const name = w.name;
       if (!name) continue;
       if (!byEmployee[name]) {
-        byEmployee[name] = { name, month, base: 0, bonus: 0, total: 0, baseRate: rateOf(name), shifts: [] };
+        byEmployee[name] = { name, month, base: 0, bonus: 0, food: 0, total: 0, baseRate: rateOf(name), shifts: [] };
       }
       const factor = w.factor != null && w.factor !== '' ? Number(w.factor) : 1;
       const base = (w.rate != null && w.rate !== '' ? Number(w.rate) : rateOf(name) * factor) || 0;
       const bonus = Number(w.bonus) || 0;
+      const food = Number(w.food) || 0;
       byEmployee[name].base += base;
       byEmployee[name].bonus += bonus;
-      byEmployee[name].total += base + bonus;
+      byEmployee[name].food += food;
+      byEmployee[name].total += base + bonus + food;
       byEmployee[name].shifts.push({
-        eventId: ev.id, date: ev.date, artist: ev.artist, factor, base, bonus,
+        eventId: ev.id, date: ev.date, artist: ev.artist, location: ev.location || '', factor, base, bonus, food, note: w.note || '',
       });
     }
   }
+  // מיון המשמרות לפי תאריך עולה (כמו בגיליון)
+  for (const e of Object.values(byEmployee)) e.shifts.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   return Object.values(byEmployee);
 }
 
