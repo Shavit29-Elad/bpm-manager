@@ -447,7 +447,7 @@ async function searchAllPages(pathName, extraBody = {}) {
 export async function listClients() {
   return cached('clients', async () => {
     const items = await searchAllPages('/clients/search');
-    return items.map(c => ({ id: c.id, name: c.name })).filter(c => c.name);
+    return items.map(c => ({ id: c.id, name: c.name, email: (Array.isArray(c.emails) && c.emails[0]) || c.email || null })).filter(c => c.name);
   });
 }
 

@@ -980,7 +980,7 @@ window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   if (!pv) { alert('שגיאה בטעינת התצוגה המקדימה'); return; }
   _invPreview = { ids, client: decodeURIComponent(clientEnc), clientId: clientId || null,
     items: (pv.items || []).map(it => ({ description: it.description, quantity: it.quantity ?? 1, price: it.price ?? 0 })),
-    subject: pv.subject || '', type: 305, dueDate: '', sendEmail: false, email: '' };
+    subject: pv.subject || '', type: 305, dueDate: '', sendEmail: false, email: pv.clientEmail || '' };
   showInvoicePreviewModal();
 };
 function invTotals() {
@@ -1022,7 +1022,7 @@ function renderInvoicePreviewModal() {
     <div style="margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px">
       <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer">
         <input type="checkbox" ${p.sendEmail ? 'checked' : ''} onchange="invToggleEmail(this.checked)"/>
-        שלח את המסמך ללקוח במייל עם ההפקה</label>
+        שלח את המסמך ללקוח במייל עם ההפקה${p.email ? ` <span class="muted" style="font-size:12px">· מייל שמור: ${escapeHtml(p.email)}</span>` : ' <span class="muted" style="font-size:12px">· אין מייל שמור ללקוח</span>'}</label>
       <div id="invEmailRow" class="${p.sendEmail ? '' : 'hidden'}" style="margin-top:8px">
         <input type="email" dir="ltr" placeholder="mail@example.com" value="${escAttr(p.email)}" oninput="_invPreview.email=this.value" style="width:100%"/>
       </div>
@@ -1717,8 +1717,22 @@ function empRow(e) {
     <td>${empDocChip(e, 'bankApproval', 'אישור')}</td>
     <td>${empDocChip(e, 'form101', '101')}</td>
     <td><div style="display:flex;gap:4px;flex-wrap:wrap">${empDocChip(e, 'licenseFront', 'קדמי')}${empDocChip(e, 'licenseBack', 'אחורי')}</div></td>
+    <td>${driveFolderCell(e)}</td>
     <td><button class="btn ghost" style="padding:4px 11px;color:var(--danger)" onclick="delEmp('${e.id}')">מחק</button></td></tr>`;
 }
+// קישור לתיקיית גוגל דרייב של העובד (ת"ז, אישור ניהול חשבון, טופס 101, רישיון וכו')
+function driveFolderCell(e) {
+  const url = e.driveFolderUrl || '';
+  if (url) return `<div style="display:flex;gap:4px;align-items:center"><a class="btn ghost" style="padding:4px 9px;font-size:12px;white-space:nowrap" href="${url}" target="_blank" rel="noopener">📁 פתח תיקייה</a><button class="btn ghost" style="padding:4px 7px;font-size:12px" title="ערוך קישור" onclick="empSetDrive('${e.id}')">✎</button></div>`;
+  return `<button class="btn ghost" style="padding:4px 10px;font-size:12px;white-space:nowrap" onclick="empSetDrive('${e.id}')">🔗 קשר תיקייה</button>`;
+}
+window.empSetDrive = async (id) => {
+  const e = (window._payEmps || []).find(x => x.id === id) || {};
+  const url = prompt('הדבק את קישור השיתוף של תיקיית העובד בגוגל דרייב:', e.driveFolderUrl || '');
+  if (url === null) return;
+  await saveEmp(id, { driveFolderUrl: url.trim() || null });
+  renderPayroll($('#content'));
+};
 window.saveEmp = (id, patch) => fetch(`/api/employees/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).catch(() => {});
 window.delEmp = async (id) => { if (!confirm('למחוק עובד מהרשימה?')) return; await fetch(`/api/employees/${id}`, { method: 'DELETE' }); renderPayroll($('#content')); };
 window.addEmployeeRow = async () => {
@@ -1759,8 +1773,8 @@ async function renderPayroll(c) {
         </div>
       </div>
       <div style="overflow-x:auto"><table style="min-width:1080px"><thead><tr>
-        <th>שם עובד</th><th>שכר בסיס</th><th>סוג שכר</th><th>החזר נסיעות</th><th>מס ת"ז</th><th>מייל</th><th>ת"ז (קדמי/אחורי/ספח)</th><th>אישור ניהול חשבון</th><th>טופס 101</th><th>רישיון (קדמי/אחורי)</th><th></th></tr></thead>
-        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="11"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
+        <th>שם עובד</th><th>שכר בסיס</th><th>סוג שכר</th><th>החזר נסיעות</th><th>מס ת"ז</th><th>מייל</th><th>ת"ז (קדמי/אחורי/ספח)</th><th>אישור ניהול חשבון</th><th>טופס 101</th><th>רישיון (קדמי/אחורי)</th><th>תיקיית דרייב</th><th></th></tr></thead>
+        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="12"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
     </div>`;
 }
 

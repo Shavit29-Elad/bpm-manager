@@ -37,7 +37,7 @@ export function eventInvoiceLines(ev) {
   if (num(ev.price)) lines.push(line('הגברה', ev.price));
   if (num(ev.priceSound)) lines.push(line('סאונד', ev.priceSound));
   if (num(ev.priceBackline)) lines.push(line('בקליין', ev.priceBackline));
-  if (num(ev.priceExtras)) lines.push(line('נוסף', ev.priceExtras));
+  if (num(ev.priceExtras)) lines.push(line('תוספות', ev.priceExtras));
   if (!lines.length && eventTotal(ev)) lines.push(line('הגברה', eventTotal(ev)));
   return lines;
 }

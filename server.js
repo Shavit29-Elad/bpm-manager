@@ -223,12 +223,22 @@ add('GET', /^\/api\/invoicing\/clients$/, (req, res, _p, q) =>
   json(res, eventsByClient(companyEvents(load(), q.companyId))));
 
 // POST /api/invoicing/preview — { eventIds } → שורות ברירת מחדל + נושא + סכומים (בלי ליצור מסמך)
-add('POST', /^\/api\/invoicing\/preview$/, (req, res, _p, _q, body) => {
+add('POST', /^\/api\/invoicing\/preview$/, async (req, res, _p, _q, body) => {
   const db = load();
   const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(Boolean);
   const items = invoiceItemsFromEvents(evs);
   const subtotal = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
-  json(res, { items, subtotal, vat: +(subtotal * 0.18).toFixed(2), total: +(subtotal * 1.18).toFixed(2), subject: subjectForEvents(evs) });
+  // מייל שמור של הלקוח — כדי שיופיע מראש בתיבה בהפקה (המשתמש מחליט אם לשלוח)
+  let clientEmail = null;
+  try {
+    if (greenInvoice.haveCredentials()) {
+      const ev0 = evs.find(e => e.clientId || e.clientName) || {};
+      const clients = await greenInvoice.listClients();
+      const c = clients.find(cl => (ev0.clientId && cl.id === ev0.clientId) || (ev0.clientName && cl.name === ev0.clientName));
+      clientEmail = c?.email || null;
+    }
+  } catch { }
+  json(res, { items, subtotal, vat: +(subtotal * 0.18).toFixed(2), total: +(subtotal * 1.18).toFixed(2), subject: subjectForEvents(evs), clientEmail });
 });
 
 // POST /api/invoicing/generate — יוצר מסמך בחשבונית ירוקה ומסמן את האירועים כמחויבים
