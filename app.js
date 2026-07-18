@@ -213,7 +213,7 @@ async function renderHome(c) {
       <div class="cards" style="margin-top:14px">
         ${kpi(incomeLabel, money(d.income), d.monthDocs != null ? `${d.monthDocs} מסמכים` : '', 'var(--accent2)')}
         ${kpi('צפי מע"מ (18%)', money(d.vat), 'מתוך ההכנסה', 'var(--warn)')}
-        ${kpi('חשבוניות מס פתוחות', d.openInvoices != null ? d.openInvoices : '—', 'טרם שולמו במלואן', 'var(--danger)')}
+        ${kpi('חיובים פתוחים', d.openInvoices != null ? d.openInvoices : '—', 'חשבון עסקה + חשבונית מס', 'var(--danger)')}
         ${kpi('יתרת עו"ש', '—', 'יש לחבר חשבון בנק', 'var(--muted)')}
       </div>
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}

@@ -237,10 +237,9 @@ export async function clientDocuments(clientId) {
 // כמות חשבוניות מס פתוחות (לא שולמו במלואן)
 export async function openInvoicesCount() {
   return cached('openInvoices', async () => {
-    const to = new Date();
-    const from = new Date(); from.setMonth(from.getMonth() - 24);
-    const items = await documentsInRange(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10), [305]);
-    return items.filter(d => Number(d.status) === 0).length; // status 0 = פתוח
+    // סך כל החיובים הפתוחים = חשבון עסקה (300) + חשבונית מס (305) עם status 0 — כמו "חיובים קרובים" בחשבונית ירוקה
+    const docs = await openDocuments();
+    return docs.length;
   });
 }
 
