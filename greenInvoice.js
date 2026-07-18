@@ -303,10 +303,22 @@ function mapExpense(e) {
 }
 // ===== הוצאות (קבלנים/ספקים) =====
 // שלב 1: מקבל פרטי העלאה חתומים (S3 presigned) — טיוטת הוצאה חדשה שתעבור OCR
+// הערה: נקודת הקצה יושבת על שרת נפרד (apigw) ולא על BASE הרגיל!
+const FILE_UPLOAD_BASE = process.env.GREENINVOICE_FILE_UPLOAD_BASE || 'https://apigw.greeninvoice.co.il';
 export async function getExpenseFileUploadUrl(existingId) {
+  const token = await getToken();
   const payload = existingId ? { id: existingId, source: 5, state: 'expense' } : { source: 5 };
   const data = encodeURIComponent(JSON.stringify(payload));
-  return api(`/expenses/file?context=expense&data=${data}`);
+  const url = `${FILE_UPLOAD_BASE}/file-upload/v1/url?context=expense&data=${data}`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+  });
+  const text = await res.text();
+  let json;
+  try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
+  if (!res.ok) throw new Error(`חשבונית ירוקה GET /file-upload/v1/url: ${res.status} ${text}`);
+  return json;
 }
 // שלב 2: מעלה את הקובץ ל-S3. שולחים את כל שדות ה-fields ואז את file אחרון (חובה!)
 export async function uploadExpenseFile(fileBase64, fileName, mime, existingId) {
