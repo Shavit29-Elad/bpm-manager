@@ -752,39 +752,45 @@ const dmy = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2
 function openEmpJobsModal(name, r) {
   const shifts = (r.pay && r.pay.shifts) || [];
   const pay = r.pay || { base: 0, bonus: 0, food: 0, total: 0 };
-  window._lastJobs = { name, month: state.payMonth, shifts, pay };
+  const nis = (n) => '₪' + (Number(n) || 0).toLocaleString('he-IL');
+  // דוח מסודר, נקי לצילום/הדפסה ושליחה לרו"ח ולעובד
+  const th = (t, w) => `<th style="border:1px solid #d8dced;padding:9px 11px;text-align:right;background:#eef0fb;font-size:13px;font-weight:700${w ? `;width:${w}` : ''}">${t}</th>`;
+  const td = (t, opt = '') => `<td style="border:1px solid #d8dced;padding:8px 11px;text-align:right;font-size:13.5px;${opt}">${t}</td>`;
+  const report = shifts.length ? `
+    <table style="width:100%;border-collapse:collapse;background:#fff">
+      <thead><tr>${th('#', '34px')}${th('אמן')}${th('תאריך', '92px')}${th('מיקום')}${th('תשלום', '90px')}${th('בונוס', '80px')}${th('אוכל', '80px')}${th('הערות')}</tr></thead>
+      <tbody>
+        ${shifts.map((s, i) => `<tr${i % 2 ? ' style="background:#fafbff"' : ''}>${td(i + 1)}${td(escapeHtml(s.artist || ''))}${td(dmy(s.date), 'white-space:nowrap')}${td(escapeHtml(s.location || ''))}${td(nis(s.base))}${td(s.bonus ? nis(s.bonus) : '₪0')}${td(s.food ? nis(s.food) : '₪0')}${td(escapeHtml(s.note || ''))}</tr>`).join('')}
+        <tr>${td('<b>בונוסים</b>', 'border-top:2px solid #c7cce0')}<td colspan="4" style="border:1px solid #d8dced"></td>${td('<b>' + nis(pay.bonus) + '</b>', 'border-top:2px solid #c7cce0')}<td colspan="2" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
+        <tr>${td('<b>החזר אוכל</b>')}<td colspan="5" style="border:1px solid #d8dced"></td>${td('<b>' + nis(pay.food) + '</b>')}<td style="border:1px solid #d8dced"></td></tr>
+        <tr style="background:#eef0fb">${td('<b>סה"כ כולל הכל (נטו)</b>')}<td colspan="6" style="border:1px solid #d8dced"></td>${td('<b style="color:#4338ca;font-size:15px">' + nis(pay.total) + '</b>')}</tr>
+      </tbody>
+    </table>` : `<div class="empty">אין עבודות לחודש זה.</div>`;
   let m = document.getElementById('jobsModal'); if (!m) { m = document.createElement('div'); m.id = 'jobsModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(900px,96vw);max-height:90vh;overflow:auto">
-    <div class="row-between"><h3>${escapeHtml(name)} — ${monthLabelFromKey(state.payMonth)}</h3>
-      <button class="btn ghost" style="padding:5px 12px" onclick="downloadJobsCsv()">⤓ הורד CSV</button></div>
-    ${shifts.length ? `<div style="overflow-x:auto"><table style="min-width:740px">
-      <thead><tr><th>#</th><th>אמן</th><th>תאריך</th><th>מיקום</th><th>תשלום</th><th>בונוס</th><th>אוכל</th><th>הערות</th></tr></thead>
-      <tbody>
-        ${shifts.map((s, i) => `<tr><td>${i + 1}</td><td>${escapeHtml(s.artist || '')}</td><td style="white-space:nowrap">${dmy(s.date)}</td><td>${escapeHtml(s.location || '')}</td><td>${money(s.base)}</td><td>${money(s.bonus)}</td><td>${money(s.food)}</td><td>${escapeHtml(s.note || '')}</td></tr>`).join('')}
-        <tr style="border-top:2px solid var(--line)"><td colspan="5" style="text-align:start"><b>בונוסים</b></td><td><b>${money(pay.bonus)}</b></td><td></td><td></td></tr>
-        <tr><td colspan="5" style="text-align:start"><b>החזר אוכל</b></td><td></td><td><b>${money(pay.food)}</b></td><td></td></tr>
-        <tr style="background:rgba(79,70,229,.07)"><td colspan="5" style="text-align:start"><b>סה"כ כולל הכל (נטו)</b></td><td colspan="3"><b style="color:var(--accent)">${money(pay.total)}</b></td></tr>
-      </tbody></table></div>` : `<div class="empty">אין עבודות לחודש זה.</div>`}
+  m.innerHTML = `<div class="modal-card" style="width:min(880px,96vw);max-height:90vh;overflow:auto">
+    <div class="row-between" style="align-items:center">
+      <div><h3 style="margin:0">${escapeHtml(name)}</h3><span class="muted" style="font-size:13.5px">דוח עבודות · ${monthLabelFromKey(state.payMonth)}</span></div>
+      <button class="btn ghost" style="padding:6px 13px" onclick="printJobsReport()">🖨 הדפס / PDF</button>
+    </div>
+    <div id="jobsReport" style="margin-top:14px;background:#fff;border-radius:10px;padding:16px">
+      <div style="font-size:16px;font-weight:800;margin-bottom:2px">${escapeHtml(name)}</div>
+      <div style="color:#6b7488;font-size:13px;margin-bottom:12px">דוח עבודות חודשי · ${monthLabelFromKey(state.payMonth)}</div>
+      <div style="overflow-x:auto">${report}</div>
+    </div>
     <div class="modal-actions" style="margin-top:14px"><button class="btn primary" onclick="document.getElementById('jobsModal').classList.add('hidden')">סגור</button></div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
 }
-window.downloadJobsCsv = () => {
-  const j = window._lastJobs; if (!j) return;
-  const esc = (v) => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const lbl = monthLabelFromKey(j.month).split(' ');
-  const rows = [];
-  rows.push([j.name, '', '', '', lbl[0] || '', '', lbl[1] || '', '']);
-  rows.push(['', 'אמן', 'תאריך', 'מיקום', 'תשלום', 'בונוס', 'אוכל', 'הערות']);
-  j.shifts.forEach((s, i) => rows.push([i + 1, s.artist || '', dmy(s.date), s.location || '', s.base || 0, s.bonus || 0, s.food || 0, s.note || '']));
-  rows.push(['בונוסים', '', '', '', j.pay.bonus || 0]);
-  rows.push(['החזר אוכל', '', '', '', j.pay.food || 0]);
-  rows.push(['סה"כ כולל הכל (נטו)', '', '', '', j.pay.total || 0]);
-  const csv = '﻿' + rows.map(r => r.map(esc).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob); const a = document.createElement('a');
-  a.href = url; a.download = `${j.name} - ${monthLabelFromKey(j.month)}.csv`; a.click(); URL.revokeObjectURL(url);
+window.printJobsReport = () => {
+  const el = document.getElementById('jobsReport'); if (!el) return;
+  const w = window.open('', '_blank', 'width=820,height=940');
+  if (!w) { alert('כדי להדפיס — אשר חלונות קופצים בדפדפן, או פשוט צלם מסך את הדוח.'); return; }
+  w.document.write(`<!doctype html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>דוח עבודות</title>
+    <style>body{font-family:'Heebo',Arial,sans-serif;color:#1c2333;padding:26px;margin:0}</style></head>
+    <body>${el.innerHTML}</body></html>`);
+  w.document.close();
+  setTimeout(() => { w.focus(); w.print(); }, 350);
 };
 function empDocChip(e, kind, label) {
   const fid = e.docs && e.docs[kind];
