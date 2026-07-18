@@ -359,6 +359,21 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/expense-drafts/:id/file — פרוקסי לקובץ הטיוטה (כדי שהתצוגה המקדימה תרוץ מאותו מקור, בלי חסימת iframe)
+add('GET', /^\/api\/expense-drafts\/([^/]+)\/file$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const draft = await greenInvoice.getExpenseDraft(params[0]);
+    if (!draft?.url) return json(res, { error: 'אין קובץ לטיוטה' }, 404);
+    const r = await fetch(draft.url, { redirect: 'follow' });
+    if (!r.ok) return json(res, { error: `שגיאה בטעינת הקובץ: ${r.status}` }, 502);
+    const ct = r.headers.get('content-type') || 'application/pdf';
+    const buf = Buffer.from(await r.arrayBuffer());
+    res.writeHead(200, { 'Content-Type': ct, 'Content-Disposition': 'inline', 'Cache-Control': 'private, max-age=300' });
+    res.end(buf);
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // POST /api/expense-drafts/:id/dismiss — התעלמות מטיוטה (מסתירה אותה אצלנו, לא מוחקת במורנינג)
 add('POST', /^\/api\/expense-drafts\/([^/]+)\/dismiss$/, async (req, res, params) => {
   const draftId = params[0];

@@ -1197,7 +1197,7 @@ function draftCard(d) {
   const amt = d.amount != null ? money(d.amount) : '<span class="muted">סכום לא זוהה</span>';
   const supTxt = d.supplierName ? escapeHtml(d.supplierName) : '<span class="muted">ספק לא זוהה — יש לבחור באישור</span>';
   const typeTxt = DRAFT_TYPE_NAMES[d.documentType] || '';
-  const file = d.url ? `<a class="btn ghost" style="padding:3px 10px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">📄 צפה בקובץ</a>` : '';
+  const file = d.url ? `<a class="btn ghost" style="padding:3px 10px;font-size:12px" href="/api/expense-drafts/${d.id}/file" target="_blank" rel="noopener">📄 צפה בקובץ</a>` : '';
   const statusTag = failed ? `<span class="tag" style="background:#fde8e8;color:var(--danger)">${escapeHtml(d.statusText)}</span>` : `<span class="tag">${escapeHtml(d.statusText)}</span>`;
   return `<div class="card" style="padding:12px 14px">
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
@@ -1243,7 +1243,7 @@ window.openApproveDraft = (id) => {
   const supOpts = (_suppliers || []).map(s => `<option value="${s.id}" ${s.id === d.supplierId ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('');
   const typeSel = APPROVE_DOC_TYPES.map(([v, l]) => `<option value="${v}" ${v === d.documentType ? 'selected' : ''}>${l}</option>`).join('');
   const preview = d.url
-    ? `<iframe src="${d.url}#toolbar=1&navpanes=0" style="width:100%;height:100%;border:0;background:#fff" title="תצוגה מקדימה"></iframe>`
+    ? `<iframe src="/api/expense-drafts/${d.id}/file#toolbar=1&navpanes=0" style="width:100%;height:100%;border:0;background:#fff" title="תצוגה מקדימה"></iframe>`
     : `<div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">אין קובץ לתצוגה</div>`;
   m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-width:97vw">
     <div class="row-between" style="margin-bottom:6px"><h3 style="margin:0">אישור וקליטת הוצאה</h3>
