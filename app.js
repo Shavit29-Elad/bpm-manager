@@ -442,11 +442,16 @@ async function renderCombined(c) {
   const approved = filtered.filter(e => e.confirmed);
   const overdue = events.filter(isOverdueUnbilled).length;
   const monthSel = `<select onchange="setEvMonth(this.value)" style="padding:6px 10px"><option value="all" ${_evMonthFilter === 'all' ? 'selected' : ''}>כל החודשים</option>${monthsSet.map(k => `<option value="${k}" ${_evMonthFilter === k ? 'selected' : ''}>${monthKeyLabel(k)}</option>`).join('')}</select>`;
-  // סינון לפי לקוח — בחלק של האירועים המאושרים בלבד
+  // סינון לפי לקוח וקבלן — בחלק של האירועים המאושרים בלבד
   const approvedClients = [...new Set(approved.map(e => (e.clientName || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he'));
+  const approvedContractors = [...new Set(approved.flatMap(e => (e.contractors || []).map(c => (c || '').trim()).filter(Boolean)))].sort((a, b) => a.localeCompare(b, 'he'));
   if (_evClientFilter !== 'all' && !approvedClients.includes(_evClientFilter)) _evClientFilter = 'all';
-  const approvedShown = _evClientFilter === 'all' ? approved : approved.filter(e => (e.clientName || '').trim() === _evClientFilter);
+  if (_evContractorFilter !== 'all' && !approvedContractors.includes(_evContractorFilter)) _evContractorFilter = 'all';
+  let approvedShown = _evClientFilter === 'all' ? approved : approved.filter(e => (e.clientName || '').trim() === _evClientFilter);
+  if (_evContractorFilter !== 'all') approvedShown = approvedShown.filter(e => (e.contractors || []).some(c => (c || '').trim() === _evContractorFilter));
+  const anyApprovedFilter = _evClientFilter !== 'all' || _evContractorFilter !== 'all';
   const evClientSel = approvedClients.length ? `<select onchange="setEvClient(this.value)" style="padding:5px 10px;font-size:13px"><option value="all" ${_evClientFilter === 'all' ? 'selected' : ''}>כל הלקוחות</option>${approvedClients.map(cn => `<option value="${escAttr(cn)}" ${_evClientFilter === cn ? 'selected' : ''}>${escapeHtml(cn)}</option>`).join('')}</select>` : '';
+  const evContractorSel = approvedContractors.length ? `<select onchange="setEvContractor(this.value)" style="padding:5px 10px;font-size:13px"><option value="all" ${_evContractorFilter === 'all' ? 'selected' : ''}>כל הקבלנים</option>${approvedContractors.map(cn => `<option value="${escAttr(cn)}" ${_evContractorFilter === cn ? 'selected' : ''}>${escapeHtml(cn)}</option>`).join('')}</select>` : '';
   c.innerHTML = `
     <div class="panel">
       <div class="row-between">
@@ -461,8 +466,9 @@ async function renderCombined(c) {
         <h3 style="margin:16px 0 4px;font-size:15px">🕓 אירועים לאישור <span class="muted" style="font-weight:400;font-size:13px">· ${pending.length}</span></h3>
         ${pending.length ? eventsByMonthHtml(pending, 'pending') : `<div class="empty">אין אירועים הממתינים לאישור 👌</div>`}
         <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:22px 0 4px">
-          <h3 style="margin:0;font-size:15px">✓ אירועים מאושרים <span class="muted" style="font-weight:400;font-size:13px">· ${approvedShown.length}${_evClientFilter !== 'all' ? ` מתוך ${approved.length}` : ''}</span></h3>
+          <h3 style="margin:0;font-size:15px">✓ אירועים מאושרים <span class="muted" style="font-weight:400;font-size:13px">· ${approvedShown.length}${anyApprovedFilter ? ` מתוך ${approved.length}` : ''}</span></h3>
           ${approvedClients.length ? `<div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">לקוח:</span>${evClientSel}</div>` : ''}
+          ${approvedContractors.length ? `<div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">קבלן:</span>${evContractorSel}</div>` : ''}
         </div>
         ${approvedShown.length ? eventsByMonthHtml(approvedShown, 'approved') : `<div class="empty">${_evClientFilter === 'all' ? 'עדיין אין אירועים מאושרים' : 'אין אירועים מאושרים ללקוח זה'}</div>`}`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
@@ -650,6 +656,8 @@ let _evMonthFilter = 'all';
 window.setEvMonth = (v) => { _evMonthFilter = v; renderCombined($('#content')); };
 let _evClientFilter = 'all';
 window.setEvClient = (v) => { _evClientFilter = v; renderCombined($('#content')); };
+let _evContractorFilter = 'all';
+window.setEvContractor = (v) => { _evContractorFilter = v; renderCombined($('#content')); };
 const monthKeyLabel = (k) => { const m = String(k).match(/^(\d{4})-(\d{2})$/); return m ? `${MONTHS_HE[+m[2] - 1]} ${m[1]}` : k; };
 const curMonthKey = () => new Date().toISOString().slice(0, 7);
 const isNoInvoiceEv = (e) => Boolean(e.noInvoice) || /ללא\s*-?\s*שול[םמ]/.test(e.clientName || '');
@@ -775,7 +783,7 @@ async function openEventEditor(ev) {
       ${fld('מחיר תוספות ₪', `<input id="evPriceExtras" type="number" inputmode="decimal" value="${ev.priceExtras ?? ''}"/>`)}
       ${fld('שיוך ללקוח (לחיוב חודשי)', `<input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…"/>`)}
       <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted);grid-column:1/3"><input id="evNoInvoice" type="checkbox" ${ev.noInvoice ? 'checked' : ''}/> לא צריך להוציא חשבונית על אירוע זה (שולם במזומן / ללא חיוב)</label>
-      ${fld('הערת בונוס/תשלום (טקסט חופשי)', `<div style="display:flex;gap:6px"><input id="evBonus" value="${v(ev.employeeBonusRaw)}" placeholder="למשל: בונוס 278 לשניהם · בונוס חצי יומית · תשלום חצי יומית" style="flex:1"/><button type="button" class="btn ghost" style="white-space:nowrap;padding:8px 12px" onclick="applyBonusNote(this)">✨ החל על העובדים</button></div>`, true)}
+      ${fld('הערת בונוס/תשלום (טקסט חופשי) — מוחל אוטומטית', `<div style="display:flex;gap:6px"><input id="evBonus" value="${v(ev.employeeBonusRaw)}" placeholder="למשל: בונוס 278 לשניהם · בונוס חצי יומית · יומית וחצי" style="flex:1" onchange="applyBonusNote(null,true)"/><button type="button" class="btn ghost" style="white-space:nowrap;padding:8px 12px" onclick="applyBonusNote(this)">✨ החל שוב</button></div>`, true)}
     </div>
     <datalist id="evClientList">${(_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
     <datalist id="evEmpList">${(_evEmployees || []).map(e => `<option value="${escapeHtml(e.name)}">`).join('')}</datalist>
@@ -833,24 +841,27 @@ function evEmpHtml() {
 }
 window.evAddEmp = () => { _evEmp.push({ name: '', factor: '1', bonus: '', food: '', note: '' }); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
 window.evRemoveEmp = (i) => { _evEmp.splice(i, 1); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
-window.applyBonusNote = async (btn) => {
-  const note = (document.getElementById('evBonus').value || '').trim();
+let _lastBonusNote = null;
+// silent=true → החלה אוטומטית (בלי התראות, בלי כפתור). נקרא גם כשמסיימים לכתוב את ההערה.
+window.applyBonusNote = async (btn, silent) => {
+  const note = (document.getElementById('evBonus')?.value || '').trim();
   const names = _evEmp.map(w => (w.name || '').trim()).filter(Boolean);
-  if (!note) { alert('כתוב הערת בונוס/תשלום קודם.'); return; }
-  if (!names.length) { alert('הוסף עובדים לאירוע קודם.'); return; }
-  btn.disabled = true; const t = btn.textContent; btn.textContent = 'מפרש…';
+  if (!note || !names.length) { if (!silent) alert(!note ? 'כתוב הערת בונוס/תשלום קודם.' : 'הוסף עובדים לאירוע קודם.'); return; }
+  if (silent && note === _lastBonusNote) return; // כבר הוחל על אותה הערה — לא מריצים שוב
+  _lastBonusNote = note;
+  let t; if (btn) { btn.disabled = true; t = btn.textContent; btn.textContent = 'מפרש…'; }
   const res = await fetch('/api/interpret-bonuses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note, employees: names }) }).then(r => r.json()).catch(() => []);
-  btn.disabled = false; btn.textContent = t;
+  if (btn) { btn.disabled = false; btn.textContent = t; }
   if (Array.isArray(res) && res.length) {
     let applied = 0;
     res.forEach(a => {
       const w = _evEmp.find(x => (x.name || '').trim() === String(a.name || '').trim());
       if (w) { if (a.bonus != null) w.bonus = a.bonus; if (a.bonusFactor != null) w.bonusFactor = a.bonusFactor; if (a.factor != null) w.factor = String(a.factor); applied++; }
     });
-    document.getElementById('evEmpBox').innerHTML = evEmpHtml();
+    const box = document.getElementById('evEmpBox'); if (box) box.innerHTML = evEmpHtml();
     await saveEventCore();
-    alert(`הוחל ונשמר עבור ${applied} עובדים.`);
-  } else { alert('לא זוהתה הוראת בונוס/תשלום תקפה בהערה.'); }
+    if (!silent) alert(`הוחל ונשמר עבור ${applied} עובדים.`);
+  } else if (!silent) alert('לא זוהתה הוראת בונוס/תשלום תקפה בהערה.');
 };
 function collectEventBody() {
   const g = (id) => document.getElementById(id);
