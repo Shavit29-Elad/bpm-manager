@@ -214,7 +214,7 @@ async function renderHome(c) {
         ${kpi(incomeLabel, money(d.income), d.monthDocs != null ? `${d.monthDocs} מסמכים` : '', 'var(--accent2)')}
         ${kpi('צפי מע"מ (18%)', money(d.vat), 'מתוך ההכנסה', 'var(--warn)')}
         ${kpi('חיובים פתוחים', d.openInvoices != null ? d.openInvoices : '—', 'חשבון עסקה + חשבונית מס', 'var(--danger)')}
-        ${kpi('יתרת עו"ש', '—', 'יש לחבר חשבון בנק', 'var(--muted)')}
+        ${kpi('סכום מסמכים פתוחים', d.openInvoicesSum != null ? money(d.openInvoicesSum) : '—', 'סה"כ עסקה + מס פתוחים', 'var(--warn)')}
       </div>
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
     </div>
@@ -974,9 +974,10 @@ async function renderQuotes(c) {
   const total = docs.reduce((s, d) => s + (Number(d.amount) || 0), 0);
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>הצעות מחיר פתוחות</h2>
-      <span class="muted">${docs.length} הצעות · ${money(total)}. כל ההצעות שהסטטוס שלהן פתוח בחשבונית ירוקה.</span></div></div>
+      <span class="muted">${docs.length} הצעות · ${money(total)}. סמן הצעות וסגור אותן יחד, או הפק מכל אחת מסמך המשך.</span></div>
+      <button class="btn ghost" id="closeSelBtn" onclick="quoteCloseSelected()" disabled>🔒 סגור נבחרות</button></div>
     ${r.error ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(r.error)}</div>` : ''}
-    ${docs.length ? `<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th>תאריך</th><th>מספר</th><th>לקוח</th><th>תיאור</th><th>סכום</th><th></th></tr></thead>
+    ${docs.length ? `<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th style="width:34px"><input type="checkbox" onchange="quoteToggleAll(this.checked)"/></th><th>תאריך</th><th>מספר</th><th>לקוח</th><th>תיאור</th><th>סכום</th><th></th></tr></thead>
       <tbody>${docs.map(quoteRow).join('')}</tbody></table></div>`
       : `<div class="empty">אין הצעות מחיר פתוחות 👌</div>`}
   </div>`;
@@ -985,11 +986,29 @@ function quoteRow(d) {
   const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
   const follow = `<button class="btn primary" style="padding:2px 9px;font-size:12px" onclick="quoteFollowup('${d.id}','${encodeURIComponent(d.clientName || '')}','${d.number}')">הפק מסמך המשך</button>`;
   const close = `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="quoteClose('${d.id}','${d.number}')">סגור הצעה</button>`;
-  return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>#${d.number}</td>
+  return `<tr>
+    <td style="text-align:center"><input type="checkbox" class="qchk" value="${d.id}" onchange="quoteSelChanged()"/></td>
+    <td style="white-space:nowrap">${fmtDate(d.date)}</td><td>#${d.number}</td>
     <td>${escapeHtml(d.clientName || '')}</td><td>${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</td>
     <td style="white-space:nowrap;font-weight:600">${money(d.amount)}</td>
     <td style="text-align:left"><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">${pv}${follow}${close}</div></td></tr>`;
 }
+window.quoteToggleAll = (on) => { document.querySelectorAll('.qchk').forEach(x => { x.checked = on; }); quoteSelChanged(); };
+window.quoteSelChanged = () => {
+  const n = document.querySelectorAll('.qchk:checked').length;
+  const b = document.getElementById('closeSelBtn');
+  if (b) { b.disabled = !n; b.textContent = n ? `🔒 סגור נבחרות (${n})` : '🔒 סגור נבחרות'; }
+};
+window.quoteCloseSelected = async () => {
+  const boxes = [...document.querySelectorAll('.qchk:checked')];
+  if (!boxes.length) return;
+  if (!confirm(`לסגור ${boxes.length} הצעות מחיר?\nהן יסומנו כסגורות ויוסרו מהרשימה (אפשר לפתוח מחדש בחשבונית ירוקה).`)) return;
+  const ids = boxes.map(b => b.value);
+  const btn = document.getElementById('closeSelBtn'); if (btn) { btn.disabled = true; btn.textContent = 'סוגר…'; }
+  const r = await fetch('/api/quotes/close-bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) renderQuotes($('#content'));
+  else { alert('שגיאה בסגירה: ' + (r.error || '')); if (btn) { btn.disabled = false; } }
+};
 const FOLLOWUP_TYPES = [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
 window.quoteClose = async (id, number) => {
   if (!confirm(`לסגור את הצעת מחיר #${number}?\nההצעה תסומן כסגורה ותוסר מהרשימה (אפשר לפתוח מחדש בחשבונית ירוקה).`)) return;

@@ -301,6 +301,13 @@ function mapExpense(e) {
     url: (e.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e.url === 'string' ? e.url : null),
   };
 }
+// ===== הוצאות (קבלנים/ספקים) =====
+export async function getExpenseUploadInfo() { return api('/expenses/file'); } // presigned URL להעלאת קובץ
+export async function getExpense(id) { return api(`/expenses/${encodeURIComponent(id)}`); }
+export async function expenseStatuses() { return api('/expenses/statuses'); }
+export async function createExpense(body) { const r = await api('/expenses', { method: 'POST', body }); clearDataCache(); return r; }
+export async function deleteExpense(id) { const r = await api(`/expenses/${encodeURIComponent(id)}`, { method: 'DELETE' }); clearDataCache(); return r; }
+
 // כל מסמכי ההוצאה של ספק מסוים (מקבלן)
 export async function supplierExpenses(supplierId) {
   return cached(`supExp:${supplierId}`, async () => {
@@ -388,5 +395,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseUploadInfo, getExpense, expenseStatuses, createExpense, deleteExpense, clearDataCache, DOC_TYPES };
 export default greenInvoice;

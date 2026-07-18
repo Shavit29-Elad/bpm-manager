@@ -265,6 +265,27 @@ add('GET', /^\/api\/open-quotes$/, async (req, res) => {
   catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
+// POST /api/quotes/close-bulk { ids } — סגירת כמה הצעות מחיר
+add('POST', /^\/api\/quotes\/close-bulk$/, async (req, res, _p, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const ids = Array.isArray(body.ids) ? body.ids : [];
+  const results = [];
+  for (const id of ids) {
+    try { await greenInvoice.closeDocument(id); results.push({ id, ok: true }); }
+    catch (e) { results.push({ id, ok: false, error: e.message }); }
+  }
+  json(res, { ok: true, closed: results.filter(r => r.ok).length, results });
+});
+
+// GET /api/debug/expense — זמני: לומד את מבנה העלאת קובץ + שדות הוצאה
+add('GET', /^\/api\/debug\/expense$/, async (req, res) => {
+  const out = {};
+  try { out.uploadInfo = await greenInvoice.getExpenseUploadInfo(); } catch (e) { out.uploadErr = e.message; }
+  try { out.statuses = await greenInvoice.expenseStatuses(); } catch (e) { out.statusErr = e.message; }
+  try { out.sample = await greenInvoice.getExpense('2a7ab208-3bcc-4a75-b5d1-03e3af00b5d7'); } catch (e) { out.sampleErr = e.message; }
+  json(res, out);
+});
+
 // POST /api/quotes/:id/close — סגירת הצעת מחיר
 add('POST', /^\/api\/quotes\/([^/]+)\/close$/, async (req, res, params) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
@@ -672,11 +693,15 @@ add('GET', /^\/api\/dashboard$/, async (req, res, _p, q) => {
     fromDate = `${month}-01`; toDate = lastDay(month);
   }
   const types = q.types ? String(q.types).split(',').map(Number).filter(Boolean) : [305, 320];
-  const out = { month: q.month || null, fromDate, toDate, types, income: null, vat: null, openInvoices: null, monthDocs: null, docs: [], clients: [], bank: null, errors: {} };
+  const out = { month: q.month || null, fromDate, toDate, types, income: null, vat: null, openInvoices: null, openInvoicesSum: null, monthDocs: null, docs: [], clients: [], bank: null, errors: {} };
   if (greenInvoice.haveCredentials()) {
     try { const m = await greenInvoice.incomeForRange(fromDate, toDate, types); out.income = m.income; out.vat = m.vat; out.monthDocs = m.count; out.docs = m.docs; }
     catch (e) { out.errors.income = e.message; }
-    try { out.openInvoices = await greenInvoice.openInvoicesCount(); } catch (e) { out.errors.open = e.message; }
+    try {
+      const openDocs = await greenInvoice.openDocuments();
+      out.openInvoices = openDocs.length;
+      out.openInvoicesSum = openDocs.reduce((s, d) => s + (d.amountDue != null ? Number(d.amountDue) : Number(d.amount) || 0), 0);
+    } catch (e) { out.errors.open = e.message; }
     try { out.clients = await greenInvoice.listClients(); } catch (e) { out.errors.clients = e.message; }
   } else { out.errors.greenInvoice = 'חשבונית ירוקה לא מחוברת'; }
   json(res, out);
