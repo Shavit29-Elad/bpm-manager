@@ -302,7 +302,7 @@ function mapExpense(e) {
   };
 }
 // ===== הוצאות (קבלנים/ספקים) =====
-export async function getExpenseUploadInfo() { return api('/expenses/file'); } // presigned URL להעלאת קובץ
+export async function getExpenseUploadInfo(id) { return api(`/expenses/file?id=${encodeURIComponent(id)}`); } // presigned URL להעלאת קובץ להוצאה קיימת
 export async function getExpense(id) { return api(`/expenses/${encodeURIComponent(id)}`); }
 export async function expenseStatuses() { return api('/expenses/statuses'); }
 export async function createExpense(body) { const r = await api('/expenses', { method: 'POST', body }); clearDataCache(); return r; }

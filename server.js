@@ -277,12 +277,20 @@ add('POST', /^\/api\/quotes\/close-bulk$/, async (req, res, _p, _q, body) => {
   json(res, { ok: true, closed: results.filter(r => r.ok).length, results });
 });
 
-// GET /api/debug/expense — זמני: לומד את מבנה העלאת קובץ + שדות הוצאה
+// GET /api/debug/expense — זמני: מחזור בדיקה — יוצר הוצאת בדיקה, מקבל URL להעלאה, ומוחק
 add('GET', /^\/api\/debug\/expense$/, async (req, res) => {
   const out = {};
-  try { out.uploadInfo = await greenInvoice.getExpenseUploadInfo(); } catch (e) { out.uploadErr = e.message; }
-  try { out.statuses = await greenInvoice.expenseStatuses(); } catch (e) { out.statusErr = e.message; }
-  try { out.sample = await greenInvoice.getExpense('2a7ab208-3bcc-4a75-b5d1-03e3af00b5d7'); } catch (e) { out.sampleErr = e.message; }
+  const supplierId = 'fdb981d0-bdc8-439c-9602-114e84ddee86'; // שי סויסה
+  const body = { supplier: { id: supplierId }, documentType: 305, date: '2026-07-01', currency: 'ILS', paymentType: 4, amount: 1.18, amountExcludeVat: 1, vat: 0.18, description: 'בדיקה טכנית - יימחק' };
+  try {
+    const created = await greenInvoice.createExpense(body);
+    out.created = created;
+    const eid = created?.id;
+    if (eid) {
+      try { out.fileInfo = await greenInvoice.getExpenseUploadInfo(eid); } catch (e) { out.fileErr = e.message; }
+      try { out.deleted = await greenInvoice.deleteExpense(eid); } catch (e) { out.delErr = e.message; }
+    }
+  } catch (e) { out.createErr = e.message; out.attempted = body; }
   json(res, out);
 });
 
