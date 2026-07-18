@@ -537,7 +537,8 @@ function rowEvent(e) {
 }
 
 // ================= עורך אירוע (תבנית מלאה + מחירים + שיוך לקוח) =================
-let _evEditing = null, _evCtr = [], _evClients = null;
+let _evEditing = null, _evCtr = [], _evClients = null, _evEmp = [], _evEmployees = null, _evSuppliers = null;
+const EV_FACTORS = [['0.5', 'חצי יומית'], ['1', 'יומית'], ['1.5', 'יומית וחצי'], ['2', 'כפולה']];
 function evClickAttr(e) {
   const p = encodeURIComponent(JSON.stringify({ eventId: e.eventId || null, gcalId: e.gcalId || null, date: e.date, title: e.title, location: e.location }));
   return `onclick="openEventFromCal('${p}')"`;
@@ -562,7 +563,11 @@ async function openEventEditor(ev) {
   _evEditing = ev;
   _evCtr = (ev.contractorDetails && ev.contractorDetails.length ? ev.contractorDetails
     : (ev.contractors || []).map(n => ({ name: n, amount: null }))).map(c => ({ name: c.name || '', amount: c.amount ?? '' }));
+  _evEmp = (ev.employeeDetails && ev.employeeDetails.length ? ev.employeeDetails
+    : (ev.employees || []).map(n => ({ name: n }))).map(w => ({ name: w.name || '', factor: w.factor ?? '1', bonus: w.bonus ?? '' }));
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
+  if (!_evEmployees) { try { _evEmployees = await api(`/api/employees?companyId=${state.company}`); } catch { _evEmployees = []; } }
+  if (!_evSuppliers) { try { const s = await api('/api/suppliers'); _evSuppliers = Array.isArray(s) ? s : []; } catch { _evSuppliers = []; } }
   let m = document.getElementById('evModal');
   if (!m) { m = document.createElement('div'); m.id = 'evModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
@@ -579,12 +584,18 @@ async function openEventEditor(ev) {
       ${fld('מחיר סאונד ₪', `<input id="evPriceSound" type="number" inputmode="decimal" value="${ev.priceSound ?? ''}"/>`)}
       ${fld('מחיר תוספות ₪', `<input id="evPriceExtras" type="number" inputmode="decimal" value="${ev.priceExtras ?? ''}"/>`)}
       ${fld('שיוך ללקוח (לחיוב חודשי)', `<input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…"/>`)}
-      ${fld('עובדים (מופרד בפסיקים)', `<input id="evEmployees" value="${v((ev.employees || []).join(', '))}"/>`, true)}
-      ${fld('תוספת לעובדים', `<input id="evBonus" value="${v(ev.employeeBonusRaw)}"/>`, true)}
+      ${fld('הערת תוספות (טקסט חופשי)', `<input id="evBonus" value="${v(ev.employeeBonusRaw)}" placeholder="למשל: כפיר כפולה, נתנאל רגיל"/>`, true)}
     </div>
     <datalist id="evClientList">${(_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
+    <datalist id="evEmpList">${(_evEmployees || []).map(e => `<option value="${escapeHtml(e.name)}">`).join('')}</datalist>
+    <datalist id="evSupList">${(_evSuppliers || []).map(s => `<option value="${escapeHtml(s.name)}">`).join('')}</datalist>
     <div style="margin-top:14px">
-      <div class="row-between" style="margin-bottom:6px"><b style="font-size:14px">קבלנים</b>
+      <div class="row-between" style="margin-bottom:6px"><b style="font-size:14px">עובדים</b>
+        <button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="evAddEmp()">+ הוסף עובד</button></div>
+      <div id="evEmpBox">${evEmpHtml()}</div>
+    </div>
+    <div style="margin-top:14px">
+      <div class="row-between" style="margin-bottom:6px"><b style="font-size:14px">קבלנים / ספקים</b>
         <button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="evAddCtr()">+ הוסף קבלן</button></div>
       <div id="evCtrBox">${evCtrHtml()}</div>
     </div>
@@ -606,27 +617,39 @@ window.deleteEvent = async () => {
   renderCombined($('#content'));
 };
 function evCtrHtml() {
-  if (!_evCtr.length) return '<span class="muted" style="font-size:13px">אין קבלנים. הוסף אם רלוונטי לתשלום.</span>';
+  if (!_evCtr.length) return '<span class="muted" style="font-size:13px">אין קבלנים. הוסף אם רלוונטי לתשלום. אפשר לבחור ספק מחשבונית ירוקה.</span>';
   return _evCtr.map((c, i) => `<div style="display:flex;gap:8px;margin-bottom:6px">
-    <input value="${(c.name || '').replace(/"/g, '&quot;')}" placeholder="שם קבלן" oninput="_evCtr[${i}].name=this.value" style="flex:1"/>
+    <input list="evSupList" value="${(c.name || '').replace(/"/g, '&quot;')}" placeholder="שם קבלן / ספק" oninput="_evCtr[${i}].name=this.value" style="flex:1"/>
     <input type="number" inputmode="decimal" value="${c.amount ?? ''}" placeholder="סכום לתשלום ₪" oninput="_evCtr[${i}].amount=this.value" style="width:150px"/>
     <button class="btn ghost" style="padding:4px 11px" onclick="evRemoveCtr(${i})" title="הסר">×</button></div>`).join('');
 }
 window.evAddCtr = () => { _evCtr.push({ name: '', amount: '' }); document.getElementById('evCtrBox').innerHTML = evCtrHtml(); };
 window.evRemoveCtr = (i) => { _evCtr.splice(i, 1); document.getElementById('evCtrBox').innerHTML = evCtrHtml(); };
+// שורות עובדים: שם (מרשימת עובדים) + פקטור (חצי/יומית/כפולה) + בונוס
+function evEmpHtml() {
+  if (!_evEmp.length) return '<span class="muted" style="font-size:13px">אין עובדים. הוסף עובדים למשמרת.</span>';
+  return _evEmp.map((w, i) => `<div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+    <input list="evEmpList" value="${(w.name || '').replace(/"/g, '&quot;')}" placeholder="שם עובד" oninput="_evEmp[${i}].name=this.value" style="flex:1"/>
+    <select onchange="_evEmp[${i}].factor=this.value" style="width:120px">${EV_FACTORS.map(([val, lbl]) => `<option value="${val}"${String(w.factor) === val ? ' selected' : ''}>${lbl}</option>`).join('')}</select>
+    <input type="number" inputmode="decimal" value="${w.bonus ?? ''}" placeholder="בונוס ₪" oninput="_evEmp[${i}].bonus=this.value" style="width:110px"/>
+    <button class="btn ghost" style="padding:4px 11px" onclick="evRemoveEmp(${i})" title="הסר">×</button></div>`).join('');
+}
+window.evAddEmp = () => { _evEmp.push({ name: '', factor: '1', bonus: '' }); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
+window.evRemoveEmp = (i) => { _evEmp.splice(i, 1); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
 window.saveEvent = async (btn) => {
   const g = (id) => document.getElementById(id);
   const num = (x) => { const s = String(x ?? '').trim(); return s === '' || isNaN(+s) ? null : +s; };
   const clientName = g('evClient').value.trim() || null;
   const clientId = (_evClients || []).find(c => c.name === clientName)?.id || _evEditing.clientId || null;
   const ctr = _evCtr.filter(c => (c.name || '').trim()).map(c => ({ name: c.name.trim(), amount: num(c.amount) }));
+  const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus) }));
   const body = {
     date: g('evDate').value || null, dateRaw: g('evDate').value || _evEditing.dateRaw || null,
     artist: g('evArtist').value.trim() || null,
     location: g('evLocation').value.trim() || null,
     sound: g('evSound').value.trim() || null,
     price: num(g('evPrice').value), priceSound: num(g('evPriceSound').value), priceExtras: num(g('evPriceExtras').value),
-    employees: g('evEmployees').value.split(',').map(s => s.trim()).filter(Boolean),
+    employees: emp.map(w => w.name), employeeDetails: emp,
     employeeBonusRaw: g('evBonus').value.trim() || null,
     contractors: ctr.map(c => c.name), contractorDetails: ctr,
     clientName, clientId,
@@ -694,16 +717,63 @@ async function renderContractors(c) {
     : `<div class="empty">אין קבלנים משויכים עם סכומים עדיין. הוסף סכום לכל קבלן באירוע.</div>`}</div>`;
 }
 
-// ---- שכר ----
+// ---- שכר עובדים ----
+const monthLabelFromKey = (k) => { const m = String(k || '').match(/^(\d{4})-(\d{2})$/); return m ? `${MONTHS_HE[+m[2] - 1]} ${m[1]}` : k; };
+function empRow(e) {
+  return `<tr id="emp-${e.id}">
+    <td><input value="${(e.name || '').replace(/"/g, '&quot;')}" onchange="saveEmp('${e.id}',{name:this.value})" style="width:170px"/></td>
+    <td><input type="number" inputmode="decimal" value="${e.baseRate ?? ''}" placeholder="₪ ליום" onchange="saveEmp('${e.id}',{baseRate:this.value===''?null:+this.value})" style="width:130px"/></td>
+    <td><button class="btn ghost" style="padding:4px 11px;color:var(--danger)" onclick="delEmp('${e.id}')">מחק</button></td></tr>`;
+}
+window.saveEmp = (id, patch) => fetch(`/api/employees/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).catch(() => {});
+window.delEmp = async (id) => { if (!confirm('למחוק עובד מהרשימה?')) return; await fetch(`/api/employees/${id}`, { method: 'DELETE' }); renderPayroll($('#content')); };
+window.addEmployeeRow = async () => {
+  const name = prompt('שם העובד:'); if (!name || !name.trim()) return;
+  await fetch('/api/employees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), baseRate: null, companyId: state.company }) });
+  renderPayroll($('#content'));
+};
+window.syncEmployees = async (btn) => {
+  if (btn) { btn.disabled = true; btn.textContent = 'מייבא…'; }
+  const r = await fetch(`/api/employees/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => ({ added: 0 }));
+  alert(`נוספו ${r.added || 0} עובדים מהאירועים. עכשיו אפשר להזין לכל אחד שכר בסיס.`);
+  renderPayroll($('#content'));
+};
+window.shiftPayMonth = (d) => { const [y, m] = (state.payMonth).split('-').map(Number); const dt = new Date(y, m - 1 + d, 1); state.payMonth = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`; renderPayroll($('#content')); };
 async function renderPayroll(c) {
-  const month = new Date().toISOString().slice(0, 7);
-  const list = await api(`/api/payroll?companyId=${state.company}&month=${month}`);
-  c.innerHTML = `<div class="panel">
-    <div class="warn-banner">מסך פנימי — נתוני שכר של עובד אינם נחשפים לעובדים אחרים.</div>
-    <h2>שכר עובדים — ${month}</h2>
-    ${list.length ? `<table><thead><tr><th>עובד</th><th>משמרות</th><th>בסיס</th><th>תוספת</th><th>סה"כ</th></tr></thead>
-      <tbody>${list.map(e => `<tr><td>${e.name}</td><td>${e.shifts.length}</td><td>${money(e.base)}</td><td>${money(e.bonus)}</td><td><b>${money(e.total)}</b></td></tr>`).join('')}</tbody></table>`
-    : `<div class="empty">אין נתוני שכר לחודש זה. שייך תעריף לכל עובד באירוע.</div>`}</div>`;
+  if (!state.payMonth) state.payMonth = new Date().toISOString().slice(0, 7);
+  const month = state.payMonth;
+  const [emps, list] = await Promise.all([
+    api(`/api/employees?companyId=${state.company}`),
+    api(`/api/payroll?companyId=${state.company}&month=${month}`),
+  ]);
+  const tot = (k) => list.reduce((s, e) => s + (e[k] || 0), 0);
+  c.innerHTML = `
+    <div class="panel">
+      <div class="row-between">
+        <div><h2>עובדים — שכר בסיס</h2><span class="muted">שכר בסיס יומי לכל עובד. במשמרת הוא מוכפל בפקטור (חצי/יומית/כפולה) ומתווסף בונוס לפי האירוע.</span></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn ghost" onclick="syncEmployees(this)">↺ ייבא עובדים מהאירועים</button>
+          <button class="btn primary" onclick="addEmployeeRow()">+ עובד</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto"><table style="min-width:480px"><thead><tr><th>שם</th><th>שכר בסיס יומי</th><th></th></tr></thead>
+        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="3"><div class="empty">אין עובדים עדיין. לחץ "ייבא עובדים מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
+    </div>
+    <div class="panel">
+      <div class="warn-banner">מסך פנימי — נתוני שכר של עובד אינם נחשפים לעובדים אחרים.</div>
+      <div class="row-between">
+        <h2>שכר לתשלום — ${monthLabelFromKey(month)}</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn ghost" style="padding:6px 12px" onclick="shiftPayMonth(-1)">חודש קודם →</button>
+          <button class="btn ghost" style="padding:6px 12px" onclick="shiftPayMonth(1)">← חודש הבא</button>
+        </div>
+      </div>
+      ${list.length ? `<div style="overflow-x:auto"><table style="min-width:660px"><thead><tr><th>עובד</th><th>שכר בסיס</th><th>משמרות</th><th>בסיס מצטבר</th><th>בונוס</th><th>סה"כ לתשלום</th></tr></thead>
+        <tbody>${list.map(e => `<tr><td>${escapeHtml(e.name)}</td><td>${e.baseRate ? money(e.baseRate) : '<span class="muted">— הגדר למעלה</span>'}</td><td>${e.shifts.length}</td><td>${money(e.base)}</td><td>${money(e.bonus)}</td><td><b>${money(e.total)}</b></td></tr>`).join('')}
+        <tr style="border-top:2px solid var(--line)"><td colspan="3"><b>סה"כ</b></td><td><b>${money(tot('base'))}</b></td><td><b>${money(tot('bonus'))}</b></td><td><b style="color:var(--accent)">${money(tot('total'))}</b></td></tr>
+        </tbody></table></div>`
+      : `<div class="empty">אין נתוני שכר לחודש זה. שייך עובדים לאירועים (בטופס העריכה) והגדר שכר בסיס למעלה.</div>`}
+    </div>`;
 }
 
 // ---- מרכז חיבורים ----

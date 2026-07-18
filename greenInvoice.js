@@ -224,5 +224,13 @@ export async function listClients() {
   });
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, listClients, clientDocuments, DOC_TYPES };
+// רשימת ספקים מחשבונית ירוקה (לשיוך קבלנים)
+export async function listSuppliers() {
+  return cached('suppliers', async () => {
+    const res = await api('/suppliers/search', { method: 'POST', body: { page: 1, pageSize: 200 } });
+    return (res.items || []).map(s => ({ id: s.id, name: s.name })).filter(s => s.name);
+  });
+}
+
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createReceipt, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, listClients, listSuppliers, clientDocuments, DOC_TYPES };
 export default greenInvoice;

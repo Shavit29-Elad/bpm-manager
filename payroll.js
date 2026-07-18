@@ -3,23 +3,30 @@
 // מידע העובדים פנימי בלבד - לא נחשף בין עובד לעובד (ראה server.js: אין endpoint שמחזיר
 // שכר של עובד אחר; כל שליפה היא לפי מזהה עובד מפורש למי שמורשה).
 
-// מקבל אירועים + שיוך תעריפים לעובד, מחזיר סיכום לכל עובד לחודש נתון.
-export function employeePayForMonth(events, month /* yyyy-mm */) {
+// מקבל אירועים + רשימת עובדים (עם שכר בסיס), מחזיר סיכום לכל עובד לחודש.
+// בסיס למשמרת = שכר בסיס יומי × פקטור (יומית=1, כפולה=2, חצי=0.5). ניתן לדרוס עם w.rate.
+export function employeePayForMonth(events, month /* yyyy-mm */, employees = []) {
+  const rateOf = (name) => {
+    const e = (employees || []).find(x => x.name === name);
+    return e ? Number(e.baseRate) || 0 : 0;
+  };
   const byEmployee = {};
   for (const ev of events) {
     if (month && !(ev.date || '').startsWith(month)) continue;
     for (const w of ev.employeeDetails || []) {
       const name = w.name;
+      if (!name) continue;
       if (!byEmployee[name]) {
-        byEmployee[name] = { name, month, base: 0, bonus: 0, total: 0, shifts: [] };
+        byEmployee[name] = { name, month, base: 0, bonus: 0, total: 0, baseRate: rateOf(name), shifts: [] };
       }
-      const base = Number(w.rate) || 0;
+      const factor = w.factor != null && w.factor !== '' ? Number(w.factor) : 1;
+      const base = (w.rate != null && w.rate !== '' ? Number(w.rate) : rateOf(name) * factor) || 0;
       const bonus = Number(w.bonus) || 0;
       byEmployee[name].base += base;
       byEmployee[name].bonus += bonus;
       byEmployee[name].total += base + bonus;
       byEmployee[name].shifts.push({
-        eventId: ev.id, date: ev.date, artist: ev.artist, base, bonus,
+        eventId: ev.id, date: ev.date, artist: ev.artist, factor, base, bonus,
       });
     }
   }

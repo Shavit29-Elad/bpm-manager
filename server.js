@@ -85,15 +85,6 @@ add('POST', /^\/api\/events\/ingest$/, async (req, res, _p, _q, body) => {
   catch (e) { json(res, { error: e.message }, 500); }
 });
 
-// DEBUG זמני — בדיקת חילוץ אירועים ב-AI בלי לשמור
-add('POST', /^\/api\/debug\/extract$/, async (req, res, _p, _q, body) => {
-  try {
-    const evs = await extractEvents(body?.text || '', 2026);
-    const raw = String(globalThis.__lastExtractRaw || '');
-    json(res, { count: evs.length, rawLen: raw.length, rawHead: raw.slice(0, 1200), rawTail: raw.slice(-500) });
-  } catch (e) { json(res, { error: e.message, rawHead: String(globalThis.__lastExtractRaw || '').slice(0, 1200) }); }
-});
-
 // POST /api/events  — יצירה ידנית או "אימוץ" אירוע מיומן גוגל לרשומה שניתן לערוך
 add('POST', /^\/api\/events$/, (req, res, _p, _q, body) => {
   const db = load();
@@ -227,8 +218,63 @@ add('GET', /^\/api\/contractors\/payables$/, (req, res, _p, q) =>
   json(res, contractorPayables(companyEvents(load(), q.companyId))));
 
 // GET /api/payroll?companyId=&month=
-add('GET', /^\/api\/payroll$/, (req, res, _p, q) =>
-  json(res, employeePayForMonth(companyEvents(load(), q.companyId), q.month)));
+add('GET', /^\/api\/payroll$/, (req, res, _p, q) => {
+  const db = load();
+  const emps = (db.employees || []).filter(e => !e.companyId || e.companyId === q.companyId);
+  json(res, employeePayForMonth(companyEvents(db, q.companyId), q.month, emps));
+});
+
+// ---- עובדים (רשימה מרכזית עם שכר בסיס) ----
+// GET /api/employees?companyId=
+add('GET', /^\/api\/employees$/, (req, res, _p, q) => {
+  const db = load();
+  json(res, (db.employees || []).filter(e => !e.companyId || e.companyId === q.companyId)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he')));
+});
+// POST /api/employees  { name, baseRate }
+add('POST', /^\/api\/employees$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const cid = body.companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
+  const name = (body.name || '').trim();
+  if (!name) return json(res, { error: 'חסר שם עובד' }, 400);
+  let emp = (db.employees || []).find(e => e.name === name && (!e.companyId || e.companyId === cid));
+  if (emp) { emp.baseRate = body.baseRate ?? emp.baseRate; }
+  else { emp = { id: id('emp'), companyId: cid, name, baseRate: body.baseRate ?? null, active: true }; db.employees.push(emp); }
+  save(db); json(res, emp);
+});
+// PUT /api/employees/:id
+add('PUT', /^\/api\/employees\/([^/]+)$/, (req, res, params, _q, body) => {
+  const db = load();
+  const emp = (db.employees || []).find(e => e.id === params[0]);
+  if (!emp) return json(res, { error: 'עובד לא נמצא' }, 404);
+  Object.assign(emp, body); save(db); json(res, emp);
+});
+// DELETE /api/employees/:id
+add('DELETE', /^\/api\/employees\/([^/]+)$/, (req, res, params) => {
+  const db = load();
+  const before = (db.employees || []).length;
+  db.employees = (db.employees || []).filter(e => e.id !== params[0]);
+  if (db.employees.length === before) return json(res, { error: 'עובד לא נמצא' }, 404);
+  save(db); json(res, { ok: true });
+});
+
+// POST /api/employees/sync — יוצר עובדים מרכזיים מכל השמות שמופיעים באירועים
+add('POST', /^\/api\/employees\/sync$/, (req, res, _p, q, body) => {
+  const db = load();
+  const cid = (body && body.companyId) || q.companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
+  const names = new Set();
+  for (const ev of companyEvents(db, cid)) for (const w of (ev.employeeDetails || [])) if (w.name) names.add(String(w.name).trim());
+  const existing = new Set((db.employees || []).filter(e => !e.companyId || e.companyId === cid).map(e => e.name));
+  let added = 0;
+  for (const name of names) { if (name && !existing.has(name)) { db.employees.push({ id: id('emp'), companyId: cid, name, baseRate: null, active: true }); added++; } }
+  save(db); json(res, { added });
+});
+
+// GET /api/suppliers — ספקים מחשבונית ירוקה (לשיוך קבלנים)
+add('GET', /^\/api\/suppliers$/, async (req, res) => {
+  try { json(res, await greenInvoice.listSuppliers()); }
+  catch (e) { json(res, { error: e.message }, 200); }
+});
 
 // GET /api/whatsapp/status
 add('GET', /^\/api\/whatsapp\/status$/, (req, res) => json(res, getBridgeStatus()));
