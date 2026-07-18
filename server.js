@@ -265,15 +265,6 @@ add('GET', /^\/api\/open-quotes$/, async (req, res) => {
   catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
-// GET /api/debug/quote — זמני: לומד שדות קישור/סגירה ממסמך אמיתי
-add('GET', /^\/api\/debug\/quote$/, async (req, res) => {
-  try {
-    const q = await greenInvoice.openQuotes();
-    const full = q[0] ? await greenInvoice.getDocument(q[0].id) : null;
-    json(res, { count: q.length, firstId: q[0]?.id, keys: full ? Object.keys(full) : [], full });
-  } catch (e) { json(res, { error: e.message }, 500); }
-});
-
 // GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה
 add('GET', /^\/api\/open-invoices$/, async (req, res) => {
   if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });

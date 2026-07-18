@@ -259,6 +259,7 @@ export async function openDocuments({ months = 24 } = {}) {
       return {
         id: d.id, number: d.number, type: d.type, date: d.documentDate,
         clientName: d.client?.name || d.clientName || '—',
+        description: d.description || '',
         amount, amountDue: openAmt, status: d.status,
         url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null),
       };
@@ -273,7 +274,7 @@ export async function openQuotes({ months = 36 } = {}) {
     const items = await documentsInRange(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10), [10]);
     return items.filter(d => Number(d.status) === 0).map(d => {
       const amount = num(d.amount ?? d.total ?? d.sum);
-      return { id: d.id, number: d.number, type: d.type, date: d.documentDate, clientName: d.client?.name || d.clientName || '—', amount, status: d.status, url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null) };
+      return { id: d.id, number: d.number, type: d.type, date: d.documentDate, clientName: d.client?.name || d.clientName || '—', description: d.description || '', amount, status: d.status, url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null) };
     });
   });
 }

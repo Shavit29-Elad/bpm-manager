@@ -264,8 +264,9 @@ function openInvClientHtml(cl) {
   const rid = 'oig_' + Math.random().toString(36).slice(2, 8);
   const rows = cl.ds.map(d => `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
     <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}</span>
-    <span>#${d.number}</span><span class="muted">${fmtDate(d.date)}</span>
-    <span style="margin-inline-start:auto;font-weight:600">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>
+    <span style="white-space:nowrap">#${d.number}</span><span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
+    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</span>
+    <span style="font-weight:600;white-space:nowrap">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>
     ${d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
     <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : ''}
   </div>`).join('');
@@ -975,7 +976,7 @@ async function renderQuotes(c) {
     <div class="row-between"><div><h2>הצעות מחיר פתוחות</h2>
       <span class="muted">${docs.length} הצעות · ${money(total)}. כל ההצעות שהסטטוס שלהן פתוח בחשבונית ירוקה.</span></div></div>
     ${r.error ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(r.error)}</div>` : ''}
-    ${docs.length ? `<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th>תאריך</th><th>מספר</th><th>לקוח</th><th>סכום</th><th></th></tr></thead>
+    ${docs.length ? `<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th>תאריך</th><th>מספר</th><th>לקוח</th><th>תיאור</th><th>סכום</th><th></th></tr></thead>
       <tbody>${docs.map(quoteRow).join('')}</tbody></table></div>`
       : `<div class="empty">אין הצעות מחיר פתוחות 👌</div>`}
   </div>`;
@@ -984,7 +985,8 @@ function quoteRow(d) {
   const acts = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
     <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : '';
   return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>#${d.number}</td>
-    <td>${escapeHtml(d.clientName || '')}</td><td style="white-space:nowrap;font-weight:600">${money(d.amount)}</td>
+    <td>${escapeHtml(d.clientName || '')}</td><td>${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</td>
+    <td style="white-space:nowrap;font-weight:600">${money(d.amount)}</td>
     <td style="text-align:left">${acts}</td></tr>`;
 }
 
