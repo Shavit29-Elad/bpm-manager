@@ -277,6 +277,15 @@ add('POST', /^\/api\/quotes\/close-bulk$/, async (req, res, _p, _q, body) => {
   json(res, { ok: true, closed: results.filter(r => r.ok).length, results });
 });
 
+// POST /api/expenses/upload-file — העלאת קובץ הוצאה (חשבונית ספק) לחשבונית ירוקה כטיוטת OCR
+// body: { fileBase64, fileName, mime }
+add('POST', /^\/api\/expenses\/upload-file$/, async (req, res, _p, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  if (!body?.fileBase64) return json(res, { error: 'חסר קובץ' }, 400);
+  try { json(res, await greenInvoice.uploadExpenseFile(body.fileBase64, body.fileName, body.mime)); }
+  catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // POST /api/contractors/:id/expense — רישום הוצאה של קבלן ישירות בחשבונית ירוקה
 // body: { number, date, documentType, amount, vatIncluded, description }
 add('POST', /^\/api\/contractors\/([^/]+)\/expense$/, async (req, res, params, _q, body) => {

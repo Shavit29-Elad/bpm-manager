@@ -302,7 +302,27 @@ function mapExpense(e) {
   };
 }
 // ===== הוצאות (קבלנים/ספקים) =====
-export async function getExpenseUploadInfo(id) { return api(`/expenses/file?id=${encodeURIComponent(id)}`); } // presigned URL להעלאת קובץ להוצאה קיימת
+// שלב 1: מקבל פרטי העלאה חתומים (S3 presigned) — טיוטת הוצאה חדשה שתעבור OCR
+export async function getExpenseFileUploadUrl(existingId) {
+  const payload = existingId ? { id: existingId, source: 5, state: 'expense' } : { source: 5 };
+  const data = encodeURIComponent(JSON.stringify(payload));
+  return api(`/expenses/file?context=expense&data=${data}`);
+}
+// שלב 2: מעלה את הקובץ ל-S3. שולחים את כל שדות ה-fields ואז את file אחרון (חובה!)
+export async function uploadExpenseFile(fileBase64, fileName, mime, existingId) {
+  const info = await getExpenseFileUploadUrl(existingId);
+  const url = info?.url || info?.uploadUrl;
+  const fields = info?.fields || {};
+  if (!url) throw new Error('לא התקבל כתובת העלאה מחשבונית ירוקה');
+  const buffer = Buffer.from(fileBase64, 'base64');
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.append(k, String(v)); // כל השדות תחילה
+  form.append('file', new Blob([buffer], { type: mime || 'application/pdf' }), fileName || 'expense.pdf'); // file אחרון!
+  const res = await fetch(url, { method: 'POST', body: form });
+  if (res.status !== 204 && !res.ok) throw new Error(`העלאת הקובץ נכשלה: ${res.status} ${await res.text().catch(() => '')}`);
+  clearDataCache();
+  return { ok: true };
+}
 export async function getExpense(id) { return api(`/expenses/${encodeURIComponent(id)}`); }
 export async function getSupplier(id) { return api(`/suppliers/${encodeURIComponent(id)}`); }
 export async function expenseStatuses() { return api('/expenses/statuses'); }
@@ -396,5 +416,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseUploadInfo, getExpense, getSupplier, expenseStatuses, createExpense, deleteExpense, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, createExpense, deleteExpense, clearDataCache, DOC_TYPES };
 export default greenInvoice;

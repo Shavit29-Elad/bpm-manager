@@ -1158,7 +1158,7 @@ function renderSupplierDetail() {
   const total = docs.reduce((s, d) => s + (Number(d.amount) || 0), 0);
   const yearSel = `<select onchange="setSupYear(this.value)" style="padding:6px 10px"><option value="all" ${_supYear === 'all' ? 'selected' : ''}>כל השנים</option>${years.map(y => `<option value="${y}" ${_supYear === y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
   detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${escapeHtml(_supName)}</h2>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn primary" style="padding:5px 12px;font-size:13px" onclick="openExpenseForm()">+ רשום הוצאה</button><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים · ${money(total)}</span></div></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn success" style="padding:5px 12px;font-size:13px" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn primary" style="padding:5px 12px;font-size:13px" onclick="openExpenseForm()">+ רשום הוצאה</button><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים · ${money(total)}</span></div></div>
     ${docs.length ? `<div style="overflow-x:auto;margin-top:10px"><table style="min-width:520px"><thead><tr><th>תאריך</th><th>מספר</th><th>קטגוריה</th><th>סכום</th><th></th></tr></thead>
       <tbody>${docs.map(supDocRow).join('')}</tbody></table></div>`
       : `<div class="empty">לא נמצאו מסמכי הוצאה לקבלן זה בחשבונית ירוקה.</div>`}`;
@@ -1169,6 +1169,26 @@ function supDocRow(d) {
   return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>${escapeHtml(String(d.number || '—'))}</td>
     <td>${escapeHtml(d.category || '')}</td><td style="white-space:nowrap">${money(d.amount)}</td><td>${acts}</td></tr>`;
 }
+// העלאת קובץ חשבונית של קבלן → נכנס לחשבונית ירוקה כטיוטת הוצאה (OCR), ממתין לאישור
+window.pickExpenseFile = () => {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.pdf,.png,.jpg,.jpeg,application/pdf,image/*';
+  inp.onchange = async () => {
+    const f = inp.files[0]; if (!f) return;
+    if (f.size > 10 * 1024 * 1024) { alert('הקובץ גדול מדי (עד 10MB)'); return; }
+    let toast = document.getElementById('expToast');
+    if (!toast) { toast = document.createElement('div'); toast.id = 'expToast'; toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 18px;font-size:14px;z-index:9999;box-shadow:0 6px 24px rgba(0,0,0,.15)'; document.body.appendChild(toast); }
+    toast.style.display = 'block'; toast.innerHTML = `מעלה את "${escapeHtml(f.name)}" לחשבונית ירוקה…`;
+    const data = await fileToB64(f);
+    const r = await fetch('/api/expenses/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileBase64: data, fileName: f.name, mime: f.type || 'application/pdf' }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (r.ok) {
+      toast.innerHTML = '✓ הקובץ הועלה! הוא ממתין לאישור כטיוטת הוצאה בחשבונית ירוקה (הזיהוי האוטומטי לוקח כמה שניות).';
+      setTimeout(() => { toast.style.display = 'none'; if (_supId) selectSupplier(_supId, encodeURIComponent(_supName)); }, 4000);
+    } else { toast.innerHTML = `<span style="color:var(--danger)">שגיאה בהעלאה: ${escapeHtml(String(r.error || ''))}</span>`; setTimeout(() => { toast.style.display = 'none'; }, 5000); }
+  };
+  inp.click();
+};
 // רישום הוצאה של קבלן ישירות בחשבונית ירוקה
 const EXPENSE_DOC_TYPES = [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
 window.openExpenseForm = () => {
