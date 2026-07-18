@@ -390,11 +390,16 @@ add('GET', /^\/api\/expense-drafts\/([^/]+)\/file$/, async (req, res, params) =>
 });
 
 // POST /api/expense-drafts/:id/ai-extract — קורא את קובץ החשבונית עם AI ומחזיר שדות מוכנים לאישור
-add('POST', /^\/api\/expense-drafts\/([^/]+)\/ai-extract$/, async (req, res, params) => {
+// התוצאה נשמרת במטמון (db.draftAi) כדי שקריאה חוזרת/פתיחת המסך תהיה מיידית. ?force=1 מריץ מחדש.
+add('POST', /^\/api\/expense-drafts\/([^/]+)\/ai-extract$/, async (req, res, params, q) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   if (!chatConfigured()) return json(res, { error: 'AI לא מוגדר. הוסף ANTHROPIC_API_KEY (או GEMINI_API_KEY) בהגדרות Render.' }, 400);
+  const draftId = params[0];
   try {
-    const draft = await greenInvoice.getExpenseDraft(params[0]);
+    const db = load();
+    db.draftAi = db.draftAi || {};
+    if (!q?.force && db.draftAi[draftId]) return json(res, { ok: true, fields: db.draftAi[draftId], cached: true });
+    const draft = await greenInvoice.getExpenseDraft(draftId);
     if (!draft?.url) return json(res, { error: 'אין קובץ לטיוטה' }, 404);
     const fr = await fetch(draft.url, { redirect: 'follow' });
     if (!fr.ok) return json(res, { error: `שגיאה בטעינת הקובץ: ${fr.status}` }, 502);
@@ -402,6 +407,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/ai-extract$/, async (req, res, par
     const b64 = Buffer.from(await fr.arrayBuffer()).toString('base64');
     const suppliers = await greenInvoice.listSuppliers().catch(() => []);
     const fields = await extractInvoiceFields(b64, mime, suppliers);
+    const db2 = load(); db2.draftAi = db2.draftAi || {}; db2.draftAi[draftId] = fields; save(db2);
     json(res, { ok: true, fields });
   } catch (e) { json(res, { error: e.message }, 500); }
 });

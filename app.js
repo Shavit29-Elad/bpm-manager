@@ -1125,6 +1125,7 @@ async function renderContractors(c) {
   </div>`;
   const inp = $('#supSearch');
   if (inp) inp.oninput = () => { $('#supList').innerHTML = supplierRows((_suppliers || []).filter(s => !inp.value || (s.name || '').includes(inp.value))); };
+  kickDraftsAi(); // AI קורא את הטיוטות ברקע כדי שהכרטיסים יציגו ספק/סכום/תיאור והמסך יהיה מוכן מראש
 }
 function contractorCard(x) {
   const safe = 'ct_' + String(x.name).replace(/[^a-zA-Z0-9֐-׿]/g, '_');
@@ -1183,6 +1184,28 @@ function supplierRows(list) {
 }
 let _supDocs = [], _supName = '', _supYear = 'all', _supId = '';
 let _drafts = [];
+const _aiByDraft = {};      // מטמון תוצאות ה-AI לכל טיוטה (id -> fields)
+const _aiInFlight = {};     // מונע קריאות כפולות במקביל
+let _openApproveId = null;  // איזו טיוטה פתוחה כרגע במסך הקליטה
+// מריץ קריאת AI ברקע לכל הטיוטות שעדיין לא נקראו, ואז מרענן את הכרטיסים
+window.kickDraftsAi = async () => {
+  const list = (_drafts || []).slice();
+  let changed = false;
+  await Promise.all(list.map(async (d) => {
+    if (_aiByDraft[d.id] || _aiInFlight[d.id]) return;
+    _aiInFlight[d.id] = true;
+    try {
+      const r = await fetch(`/api/expense-drafts/${d.id}/ai-extract`, { method: 'POST' }).then(x => x.json());
+      if (r && r.ok && r.fields) { _aiByDraft[d.id] = r.fields; const dd = (_drafts || []).find(x => x.id === d.id); if (dd) dd.ai = r.fields; changed = true; }
+    } catch { } finally { delete _aiInFlight[d.id]; }
+  }));
+  if (changed) {
+    const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
+    if (_openApproveId && _aiByDraft[_openApproveId] && document.getElementById('apAi')) {
+      applyAiFields(_aiByDraft[_openApproveId]); document.getElementById('apAi').innerHTML = aiNote(_aiByDraft[_openApproveId]);
+    }
+  }
+};
 // ===== טיוטות הוצאה (OCR) — צפייה ואישור מתוך האתר =====
 const DRAFT_TYPE_NAMES = { 20: 'חשבון/אישור', 305: 'חשבונית מס', 320: 'מס-קבלה', 330: 'זיכוי', 400: 'קבלה', 405: 'קבלה תרומה' };
 function draftsSection() {
@@ -1193,17 +1216,27 @@ function draftsSection() {
     ${list.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${list.map(draftCard).join('')}</div>` : `<div class="empty">אין טיוטות ממתינות לאישור.</div>`}`;
 }
 function draftCard(d) {
+  const ai = _aiByDraft[d.id] || d.ai || null;   // מה שה-AI קרא מהחשבונית (גובר על ה-OCR הכללי של מורנינג)
   const failed = d.status === 50 || d.status === 200;
-  const amt = d.amount != null ? money(d.amount) : '<span class="muted">סכום לא זוהה</span>';
-  const supTxt = d.supplierName ? escapeHtml(d.supplierName) : '<span class="muted">ספק לא זוהה — יש לבחור באישור</span>';
-  const typeTxt = DRAFT_TYPE_NAMES[d.documentType] || '';
-  const file = d.url ? `<a class="btn ghost" style="padding:3px 10px;font-size:12px" href="/api/expense-drafts/${d.id}/file" target="_blank" rel="noopener">📄 צפה בקובץ</a>` : '';
-  const statusTag = failed ? `<span class="tag" style="background:#fde8e8;color:var(--danger)">${escapeHtml(d.statusText)}</span>` : `<span class="tag">${escapeHtml(d.statusText)}</span>`;
+  const supName = (ai && ai.supplierName) || d.supplierName;
+  const amtVal = (ai && ai.amountInclVat) ? ai.amountInclVat : d.amount;
+  const desc = (ai && ai.description) || d.description || '';
+  const number = (ai && ai.invoiceNumber) || d.number;
+  const date = (ai && ai.date) || d.date;
+  const docType = (ai && ai.documentType) || d.documentType;
+  const amt = (amtVal != null && amtVal !== '') ? money(amtVal) : '<span class="muted">—</span>';
+  const supTxt = supName ? escapeHtml(supName) : '<span class="muted">ספק לא זוהה</span>';
+  const typeTxt = DRAFT_TYPE_NAMES[docType] || '';
+  const file = d.url ? `<a class="btn ghost" style="padding:3px 10px;font-size:12px" href="/api/expense-drafts/${d.id}/file" target="_blank" rel="noopener">📄 צפה</a>` : '';
+  const aiBadge = ai
+    ? '<span class="tag" style="background:#e7f7ee;color:var(--accent2)">🤖 נקרא — מוכן לקליטה</span>'
+    : '<span class="tag muted">🤖 קורא…</span>';
+  const statusTag = failed ? ` <span class="tag" style="background:#fde8e8;color:var(--danger)">${escapeHtml(d.statusText)}</span>` : '';
   return `<div class="card" style="padding:12px 14px">
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <div style="min-width:180px"><b>${supTxt}</b> ${statusTag}<br><span class="muted" style="font-size:12.5px">${typeTxt}${d.number ? ` · מס' ${escapeHtml(String(d.number))}` : ''}${d.date ? ` · ${ddmy(d.date)}` : ''}</span></div>
+      <div style="min-width:190px"><b>${supTxt}</b> ${aiBadge}${statusTag}<br><span class="muted" style="font-size:12.5px">${typeTxt}${number ? ` · מס' ${escapeHtml(String(number))}` : ''}${date ? ` · ${ddmy(date)}` : ''}</span></div>
       <div style="font-weight:700;font-size:15px;min-width:90px">${amt}</div>
-      <div style="flex:1;min-width:120px" class="muted">${escapeHtml(d.description || '')}</div>
+      <div style="flex:1;min-width:120px" class="muted">${escapeHtml(desc)}</div>
       <div style="display:flex;gap:6px;margin-inline-start:auto">
         ${file}
         <button class="btn success" style="padding:4px 12px;font-size:13px" onclick="openApproveDraft('${d.id}')">📥 קליטת חשבונית</button>
@@ -1217,6 +1250,8 @@ window.reloadDrafts = async (btn) => {
   const dr = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
   _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
   const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
+  if (btn) { btn.disabled = false; btn.textContent = '↻ רענן'; }
+  kickDraftsAi(); // AI קורא את כל הטיוטות ברקע כדי שהכרטיסים והמסך יהיו מוכנים מראש
 };
 window.dismissDraft = async (id) => {
   if (!confirm('להסתיר את הטיוטה הזו מהרשימה? (הקובץ יישאר בחשבונית ירוקה, לא תיווצר הוצאה)')) return;
@@ -1276,6 +1311,7 @@ window.openApproveDraft = (id) => {
     </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  _openApproveId = d.id;
   setTimeout(() => { recalcApprVat(); aiFillDraft(d.id); }, 30);
 };
 // קליטה חכמה: AI קורא את קובץ החשבונית וממלא את השדות (עם מטמון לכל טיוטה)
@@ -1293,13 +1329,13 @@ function applyAiFields(f) {
   recalcApprVat();
 }
 window.aiFillDraft = async (id, force) => {
-  const d = (_drafts || []).find(x => x.id === id); if (!d) return;
   const el = document.getElementById('apAi');
-  if (d.ai && !force) { applyAiFields(d.ai); if (el) el.innerHTML = aiNote(d.ai); return; }
+  const cached = !force && (_aiByDraft[id] || (_drafts || []).find(x => x.id === id)?.ai);
+  if (cached) { applyAiFields(cached); if (el) el.innerHTML = aiNote(cached); return; }  // כבר נקרא מראש — מיידי
   if (el) el.innerHTML = '<span class="muted">🤖 קורא את החשבונית עם AI…</span>';
-  const r = await fetch(`/api/expense-drafts/${id}/ai-extract`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const r = await fetch(`/api/expense-drafts/${id}/ai-extract${force ? '?force=1' : ''}`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (!document.getElementById('apAi')) return; // המשתמש סגר
-  if (r.ok && r.fields) { d.ai = r.fields; applyAiFields(r.fields); if (el) el.innerHTML = aiNote(r.fields); }
+  if (r.ok && r.fields) { _aiByDraft[id] = r.fields; const d = (_drafts || []).find(x => x.id === id); if (d) d.ai = r.fields; applyAiFields(r.fields); if (el) el.innerHTML = aiNote(r.fields); }
   else if (el) el.innerHTML = `<span style="color:var(--warn)">🤖 AI לא זמין (${escapeHtml(String(r.error || ''))}) — מלא ידנית</span>`;
 };
 function aiNote(f) {
@@ -1391,7 +1427,8 @@ window.pickExpenseFile = () => {
         const list = Array.isArray(dr?.drafts) ? dr.drafts : null;
         if (list) { _drafts = list; const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection(); }
         if ((list && list.length > baseline)) {
-          toast.innerHTML = '✓ החשבונית זוהתה ונוספה ל"טיוטות הוצאה לאישור".';
+          toast.innerHTML = '✓ החשבונית זוהתה ונוספה ל"טיוטות הוצאה לאישור". ה-AI קורא אותה עכשיו…';
+          kickDraftsAi(); // מיד קורא את החשבונית עם AI כדי שהכרטיס והמסך יהיו מוכנים
           setTimeout(() => { toast.style.display = 'none'; }, 4000);
         } else if (tries >= 15) {
           toast.innerHTML = 'הקובץ הועלה בהצלחה. הזיהוי האוטומטי עדיין מתעבד — לחץ "↻ רענן" בעוד רגע כדי לראות אותו.';
