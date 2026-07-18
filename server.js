@@ -303,18 +303,25 @@ add('GET', /^\/api\/invoicing\/recent-for-client$/, async (req, res, _p, q) => {
   } catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
-// POST /api/invoicing/link { eventIds, docId, docNumber, docType } — שיוך אירועים לחשבונית קיימת
+// POST /api/invoicing/link { eventIds, docs:[{id,number,type}] } — שיוך אירועים לעד 4 מסמכים קיימים וסגירת האירוע
 add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
   const db = load();
   const ids = body.eventIds || [];
-  if (!ids.length || !body.docId) return json(res, { error: 'חסרים נתונים לשיוך' }, 400);
+  let docs = Array.isArray(body.docs) && body.docs.length
+    ? body.docs
+    : (body.docId ? [{ id: body.docId, number: body.docNumber || null, type: Number(body.docType) || null }] : []);
+  if (!ids.length || !docs.length) return json(res, { error: 'חסרים נתונים לשיוך' }, 400);
+  docs = docs.slice(0, 4).map(d => ({ id: d.id, number: d.number || null, type: Number(d.type) || null }));
+  // מסמך ראשי לתצוגה: חשבונית מס/מס-קבלה > חשבון עסקה > קבלה > הצעת מחיר
+  let primary = docs[0];
+  for (const t of [305, 320, 300, 400, 10]) { const d = docs.find(x => x.type === t); if (d) { primary = d; break; } }
   let n = 0;
   for (const id of ids) {
     const e = db.events.find(x => x.id === id);
-    if (e) { e.invoiceStatus = 'invoiced'; e.invoiceId = body.docId; e.invoiceNumber = body.docNumber || null; e.invoiceType = Number(body.docType) || null; n++; }
+    if (e) { e.invoiceStatus = 'invoiced'; e.linkedDocs = docs; e.invoiceId = primary.id; e.invoiceNumber = primary.number; e.invoiceType = primary.type; n++; }
   }
   save(db);
-  json(res, { ok: true, linked: n });
+  json(res, { ok: true, linked: n, docs: docs.length });
 });
 
 // GET /api/open-quotes — הצעות מחיר פתוחות
