@@ -45,6 +45,7 @@ async function initPg() {
     idleTimeoutMillis: 30000,
   });
   await pool.query('CREATE TABLE IF NOT EXISTS app_state (id INT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ DEFAULT now())');
+  await pool.query('CREATE TABLE IF NOT EXISTS emp_files (id TEXT PRIMARY KEY, employee_id TEXT, kind TEXT, filename TEXT, mime TEXT, data TEXT, created_at TIMESTAMPTZ DEFAULT now())');
   const r = await pool.query('SELECT data FROM app_state WHERE id = 1');
   if (r.rows.length) {
     cache = { ...EMPTY, ...r.rows[0].data };
@@ -144,4 +145,27 @@ export function upsertEvent(db, ev) {
 
 export function companyEvents(db, companyId) {
   return db.events.filter(e => e.companyId === companyId);
+}
+
+// ----- אחסון קבצים (מסמכי עובדים) — בטבלה נפרדת כדי לא לנפח את app_state -----
+const _localFiles = new Map();
+export async function saveFile({ id: fid, employeeId, kind, filename, mime, data }) {
+  const fileId = fid || id('file');
+  if (usePg && pool) {
+    await pool.query(
+      'INSERT INTO emp_files (id, employee_id, kind, filename, mime, data) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO UPDATE SET data=$6, filename=$4, mime=$5, kind=$3',
+      [fileId, employeeId || null, kind || null, filename || null, mime || null, data || '']);
+  } else {
+    _localFiles.set(fileId, { id: fileId, employee_id: employeeId, kind, filename, mime, data });
+  }
+  return { id: fileId, employeeId, kind, filename, mime };
+}
+export async function getFile(fileId) {
+  if (usePg && pool) { const r = await pool.query('SELECT * FROM emp_files WHERE id=$1', [fileId]); return r.rows[0] || null; }
+  return _localFiles.get(fileId) || null;
+}
+export async function deleteFile(fileId) {
+  if (usePg && pool) { await pool.query('DELETE FROM emp_files WHERE id=$1', [fileId]); }
+  else { _localFiles.delete(fileId); }
+  return true;
 }

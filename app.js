@@ -501,7 +501,11 @@ async function renderMonthCalendar() {
       ${cells}
     </div>`;
 }
-const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>איכות קליטה</th><th>עריכה</th></tr></thead>`;
+const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>אישור</th><th>עריכה</th></tr></thead>`;
+window.confirmEventRow = async (id, val) => {
+  await fetch(`/api/events/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: val }) }).catch(() => {});
+  renderCombined($('#content'));
+};
 // אירועים מקובצים לפי חודש — כל חודש בטבלה נפרדת עם סיכום
 function eventsByMonthHtml(events) {
   const groups = {};
@@ -522,8 +526,10 @@ function eventsByMonthHtml(events) {
   }).join('');
 }
 function rowEvent(e) {
-  const miss = e.missingFields?.length ? `<span class="tag miss">חסר: ${e.missingFields.join(', ')}</span>` : `<span class="tag match">מלא</span>`;
-  return `<tr>
+  const confBtn = e.confirmed
+    ? `<button class="btn success" style="padding:4px 12px;font-size:12px" onclick="confirmEventRow('${e.id}',false)">מאושר ✓</button>`
+    : `<button class="btn ghost" style="padding:4px 16px;font-size:12px" onclick="confirmEventRow('${e.id}',true)">אשר</button>`;
+  return `<tr${e.confirmed ? ' style="background:rgba(14,164,114,.05)"' : ''}>
     <td>${e.date || e.dateRaw || '—'}</td>
     <td>${e.artist || '—'}</td>
     <td>${e.location || '—'}</td>
@@ -532,7 +538,7 @@ function rowEvent(e) {
     <td>${(e.employees || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td>${(e.contractors || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td><span class="tag ${e.invoiceStatus === 'invoiced' ? 'invoiced' : 'pending'}">${e.invoiceStatus === 'invoiced' ? 'חויב' : 'ממתין'}</span></td>
-    <td>${miss}</td>
+    <td>${confBtn}</td>
     <td><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button></td></tr>`;
 }
 
@@ -717,12 +723,61 @@ async function renderContractors(c) {
     : `<div class="empty">אין קבלנים משויכים עם סכומים עדיין. הוסף סכום לכל קבלן באירוע.</div>`}</div>`;
 }
 
-// ---- שכר עובדים ----
+// ---- עובדים ----
 const monthLabelFromKey = (k) => { const m = String(k || '').match(/^(\d{4})-(\d{2})$/); return m ? `${MONTHS_HE[+m[2] - 1]} ${m[1]}` : k; };
+const FACTOR_LABEL = (f) => ({ '0.5': 'חצי יומית', '1': 'יומית', '1.5': 'יומית וחצי', '2': 'כפולה' }[String(f)] || (f != null ? '×' + f : 'יומית'));
+function payPeriodControls() {
+  const [y, mm] = state.payMonth.split('-'); const cy = new Date().getFullYear(); const years = [];
+  for (let yy = cy + 1; yy >= cy - 5; yy--) years.push(yy);
+  return `<div style="display:flex;gap:8px;align-items:center">
+    <select onchange="setPayPart('m',this.value)">${MONTHS_HE.map((mn, i) => `<option value="${String(i + 1).padStart(2, '0')}"${(+mm === i + 1) ? ' selected' : ''}>${mn}</option>`).join('')}</select>
+    <select onchange="setPayPart('y',this.value)">${years.map(yy => `<option${(+y === yy) ? ' selected' : ''}>${yy}</option>`).join('')}</select></div>`;
+}
+window.setPayPart = (part, val) => { let [y, mm] = state.payMonth.split('-'); if (part === 'm') mm = val; else y = val; state.payMonth = `${y}-${mm}`; renderPayroll($('#content')); };
+function fileToB64(f) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f); }); }
+window.empUploadDoc = (empId, kind) => {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*,application/pdf';
+  inp.onchange = async () => { const f = inp.files[0]; if (!f) return; if (f.size > 8 * 1024 * 1024) { alert('הקובץ גדול מדי (עד 8MB)'); return; }
+    const data = await fileToB64(f);
+    await fetch(`/api/employees/${empId}/files`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, filename: f.name, mime: f.type, data }) }).catch(() => {});
+    renderPayroll($('#content')); };
+  inp.click();
+};
+window.empDelDoc = async (fid) => { if (!confirm('למחוק מסמך?')) return; await fetch(`/api/files/${fid}`, { method: 'DELETE' }); renderPayroll($('#content')); };
+window.empJobs = async (empId, nameEnc) => { const r = await api(`/api/employees/${empId}/jobs?month=${state.payMonth}`); openEmpJobsModal(decodeURIComponent(nameEnc), r); };
+window.empJobsByName = (nameEnc) => { const name = decodeURIComponent(nameEnc); const e = (window._payEmps || []).find(x => x.name === name); if (e) empJobs(e.id, nameEnc); else alert('העובד לא נמצא ברשימת העובדים. לחץ "ייבא מהאירועים".'); };
+function openEmpJobsModal(name, r) {
+  const shifts = (r.pay && r.pay.shifts) || [];
+  let m = document.getElementById('jobsModal'); if (!m) { m = document.createElement('div'); m.id = 'jobsModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(780px,95vw);max-height:88vh;overflow:auto">
+    <h3>עבודות של ${escapeHtml(name)} — ${monthLabelFromKey(state.payMonth)}</h3>
+    ${shifts.length ? `<div style="overflow-x:auto"><table><thead><tr><th>תאריך</th><th>אירוע</th><th>סוג משמרת</th><th>בסיס</th><th>בונוס</th><th>סה"כ</th></tr></thead>
+      <tbody>${shifts.map(s => `<tr><td>${s.date || '—'}</td><td>${escapeHtml(s.artist || '—')}</td><td>${FACTOR_LABEL(s.factor)}</td><td>${money(s.base)}</td><td>${money(s.bonus)}</td><td><b>${money((s.base || 0) + (s.bonus || 0))}</b></td></tr>`).join('')}
+      <tr style="border-top:2px solid var(--line)"><td colspan="3"><b>סה"כ</b></td><td>${money(r.pay.base)}</td><td>${money(r.pay.bonus)}</td><td><b style="color:var(--accent)">${money(r.pay.total)}</b></td></tr>
+      </tbody></table></div>` : `<div class="empty">אין עבודות לחודש זה.</div>`}
+    <div class="modal-actions" style="margin-top:14px"><button class="btn primary" onclick="document.getElementById('jobsModal').classList.add('hidden')">סגור</button></div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+}
+function empDocChip(e, kind, label) {
+  const fid = e.docs && e.docs[kind];
+  return fid
+    ? `<span style="white-space:nowrap"><a href="/api/files/${fid}" target="_blank" class="tag match" style="text-decoration:none">${label} 👁</a><a onclick="empDelDoc('${fid}')" style="cursor:pointer;color:var(--danger);margin-inline-start:3px">×</a></span>`
+    : `<button class="btn ghost" style="padding:2px 8px;font-size:11px;white-space:nowrap" onclick="empUploadDoc('${e.id}','${kind}')">${label} ↑</button>`;
+}
 function empRow(e) {
-  return `<tr id="emp-${e.id}">
-    <td><input value="${(e.name || '').replace(/"/g, '&quot;')}" onchange="saveEmp('${e.id}',{name:this.value})" style="width:170px"/></td>
-    <td><input type="number" inputmode="decimal" value="${e.baseRate ?? ''}" placeholder="₪ ליום" onchange="saveEmp('${e.id}',{baseRate:this.value===''?null:+this.value})" style="width:130px"/></td>
+  const val = (f) => (e[f] == null ? '' : String(e[f])).replace(/"/g, '&quot;');
+  return `<tr>
+    <td><button class="btn ghost" style="padding:4px 10px;font-size:13px;font-weight:600" title="ראה עבודות לחודש" onclick="empJobs('${e.id}','${encodeURIComponent(e.name || '')}')">${escapeHtml(e.name || '')}</button></td>
+    <td><input type="number" value="${e.baseRate ?? ''}" placeholder="₪ ליום" onchange="saveEmp('${e.id}',{baseRate:this.value===''?null:+this.value})" style="width:95px"/></td>
+    <td><input type="number" value="${e.travel ?? ''}" placeholder="₪" onchange="saveEmp('${e.id}',{travel:this.value===''?null:+this.value})" style="width:85px"/></td>
+    <td><input value="${val('idNumber')}" placeholder="מספר זהות" onchange="saveEmp('${e.id}',{idNumber:this.value})" style="width:120px" dir="ltr"/></td>
+    <td><input type="email" value="${val('email')}" placeholder="מייל" onchange="saveEmp('${e.id}',{email:this.value})" style="width:150px" dir="ltr"/></td>
+    <td><div style="display:flex;gap:4px;flex-wrap:wrap">${empDocChip(e, 'idFront', 'קדמי')}${empDocChip(e, 'idBack', 'אחורי')}${empDocChip(e, 'idSpah', 'ספח')}</div></td>
+    <td>${empDocChip(e, 'bankApproval', 'אישור')}</td>
+    <td>${empDocChip(e, 'form101', '101')}</td>
+    <td><div style="display:flex;gap:4px;flex-wrap:wrap">${empDocChip(e, 'licenseFront', 'קדמי')}${empDocChip(e, 'licenseBack', 'אחורי')}</div></td>
     <td><button class="btn ghost" style="padding:4px 11px;color:var(--danger)" onclick="delEmp('${e.id}')">מחק</button></td></tr>`;
 }
 window.saveEmp = (id, patch) => fetch(`/api/employees/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).catch(() => {});
@@ -735,10 +790,9 @@ window.addEmployeeRow = async () => {
 window.syncEmployees = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'מייבא…'; }
   const r = await fetch(`/api/employees/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => ({ added: 0 }));
-  alert(`נוספו ${r.added || 0} עובדים מהאירועים. עכשיו אפשר להזין לכל אחד שכר בסיס.`);
+  alert(`נוספו ${r.added || 0} עובדים מהאירועים.`);
   renderPayroll($('#content'));
 };
-window.shiftPayMonth = (d) => { const [y, m] = (state.payMonth).split('-').map(Number); const dt = new Date(y, m - 1 + d, 1); state.payMonth = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`; renderPayroll($('#content')); };
 async function renderPayroll(c) {
   if (!state.payMonth) state.payMonth = new Date().toISOString().slice(0, 7);
   const month = state.payMonth;
@@ -746,33 +800,28 @@ async function renderPayroll(c) {
     api(`/api/employees?companyId=${state.company}`),
     api(`/api/payroll?companyId=${state.company}&month=${month}`),
   ]);
+  window._payEmps = emps;
   const tot = (k) => list.reduce((s, e) => s + (e[k] || 0), 0);
   c.innerHTML = `
     <div class="panel">
+      <div class="warn-banner">מסך פנימי — נתוני שכר של עובד אינם נחשפים לעובדים אחרים.</div>
+      <div class="row-between"><h2>שכר לתשלום — ${monthLabelFromKey(month)}</h2>${payPeriodControls()}</div>
+      ${list.length ? `<div style="overflow-x:auto"><table style="min-width:680px"><thead><tr><th>עובד</th><th>שכר בסיס</th><th>משמרות</th><th>בסיס מצטבר</th><th>בונוס</th><th>סה"כ לתשלום</th></tr></thead>
+        <tbody>${list.map(e => `<tr><td><a onclick="empJobsByName('${encodeURIComponent(e.name)}')" style="cursor:pointer;color:var(--accent);font-weight:600">${escapeHtml(e.name)}</a></td><td>${e.baseRate ? money(e.baseRate) : '<span class="muted">—</span>'}</td><td>${e.shifts.length}</td><td>${money(e.base)}</td><td>${money(e.bonus)}</td><td><b>${money(e.total)}</b></td></tr>`).join('')}
+        <tr style="border-top:2px solid var(--line)"><td colspan="3"><b>סה"כ</b></td><td><b>${money(tot('base'))}</b></td><td><b>${money(tot('bonus'))}</b></td><td><b style="color:var(--accent)">${money(tot('total'))}</b></td></tr>
+        </tbody></table></div>` : `<div class="empty">אין נתוני שכר לחודש זה. שייך עובדים לאירועים והגדר שכר בסיס למטה.</div>`}
+    </div>
+    <div class="panel">
       <div class="row-between">
-        <div><h2>עובדים — שכר בסיס</h2><span class="muted">שכר בסיס יומי לכל עובד. במשמרת הוא מוכפל בפקטור (חצי/יומית/כפולה) ומתווסף בונוס לפי האירוע.</span></div>
+        <div><h2>רשימת עובדים</h2><span class="muted">שכר בסיס, פרטים ומסמכים. לחיצה על שם עובד — העבודות שלו לחודש שנבחר למעלה.</span></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn ghost" onclick="syncEmployees(this)">↺ ייבא עובדים מהאירועים</button>
+          <button class="btn ghost" onclick="syncEmployees(this)">↺ ייבא מהאירועים</button>
           <button class="btn primary" onclick="addEmployeeRow()">+ עובד</button>
         </div>
       </div>
-      <div style="overflow-x:auto"><table style="min-width:480px"><thead><tr><th>שם</th><th>שכר בסיס יומי</th><th></th></tr></thead>
-        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="3"><div class="empty">אין עובדים עדיין. לחץ "ייבא עובדים מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
-    </div>
-    <div class="panel">
-      <div class="warn-banner">מסך פנימי — נתוני שכר של עובד אינם נחשפים לעובדים אחרים.</div>
-      <div class="row-between">
-        <h2>שכר לתשלום — ${monthLabelFromKey(month)}</h2>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn ghost" style="padding:6px 12px" onclick="shiftPayMonth(-1)">חודש קודם →</button>
-          <button class="btn ghost" style="padding:6px 12px" onclick="shiftPayMonth(1)">← חודש הבא</button>
-        </div>
-      </div>
-      ${list.length ? `<div style="overflow-x:auto"><table style="min-width:660px"><thead><tr><th>עובד</th><th>שכר בסיס</th><th>משמרות</th><th>בסיס מצטבר</th><th>בונוס</th><th>סה"כ לתשלום</th></tr></thead>
-        <tbody>${list.map(e => `<tr><td>${escapeHtml(e.name)}</td><td>${e.baseRate ? money(e.baseRate) : '<span class="muted">— הגדר למעלה</span>'}</td><td>${e.shifts.length}</td><td>${money(e.base)}</td><td>${money(e.bonus)}</td><td><b>${money(e.total)}</b></td></tr>`).join('')}
-        <tr style="border-top:2px solid var(--line)"><td colspan="3"><b>סה"כ</b></td><td><b>${money(tot('base'))}</b></td><td><b>${money(tot('bonus'))}</b></td><td><b style="color:var(--accent)">${money(tot('total'))}</b></td></tr>
-        </tbody></table></div>`
-      : `<div class="empty">אין נתוני שכר לחודש זה. שייך עובדים לאירועים (בטופס העריכה) והגדר שכר בסיס למעלה.</div>`}
+      <div style="overflow-x:auto"><table style="min-width:1080px"><thead><tr>
+        <th>שם עובד</th><th>שכר בסיס</th><th>החזר נסיעות</th><th>מס ת"ז</th><th>מייל</th><th>ת"ז (קדמי/אחורי/ספח)</th><th>אישור ניהול חשבון</th><th>טופס 101</th><th>רישיון (קדמי/אחורי)</th><th></th></tr></thead>
+        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="10"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
     </div>`;
 }
 

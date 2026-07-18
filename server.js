@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { init as initStore, load, save, id, upsertEvent, companyEvents } from './store.js';
+import { init as initStore, load, save, id, upsertEvent, companyEvents, saveFile, getFile, deleteFile } from './store.js';
 import { parseEventMessage, parseEventMessages } from './whatsappParser.js';
 import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar } from './googleCalendar.js';
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables } from './invoicing.js';
@@ -268,6 +268,52 @@ add('POST', /^\/api\/employees\/sync$/, (req, res, _p, q, body) => {
   let added = 0;
   for (const name of names) { if (name && !existing.has(name)) { db.employees.push({ id: id('emp'), companyId: cid, name, baseRate: null, active: true }); added++; } }
   save(db); json(res, { added });
+});
+
+// ---- מסמכי עובד (העלאה/צפייה/מחיקה) ----
+// POST /api/employees/:id/files  { kind, filename, mime, data(base64) }
+add('POST', /^\/api\/employees\/([^/]+)\/files$/, async (req, res, params, _q, body) => {
+  const db = load();
+  const emp = (db.employees || []).find(e => e.id === params[0]);
+  if (!emp) return json(res, { error: 'עובד לא נמצא' }, 404);
+  if (!body || !body.data || !body.kind) return json(res, { error: 'חסר קובץ או סוג' }, 400);
+  const fileId = id('file');
+  await saveFile({ id: fileId, employeeId: emp.id, kind: body.kind, filename: body.filename || 'file', mime: body.mime || 'application/octet-stream', data: body.data });
+  emp.docs = emp.docs || {};
+  // אם היה קובץ קודם מאותו סוג — נמחק אותו
+  const prev = emp.docs[body.kind];
+  if (prev) { try { await deleteFile(prev); } catch { } }
+  emp.docs[body.kind] = fileId;
+  save(db);
+  json(res, { fileId, kind: body.kind, filename: body.filename || 'file' });
+});
+// GET /api/files/:id — הגשת הקובץ (צפייה/הורדה)
+add('GET', /^\/api\/files\/([^/]+)$/, async (req, res, params) => {
+  const f = await getFile(params[0]);
+  if (!f) return json(res, { error: 'קובץ לא נמצא' }, 404);
+  const buf = Buffer.from(f.data || '', 'base64');
+  res.writeHead(200, { 'Content-Type': f.mime || 'application/octet-stream', 'Content-Disposition': `inline; filename="${encodeURIComponent(f.filename || 'file')}"`, 'Content-Length': buf.length });
+  res.end(buf);
+});
+// DELETE /api/files/:id — מחיקת קובץ + הסרת ההפניה מהעובד
+add('DELETE', /^\/api\/files\/([^/]+)$/, async (req, res, params) => {
+  const db = load();
+  for (const emp of (db.employees || [])) {
+    if (emp.docs) for (const k of Object.keys(emp.docs)) if (emp.docs[k] === params[0]) delete emp.docs[k];
+  }
+  save(db);
+  try { await deleteFile(params[0]); } catch { }
+  json(res, { ok: true });
+});
+
+// GET /api/employees/:id/jobs?month= — עבודות של עובד לחודש (מתוך חישוב השכר)
+add('GET', /^\/api\/employees\/([^/]+)\/jobs$/, (req, res, params, q) => {
+  const db = load();
+  const emp = (db.employees || []).find(e => e.id === params[0]);
+  if (!emp) return json(res, { error: 'עובד לא נמצא' }, 404);
+  const emps = (db.employees || []).filter(e => !e.companyId || e.companyId === emp.companyId);
+  const pay = employeePayForMonth(companyEvents(db, emp.companyId), q.month, emps).find(p => p.name === emp.name);
+  json(res, { employee: emp, month: q.month, pay: pay || { shifts: [], base: 0, bonus: 0, total: 0 } });
 });
 
 // GET /api/suppliers — ספקים מחשבונית ירוקה (לשיוך קבלנים)
