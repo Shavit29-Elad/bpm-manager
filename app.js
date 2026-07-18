@@ -1379,8 +1379,27 @@ window.pickExpenseFile = () => {
     const r = await fetch('/api/expenses/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fileBase64: data, fileName: f.name, mime: f.type || 'application/pdf' }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (r.ok) {
-      toast.innerHTML = '✓ הקובץ הועלה! ממתין לזיהוי אוטומטי (OCR) — יופיע ב"טיוטות הוצאה לאישור" בעוד כמה שניות.';
-      setTimeout(() => { toast.style.display = 'none'; if (typeof reloadDrafts === 'function') reloadDrafts(); }, 6000);
+      // הזיהוי האוטומטי (OCR) של חשבונית ירוקה עשוי לקחת עד ~דקה — לכן נבדוק שוב ושוב עד שהטיוטה מופיעה
+      const baseline = (_drafts || []).length;
+      toast.innerHTML = '✓ הקובץ הועלה! מזהה את החשבונית אוטומטית (OCR)… זה עשוי לקחת עד דקה.';
+      let tries = 0;
+      const poll = async () => {
+        tries++;
+        const dr = await api('/api/expense-drafts?fresh=1').catch(() => null);
+        const list = Array.isArray(dr?.drafts) ? dr.drafts : null;
+        if (list) { _drafts = list; const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection(); }
+        if ((list && list.length > baseline)) {
+          toast.innerHTML = '✓ החשבונית זוהתה ונוספה ל"טיוטות הוצאה לאישור".';
+          setTimeout(() => { toast.style.display = 'none'; }, 4000);
+        } else if (tries >= 15) {
+          toast.innerHTML = 'הקובץ הועלה בהצלחה. הזיהוי האוטומטי עדיין מתעבד — לחץ "↻ רענן" בעוד רגע כדי לראות אותו.';
+          setTimeout(() => { toast.style.display = 'none'; }, 6000);
+        } else {
+          toast.innerHTML = `✓ הקובץ הועלה! מזהה את החשבונית אוטומטית (OCR)… (${tries*5} שנ')`;
+          setTimeout(poll, 5000);
+        }
+      };
+      setTimeout(poll, 4000);
     } else { toast.innerHTML = `<span style="color:var(--danger)">שגיאה בהעלאה: ${escapeHtml(String(r.error || ''))}</span>`; setTimeout(() => { toast.style.display = 'none'; }, 5000); }
   };
   inp.click();
