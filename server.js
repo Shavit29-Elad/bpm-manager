@@ -280,13 +280,15 @@ add('POST', /^\/api\/quotes\/close-bulk$/, async (req, res, _p, _q, body) => {
 // GET /api/debug/expense — זמני: מנסה כמה וריאנטים של גוף POST /expenses עד הצלחה, מקבל URL, מוחק
 add('GET', /^\/api\/debug\/expense$/, async (req, res) => {
   const supplierId = 'fdb981d0-bdc8-439c-9602-114e84ddee86'; // שי סויסה
-  const base = { supplier: { id: supplierId }, currency: 'ILS', paymentType: 4, amount: 1.18, amountExcludeVat: 1, vat: 0.18, description: 'בדיקה טכנית - יימחק', number: '990001', date: '2026-07-01' };
+  const cls = '0904485a-c1c2-417c-bb41-35c7d990ff77'; // ספק תאורה (מהדגימה)
+  const base = { supplier: { id: supplierId }, currency: 'ILS', paymentType: 4, amount: 1.18, amountExcludeVat: 1, vat: 0.18, description: 'בדיקה טכנית - יימחק', number: '990001', date: '2026-07-01', reportingDate: '2026-07-01', documentType: 305 };
   const variants = [
-    { ...base, documentType: 305 },
-    { ...base, documentType: 305, reportingDate: '2026-07-01' },
-    { ...base, documentType: 40, reportingDate: '2026-07-01' },
-    { ...base, type: 305, reportingDate: '2026-07-01' },
-    { ...base, documentType: 320, reportingDate: '2026-07-01', vatType: 1 },
+    { ...base, accountingClassificationId: cls },
+    { ...base, expenseType: 'professional_services_and_subcontractors' },
+    { ...base, accountingClassificationId: cls, expenseType: 'professional_services_and_subcontractors' },
+    { ...base, accountingClassification: { id: cls } },
+    { ...base, classification: cls },
+    { ...base, accountingClassificationId: cls, allocationNumber: '990001' },
   ];
   const out = { tries: [] };
   for (const body of variants) {
