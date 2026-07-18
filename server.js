@@ -428,6 +428,30 @@ add('POST', /^\/api\/quotes\/([^/]+)\/followup$/, async (req, res, params, _q, b
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// POST /api/documents/:id/derive { type, linked } — מסמך המשך (מקושר) או שכפול (חופשי) ממסמך קיים
+// linked=true → מסמך המשך מקושר למקור. linked=false → שכפול שאפשר לבחור לו כל סוג.
+add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const src = await greenInvoice.getDocument(params[0]);
+    const type = Number(body.type);
+    if (!type) return json(res, { error: 'חסר סוג מסמך' }, 400);
+    const items = (src.income || []).map(it => ({
+      catalogNum: it.catalogNum || undefined, description: it.description,
+      quantity: it.quantity ?? 1, price: it.price ?? 0,
+    }));
+    if (!items.length) return json(res, { error: 'אין שורות במסמך המקור' }, 400);
+    const opts = {
+      type,
+      client: src.client?.id ? { id: src.client.id } : { name: src.client?.name || 'לקוח' },
+      items, description: src.description || '', remarks: src.remarks || null,
+    };
+    if (body.linked) opts.linkedDocumentIds = [params[0]]; // מסמך המשך — קישור למקור
+    const doc = await greenInvoice.createDocument(opts);
+    json(res, { ok: true, doc });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה
 add('GET', /^\/api\/open-invoices$/, async (req, res) => {
   if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });

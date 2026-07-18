@@ -269,6 +269,8 @@ function openInvClientHtml(cl) {
     <span style="font-weight:600;white-space:nowrap">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>
     ${d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
     <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : ''}
+    ${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'followup')">מסמך המשך ↪</button>` : ''}
+    <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'duplicate')">שכפול ⧉</button>
   </div>`).join('');
   return `<div class="card" style="padding:0;overflow:hidden">
     <div class="row-between" style="margin:0;padding:11px 13px;cursor:pointer" onclick="document.getElementById('${rid}').classList.toggle('hidden')">
@@ -278,6 +280,45 @@ function openInvClientHtml(cl) {
     <div id="${rid}" class="${cl.ds.length > 1 ? 'hidden' : ''}">${rows}</div>
   </div>`;
 }
+// מסמכי המשך מותרים לפי סוג המקור: עסקה→מס/מס-קבלה ; מס→קבלה
+const FOLLOWUP_FOR = { 300: [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 305: [[400, 'קבלה']] };
+// שכפול — אפשר לבחור כל סוג (כולל הצעת מחיר)
+const DUPLICATE_TYPES = [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה'], [10, 'הצעת מחיר']];
+window.openDerive = (id, number, srcType, mode) => {
+  const followup = mode === 'followup';
+  const opts = followup ? (FOLLOWUP_FOR[srcType] || []) : DUPLICATE_TYPES;
+  let m = document.getElementById('derModal');
+  if (!m) { m = document.createElement('div'); m.id = 'derModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  const srcName = DOC_TYPE_SHORT[srcType] || 'מסמך';
+  m.innerHTML = `<div class="modal-card" style="width:min(440px,94vw)">
+    <h3>${followup ? 'מסמך המשך' : 'שכפול מסמך'} — ${srcName} #${escapeHtml(String(number))}</h3>
+    <p class="muted" style="font-size:13px">${followup
+      ? 'המסמך החדש ייווצר עם אותן שורות ויקושר למקור. בחר סוג:'
+      : 'שכפול עם אותן שורות (לא מקושר למקור) — בחר לאיזה סוג מסמך:'}</p>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+      ${opts.map(([v, l]) => `<button class="btn ghost" style="justify-content:flex-start;text-align:right" onclick="doDerive('${id}',${v},${followup ? 'true' : 'false'},this)">${l}</button>`).join('')}
+    </div>
+    <div id="derStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
+    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">ביטול</button></div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+};
+window.doDerive = async (id, type, linked, btn) => {
+  const st = document.getElementById('derStatus');
+  const typeName = DOC_TYPE_SHORT[type] || 'מסמך';
+  if (!confirm(`להפיק ${typeName}?\nהמסמך ייווצר בחשבונית ירוקה${linked ? ' ויקושר למקור' : ''} ולא ניתן למחיקה (רק לזכות).`)) return;
+  [...document.querySelectorAll('#derModal button')].forEach(b => b.disabled = true);
+  st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
+  const r = await fetch(`/api/documents/${id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, linked }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) {
+    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
+    setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); }, 1400);
+  } else {
+    [...document.querySelectorAll('#derModal button')].forEach(b => b.disabled = false);
+    st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
+  }
+};
 
 // פירוט הכנסה לפי חודש (לתצוגה שנתית / טווח)
 function monthlyBreakdown(docs) {
@@ -1060,14 +1101,14 @@ async function renderContractors(c) {
   _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
   const totalUnpaid = payables.reduce((s, x) => s + (x.unpaidTotal || 0), 0);
   const totalPaid = payables.reduce((s, x) => s + (x.paidTotal || 0), 0);
-  c.innerHTML = `<div class="panel">
+  c.innerHTML = `<div class="panel" id="draftsPanel">${draftsSection()}</div>
+  <div class="panel">
     <div class="row-between"><div><h2>קבלנים לתשלום</h2>
       <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום <b style="color:var(--danger)">${money(totalUnpaid)}</b>. סמן אירועים (או הכל), לחץ "סמן כשולם" והזן מספר חשבונית.</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn success" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
     ${payables.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${payables.map(contractorCard).join('')}</div>`
       : `<div class="empty">אין קבלנים עם סכומים עדיין. הוסף סכום לקבלן באירוע.</div>`}
   </div>
-  <div class="panel" id="draftsPanel">${draftsSection()}</div>
   <div class="panel">
     <div class="row-between"><div><h2>רשימת קבלנים</h2>
       <span class="muted">${_suppliers.length} קבלנים · מתוך הספקים בחשבונית ירוקה. לחיצה על קבלן מציגה את כל המסמכים שלו.</span></div>
