@@ -20,6 +20,12 @@ export function eventTotal(ev) {
   return parts || num(ev.price);
 }
 function isBilled(ev) { return Boolean(ev.invoiceId) || ev.invoiceStatus === 'invoiced'; }
+// אירוע שלא צריך להוציא עליו חשבונית (סומן ידנית, או לקוח "ללא - שולם")
+export function isNoInvoice(ev) {
+  if (ev.noInvoice) return true;
+  const c = (ev.clientName || ev.client || '').trim();
+  return /ללא\s*-?\s*שול[םמ]/.test(c);
+}
 
 // בונה שורות חשבונית מאירוע יחיד לפי הפורמט הנלמד
 export function eventInvoiceLines(ev) {
@@ -56,6 +62,7 @@ export function subjectForEvents(events) {
 export function eventsByClient(events) {
   const groups = {};
   for (const ev of events || []) {
+    if (isNoInvoice(ev)) continue; // אירועים שלא צריך להוציא עליהם חשבונית — לא מוצגים לחיוב
     const client = (ev.clientName || ev.client || 'ללא לקוח').trim();
     if (!groups[client]) groups[client] = { client, clientId: ev.clientId || null, events: [], total: 0, unbilledTotal: 0, unbilledCount: 0 };
     const g = groups[client];
@@ -89,18 +96,26 @@ export function groupForInvoicing(events) {
 }
 export function invoiceItemsFromGroup(group) { return invoiceItemsFromEvents(group.events); }
 
-// קבלנים: מי צריך להוציא לנו חשבונית וכמה אנחנו משלמים
+// קבלנים: כמה משלמים לכל קבלן, ומעקב תשלום לפי אירוע (שולם / לא שולם)
 export function contractorPayables(events) {
   const byContractor = {};
   for (const ev of events || []) {
-    for (const c of ev.contractorDetails || []) {
-      const name = c.name;
-      if (!byContractor[name]) byContractor[name] = { name, total: 0, events: [] };
-      byContractor[name].total += Number(c.amount) || 0;
-      byContractor[name].events.push({ id: ev.id, date: ev.date, amount: c.amount });
+    const details = ev.contractorDetails || [];
+    for (let i = 0; i < details.length; i++) {
+      const c = details[i];
+      const name = (c.name || '').trim();
+      if (!name) continue;
+      if (!byContractor[name]) byContractor[name] = { name, total: 0, paidTotal: 0, unpaidTotal: 0, events: [] };
+      const amt = Number(c.amount) || 0;
+      const paid = Boolean(c.paid);
+      const g = byContractor[name];
+      g.total += amt;
+      if (paid) g.paidTotal += amt; else g.unpaidTotal += amt;
+      g.events.push({ eventId: ev.id, index: i, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: amt, paid });
     }
   }
-  return Object.values(byContractor);
+  for (const g of Object.values(byContractor)) g.events.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  return Object.values(byContractor).sort((a, b) => b.unpaidTotal - a.unpaidTotal || a.name.localeCompare(b.name, 'he'));
 }
 
 export default {

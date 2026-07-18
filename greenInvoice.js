@@ -88,7 +88,7 @@ const PAYMENT_REQUIRED = new Set([320, 400, 405]);
 
 // בונה גוף מסמך. items = [{ description, quantity, price }].
 // client = { id? , name, taxId?, emails? } — אם יש id משתמשים בו (נמנע כפילות לקוח).
-function documentBody({ client, items, type, remarks, description, dueDate, date, payment }) {
+function documentBody({ client, items, type, remarks, description, dueDate, date, payment, sendEmail, email }) {
   const total = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
   const body = {
     type,
@@ -110,7 +110,8 @@ function documentBody({ client, items, type, remarks, description, dueDate, date
       return line;
     }),
   };
-  // אין שליחת מייל אוטומטית ללקוח — שליחה בשם המשתמש דורשת אישור מפורש בממשק
+  // שליחת מייל ללקוח רק אם המשתמש ביקש במפורש (ברירת מחדל: לא נשלח)
+  if (sendEmail && email) body.emails = [String(email).trim()];
   if (description) body.description = description;   // כותרת/נושא המסמך
   if (remarks) body.remarks = remarks;              // הערה בתחתית
   if (dueDate) body.dueDate = dueDate;

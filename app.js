@@ -393,16 +393,27 @@ async function renderCombined(c) {
     api(`/api/calendar/match?companyId=${state.company}`),
   ]);
   const misses = m.matched.filter(x => !x.calendar);
+  const monthsSet = [...new Set(events.map(e => (e.date || e.dateRaw || '').slice(0, 7)).filter(Boolean))].sort().reverse();
+  const filtered = _evMonthFilter === 'all' ? events : events.filter(e => (e.date || e.dateRaw || '').slice(0, 7) === _evMonthFilter);
+  const pending = filtered.filter(e => !e.confirmed);
+  const approved = filtered.filter(e => e.confirmed);
+  const overdue = events.filter(isOverdueUnbilled).length;
+  const monthSel = `<select onchange="setEvMonth(this.value)" style="padding:6px 10px"><option value="all" ${_evMonthFilter === 'all' ? 'selected' : ''}>כל החודשים</option>${monthsSet.map(k => `<option value="${k}" ${_evMonthFilter === k ? 'selected' : ''}>${monthKeyLabel(k)}</option>`).join('')}</select>`;
   c.innerHTML = `
     <div class="panel">
       <div class="row-between">
-        <div><h2>אירועים</h2><span class="muted">${events.length} אירועים</span></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div><h2>אירועים</h2><span class="muted">${events.length} אירועים${overdue ? ` · <span style="color:var(--danger)">${overdue} ללא חשבונית מחודש שעבר</span>` : ''}</span></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <span class="muted" style="font-size:13px">חודש:</span>${monthSel}
           <button class="btn primary" id="addEvent">+ הדבק הודעת ווטסאפ</button>
           <button class="btn ghost" id="addEventManual">+ הוסף אירוע</button>
         </div>
       </div>
-      ${events.length ? eventsByMonthHtml(events)
+      ${events.length ? `
+        <h3 style="margin:16px 0 4px;font-size:15px">🕓 אירועים לאישור <span class="muted" style="font-weight:400;font-size:13px">· ${pending.length}</span></h3>
+        ${pending.length ? eventsByMonthHtml(pending) : `<div class="empty">אין אירועים הממתינים לאישור 👌</div>`}
+        <h3 style="margin:22px 0 4px;font-size:15px">✓ אירועים מאושרים <span class="muted" style="font-weight:400;font-size:13px">· ${approved.length}</span></h3>
+        ${approved.length ? eventsByMonthHtml(approved) : `<div class="empty">עדיין אין אירועים מאושרים</div>`}`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
     </div>
 
@@ -561,6 +572,26 @@ async function renderMonthCalendar() {
     </div>`;
 }
 const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>אישור</th><th>עריכה</th></tr></thead>`;
+let _evMonthFilter = 'all';
+window.setEvMonth = (v) => { _evMonthFilter = v; renderCombined($('#content')); };
+const monthKeyLabel = (k) => { const m = String(k).match(/^(\d{4})-(\d{2})$/); return m ? `${MONTHS_HE[+m[2] - 1]} ${m[1]}` : k; };
+const curMonthKey = () => new Date().toISOString().slice(0, 7);
+const isNoInvoiceEv = (e) => Boolean(e.noInvoice) || /ללא\s*-?\s*שול[םמ]/.test(e.clientName || '');
+const isBilledEv = (e) => Boolean(e.invoiceId) || e.invoiceStatus === 'invoiced';
+const isOverdueUnbilled = (e) => {
+  if (isBilledEv(e) || isNoInvoiceEv(e)) return false;
+  const mk = (e.date || e.dateRaw || '').slice(0, 7);
+  return Boolean(mk) && mk < curMonthKey();
+};
+function invoiceCell(e) {
+  if (isBilledEv(e)) {
+    const t = DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית';
+    return `<span class="tag invoiced">שויך · ${t}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}</span>`;
+  }
+  if (isNoInvoiceEv(e)) return `<span class="tag" style="background:var(--panel2);color:var(--muted)">לא נדרש</span>`;
+  if (isOverdueUnbilled(e)) return `<span class="tag" style="background:rgba(225,29,72,.14);color:var(--danger);font-weight:700">חסר חשבונית!</span>`;
+  return `<span class="tag pending">ממתין</span>`;
+}
 window.confirmEventRow = async (id, val) => {
   await fetch(`/api/events/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: val }) }).catch(() => {});
   renderCombined($('#content'));
@@ -588,7 +619,8 @@ function rowEvent(e) {
   const confBtn = e.confirmed
     ? `<button class="btn success" style="padding:4px 12px;font-size:12px" onclick="confirmEventRow('${e.id}',false)">מאושר ✓</button>`
     : `<button class="btn ghost" style="padding:4px 16px;font-size:12px" onclick="confirmEventRow('${e.id}',true)">אשר</button>`;
-  return `<tr${e.confirmed ? ' style="background:rgba(14,164,114,.05)"' : ''}>
+  const rowBg = isOverdueUnbilled(e) ? 'background:rgba(225,29,72,.06)' : (e.confirmed ? 'background:rgba(14,164,114,.05)' : '');
+  return `<tr${rowBg ? ` style="${rowBg}"` : ''}>
     <td style="white-space:nowrap">${ddmy(e.date || e.dateRaw)}</td>
     <td>${e.artist || '—'}</td>
     <td>${e.location || '—'}</td>
@@ -596,7 +628,7 @@ function rowEvent(e) {
     <td>${money(e.price)}${(e.priceSound || e.priceExtras) ? `<div class="muted" style="font-size:11px">סאונד ${money(e.priceSound || 0)} · תוספות ${money(e.priceExtras || 0)}</div>` : ''}</td>
     <td>${(e.employees || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td>${(e.contractors || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
-    <td><span class="tag ${e.invoiceStatus === 'invoiced' ? 'invoiced' : 'pending'}">${e.invoiceStatus === 'invoiced' ? 'חויב' : 'ממתין'}</span></td>
+    <td>${invoiceCell(e)}</td>
     <td>${confBtn}</td>
     <td><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button></td></tr>`;
 }
@@ -649,6 +681,7 @@ async function openEventEditor(ev) {
       ${fld('מחיר סאונד ₪', `<input id="evPriceSound" type="number" inputmode="decimal" value="${ev.priceSound ?? ''}"/>`)}
       ${fld('מחיר תוספות ₪', `<input id="evPriceExtras" type="number" inputmode="decimal" value="${ev.priceExtras ?? ''}"/>`)}
       ${fld('שיוך ללקוח (לחיוב חודשי)', `<input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…"/>`)}
+      <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted);grid-column:1/3"><input id="evNoInvoice" type="checkbox" ${ev.noInvoice ? 'checked' : ''}/> לא צריך להוציא חשבונית על אירוע זה (שולם במזומן / ללא חיוב)</label>
       ${fld('הערת בונוס/תשלום (טקסט חופשי)', `<div style="display:flex;gap:6px"><input id="evBonus" value="${v(ev.employeeBonusRaw)}" placeholder="למשל: בונוס 278 לשניהם · בונוס חצי יומית · תשלום חצי יומית" style="flex:1"/><button type="button" class="btn ghost" style="white-space:nowrap;padding:8px 12px" onclick="applyBonusNote(this)">✨ החל על העובדים</button></div>`, true)}
     </div>
     <datalist id="evClientList">${(_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
@@ -740,6 +773,7 @@ function collectEventBody() {
     employeeBonusRaw: g('evBonus').value.trim() || null,
     contractors: ctr.map(c => c.name), contractorDetails: ctr,
     clientName, clientId,
+    noInvoice: Boolean(g('evNoInvoice')?.checked),
   };
 }
 let _evSaveT = null;
@@ -837,7 +871,7 @@ window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   if (!pv) { alert('שגיאה בטעינת התצוגה המקדימה'); return; }
   _invPreview = { ids, client: decodeURIComponent(clientEnc), clientId: clientId || null,
     items: (pv.items || []).map(it => ({ description: it.description, quantity: it.quantity ?? 1, price: it.price ?? 0 })),
-    subject: pv.subject || '', type: 305, dueDate: '' };
+    subject: pv.subject || '', type: 305, dueDate: '', sendEmail: false, email: '' };
   showInvoicePreviewModal();
 };
 function invTotals() {
@@ -876,6 +910,14 @@ function renderInvoicePreviewModal() {
     ${isReceipt ? `<div class="warn-banner" style="margin-bottom:10px">שים לב: ${DOC_TYPE_SHORT[+p.type]} מתעדת קבלת תשלום. תיווצר שורת תקבול של העברה בנקאית על מלוא הסכום.</div>` : ''}
     <table><thead><tr><th>פירוט</th><th>כמות</th><th>מחיר</th><th>סה"כ</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     <div style="margin-top:8px"><button class="btn ghost" onclick="invAddRow()">+ הוסף שורה</button></div>
+    <div style="margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px">
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer">
+        <input type="checkbox" ${p.sendEmail ? 'checked' : ''} onchange="invToggleEmail(this.checked)"/>
+        שלח את המסמך ללקוח במייל עם ההפקה</label>
+      <div id="invEmailRow" class="${p.sendEmail ? '' : 'hidden'}" style="margin-top:8px">
+        <input type="email" dir="ltr" placeholder="mail@example.com" value="${escAttr(p.email)}" oninput="_invPreview.email=this.value" style="width:100%"/>
+      </div>
+    </div>
     <div id="invSummary" style="margin-top:12px;text-align:left;font-size:14px">${invSummaryHtml(t)}</div>
     <div id="invPvStatus" style="min-height:18px;font-size:13px;margin:6px 0"></div>
     <div class="modal-actions">
@@ -896,6 +938,7 @@ window.invEdit = (i, k, v) => {
   const sum = document.getElementById('invSummary'); if (sum) sum.innerHTML = invSummaryHtml(invTotals());
 };
 window.invSetType = (v) => { _invPreview.type = +v; renderInvoicePreviewModal(); };
+window.invToggleEmail = (on) => { _invPreview.sendEmail = on; const r = document.getElementById('invEmailRow'); if (r) r.classList.toggle('hidden', !on); };
 window.invAddRow = () => { _invPreview.items.push({ description: '', quantity: 1, price: 0 }); renderInvoicePreviewModal(); };
 window.invDelRow = (i) => { _invPreview.items.splice(i, 1); renderInvoicePreviewModal(); };
 window.generateInvoice = async (btn) => {
@@ -903,12 +946,15 @@ window.generateInvoice = async (btn) => {
   const items = p.items.filter(it => (it.description || '').trim() && (Number(it.price) || 0) !== 0);
   if (!items.length) { document.getElementById('invPvStatus').innerHTML = '<span style="color:var(--danger)">אין שורות תקינות.</span>'; return; }
   const typeName = (INV_TYPES.find(x => x[0] === +p.type) || [, ''])[1];
-  if (!confirm(`להפיק ${typeName} על סך ${money(invTotals().total)} עבור ${p.client}?\nהמסמך ייווצר בחשבונית ירוקה ולא ניתן למחיקה (רק לזכות).`)) return;
+  if (p.sendEmail && !(p.email || '').trim()) { document.getElementById('invPvStatus').innerHTML = '<span style="color:var(--danger)">סימנת שליחה במייל אך לא הזנת כתובת.</span>'; return; }
+  const emailNote = p.sendEmail ? `\nהמסמך יישלח במייל אל ${p.email}.` : '';
+  if (!confirm(`להפיק ${typeName} על סך ${money(invTotals().total)} עבור ${p.client}?\nהמסמך ייווצר בחשבונית ירוקה ולא ניתן למחיקה (רק לזכות).${emailNote}`)) return;
   btn.disabled = true; btn.textContent = 'מפיק…';
   const st = document.getElementById('invPvStatus'); st.innerHTML = '<span class="muted">יוצר מסמך בחשבונית ירוקה…</span>';
   const r = await fetch('/api/invoicing/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ companyId: state.company, eventIds: p.ids, clientName: p.client, clientId: p.clientId,
-      type: p.type, items, description: p.subject, dueDate: p.dueDate || null }) }).then(r => r.json()).catch(() => ({ error: 'שגיאת רשת' }));
+      type: p.type, items, description: p.subject, dueDate: p.dueDate || null,
+      sendEmail: p.sendEmail, email: p.sendEmail ? p.email : null }) }).then(r => r.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ הפק בחשבונית ירוקה';
   if (r.ok) {
     st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
@@ -920,14 +966,49 @@ window.generateInvoice = async (btn) => {
 
 // ---- קבלנים ----
 async function renderContractors(c) {
-  const list = await api(`/api/contractors/payables?companyId=${state.company}`);
+  c.innerHTML = `<div class="panel"><div class="empty">טוען קבלנים…</div></div>`;
+  const [pay, sup] = await Promise.all([
+    api(`/api/contractors/payables?companyId=${state.company}`),
+    api('/api/suppliers').catch(() => []),
+  ]);
+  const payables = Array.isArray(pay) ? pay : [];
+  const suppliers = Array.isArray(sup) ? sup : [];
+  const totalUnpaid = payables.reduce((s, x) => s + (x.unpaidTotal || 0), 0);
+  const totalPaid = payables.reduce((s, x) => s + (x.paidTotal || 0), 0);
   c.innerHTML = `<div class="panel">
-    <div class="row-between"><div><h2>קבלנים לתשלום</h2><span class="muted">כמה אנחנו אמורים לשלם לכל קבלן, ולמעקב אחר חשבוניות שהם צריכים להוציא לנו.</span></div>
+    <div class="row-between"><div><h2>קבלנים לתשלום</h2>
+      <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום <b style="color:var(--danger)">${money(totalUnpaid)}</b>. לחיצה על קבלן פותחת את האירועים שלו וסימון שולם/לא שולם לכל אחד.</span></div>
       <button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div>
-    ${list.length ? `<table><thead><tr><th>קבלן</th><th>מס' אירועים</th><th>סכום לתשלום</th></tr></thead>
-      <tbody>${list.map(x => `<tr><td>${x.name}</td><td>${x.events.length}</td><td>${money(x.total)}</td></tr>`).join('')}</tbody></table>`
-    : `<div class="empty">אין קבלנים משויכים עם סכומים עדיין. הוסף סכום לכל קבלן באירוע.</div>`}</div>`;
+    ${payables.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${payables.map(contractorCard).join('')}</div>`
+      : `<div class="empty">אין קבלנים עם סכומים עדיין. הוסף סכום לקבלן באירוע.</div>`}
+  </div>
+  <div class="panel">
+    <div class="row-between"><div><h2>כל הקבלנים / הספקים</h2>
+      <span class="muted">מתוך רשימת הספקים בחשבונית ירוקה · ${suppliers.length}</span></div></div>
+    ${suppliers.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${suppliers.map(s => `<span class="chip" style="font-size:13px">🎛️ ${escapeHtml(s.name)}</span>`).join('')}</div>`
+      : `<div class="empty">לא נטענו ספקים מחשבונית ירוקה (ודא שהחיבור פעיל).</div>`}
+  </div>`;
 }
+function contractorCard(x) {
+  const safe = 'ct_' + String(x.name).replace(/[^a-zA-Z0-9֐-׿]/g, '_');
+  const rows = x.events.map(ev => `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
+    <span class="muted" style="white-space:nowrap">${ddmy(ev.date)}</span>
+    <span>${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''}</span>
+    <span style="margin-inline-start:auto;font-weight:600">${money(ev.amount)}</span>
+    <button class="btn ${ev.paid ? 'success' : 'ghost'}" style="padding:3px 10px;font-size:12px" onclick="toggleContractorPaid('${ev.eventId}',${ev.index},${ev.paid ? 0 : 1})">${ev.paid ? 'שולם ✓' : 'לא שולם'}</button>
+  </div>`).join('');
+  return `<div class="card" style="padding:0;overflow:hidden">
+    <div class="row-between" style="margin:0;padding:11px 13px;cursor:pointer" onclick="document.getElementById('${safe}').classList.toggle('hidden')">
+      <div><b>${escapeHtml(x.name)}</b> <span class="muted">· ${x.events.length} אירועים</span></div>
+      <div style="font-size:13px">שולם ${money(x.paidTotal)} · <span style="color:var(--danger)">נותר ${money(x.unpaidTotal)}</span></div>
+    </div>
+    <div id="${safe}" class="${x.events.length > 3 ? 'hidden' : ''}">${rows}</div>
+  </div>`;
+}
+window.toggleContractorPaid = async (eventId, index, paid) => {
+  await fetch('/api/contractors/toggle-paid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId, index, paid: !!paid }) }).catch(() => {});
+  renderContractors($('#content'));
+};
 
 // טופס הוספת לקוח/ספק לחשבונית ירוקה
 window.openContactForm = (kind) => {

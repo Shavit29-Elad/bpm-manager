@@ -247,6 +247,7 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
       description: body.description || subjectForEvents(evs),
       remarks: body.remarks || null,
       dueDate: [300, 305].includes(type) ? (body.dueDate || null) : null,
+      sendEmail: Boolean(body.sendEmail), email: body.email || null,
     });
     for (const ev of evs) {
       const e = db.events.find(x => x.id === ev.id);
@@ -267,6 +268,15 @@ add('GET', /^\/api\/open-invoices$/, async (req, res) => {
 // GET /api/contractors/payables?companyId=
 add('GET', /^\/api\/contractors\/payables$/, (req, res, _p, q) =>
   json(res, contractorPayables(companyEvents(load(), q.companyId))));
+
+// POST /api/contractors/toggle-paid — סימון תשלום לקבלן על אירוע מסוים
+add('POST', /^\/api\/contractors\/toggle-paid$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const ev = db.events.find(e => e.id === body.eventId);
+  if (!ev || !ev.contractorDetails || !ev.contractorDetails[body.index]) return json(res, { error: 'לא נמצא' }, 404);
+  ev.contractorDetails[body.index].paid = Boolean(body.paid);
+  save(db); json(res, { ok: true });
+});
 
 // GET /api/payroll?companyId=&month=
 add('GET', /^\/api\/payroll$/, (req, res, _p, q) => {
