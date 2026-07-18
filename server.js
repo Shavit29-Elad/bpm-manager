@@ -19,7 +19,7 @@ import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
-import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents } from './chat.js';
+import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses } from './chat.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
 
@@ -316,6 +316,12 @@ add('GET', /^\/api\/employees\/([^/]+)\/jobs$/, (req, res, params, q) => {
   const emps = (db.employees || []).filter(e => !e.companyId || e.companyId === emp.companyId);
   const pay = employeePayForMonth(companyEvents(db, emp.companyId), q.month, emps).find(p => p.name === emp.name);
   json(res, { employee: emp, month: q.month, pay: pay || { shifts: [], base: 0, bonus: 0, total: 0 } });
+});
+
+// POST /api/interpret-bonuses  { note, employees:[names] } — מפרש הוראת בונוס להחלה על עובדים
+add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, _q, body) => {
+  try { json(res, await interpretBonuses(body?.note || '', body?.employees || [])); }
+  catch (e) { json(res, { error: e.message }, 200); }
 });
 
 // GET /api/suppliers — ספקים מחשבונית ירוקה (לשיוך קבלנים)

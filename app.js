@@ -597,7 +597,7 @@ async function openEventEditor(ev) {
       ${fld('מחיר סאונד ₪', `<input id="evPriceSound" type="number" inputmode="decimal" value="${ev.priceSound ?? ''}"/>`)}
       ${fld('מחיר תוספות ₪', `<input id="evPriceExtras" type="number" inputmode="decimal" value="${ev.priceExtras ?? ''}"/>`)}
       ${fld('שיוך ללקוח (לחיוב חודשי)', `<input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…"/>`)}
-      ${fld('הערת תוספות (טקסט חופשי)', `<input id="evBonus" value="${v(ev.employeeBonusRaw)}" placeholder="למשל: כפיר כפולה, נתנאל רגיל"/>`, true)}
+      ${fld('הערת בונוס/תשלום (טקסט חופשי)', `<div style="display:flex;gap:6px"><input id="evBonus" value="${v(ev.employeeBonusRaw)}" placeholder="למשל: בונוס 278 לשניהם · בונוס חצי יומית · תשלום חצי יומית" style="flex:1"/><button type="button" class="btn ghost" style="white-space:nowrap;padding:8px 12px" onclick="applyBonusNote(this)">✨ החל על העובדים</button></div>`, true)}
     </div>
     <datalist id="evClientList">${(_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
     <datalist id="evEmpList">${(_evEmployees || []).map(e => `<option value="${escapeHtml(e.name)}">`).join('')}</datalist>
@@ -651,6 +651,24 @@ function evEmpHtml() {
 }
 window.evAddEmp = () => { _evEmp.push({ name: '', factor: '1', bonus: '', food: '', note: '' }); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
 window.evRemoveEmp = (i) => { _evEmp.splice(i, 1); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
+window.applyBonusNote = async (btn) => {
+  const note = (document.getElementById('evBonus').value || '').trim();
+  const names = _evEmp.map(w => (w.name || '').trim()).filter(Boolean);
+  if (!note) { alert('כתוב הערת בונוס/תשלום קודם.'); return; }
+  if (!names.length) { alert('הוסף עובדים לאירוע קודם.'); return; }
+  btn.disabled = true; const t = btn.textContent; btn.textContent = 'מפרש…';
+  const res = await fetch('/api/interpret-bonuses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note, employees: names }) }).then(r => r.json()).catch(() => []);
+  btn.disabled = false; btn.textContent = t;
+  if (Array.isArray(res) && res.length) {
+    let applied = 0;
+    res.forEach(a => {
+      const w = _evEmp.find(x => (x.name || '').trim() === String(a.name || '').trim());
+      if (w) { if (a.bonus != null) w.bonus = a.bonus; if (a.bonusFactor != null) w.bonusFactor = a.bonusFactor; if (a.factor != null) w.factor = String(a.factor); applied++; }
+    });
+    document.getElementById('evEmpBox').innerHTML = evEmpHtml();
+    alert(`הוחל על ${applied} עובדים. בדוק ולחץ "שמור".`);
+  } else { alert('לא זוהתה הוראת בונוס/תשלום תקפה בהערה.'); }
+};
 window.saveEvent = async (btn) => {
   const g = (id) => document.getElementById(id);
   const num = (x) => { const s = String(x ?? '').trim(); return s === '' || isNaN(+s) ? null : +s; };

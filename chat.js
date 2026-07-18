@@ -182,6 +182,26 @@ ${text}`;
   }).filter(e => e.date || e.artist);
 }
 
+// פירוש הוראת בונוס/תשלום חופשית והחלתה על עובדים ספציפיים (בעריכה ידנית)
+export async function interpretBonuses(note, names) {
+  if (!note || !Array.isArray(names) || !names.length) return [];
+  const system = `אתה עוזר שמפרש הוראות בונוס/תשלום לעובדים בחברת הגברה ותאורה. ענה אך ורק ב-JSON תקין, בלי טקסט נוסף.`;
+  const prompt = `העובדים באירוע: ${names.join(', ')}.
+ההוראה שנכתבה: "${note}".
+החזר מערך JSON, אובייקט לכל עובד שההוראה חלה עליו, במבנה: {"name":"שם מדויק כפי שמופיע ברשימה","bonus":מספר או null,"bonusFactor":מספר או null,"factor":מספר או null}.
+כללים:
+- "בונוס X לשניהם/לשלושתם/לכולם/לכולן" או "פלוס X לכולם" → bonus:X לכל העובדים ברשימה.
+- "בונוס X ל<שם>" → bonus:X רק לאותו עובד.
+- "בונוס חצי יומית" → bonusFactor:0.5 (לכל מי שההוראה חלה עליו). "בונוס יומית" → bonusFactor:1.
+- "תשלום חצי יומית" → factor:0.5. "כפולה" → factor:2. "יומית וחצי" → factor:1.5.
+- כלול רק עובדים שההוראה חלה עליהם, ורק שדות רלוונטיים (השאר null). אם אין הוראה תקפה — החזר [].`;
+  try {
+    const raw = await complete(system, [{ role: 'user', content: prompt }], { maxTokens: 1000 });
+    const arr = parseEventsJson(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
 // למידה: מפיק "עובדות לזכור" מתוך חילופי ההודעות האחרונים (לזיכרון המתמשך)
 export async function learnFromExchange(member, exchangeText) {
   const system = `אתה עוזר שמתחזק זיכרון ארוך-טווח עבור ${member.name} (${member.role}). מטרתך לזקק עובדות/העדפות/החלטות יציבות ששווה לזכור לטווח ארוך.`;
