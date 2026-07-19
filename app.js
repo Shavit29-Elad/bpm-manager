@@ -644,11 +644,12 @@ async function renderCombined(c) {
         <div class="card"><div class="label">חסר בווטסאפ (יש ביומן)</div><div class="big" style="color:var(--warn)">${m.missingInWhatsappCount ?? (m.missingInWhatsapp?.length || 0)}</div></div>
         <div class="card"><div class="label">הותאמו</div><div class="big" style="color:var(--accent2)">${m.matched.filter(x => x.calendar).length}</div></div>
       </div>
-      ${misses.length ? `<table><thead><tr><th>תאריך</th><th>אירוע (ווטסאפ)</th><th>סטטוס</th></tr></thead>
+      ${misses.length ? `<table><thead><tr><th>תאריך</th><th>אירוע (ווטסאפ)</th><th>סטטוס</th><th></th></tr></thead>
       <tbody>${misses.slice().sort((a, b) => (a.whatsapp.date || '').localeCompare(b.whatsapp.date || '')).map(x => `<tr>
         <td style="white-space:nowrap">${ddmy(x.whatsapp.date)}</td>
         <td>${x.whatsapp.artist || '—'}${x.whatsapp.location ? ` / ${x.whatsapp.location}` : ''}</td>
         <td><span class="tag miss">חסר ביומן</span></td>
+        <td style="text-align:left"><button class="btn ghost" style="padding:3px 10px;font-size:12px;white-space:nowrap" onclick="markMatched('${x.whatsapp.id}',this)">✓ סמן כהותאם</button></td>
       </tr>`).join('')}</tbody></table>`
       : `<div class="empty">אין אי-התאמות כרגע 👌</div>`}
     </div>
@@ -1094,6 +1095,13 @@ window.unapproveFromEditor = async (btn) => {
   renderCombined($('#content'));
 };
 
+// סימון ידני של אי-התאמה כ"הותאם" — האירוע יורד מרשימת אי-ההתאמות מול היומן
+window.markMatched = async (eventId, btn) => {
+  if (btn) { btn.disabled = true; btn.textContent = 'מסמן…'; }
+  const r = await fetch('/api/calendar/mark-matched', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId, matched: true }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) { render(); }
+  else if (btn) { btn.disabled = false; btn.textContent = '✓ סמן כהותאם'; alert('שגיאה: ' + (r.error || '')); }
+};
 // ---- יומן והתאמות (למעלה אי-התאמות, מתחת יומן) ----
 async function renderCalendar(c) {
   const m = await api(`/api/calendar/match?companyId=${state.company}`);
@@ -1106,11 +1114,12 @@ async function renderCalendar(c) {
       <div class="card"><div class="label">חסר בווטסאפ (יש ביומן)</div><div class="big" style="color:var(--warn)">${m.missingInWhatsappCount ?? (m.missingInWhatsapp?.length || 0)}</div></div>
       <div class="card"><div class="label">הותאמו</div><div class="big" style="color:var(--accent2)">${m.matched.filter(x => x.calendar).length}</div></div>
     </div>
-    ${misses.length ? `<table><thead><tr><th>תאריך</th><th>אירוע (ווטסאפ)</th><th>סטטוס</th></tr></thead>
+    ${misses.length ? `<table><thead><tr><th>תאריך</th><th>אירוע (ווטסאפ)</th><th>סטטוס</th><th></th></tr></thead>
     <tbody>${misses.map(x => `<tr>
       <td>${x.whatsapp.date || '—'}</td>
       <td>${x.whatsapp.artist || '—'} / ${x.whatsapp.location || ''}</td>
       <td><span class="tag miss">חסר ביומן</span></td>
+      <td style="text-align:left"><button class="btn ghost" style="padding:3px 10px;font-size:12px;white-space:nowrap" onclick="markMatched('${x.whatsapp.id}',this)">✓ סמן כהותאם</button></td>
     </tr>`).join('')}</tbody></table>`
     : `<div class="empty">אין אי-התאמות כרגע 👌</div>`}
   </div>
@@ -1192,22 +1201,23 @@ window.linkChkChanged = (el) => {
 window.openLinkExisting = (safe, clientEnc, clientId) => {
   const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
   if (!ids.length) { alert('לא נבחרו אירועים לשיוך'); return; }
-  openLinkModal(ids, decodeURIComponent(clientEnc), clientId, renderInvoicing);
+  openDocLinkModal(ids, decodeURIComponent(clientEnc), clientId, renderInvoicing);
 };
 // שיוך מסמכים לאירוע בודד — מלשונית האירועים (עמודת חיוב). רק מסמכים של אותו לקוח.
 window.linkForEvent = (eventId, clientEnc, clientId) => {
   const client = decodeURIComponent(clientEnc);
   if (!client && !clientId) { alert('יש לשייך את האירוע ללקוח לפני קישור מסמכים.'); return; }
-  openLinkModal([eventId], client, clientId, renderCombined);
+  openDocLinkModal([eventId], client, clientId, renderCombined);
 };
 // שיוך מסמכים לאירוע בודד מתוך כרטיס החשבוניות (בלי תלות ב-checkbox) — מרענן את מסך החשבוניות
 window.linkOneEvent = (eventId, clientEnc, clientId) => {
-  openLinkModal([eventId], decodeURIComponent(clientEnc), clientId || '', renderInvoicing);
+  openDocLinkModal([eventId], decodeURIComponent(clientEnc), clientId || '', renderInvoicing);
 };
-async function openLinkModal(ids, client, clientId, onDone) {
+// שיוך אירוע למסמכים קיימים של אותו הלקוח (שם ייחודי כדי לא להתנגש עם שיוך-בנק openLinkModal)
+async function openDocLinkModal(ids, client, clientId, onDone) {
   _linkCtx = { ids, client, clientId: clientId || '', onDone: onDone || renderInvoicing };
-  let m = document.getElementById('linkModal');
-  if (!m) { m = document.createElement('div'); m.id = 'linkModal'; m.className = 'modal'; document.body.appendChild(m); }
+  let m = document.getElementById('docLinkModal');
+  if (!m) { m = document.createElement('div'); m.id = 'docLinkModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden'); m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   m.innerHTML = `<div class="modal-card" style="width:min(700px,95vw)"><div class="empty">טוען חשבוניות פתוחות של ${escapeHtml(client)}…</div></div>`;
   const r = await api(`/api/invoicing/open-for-client?clientName=${encodeURIComponent(client)}`).catch(() => ({ docs: [] }));
@@ -1222,7 +1232,7 @@ async function openLinkModal(ids, client, clientId, onDone) {
     <div style="margin-top:10px"><button class="btn ghost" onclick="loadRecentDocs()">📄 הצג מסמכים אחרונים (הצעות מחיר / עסקה / מס / קבלה)</button></div>
     <div id="linkStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
     <div class="modal-actions">
-      <button class="btn ghost" onclick="document.getElementById('linkModal').classList.add('hidden')">ביטול</button>
+      <button class="btn ghost" onclick="document.getElementById('docLinkModal').classList.add('hidden')">ביטול</button>
       <button class="btn success" id="linkConfirmBtn" disabled onclick="linkConfirm()">✓ שייך וסגור את האירוע</button>
     </div>
   </div>`;
@@ -1248,7 +1258,7 @@ window.linkConfirm = async () => {
   if (r.ok) {
     if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ האירוע שויך ל-${r.docs} מסמכים וסומן כחויב.</span>`;
     const done = (_linkCtx && _linkCtx.onDone) || renderInvoicing;
-    setTimeout(() => { document.getElementById('linkModal').classList.add('hidden'); done($('#content')); }, 1200);
+    setTimeout(() => { document.getElementById('docLinkModal').classList.add('hidden'); done($('#content')); }, 1200);
   } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {

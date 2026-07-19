@@ -154,6 +154,14 @@ add('GET', /^\/api\/calendar\/match$/, async (req, res, _p, q) => {
     const timeMax = dates.length ? `${dates[dates.length - 1]}T23:59:59Z` : undefined;
     const cal = (await fetchCalendarEvents({ timeMin, timeMax })).filter(e => (e.date || '') >= MATCH_START);
     const r = matchEvents(waEvents, cal);
+    // אירועים שסומנו ידנית כ"הותאם" — מוציאים מרשימת חוסר-ההתאמה וסופרים כהותאמו
+    for (const entry of r.matched) {
+      if (!entry.calendar && entry.whatsapp && entry.whatsapp.manualMatched) {
+        entry.calendar = { manual: true, summary: 'סומן ידנית כהותאם' };
+        entry.manual = true;
+      }
+    }
+    r.missingInCalendar = r.missingInCalendar.filter(w => !w.manualMatched);
     // שולחים רק ספירה של "חסר בווטסאפ" (יכול להיות אלפי אירועים) — לא את כל המערך
     json(res, {
       matched: r.matched,
@@ -164,6 +172,16 @@ add('GET', /^\/api\/calendar\/match$/, async (req, res, _p, q) => {
     json(res, { matched: waEvents.map(w => ({ whatsapp: w, calendar: null, score: 0 })),
       missingInCalendar: waEvents, missingInWhatsappCount: 0, calendarError: e.message });
   }
+});
+
+// POST /api/calendar/mark-matched { eventId, matched } — סימון/ביטול ידני של "הותאם" לאי-התאמה
+add('POST', /^\/api\/calendar\/mark-matched$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const ev = db.events.find(e => e.id === body.eventId);
+  if (!ev) return json(res, { error: 'האירוע לא נמצא' }, 404);
+  ev.manualMatched = body.matched !== false;
+  save(db);
+  json(res, { ok: true, manualMatched: ev.manualMatched });
 });
 
 // GET /api/calendar/events?companyId=&from=YYYY-MM-DD&to=YYYY-MM-DD  (טווח שבועי)
