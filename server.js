@@ -724,6 +724,37 @@ add('POST', /^\/api\/contractors\/rename-bulk$/, (req, res, _p, _q, body) => {
   save(db); json(res, { ok: true, changed, applied });
 });
 
+// POST /api/contractors/auto-sync-names — עדכון אוטומטי של שמות קבלנים לפי חשבונית ירוקה (רק התאמות ודאיות)
+// התאמה ודאית = שם הקבלן זהה לספק, או שקיים בדיוק ספק אחד שהשם שלו מכיל את שם הקבלן (או להיפך).
+add('POST', /^\/api\/contractors\/auto-sync-names$/, async (req, res) => {
+  const db = load();
+  let suppliers = [];
+  try { suppliers = (await greenInvoice.listSuppliers()).map(s => (s.name || '').trim()).filter(Boolean); }
+  catch (e) { return json(res, { ok: false, changed: 0, error: e.message }); }
+  const supSet = new Set(suppliers);
+  // שמות קבלנים ייחודיים מהאירועים
+  const names = new Set();
+  for (const ev of db.events) for (const c of (ev.contractorDetails || [])) { const n = (c.name || '').trim(); if (n) names.add(n); }
+  const renameMap = new Map();
+  for (const name of names) {
+    if (supSet.has(name)) continue; // כבר תואם במדויק
+    const cand = suppliers.filter(s => s !== name && (s.includes(name) || name.includes(s)));
+    if (cand.length === 1) renameMap.set(name, cand[0]); // רק כשיש התאמה יחידה וודאית
+  }
+  let changed = 0; const applied = {};
+  if (renameMap.size) {
+    for (const ev of db.events) {
+      for (const c of (ev.contractorDetails || [])) {
+        const k = (c.name || '').trim();
+        if (renameMap.has(k)) { c.name = renameMap.get(k); changed++; applied[k] = renameMap.get(k); }
+      }
+      if (Array.isArray(ev.contractors)) ev.contractors = ev.contractors.map(n => renameMap.get((n || '').trim()) || n);
+    }
+    if (changed) save(db);
+  }
+  json(res, { ok: true, changed, applied });
+});
+
 // GET /api/contractors/:id/documents — מסמכי הוצאה של קבלן/ספק מחשבונית ירוקה
 add('GET', /^\/api\/contractors\/([^/]+)\/documents$/, async (req, res, params) => {
   try { json(res, await greenInvoice.supplierExpenses(params[0])); }

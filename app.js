@@ -1461,8 +1461,12 @@ window.doFollowup = async (id, type, btn) => {
 
 // ---- קבלנים ----
 let _suppliers = [];
+let _ctrSyncNote = ''; // הודעה על עדכון אוטומטי של שמות קבלנים לפי חשבונית ירוקה
 async function renderContractors(c) {
-  c.innerHTML = `<div class="panel"><div class="empty">טוען קבלנים…</div></div>`;
+  c.innerHTML = `<div class="panel"><div class="empty">טוען קבלנים ומעדכן שמות לפי חשבונית ירוקה…</div></div>`;
+  // עדכון אוטומטי של שמות הקבלנים לפי חשבונית ירוקה (רק התאמות ודאיות) לפני הטעינה
+  const sync = await fetch('/api/contractors/auto-sync-names', { method: 'POST' }).then(x => x.json()).catch(() => ({ changed: 0 }));
+  _ctrSyncNote = (sync && sync.changed) ? `עודכנו ${sync.changed} שמות קבלנים לפי חשבונית ירוקה` : '';
   const [pay, sup, dr] = await Promise.all([
     api(`/api/contractors/payables?companyId=${state.company}`),
     api('/api/suppliers').catch(() => []),
@@ -1476,8 +1480,8 @@ async function renderContractors(c) {
   c.innerHTML = `<div class="panel" id="draftsPanel">${draftsSection()}</div>
   <div class="panel">
     <div class="row-between"><div><h2>קבלנים לתשלום</h2>
-      <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום <b style="color:var(--danger)">${money(totalUnpaid)}</b>. סמן אירועים (או הכל), לחץ "סמן כשולם" והזן מספר חשבונית.</span></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost" onclick="openRenameContractors()">🔄 עדכן שמות לפי חשבונית ירוקה</button><button class="btn success" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
+      <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום <b style="color:var(--danger)">${money(totalUnpaid)}</b>. סמן אירועים (או הכל), לחץ "סמן כשולם" והזן מספר חשבונית.</span>${_ctrSyncNote ? `<div style="font-size:12px;color:var(--accent2);margin-top:2px">✓ ${_ctrSyncNote}</div>` : ''}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn success" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
     ${payables.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${payables.map(contractorCard).join('')}</div>`
       : `<div class="empty">אין קבלנים עם סכומים עדיין. הוסף סכום לקבלן באירוע.</div>`}
   </div>
