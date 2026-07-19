@@ -294,10 +294,10 @@ window.openDerive = (id, number, srcType, mode) => {
   m.innerHTML = `<div class="modal-card" style="width:min(440px,94vw)">
     <h3>${followup ? 'מסמך המשך' : 'שכפול מסמך'} — ${srcName} #${escapeHtml(String(number))}</h3>
     <p class="muted" style="font-size:13px">${followup
-      ? 'המסמך החדש ייווצר עם אותן שורות ויקושר למקור. בחר סוג:'
-      : 'שכפול עם אותן שורות (לא מקושר למקור) — בחר לאיזה סוג מסמך:'}</p>
+      ? 'ייפתח עורך עם כל השורות לעריכה, בחירת תאריך ותקבולים. בחר סוג מסמך:'
+      : 'שכפול (לא מקושר למקור) — ייפתח עורך שורות. בחר סוג מסמך:'}</p>
     <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
-      ${opts.map(([v, l]) => `<button class="btn ghost" style="justify-content:flex-start;text-align:right" onclick="doDerive('${id}',${v},${followup ? 'true' : 'false'},this)">${l}</button>`).join('')}
+      ${opts.map(([v, l]) => `<button class="btn ghost" style="justify-content:flex-start;text-align:right" onclick="openDeriveEditor('${id}',${v},${followup ? 'true' : 'false'})">${l} ←</button>`).join('')}
     </div>
     <div id="derStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
     <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">ביטול</button></div>
@@ -317,6 +317,168 @@ window.doDerive = async (id, type, linked, btn) => {
   } else {
     [...document.querySelectorAll('#derModal button')].forEach(b => b.disabled = false);
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
+  }
+};
+
+// ============ עורך מסמך המשך: שורות לעריכה + תאריך + תקבולים ============
+// סוגי תקבול לפי חשבונית ירוקה: ניכוי מס במקור=0, מזומן=1, צ'ק=2, אשראי=3, העברה בנקאית=4
+const DER_PAY_TYPES = [[4, 'העברה בנקאית'], [2, "צ'ק"], [0, 'ניכוי מס במקור'], [1, 'מזומן'], [3, 'כרטיס אשראי']];
+const DER_PAYMENT_DOCS = new Set([320, 400]); // מסמכים שמחייבים תקבול (מס-קבלה / קבלה)
+let _derEdit = null;
+window.openDeriveEditor = async (id, type, linked) => {
+  const m = document.getElementById('derModal') || (() => { const x = document.createElement('div'); x.id = 'derModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען שורות מהמסמך…</div></div>`;
+  const r = await api(`/api/documents/${id}/lines`).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || !r.ok) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת השורות: ${escapeHtml(String(r?.error || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">סגור</button></div></div>`; return; }
+  const needsPay = DER_PAYMENT_DOCS.has(Number(type));
+  _derEdit = {
+    id, type: Number(type), linked: linked === true || linked === 'true',
+    clientName: r.client?.name || '', date: todayIso(),
+    description: r.description || '', remarks: r.remarks || '',
+    items: (r.items || []).map(it => ({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })),
+    payments: needsPay ? [{ type: 4, price: 0, date: todayIso(), chequeNum: '', bankName: '' }] : [],
+    needsPay,
+  };
+  if (!_derEdit.items.length) _derEdit.items.push({ description: '', quantity: 1, price: 0 });
+  renderDeriveEditor();
+};
+// סנכרון ערכי ה-DOM לתוך ה-state לפני רינדור מחדש
+function derSyncFromDom() {
+  const e = _derEdit; if (!e) return;
+  document.querySelectorAll('#derModal .der-item').forEach((row, i) => {
+    if (!e.items[i]) return;
+    e.items[i].description = row.querySelector('.der-desc')?.value ?? e.items[i].description;
+    e.items[i].quantity = row.querySelector('.der-qty')?.value ?? e.items[i].quantity;
+    e.items[i].price = row.querySelector('.der-price')?.value ?? e.items[i].price;
+  });
+  document.querySelectorAll('#derModal .der-pay').forEach((row, i) => {
+    if (!e.payments[i]) return;
+    e.payments[i].type = Number(row.querySelector('.der-ptype')?.value ?? e.payments[i].type);
+    e.payments[i].price = row.querySelector('.der-pprice')?.value ?? e.payments[i].price;
+    e.payments[i].date = row.querySelector('.der-pdate')?.value ?? e.payments[i].date;
+    e.payments[i].chequeNum = row.querySelector('.der-pcheque')?.value ?? e.payments[i].chequeNum;
+    e.payments[i].bankName = row.querySelector('.der-pbank')?.value ?? e.payments[i].bankName;
+  });
+  const d = document.querySelector('#derModal .der-date'); if (d) e.date = d.value;
+  const desc = document.querySelector('#derModal .der-descr'); if (desc) e.description = desc.value;
+  const rem = document.querySelector('#derModal .der-rem'); if (rem) e.remarks = rem.value;
+}
+window.derAddItem = () => { derSyncFromDom(); _derEdit.items.push({ description: '', quantity: 1, price: 0 }); renderDeriveEditor(); };
+window.derDelItem = (i) => { derSyncFromDom(); _derEdit.items.splice(i, 1); if (!_derEdit.items.length) _derEdit.items.push({ description: '', quantity: 1, price: 0 }); renderDeriveEditor(); };
+window.derAddPay = () => { derSyncFromDom(); _derEdit.payments.push({ type: 4, price: 0, date: _derEdit.date, chequeNum: '', bankName: '' }); renderDeriveEditor(); };
+window.derDelPay = (i) => { derSyncFromDom(); _derEdit.payments.splice(i, 1); renderDeriveEditor(); };
+window.derPayTypeChanged = () => { derSyncFromDom(); renderDeriveEditor(); }; // מציג שדה צ'ק/בנק לפי הסוג
+// מילוי אוטומטי של יתרת התקבול הראשון לפי סה"כ המסמך
+window.derFillBalance = () => {
+  derSyncFromDom();
+  const t = derTotals();
+  const others = _derEdit.payments.reduce((s, p, i) => i === 0 ? s : s + (Number(p.price) || 0), 0);
+  if (_derEdit.payments[0]) _derEdit.payments[0].price = Math.max(0, +(t.total - others).toFixed(2));
+  renderDeriveEditor();
+};
+function derTotals() {
+  const sub = _derEdit.items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.price) || 0), 0);
+  const vat = +(sub * VAT_RATE).toFixed(2);
+  return { sub: +sub.toFixed(2), vat, total: +(sub + vat).toFixed(2) };
+}
+window.derRecalc = () => {
+  // עדכון חי של הסכומים בלי רינדור מלא
+  const e = _derEdit; if (!e) return;
+  let sub = 0;
+  document.querySelectorAll('#derModal .der-item').forEach(row => {
+    sub += (Number(row.querySelector('.der-qty')?.value) || 0) * (Number(row.querySelector('.der-price')?.value) || 0);
+  });
+  const vat = sub * VAT_RATE, total = sub + vat;
+  const box = document.getElementById('derTotals');
+  if (box) box.innerHTML = `ביניים: <b>${money(sub)}</b> · מע"מ ${Math.round(VAT_RATE * 100)}%: <b>${money(vat)}</b> · סה"כ: <b style="color:var(--accent2)">${money(total)}</b>`;
+  if (e.needsPay) {
+    let psum = 0; document.querySelectorAll('#derModal .der-pprice').forEach(x => psum += Number(x.value) || 0);
+    const ps = document.getElementById('derPaySum');
+    if (ps) { const diff = +(total - psum).toFixed(2); ps.innerHTML = `סה"כ תקבולים: <b>${money(psum)}</b>${Math.abs(diff) > 0.01 ? ` · <span style="color:var(--danger)">חסר ${money(diff)}</span>` : ' · <span style="color:var(--accent2)">מאוזן ✓</span>'}`; }
+  }
+};
+function renderDeriveEditor() {
+  const e = _derEdit; if (!e) return;
+  const t = derTotals();
+  const typeName = DOC_TYPE_SHORT[e.type] || 'מסמך';
+  const itemRows = e.items.map((it, i) => `<div class="der-item" style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;align-items:center;margin-bottom:6px">
+    <input class="der-desc" value="${escAttr(it.description)}" placeholder="תיאור" style="padding:6px 8px">
+    <input class="der-qty" type="number" step="any" value="${it.quantity}" oninput="derRecalc()" style="padding:6px 6px;text-align:center" title="כמות">
+    <input class="der-price" type="number" step="any" value="${it.price}" oninput="derRecalc()" style="padding:6px 6px;text-align:left" title="מחיר יחידה (ללא מע״מ)">
+    <button class="btn ghost" style="padding:4px 8px;font-size:14px" onclick="derDelItem(${i})" title="מחק שורה">✕</button>
+  </div>`).join('');
+  const payRows = e.needsPay ? e.payments.map((p, i) => {
+    const isCheque = Number(p.type) === 2, isBank = Number(p.type) === 4;
+    return `<div class="der-pay" style="display:grid;grid-template-columns:1fr 96px 130px 28px;gap:6px;align-items:center;margin-bottom:6px">
+      <select class="der-ptype" onchange="derPayTypeChanged()" style="padding:6px 6px">${DER_PAY_TYPES.map(([v, l]) => `<option value="${v}" ${Number(p.type) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <input class="der-pprice" type="number" step="any" value="${p.price}" oninput="derRecalc()" style="padding:6px 6px;text-align:left" title="סכום">
+      <input class="der-pdate" type="date" value="${(p.date || e.date || '').slice(0, 10)}" style="padding:6px 6px" title="תאריך תקבול">
+      <button class="btn ghost" style="padding:4px 8px;font-size:14px" onclick="derDelPay(${i})" title="הסר תקבול">✕</button>
+      ${isCheque ? `<input class="der-pcheque" value="${escAttr(p.chequeNum || '')}" placeholder="מספר צ'ק" style="grid-column:1/4;padding:6px 8px">` : ''}
+      ${isBank ? `<input class="der-pbank" value="${escAttr(p.bankName || '')}" placeholder="שם בנק (לא חובה)" style="grid-column:1/4;padding:6px 8px">` : ''}
+    </div>`;
+  }).join('') : '';
+  const m = document.getElementById('derModal');
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;overflow:auto">
+    <div class="row-between"><h3>${e.linked ? 'מסמך המשך' : 'שכפול'} — ${typeName}</h3><span class="muted">${escapeHtml(e.clientName)}</span></div>
+
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin:8px 0 4px">
+      <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" style="padding:6px 8px;margin-inline-start:6px"></label>
+    </div>
+    <label style="font-size:13px;display:block;margin-bottom:8px">נושא/כותרת <input class="der-descr" value="${escAttr(e.description)}" placeholder="נושא המסמך" style="width:100%;padding:6px 8px;margin-top:3px"></label>
+
+    <div style="font-weight:600;font-size:13px;margin:8px 0 4px">שורות המסמך</div>
+    <div style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;font-size:11px;color:var(--muted);margin-bottom:3px"><span>תיאור</span><span style="text-align:center">כמות</span><span style="text-align:left">מחיר</span><span></span></div>
+    <div id="derItems">${itemRows}</div>
+    <button class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:2px" onclick="derAddItem()">+ הוסף שורה</button>
+    <div id="derTotals" style="margin-top:10px;font-size:14px">ביניים: <b>${money(t.sub)}</b> · מע"מ ${Math.round(VAT_RATE * 100)}%: <b>${money(t.vat)}</b> · סה"כ: <b style="color:var(--accent2)">${money(t.total)}</b></div>
+
+    ${e.needsPay ? `<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:10px">
+      <div class="row-between" style="margin-bottom:4px"><div style="font-weight:600;font-size:13px">תקבולים</div><button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="derFillBalance()">מלא יתרה בשורה 1</button></div>
+      <p class="muted" style="font-size:11.5px;margin:0 0 6px">סכום התקבולים צריך להשתוות לסה"כ המסמך. ניכוי מס במקור מוזן כשורת תקבול נפרדת על סכום הניכוי.</p>
+      <div style="display:grid;grid-template-columns:1fr 96px 130px 28px;gap:6px;font-size:11px;color:var(--muted);margin-bottom:3px"><span>סוג תקבול</span><span style="text-align:left">סכום</span><span>תאריך</span><span></span></div>
+      <div id="derPays">${payRows}</div>
+      <button class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:2px" onclick="derAddPay()">+ הוסף תקבול</button>
+      <div id="derPaySum" style="margin-top:8px;font-size:13px"></div>
+    </div>` : ''}
+
+    <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית (לא חובה) <input class="der-rem" value="${escAttr(e.remarks)}" style="width:100%;padding:6px 8px;margin-top:3px"></label>
+
+    <div id="derEditStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">ביטול</button>
+      <button class="btn success" id="derConfirmBtn" onclick="derConfirm()">✓ הפק ${typeName}</button>
+    </div>
+  </div>`;
+  m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
+  derRecalc();
+}
+window.derConfirm = async () => {
+  derSyncFromDom();
+  const e = _derEdit; if (!e) return;
+  const items = e.items.map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
+  if (!items.length) { alert('יש להזין לפחות שורה אחת עם תיאור.'); return; }
+  const t = derTotals();
+  let payment = [];
+  if (e.needsPay) {
+    payment = e.payments.map(p => ({ type: Number(p.type), price: Number(p.price) || 0, date: (p.date || e.date), chequeNum: p.chequeNum || '', bankName: p.bankName || '' })).filter(p => Math.abs(p.price) > 0);
+    const psum = payment.reduce((s, p) => s + p.price, 0);
+    if (!payment.length) { alert('מסמך מסוג ' + (DOC_TYPE_SHORT[e.type] || '') + ' מחייב לפחות תקבול אחד.'); return; }
+    if (Math.abs(psum - t.total) > 0.01 && !confirm(`סכום התקבולים (${money(psum)}) שונה מסה"כ המסמך (${money(t.total)}).\nלהמשיך בכל זאת?`)) return;
+  }
+  const typeName = DOC_TYPE_SHORT[e.type] || 'מסמך';
+  if (!confirm(`להפיק ${typeName} על סך ${money(t.total)}?\nהמסמך ייווצר בחשבונית ירוקה${e.linked ? ' ויקושר למקור' : ''} ולא ניתן למחיקה (רק לזכות).`)) return;
+  const btn = document.getElementById('derConfirmBtn'); if (btn) { btn.disabled = true; }
+  const st = document.getElementById('derEditStatus'); if (st) st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
+  const r = await fetch(`/api/documents/${e.id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: e.type, linked: e.linked, items, date: e.date, description: e.description, remarks: e.remarks, payment }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) {
+    if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
+    setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); }, 1400);
+  } else {
+    if (btn) btn.disabled = false;
+    if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }
 };
 

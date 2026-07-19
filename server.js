@@ -575,24 +575,58 @@ add('POST', /^\/api\/quotes\/([^/]+)\/followup$/, async (req, res, params, _q, b
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
-// POST /api/documents/:id/derive { type, linked } — מסמך המשך (מקושר) או שכפול (חופשי) ממסמך קיים
-// linked=true → מסמך המשך מקושר למקור. linked=false → שכפול שאפשר לבחור לו כל סוג.
+// GET /api/documents/:id/lines — שורות + פרטי מסמך מקור, לעריכה לפני הפקת מסמך המשך
+add('GET', /^\/api\/documents\/([^/]+)\/lines$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const src = await greenInvoice.getDocument(params[0]);
+    const items = (src.income || []).map(it => ({
+      catalogNum: it.catalogNum || undefined, description: it.description,
+      quantity: it.quantity ?? 1, price: it.price ?? 0,
+    }));
+    json(res, {
+      ok: true,
+      items,
+      client: { id: src.client?.id || null, name: src.client?.name || '' },
+      description: src.description || '',
+      remarks: src.remarks || '',
+      srcType: src.type, srcNumber: src.number,
+    });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/documents/:id/derive { type, linked, items?, date?, payment?, description?, remarks? }
+// מסמך המשך (מקושר) או שכפול (חופשי). אם נשלחות שורות/תאריך/תקבולים ערוכים — משתמשים בהם.
 add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
     const src = await greenInvoice.getDocument(params[0]);
     const type = Number(body.type);
     if (!type) return json(res, { error: 'חסר סוג מסמך' }, 400);
-    const items = (src.income || []).map(it => ({
+    // שורות ערוכות מהלקוח (אם נשלחו), אחרת שורות המקור
+    const edited = Array.isArray(body.items) && body.items.length ? body.items : null;
+    const items = (edited || src.income || []).map(it => ({
       catalogNum: it.catalogNum || undefined, description: it.description,
-      quantity: it.quantity ?? 1, price: it.price ?? 0,
-    }));
-    if (!items.length) return json(res, { error: 'אין שורות במסמך המקור' }, 400);
+      quantity: Number(it.quantity) || 1, price: Number(it.price) || 0,
+    })).filter(it => it.description && it.description.trim());
+    if (!items.length) return json(res, { error: 'אין שורות במסמך' }, 400);
     const opts = {
       type,
       client: src.client?.id ? { id: src.client.id } : { name: src.client?.name || 'לקוח' },
-      items, description: src.description || '', remarks: src.remarks || null,
+      items,
+      description: body.description != null ? body.description : (src.description || ''),
+      remarks: body.remarks != null ? body.remarks : (src.remarks || null),
     };
+    if (body.date) opts.date = String(body.date).slice(0, 10);
+    // תקבולים ערוכים (למסמכי מס-קבלה/קבלה) — סוג + סכום + תאריך + פרטים
+    if (Array.isArray(body.payment) && body.payment.length) {
+      opts.payment = body.payment.map(p => {
+        const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
+        if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum); // צ'ק
+        if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName);    // העברה בנקאית
+        return row;
+      }).filter(p => Math.abs(p.price) > 0); // מתעלמים משורות תקבול ריקות
+    }
     if (body.linked) opts.linkedDocumentIds = [params[0]]; // מסמך המשך — קישור למקור
     const doc = await greenInvoice.createDocument(opts);
     json(res, { ok: true, doc });
