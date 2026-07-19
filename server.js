@@ -312,13 +312,20 @@ add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
     : (body.docId ? [{ id: body.docId, number: body.docNumber || null, type: Number(body.docType) || null }] : []);
   if (!ids.length || !docs.length) return json(res, { error: 'חסרים נתונים לשיוך' }, 400);
   docs = docs.slice(0, 4).map(d => ({ id: d.id, number: d.number || null, type: Number(d.type) || null }));
-  // מסמך ראשי לתצוגה: חשבונית מס/מס-קבלה > חשבון עסקה > קבלה > הצעת מחיר
-  let primary = docs[0];
-  for (const t of [305, 320, 300, 400, 10]) { const d = docs.find(x => x.type === t); if (d) { primary = d; break; } }
   let n = 0;
   for (const id of ids) {
     const e = db.events.find(x => x.id === id);
-    if (e) { e.invoiceStatus = 'invoiced'; e.linkedDocs = docs; e.invoiceId = primary.id; e.invoiceNumber = primary.number; e.invoiceType = primary.type; n++; }
+    if (!e) continue;
+    // צירוף המסמכים החדשים לקיימים (בלי כפילויות) — מאפשר לשייך עוד מסמכים בהמשך
+    const merged = Array.isArray(e.linkedDocs) ? e.linkedDocs.slice() : [];
+    for (const d of docs) if (!merged.some(x => String(x.id) === String(d.id))) merged.push(d);
+    e.linkedDocs = merged.slice(0, 6);
+    e.invoiceStatus = 'invoiced';
+    // מסמך ראשי לתצוגה: חשבונית מס/מס-קבלה > חשבון עסקה > קבלה > הצעת מחיר
+    let primary = e.linkedDocs[0];
+    for (const t of [305, 320, 300, 400, 10]) { const d = e.linkedDocs.find(x => x.type === t); if (d) { primary = d; break; } }
+    e.invoiceId = primary.id; e.invoiceNumber = primary.number; e.invoiceType = primary.type;
+    n++;
   }
   save(db);
   json(res, { ok: true, linked: n, docs: docs.length });

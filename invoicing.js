@@ -80,6 +80,7 @@ export function eventsByClient(events) {
       id: ev.id, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '',
       price: num(ev.price), priceLighting: num(ev.priceLighting), priceSound: num(ev.priceSound), priceBackline: num(ev.priceBackline), ledMeters: num(ev.ledMeters), ledPricePerMeter: num(ev.ledPricePerMeter), priceExtras: num(ev.priceExtras), total: t,
       billed, invoiceId: ev.invoiceId || null, invoiceNumber: ev.invoiceNumber || null, invoiceType: ev.invoiceType || null,
+      linkedDocs: Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [],
     });
     g.total += t;
     if (!billed) { g.unbilledTotal += t; g.unbilledCount++; }
