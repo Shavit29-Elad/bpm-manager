@@ -1147,7 +1147,8 @@ function invClientCard(g) {
       <td>${escapeHtml(ev.artist || '')}</td>
       <td>${escapeHtml(ev.location || '')}</td>
       <td style="white-space:nowrap">${money(ev.total)}</td>
-      <td>${tags || (ev.billed ? '<span class="tag pending" style="font-size:10.5px">חויב</span>' : '<span class="muted" style="font-size:11px">—</span>')}</td>
+      <td>${tags || (ev.billed ? '<span class="tag pending" style="font-size:10.5px">חויב</span>' : '<span class="muted" style="font-size:11px">—</span>')}
+        <button class="btn ghost" style="padding:2px 8px;font-size:11px;white-space:nowrap;margin-inline-start:4px" onclick="linkOneEvent('${ev.id}','${cEnc}','${g.clientId || ''}')">🔗 שייך</button></td>
     </tr>`;
   }).join('');
   const collapsed = g.unpaidCount === 0;
@@ -1198,6 +1199,10 @@ window.linkForEvent = (eventId, clientEnc, clientId) => {
   const client = decodeURIComponent(clientEnc);
   if (!client && !clientId) { alert('יש לשייך את האירוע ללקוח לפני קישור מסמכים.'); return; }
   openLinkModal([eventId], client, clientId, renderCombined);
+};
+// שיוך מסמכים לאירוע בודד מתוך כרטיס החשבוניות (בלי תלות ב-checkbox) — מרענן את מסך החשבוניות
+window.linkOneEvent = (eventId, clientEnc, clientId) => {
+  openLinkModal([eventId], decodeURIComponent(clientEnc), clientId || '', renderInvoicing);
 };
 async function openLinkModal(ids, client, clientId, onDone) {
   _linkCtx = { ids, client, clientId: clientId || '', onDone: onDone || renderInvoicing };
