@@ -71,22 +71,26 @@ export function eventsByClient(events) {
   for (const ev of events || []) {
     if (isNoInvoice(ev)) continue; // אירועים שלא צריך להוציא עליהם חשבונית — לא מוצגים לחיוב
     const client = (ev.clientName || ev.client || 'ללא לקוח').trim();
-    if (!groups[client]) groups[client] = { client, clientId: ev.clientId || null, events: [], total: 0, unbilledTotal: 0, unbilledCount: 0 };
+    if (!groups[client]) groups[client] = { client, clientId: ev.clientId || null, events: [], total: 0, unbilledTotal: 0, unbilledCount: 0, unpaidTotal: 0, unpaidCount: 0 };
     const g = groups[client];
     if (ev.clientId && !g.clientId) g.clientId = ev.clientId;
     const t = eventTotal(ev);
     const billed = isBilled(ev);
+    const linkedDocs = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+    // "שולם/הושלם" רק כשיש מסמך מסוג קבלה או מס-קבלה (320/400) — עסקה/מס בלבד = חויב אך פתוח
+    const paid = linkedDocs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(ev.invoiceType));
     g.events.push({
       id: ev.id, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '',
       price: num(ev.price), priceLighting: num(ev.priceLighting), priceSound: num(ev.priceSound), priceBackline: num(ev.priceBackline), ledMeters: num(ev.ledMeters), ledPricePerMeter: num(ev.ledPricePerMeter), priceExtras: num(ev.priceExtras), total: t,
-      billed, invoiceId: ev.invoiceId || null, invoiceNumber: ev.invoiceNumber || null, invoiceType: ev.invoiceType || null,
-      linkedDocs: Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [],
+      billed, paid, invoiceId: ev.invoiceId || null, invoiceNumber: ev.invoiceNumber || null, invoiceType: ev.invoiceType || null,
+      linkedDocs,
     });
     g.total += t;
     if (!billed) { g.unbilledTotal += t; g.unbilledCount++; }
+    if (!paid) { g.unpaidTotal += t; g.unpaidCount++; }
   }
   for (const g of Object.values(groups)) g.events.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  return Object.values(groups).sort((a, b) => b.unbilledTotal - a.unbilledTotal || a.client.localeCompare(b.client));
+  return Object.values(groups).sort((a, b) => b.unpaidTotal - a.unpaidTotal || a.client.localeCompare(b.client));
 }
 
 // ---- תאימות לאחור: קיבוץ לפי לקוח+חודש (המסך הישן של "חיוב") ----

@@ -668,13 +668,27 @@ const isOverdueUnbilled = (e) => {
   return Boolean(mk) && mk < curMonthKey();
 };
 function invoiceCell(e) {
-  if (isBilledEv(e)) {
-    const t = DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית';
-    return `<span class="tag invoiced">שויך · ${t}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}</span>`;
+  const clientEnc = encodeURIComponent(e.clientName || '');
+  const clientId = e.clientId || '';
+  // כפתור שיוך עד 4 מסמכים — רק מסמכים של אותו לקוח (linkForEvent אוכף את זה)
+  const linkBtn = `<button class="btn ghost" style="padding:3px 9px;font-size:11px" onclick="linkForEvent('${e.id}','${clientEnc}','${clientId}')">🔗 שייך מסמכים</button>`;
+  const docs = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
+  // "שולם" רק כשיש חשבונית מס-קבלה (320) או קבלה (400) — עסקה/מס בלבד נשאר פתוח
+  const isReceipt = docs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(e.invoiceType));
+  if (isBilledEv(e) || docs.length) {
+    const tags = docs.length
+      ? docs.map(d => `<span class="tag invoiced" style="font-size:10.5px">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''}</span>`).join(' ')
+      : `<span class="tag invoiced">שויך · ${DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}</span>`;
+    const status = isReceipt
+      ? `<div style="font-size:10.5px;color:var(--accent2);font-weight:700">שולם ✓</div>`
+      : `<div style="font-size:10.5px;color:var(--muted)">ממתין לקבלה</div>`;
+    return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">${tags}${status}${linkBtn}</div>`;
   }
   if (isNoInvoiceEv(e)) return `<span class="tag" style="background:var(--panel2);color:var(--muted)">לא נדרש</span>`;
-  if (isOverdueUnbilled(e)) return `<span class="tag" style="background:rgba(225,29,72,.14);color:var(--danger);font-weight:700">חסר חשבונית!</span>`;
-  return `<span class="tag pending">ממתין</span>`;
+  const base = isOverdueUnbilled(e)
+    ? `<span class="tag" style="background:rgba(225,29,72,.14);color:var(--danger);font-weight:700">חסר חשבונית!</span>`
+    : `<span class="tag pending">ממתין</span>`;
+  return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">${base}${linkBtn}</div>`;
 }
 window.confirmEventRow = async (id, val) => {
   await fetch(`/api/events/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: val }) }).catch(() => {});
@@ -949,54 +963,45 @@ let _invClients = [];
 async function renderInvoicing(c) {
   c.innerHTML = `<div class="panel"><div class="empty">טוען אירועים…</div></div>`;
   _invClients = await api(`/api/invoicing/clients?companyId=${state.company}`) || [];
-  // מובילים בלקוחות שיש להם אירועים לחיוב; לקוחות שכולם חויבו מוצגים מקופלים (לשיוך מסמכים נוספים)
-  const shown = _invClients.slice().sort((a, b) => (b.unbilledCount || 0) - (a.unbilledCount || 0));
+  // מציגים רק לקוחות עם יתרה פתוחה (יש אירועים בלי קבלה/מס-קבלה). כשכל האירועים שולמו — הלקוח יורד מהרשימה.
+  const shown = _invClients.filter(g => (g.unpaidCount || 0) > 0);
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>הפקת חשבוניות ללקוחות</h2>
-      <span class="muted">בחר אירועים של לקוח והפק חשבון עסקה / חשבונית מס / מס-קבלה / קבלה, או שייך למסמך קיים. אירוע שחויב עובר לחלק "חויבו" — עדיין אפשר לשייך לו מסמכים נוספים.</span></div></div>
-    ${shown.length ? shown.map(invClientCard).join('') : `<div class="empty">אין אירועים. הוסף אירועים ושייך להם לקוח בלשונית האירועים.</div>`}
+      <span class="muted">בחר אירועים והפק חשבון עסקה / מס / מס-קבלה / קבלה, או שייך למסמך קיים. אירוע נסגר ויורד מהרשימה רק כשמשויכת אליו קבלה או מס-קבלה. שיוך מסמכים נוסף אפשרי גם מלשונית האירועים (עמודת חיוב).</span></div></div>
+    ${shown.length ? shown.map(invClientCard).join('') : `<div class="empty">אין יתרות פתוחות — כל האירועים חויבו ושולמו. 👌</div>`}
   </div>`;
 }
 function invClientCard(g) {
   const safe = 'c' + (g.clientId || g.client).replace(/[^a-zA-Z0-9֐-׿]/g, '_');
   const bodyId = 'invbody_' + safe;
   const cEnc = encodeURIComponent(g.client);
-  const unbilled = g.events.filter(ev => !ev.billed);
-  const billedEvents = g.events.filter(ev => ev.billed);
-  const rows = unbilled.map(ev => `<tr>
-      <td style="text-align:center"><input type="checkbox" class="invchk" data-c="${safe}" value="${ev.id}" checked/></td>
+  // מציגים אירועים שטרם "שולמו" (אין להם קבלה/מס-קבלה). אירוע עם קבלה מוסר לגמרי.
+  const openEvents = g.events.filter(ev => !ev.paid);
+  const rows = openEvents.map(ev => {
+    const tags = (ev.linkedDocs || []).map(d => `<span class="tag invoiced" style="font-size:10.5px">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''}</span>`).join(' ');
+    return `<tr>
+      <td style="text-align:center"><input type="checkbox" class="invchk" data-c="${safe}" value="${ev.id}" ${ev.billed ? '' : 'checked'}/></td>
       <td>${ddmy(ev.date)}</td>
       <td>${escapeHtml(ev.artist || '')}</td>
       <td>${escapeHtml(ev.location || '')}</td>
       <td style="white-space:nowrap">${money(ev.total)}</td>
-    </tr>`).join('');
-  const unbilledHtml = unbilled.length ? `
-      <table style="margin:0"><thead><tr><th style="width:64px">בחר</th><th>תאריך</th><th>אמן</th><th>מיקום</th><th>סכום</th></tr></thead>
-        <tbody>${rows}</tbody></table>
-      <div style="padding:10px 14px;display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
-        <button class="btn ghost" onclick="openLinkExisting('${safe}','${cEnc}','${g.clientId || ''}')">🔗 קשר לחשבונית קיימת</button>
-        <button class="btn success" onclick="openInvoicePreview('${safe}','${cEnc}','${g.clientId || ''}')">הפק חשבונית מהנבחרים ←</button>
-      </div>`
-    : `<div class="empty" style="padding:14px;margin:0">כל האירועים של לקוח זה חויבו.</div>`;
-  const billedHtml = billedEvents.length ? `
-    <div style="border-top:1px solid var(--line);padding:10px 14px">
-      <div class="muted" style="font-size:12.5px;margin-bottom:6px">✓ חויבו · ${billedEvents.length} — אפשר לשייך מסמכים נוספים</div>
-      <div style="display:flex;flex-direction:column;gap:6px">
-        ${billedEvents.map(ev => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px;background:var(--panel2);border-radius:8px;padding:6px 10px">
-          <span style="white-space:nowrap">${ddmy(ev.date)}</span>
-          <span>${escapeHtml(ev.artist || '')}${ev.location ? ' · ' + escapeHtml(ev.location) : ''}</span>
-          <span style="margin-inline-start:auto;display:flex;gap:4px;flex-wrap:wrap;align-items:center">${(ev.linkedDocs || []).length ? ev.linkedDocs.map(d => `<span class="tag invoiced">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number}</span>`).join('') : (ev.invoiceNumber ? `<span class="tag invoiced">#${ev.invoiceNumber}</span>` : '')}
-            <button class="btn ghost" style="padding:3px 9px;font-size:12px;white-space:nowrap" onclick="linkMoreForEvent('${ev.id}','${cEnc}','${g.clientId || ''}')">🔗 שייך מסמך נוסף</button></span>
-        </div>`).join('')}
-      </div>
-    </div>` : '';
-  const collapsed = g.unbilledCount === 0;
+      <td>${tags || (ev.billed ? '<span class="tag pending" style="font-size:10.5px">חויב</span>' : '<span class="muted" style="font-size:11px">—</span>')}</td>
+    </tr>`;
+  }).join('');
+  const collapsed = g.unpaidCount === 0;
   return `<div class="card" style="margin-top:12px;padding:0;overflow:hidden">
     <div class="row-between" style="margin:0;padding:12px 14px;cursor:pointer" onclick="document.getElementById('${bodyId}').classList.toggle('hidden')">
-      <div><b>${escapeHtml(g.client)}</b> <span class="muted">· ${g.unbilledCount} לחיוב${billedEvents.length ? ` · ${billedEvents.length} חויבו` : ''} · ${g.events.length} סה"כ</span></div>
-      <div style="font-weight:700">${money(g.unbilledTotal)}</div>
+      <div><b>${escapeHtml(g.client)}</b> <span class="muted">· ${g.unpaidCount} פתוחים · יתרה ${money(g.unpaidTotal)}</span></div>
+      <div style="font-weight:700">${money(g.unpaidTotal)}</div>
     </div>
-    <div id="${bodyId}" class="${collapsed ? 'hidden' : ''}">${unbilledHtml}${billedHtml}</div>
+    <div id="${bodyId}" class="${collapsed ? 'hidden' : ''}">
+      <table style="margin:0"><thead><tr><th style="width:56px">בחר</th><th>תאריך</th><th>אמן</th><th>מיקום</th><th>סכום</th><th>מסמכים</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      <div style="padding:10px 14px;display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
+        <button class="btn ghost" onclick="openLinkExisting('${safe}','${cEnc}','${g.clientId || ''}')">🔗 שייך למסמכים קיימים</button>
+        <button class="btn success" onclick="openInvoicePreview('${safe}','${cEnc}','${g.clientId || ''}')">הפק חשבונית מהנבחרים ←</button>
+      </div>
+    </div>
   </div>`;
 }
 
@@ -1024,12 +1029,16 @@ window.linkChkChanged = (el) => {
 window.openLinkExisting = (safe, clientEnc, clientId) => {
   const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
   if (!ids.length) { alert('לא נבחרו אירועים לשיוך'); return; }
-  openLinkModal(ids, decodeURIComponent(clientEnc), clientId);
+  openLinkModal(ids, decodeURIComponent(clientEnc), clientId, renderInvoicing);
 };
-// שיוך מסמך נוסף לאירוע בודד שכבר חויב
-window.linkMoreForEvent = (eventId, clientEnc, clientId) => openLinkModal([eventId], decodeURIComponent(clientEnc), clientId);
-async function openLinkModal(ids, client, clientId) {
-  _linkCtx = { ids, client, clientId: clientId || '' };
+// שיוך מסמכים לאירוע בודד — מלשונית האירועים (עמודת חיוב). רק מסמכים של אותו לקוח.
+window.linkForEvent = (eventId, clientEnc, clientId) => {
+  const client = decodeURIComponent(clientEnc);
+  if (!client && !clientId) { alert('יש לשייך את האירוע ללקוח לפני קישור מסמכים.'); return; }
+  openLinkModal([eventId], client, clientId, renderCombined);
+};
+async function openLinkModal(ids, client, clientId, onDone) {
+  _linkCtx = { ids, client, clientId: clientId || '', onDone: onDone || renderInvoicing };
   let m = document.getElementById('linkModal');
   if (!m) { m = document.createElement('div'); m.id = 'linkModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden'); m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
@@ -1071,7 +1080,8 @@ window.linkConfirm = async () => {
   const r = await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventIds: _linkCtx.ids, docs }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
     if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ האירוע שויך ל-${r.docs} מסמכים וסומן כחויב.</span>`;
-    setTimeout(() => { document.getElementById('linkModal').classList.add('hidden'); renderInvoicing($('#content')); }, 1200);
+    const done = (_linkCtx && _linkCtx.onDone) || renderInvoicing;
+    setTimeout(() => { document.getElementById('linkModal').classList.add('hidden'); done($('#content')); }, 1200);
   } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {
