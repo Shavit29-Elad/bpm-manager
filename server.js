@@ -689,6 +689,41 @@ add('POST', /^\/api\/contractors\/mark-paid-bulk$/, (req, res, _p, _q, body) => 
   save(db); json(res, { ok: true, updated: n });
 });
 
+// GET /api/contractors/names — שמות קבלנים ייחודיים מתוך האירועים (עם ספירה וסכום)
+add('GET', /^\/api\/contractors\/names$/, (req, res, _p, q) => {
+  const db = load();
+  const evs = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  const map = {};
+  for (const ev of evs) {
+    for (const c of (ev.contractorDetails || [])) {
+      const name = (c.name || '').trim();
+      if (!name) continue;
+      if (!map[name]) map[name] = { name, count: 0, total: 0 };
+      map[name].count++;
+      map[name].total += Number(c.amount) || 0;
+    }
+  }
+  json(res, Object.values(map).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, 'he')));
+});
+
+// POST /api/contractors/rename-bulk { renames:[{from,to}] } — עדכון שם קבלן בכל האירועים (לפי שמות חשבונית ירוקה)
+add('POST', /^\/api\/contractors\/rename-bulk$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const map = new Map((Array.isArray(body.renames) ? body.renames : [])
+    .filter(r => r && r.from && r.to && String(r.from).trim() !== String(r.to).trim())
+    .map(r => [String(r.from).trim(), String(r.to).trim()]));
+  if (!map.size) return json(res, { error: 'אין שינויים לביצוע' }, 400);
+  let changed = 0; const applied = {};
+  for (const ev of db.events) {
+    for (const c of (ev.contractorDetails || [])) {
+      const key = (c.name || '').trim();
+      if (map.has(key)) { c.name = map.get(key); changed++; applied[key] = (applied[key] || 0) + 1; }
+    }
+    if (Array.isArray(ev.contractors)) ev.contractors = ev.contractors.map(n => map.get((n || '').trim()) || n);
+  }
+  save(db); json(res, { ok: true, changed, applied });
+});
+
 // GET /api/contractors/:id/documents — מסמכי הוצאה של קבלן/ספק מחשבונית ירוקה
 add('GET', /^\/api\/contractors\/([^/]+)\/documents$/, async (req, res, params) => {
   try { json(res, await greenInvoice.supplierExpenses(params[0])); }

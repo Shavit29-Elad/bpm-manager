@@ -1477,7 +1477,7 @@ async function renderContractors(c) {
   <div class="panel">
     <div class="row-between"><div><h2>קבלנים לתשלום</h2>
       <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום <b style="color:var(--danger)">${money(totalUnpaid)}</b>. סמן אירועים (או הכל), לחץ "סמן כשולם" והזן מספר חשבונית.</span></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn success" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost" onclick="openRenameContractors()">🔄 עדכן שמות לפי חשבונית ירוקה</button><button class="btn success" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
     ${payables.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${payables.map(contractorCard).join('')}</div>`
       : `<div class="empty">אין קבלנים עם סכומים עדיין. הוסף סכום לקבלן באירוע.</div>`}
   </div>
@@ -1541,6 +1541,55 @@ window.ctMarkPaid = async (safe) => {
 window.toggleContractorPaid = async (eventId, index, paid) => {
   await fetch('/api/contractors/toggle-paid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId, index, paid: !!paid }) }).catch(() => {});
   renderContractors($('#content'));
+};
+// עדכון שמות קבלנים לפי רשימת הספקים בחשבונית ירוקה — כלי מיפוי עם התאמות מוצעות
+window.openRenameContractors = async () => {
+  const m = document.getElementById('renameCtrModal') || (() => { const x = document.createElement('div'); x.id = 'renameCtrModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(760px,96vw)"><div class="empty">טוען שמות קבלנים וספקים…</div></div>`;
+  const [names, sup] = await Promise.all([
+    api(`/api/contractors/names?companyId=${state.company}`).catch(() => []),
+    api('/api/suppliers').catch(() => []),
+  ]);
+  const suppliers = (Array.isArray(sup) ? sup : []).map(s => s.name).filter(Boolean).sort((a, b) => a.localeCompare(b, 'he'));
+  const supSet = new Set(suppliers.map(n => n.trim()));
+  const bestMatch = (name) => {
+    const t = name.trim();
+    const cand = suppliers.filter(s => s.trim() !== t && (s.includes(t) || t.includes(s)));
+    return cand.length === 1 ? cand[0] : '';
+  };
+  const list = Array.isArray(names) ? names : [];
+  const rows = list.map(n => {
+    const exact = supSet.has(n.name.trim());
+    const best = exact ? '' : bestMatch(n.name);
+    const opts = `<option value="">— ללא שינוי —</option>` + suppliers.map(s => `<option value="${escAttr(s)}" ${(s === best) ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+    return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line)">
+      <div><b>${escapeHtml(n.name)}</b> <span class="muted" style="font-size:12px">· ${n.count} אירועים · ${money(n.total)}</span>${exact ? ' <span class="tag invoiced" style="font-size:10px">תואם</span>' : (best ? ' <span class="tag" style="font-size:10px;background:rgba(14,164,114,.14);color:var(--accent2)">הוצע</span>' : '')}</div>
+      <select class="renamesel" data-from="${escAttr(n.name)}" style="padding:6px 8px">${opts}</select>
+    </div>`;
+  }).join('');
+  m.innerHTML = `<div class="modal-card" style="width:min(760px,96vw);max-height:90vh;overflow:auto">
+    <h3>עדכון שמות קבלנים לפי חשבונית ירוקה</h3>
+    <p class="muted" style="font-size:12.5px">לכל שם קבלן מהאירועים בחר את השם המדויק מרשימת הספקים בחשבונית ירוקה. התאמות ודאיות סומנו "הוצע" ונבחרו מראש; "תואם" = כבר זהה. "ללא שינוי" משאיר כמו שהוא. העדכון חל על כל האירועים.</p>
+    ${list.length ? rows : '<div class="empty">אין שמות קבלנים באירועים.</div>'}
+    <div id="renameStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('renameCtrModal').classList.add('hidden')">סגור</button>
+      <button class="btn success" onclick="applyRenameContractors()">✓ עדכן שמות</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+};
+window.applyRenameContractors = async () => {
+  const renames = [...document.querySelectorAll('.renamesel')]
+    .map(s => ({ from: s.dataset.from, to: s.value }))
+    .filter(r => r.to && r.to.trim() && r.to.trim() !== r.from.trim());
+  if (!renames.length) { alert('לא נבחרו שינויים.'); return; }
+  if (!confirm(`לעדכן ${renames.length} שמות קבלנים בכל האירועים?\n\n` + renames.map(r => `• ${r.from}  →  ${r.to}`).join('\n'))) return;
+  const st = document.getElementById('renameStatus'); if (st) st.innerHTML = '<span class="muted">מעדכן…</span>';
+  const r = await fetch('/api/contractors/rename-bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ renames }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ עודכנו ${r.changed} רשומות בקבלנים</span>`; setTimeout(() => { document.getElementById('renameCtrModal').classList.add('hidden'); renderContractors($('#content')); }, 1300); }
+  else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
 window.refreshSuppliers = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'מרענן…'; }
