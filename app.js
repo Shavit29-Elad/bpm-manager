@@ -165,6 +165,17 @@ window.closePreview = () => {
   if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
 };
 
+// הורדה אוטומטית של קובץ מסמך (PDF) מיד אחרי הפקה, בלי ניווט ובלי לחיצה
+function autoDownloadDoc(url) {
+  if (!url) return;
+  try {
+    const a = document.createElement('a');
+    a.href = url; a.download = ''; a.target = '_blank'; a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (e) { try { window.open(url, '_blank', 'noopener'); } catch (_) {} }
+}
+window.autoDownloadDoc = autoDownloadDoc;
+
 // טבלת מסמכים משותפת (עם פירוק מע"מ). opts.showClient מוסיף עמודת לקוח.
 function docsTable(docs, opts = {}) {
   if (docs && docs.error) return `<div class="warn-banner">${docs.error}</div>`;
@@ -174,6 +185,18 @@ function docsTable(docs, opts = {}) {
   const totalEx = rows.reduce((s, d) => s + (Number(d.amountExVat) || 0), 0);
   const cc = opts.showClient;
   const s = opts.sort;
+  // תג סטטוס (פתוח/סגור/מבוטל) ליד התאריך
+  const statusBadge = (d) => {
+    const st = Number(d.status);
+    if (d.status == null || Number.isNaN(st)) return '';
+    let label = '', bg = '', fg = '#fff';
+    if (st === 0) { label = 'פתוח'; bg = 'var(--warn)'; }
+    else if (st === 1 || st === 2) { label = 'סגור'; bg = 'var(--accent2)'; }
+    else if (st === 3) { label = 'מבטל'; bg = 'var(--muted)'; }
+    else if (st === 4) { label = 'מבוטל'; bg = 'var(--danger)'; }
+    else return '';
+    return `<span style="display:inline-block;margin-inline-start:6px;padding:1px 7px;border-radius:9px;font-size:10.5px;font-weight:600;background:${bg};color:${fg};white-space:nowrap">${label}</span>`;
+  };
   // כפתורי פעולה לכל מסמך (בטבלת לקוח): מסמך המשך / שכפול / זיכוי / סמן טופל / פתח מחדש
   const actBtns = (d) => {
     if (!opts.actions) return '';
@@ -197,7 +220,7 @@ function docsTable(docs, opts = {}) {
   };
   return `<table><thead><tr>${th('date', 'תאריך')}${cc ? th('client', 'לקוח') : ''}${th('type', 'סוג')}${th('number', 'מספר')}<th>כותרת</th>${th('amount', 'סכום ללא מע"מ')}${th('amount', 'סכום כולל מע"מ')}<th></th></tr></thead>
     <tbody>${rows.map(d => `<tr>
-      <td>${fmtDate(d.date)}</td>${cc ? `<td>${d.clientName || '—'}</td>` : ''}
+      <td style="white-space:nowrap">${fmtDate(d.date)}${statusBadge(d)}</td>${cc ? `<td>${d.clientName || '—'}</td>` : ''}
       <td>${DOC_TYPE_NAMES[d.type] || `סוג ${d.type}`}</td>
       <td>${d.number ?? '—'}</td>
       <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</td>
@@ -330,7 +353,8 @@ window.doDerive = async (id, type, linked, btn) => {
   st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
   const r = await fetch(`/api/documents/${id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, linked }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
-    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
+    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
+    autoDownloadDoc(r.doc?.url);
     setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); if (typeof _docActionRefresh === 'function') _docActionRefresh(); }, 1400);
   } else {
     [...document.querySelectorAll('#derModal button')].forEach(b => b.disabled = false);
@@ -511,7 +535,8 @@ window.derConfirm = async () => {
   const r = await fetch(`/api/documents/${e.id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: e.type, linked: e.linked, items, date: e.date, description: e.description, remarks: e.remarks, payment }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
-    if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
+    if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
+    autoDownloadDoc(r.doc?.url);
     setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); if (typeof _docActionRefresh === 'function') _docActionRefresh(); }, 1400);
   } else {
     if (btn) btn.disabled = false;
@@ -565,8 +590,10 @@ window.doCredit = async (id, srcType) => {
   if (r.ok) {
     const parts = [`✓ חשבונית זיכוי #${r.credit?.number || ''}`];
     if (r.negativeReceipt) parts.push(`קבלה שלילית #${r.negativeReceipt?.number || ''}`);
-    if (st) st.innerHTML = `<span style="color:var(--accent2)">${parts.join(' · ')}</span>`;
-    setTimeout(() => { document.getElementById('creditModal').classList.add('hidden'); if (typeof reloadClientDocs === 'function') reloadClientDocs(); }, 1600);
+    if (st) st.innerHTML = `<span style="color:var(--accent2)">${parts.join(' · ')} · מוריד קבצים…</span>`;
+    autoDownloadDoc(r.credit?.url);
+    if (r.negativeReceipt?.url) setTimeout(() => autoDownloadDoc(r.negativeReceipt.url), 900);
+    setTimeout(() => { document.getElementById('creditModal').classList.add('hidden'); if (typeof reloadClientDocs === 'function') reloadClientDocs(); }, 1900);
   } else {
     if (btn) btn.disabled = false;
     if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
@@ -1552,6 +1579,7 @@ window.showDesignedPreview = async (btn) => {
 };
 // חלון "החשבונית הופקה בהצלחה" עם אפשרות הורדה מיידית
 function showInvoiceDoneDialog(typeName, number, url) {
+  autoDownloadDoc(url); // הורדה אוטומטית מיד בהפקה
   let m = document.getElementById('invDoneModal');
   if (!m) { m = document.createElement('div'); m.id = 'invDoneModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
@@ -1668,7 +1696,7 @@ window.createNewQuote = async (btn) => {
   const body = { clientId: e.clientId || null, clientName: e.clientName || null, items, date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim() };
   const r = await fetch('/api/quotes/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
-  if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''}</span>`; setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); }, 1300); }
+  if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''} · מוריד קובץ…</span>`; autoDownloadDoc(r.doc?.url); setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); }, 1300); }
   else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
 // הוספת לקוח חדש מתוך מסך הצעת המחיר — נוצר בחשבונית ירוקה ונבחר אוטומטית
@@ -1771,7 +1799,8 @@ window.doFollowup = async (id, type, btn) => {
   st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
   const r = await fetch(`/api/quotes/${id}/followup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
-    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
+    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
+    autoDownloadDoc(r.doc?.url);
     setTimeout(() => { document.getElementById('fuModal').classList.add('hidden'); renderQuotes($('#content')); }, 1300);
   } else {
     [...document.querySelectorAll('#fuModal button')].forEach(b => b.disabled = false);
@@ -1803,7 +1832,7 @@ async function renderContractors(c) {
   <div class="panel">
     <div class="row-between"><div><h2>קבלנים לתשלום</h2>
       <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום (ללא מע״מ) <b style="color:var(--danger)">${money(totalUnpaid)}</b> · כולל מע״מ <b>${money(totalUnpaid * (1 + VAT_RATE))}</b>. סמן אירועים (או הכל), לחץ "סמן כשולם" והזן מספר חשבונית.</span>${_ctrSyncNote ? `<div style="font-size:12px;color:var(--accent2);margin-top:2px">✓ ${_ctrSyncNote}</div>` : ''}</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn success" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
     ${payables.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${payables.map(contractorCard).join('')}</div>`
       : `<div class="empty">אין קבלנים עם סכומים עדיין. הוסף סכום לקבלן באירוע.</div>`}
   </div>
@@ -1964,7 +1993,12 @@ function draftsSection() {
     : `<div style="font-size:12px;color:var(--warn);margin-top:2px">📧 שליחת הוצאות לרו"ח (${escapeHtml(String(ms.forwardTo || '516942349@rivh.it'))}) עדיין לא מחוברת — צריך להגדיר חשבון מייל שולח.</div>`;
   return `<div class="row-between"><div><h2>🧾 טיוטות הוצאה לאישור</h2>
       <span class="muted">${list.length ? `${list.length} טיוטות שהעלית וממתינות לאישור. בדוק את מה שהזיהוי האוטומטי קלט, תקן אם צריך, ואשר — תיווצר הוצאה אמיתית שמשויכת לספק.` : 'אין טיוטות ממתינות. העלה קובץ הוצאה כדי שיופיע כאן אחרי זיהוי אוטומטי (OCR).'}</span>${mailNote}</div>
-      <button class="btn ghost" onclick="reloadDrafts(this)">↻ רענן</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn success" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn ghost" onclick="reloadDrafts(this)">↻ רענן</button></div></div>
+    <div id="expDropZone" ondragover="expDragOver(event)" ondragleave="expDragLeave(event)" ondrop="expDrop(event)" onclick="pickExpenseFile()" style="border:2px dashed var(--line);border-radius:12px;padding:16px;text-align:center;margin-top:12px;cursor:pointer;transition:border-color .15s,background .15s">
+      <div style="font-size:22px">📎⬇️</div>
+      <div style="font-size:13.5px;font-weight:600;margin-top:4px">גרור לכאן קובץ הוצאה (PDF / תמונה) או לחץ לבחירה</div>
+      <div class="muted" style="font-size:11.5px;margin-top:2px">הקובץ יעלה לחשבונית ירוקה ויעבור זיהוי אוטומטי (OCR)</div>
+    </div>
     ${list.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${list.map(draftCard).join('')}</div>` : `<div class="empty">אין טיוטות ממתינות לאישור.</div>`}`;
 }
 function draftCard(d) {
@@ -2061,7 +2095,7 @@ window.openApproveDraft = (id) => {
           <button class="btn ghost" style="padding:3px 10px;font-size:12px;white-space:nowrap" onclick="aiFillDraft('${d.id}',true)">🤖 קרא עם AI</button>
         </div>
         <div style="padding-inline-start:2px">
-          ${fld('שם הספק / קבלן *', `<div style="display:flex;gap:6px;align-items:center"><select id="apSup" style="flex:1" onchange="syncApprClassForSupplier()"><option value="">— בחר ספק —</option>${supOpts}</select><button type="button" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap" onclick="openAddSupplier()">+ ספק חדש</button></div>`)}
+          ${fld('שם הספק / קבלן *', `<div style="display:flex;gap:6px;align-items:center"><select id="apSup" style="flex:1" onchange="onApprSupplierChange()"><option value="">— בחר ספק —</option>${supOpts}</select><button type="button" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap" onclick="openAddSupplier()">+ ספק חדש</button></div>`)}
           ${fld('סיווג הוצאה (חשבונית ירוקה) *', `<select id="apClass"><option value="">— טוען סיווגים… —</option></select>`)}
           <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:-4px 0 9px"><input type="checkbox" id="apClassSave" checked/> שמור כברירת מחדל לספק זה (כדי שהקליטה הבאה תהיה אוטומטית)</label>
           ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
@@ -2111,11 +2145,23 @@ window.syncApprClassForSupplier = (fallbackId) => {
   const cid = (sup && sup.accountingClassificationId) || fallbackId || '';
   if (cid && [...sel.options].some(o => o.value === String(cid))) sel.value = String(cid);
 };
+// בחירת ספק בקליטת הוצאה — ממלא אוטומטית את פרטי הספק הידועים (ח.פ) + הסיווג
+window.onApprSupplierChange = () => {
+  fillApprSupplierDetails();
+  syncApprClassForSupplier();
+};
+// ממלא את פרטי הספק הידועים מרשימת הספקים (ח.פ). overwrite=true דורס ערך קיים.
+function fillApprSupplierDetails(overwrite = true) {
+  const supId = document.getElementById('apSup')?.value;
+  const sup = (_suppliers || []).find(s => String(s.id) === String(supId));
+  const taxEl = document.getElementById('apTax');
+  if (sup && sup.taxId && taxEl && (overwrite || !taxEl.value)) taxEl.value = sup.taxId;
+}
 // קליטה חכמה: AI קורא את קובץ החשבונית וממלא את השדות (עם מטמון לכל טיוטה)
 function applyAiFields(f) {
   const g = (x) => document.getElementById(x);
   if (!g('apSup')) return;
-  if (f.supplierId && [...g('apSup').options].some(o => o.value === String(f.supplierId))) g('apSup').value = String(f.supplierId);
+  if (f.supplierId && [...g('apSup').options].some(o => o.value === String(f.supplierId))) { g('apSup').value = String(f.supplierId); fillApprSupplierDetails(false); }
   if (f.taxId && !g('apTax').value) g('apTax').value = f.taxId;
   if (f.documentType && [...g('apType').options].some(o => +o.value === +f.documentType)) g('apType').value = String(f.documentType);
   if (f.invoiceNumber) g('apNum').value = f.invoiceNumber;
@@ -2277,8 +2323,17 @@ function supDocRow(d) {
 window.pickExpenseFile = () => {
   const inp = document.createElement('input');
   inp.type = 'file'; inp.accept = '.pdf,.png,.jpg,.jpeg,application/pdf,image/*';
-  inp.onchange = async () => {
-    const f = inp.files[0]; if (!f) return;
+  inp.onchange = () => { const f = inp.files[0]; if (f) handleExpenseFile(f); };
+  inp.click();
+};
+// גרירת קובץ הוצאה לאזור השחרור
+window.expDragOver = (e) => { e.preventDefault(); const z = document.getElementById('expDropZone'); if (z) { z.style.borderColor = 'var(--accent)'; z.style.background = 'var(--panel2)'; } };
+window.expDragLeave = (e) => { e.preventDefault(); const z = document.getElementById('expDropZone'); if (z) { z.style.borderColor = 'var(--line)'; z.style.background = ''; } };
+window.expDrop = (e) => { e.preventDefault(); window.expDragLeave(e); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) handleExpenseFile(f); };
+// העלאת קובץ הוצאה לחשבונית ירוקה + מעקב אחר זיהוי אוטומטי (משמש גם בבחירה וגם בגרירה)
+window.handleExpenseFile = async (f) => {
+    if (!f) return;
+    if (!/\.(pdf|png|jpe?g)$/i.test(f.name) && !/(pdf|image)/i.test(f.type || '')) { alert('יש להעלות קובץ PDF או תמונה.'); return; }
     if (f.size > 10 * 1024 * 1024) { alert('הקובץ גדול מדי (עד 10MB)'); return; }
     let toast = document.getElementById('expToast');
     if (!toast) { toast = document.createElement('div'); toast.id = 'expToast'; toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 18px;font-size:14px;z-index:9999;box-shadow:0 6px 24px rgba(0,0,0,.15)'; document.body.appendChild(toast); }
@@ -2310,8 +2365,6 @@ window.pickExpenseFile = () => {
       };
       setTimeout(poll, 4000);
     } else { toast.innerHTML = `<span style="color:var(--danger)">שגיאה בהעלאה: ${escapeHtml(String(r.error || ''))}</span>`; setTimeout(() => { toast.style.display = 'none'; }, 5000); }
-  };
-  inp.click();
 };
 // רישום הוצאה של קבלן ישירות בחשבונית ירוקה
 const EXPENSE_DOC_TYPES = [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
