@@ -2009,14 +2009,27 @@ const PAYABLE_TYPE_NAMES = { 20: 'חשבון עסקה', 300: 'חשבון עסק�
 function supplierPayablesSection(list) {
   const items = Array.isArray(list) ? list : [];
   const total = items.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  const rows = items.map(p => `<div style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-top:1px solid var(--line);font-size:13px;flex-wrap:wrap">
-    <span class="tag" style="${p.isBusinessDoc ? 'background:#fff4e5;color:#8a5a00' : 'background:#eef;color:var(--accent)'}">${PAYABLE_TYPE_NAMES[p.documentType] || ('סוג ' + p.documentType)}${p.isBusinessDoc ? ' · פנימי' : ''}</span>
-    <span style="font-weight:600;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(p.description || '')}">${escapeHtml(p.supplierName || 'ספק')}</span>
-    <span class="muted" style="white-space:nowrap">#${escapeHtml(String(p.number || ''))} · ${fmtDate(p.date)}</span>
-    <span style="font-weight:700;white-space:nowrap">${money(p.amount)}</span>
-    <button class="btn success" style="padding:3px 10px;font-size:12px" onclick="markPayablePaid('${p.id}')">✓ סמן כשולם</button>
-    <button class="btn ghost" style="padding:3px 8px;font-size:12px" onclick="deletePayable('${p.id}')" title="הסר רישום">✕</button>
-  </div>`).join('');
+  const rows = items.map(p => {
+    const missingAlloc = [305, 320].includes(Number(p.documentType)) && Math.max(Number(p.amount) || 0, Number(p.amountExcludeVat) || 0) > 5000 && !p.allocationNumber;
+    return `<div style="padding:10px 12px;border-top:1px solid var(--line);font-size:13px">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span class="tag" style="${p.isBusinessDoc ? 'background:#fff4e5;color:#8a5a00' : 'background:#eef;color:var(--accent)'}">${PAYABLE_TYPE_NAMES[p.documentType] || ('סוג ' + p.documentType)}${p.isBusinessDoc ? ' · פנימי' : ''}</span>
+      <span style="font-weight:600;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.supplierName || 'ספק')}</span>
+      ${missingAlloc ? '<span class="tag" style="background:#fde8e8;color:var(--danger);font-size:10.5px;white-space:nowrap">⚠ חסר מס׳ הקצאה</span>' : ''}
+      <span class="muted" style="white-space:nowrap">#${escapeHtml(String(p.number || ''))} · ${fmtDate(p.date)}</span>
+    </div>
+    ${p.description ? `<div class="muted" style="font-size:12px;margin:5px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(p.description)}">${escapeHtml(p.description)}</div>` : ''}
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:7px">
+      <span style="font-size:12.5px">ללא מע"מ: <b>${money(p.amountExcludeVat)}</b></span>
+      <span style="font-size:12.5px">כולל מע"מ: <b style="color:var(--danger)">${money(p.amount)}</b></span>
+      <span style="flex:1;min-width:8px"></span>
+      ${p.hasFile ? `<a class="btn ghost" style="padding:3px 10px;font-size:12px;text-decoration:none" href="/api/supplier-payables/${p.id}/file" target="_blank" rel="noopener">תצוגה 👁</a>
+      <a class="btn ghost" style="padding:3px 10px;font-size:12px;text-decoration:none" href="/api/supplier-payables/${p.id}/file" download target="_blank" rel="noopener">הורדה ↓</a>` : ''}
+      <button class="btn success" style="padding:3px 10px;font-size:12px" onclick="markPayablePaid('${p.id}')">✓ סמן כשולם</button>
+      <button class="btn ghost" style="padding:3px 8px;font-size:12px" onclick="deletePayable('${p.id}')" title="הסר רישום">✕</button>
+    </div>
+  </div>`;
+  }).join('');
   return `<div class="row-between"><div><h2>🧾 הוצאות ספקים לתשלום</h2>
       <span class="muted">${items.length ? `${items.length} הוצאות שטרם שולמו · סה"כ ${money(total)} (כולל מע"מ). "חשבון עסקה · פנימי" = רישום שלא נשלח לחשבונית ירוקה/רו״ח.` : 'אין הוצאות ספקים פתוחות. הוצאה שתסמן "לא שולם" (או חשבון עסקה) תופיע כאן.'}</span></div></div>
     ${items.length ? `<div style="margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="empty">אין הוצאות פתוחות לתשלום.</div>'}`;

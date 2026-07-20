@@ -541,15 +541,14 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     if (isBusiness) {
       const db = load();
       db.supplierPayables = db.supplierPayables || [];
-      const payable = newPayable({ isBusinessDoc: true, giExpenseId: null });
+      // שומרים את draftId (הקובץ נשאר בחשבונית ירוקה כטיוטה מוסתרת) כדי שתהיה צפייה/הורדה — לא נוצר כהוצאה
+      const payable = newPayable({ isBusinessDoc: true, giExpenseId: null, draftId });
       db.supplierPayables.push(payable);
       const linked = applyLinkedEvents(db, linkedEvents, number, payable.id);
       db.approvedDrafts = db.approvedDrafts || {};
       db.approvedDrafts[draftId] = { businessPayableId: payable.id, at: new Date().toISOString() };
-      save(db);
-      let draftRemoved = false;
-      try { await greenInvoice.deleteExpenseDraft(draftId); draftRemoved = true; } catch { }
-      return json(res, { ok: true, businessDoc: true, payableId: payable.id, draftRemoved, linkedCount: linked });
+      save(db); // הטיוטה מוסתרת מרשימת הטיוטות (approvedDrafts) אך נשמרת כדי לשמור על הקובץ
+      return json(res, { ok: true, businessDoc: true, payableId: payable.id, linkedCount: linked });
     }
 
     // ===== מסמך מס אמיתי — נוצר בחשבונית ירוקה =====
@@ -686,8 +685,37 @@ add('GET', /^\/api\/contractors\/open-events$/, (req, res, _p, q) => {
 add('GET', /^\/api\/supplier-payables$/, (req, res, _p, q) => {
   const db = load();
   const list = db.supplierPayables || [];
-  const out = (q.all ? list : list.filter(p => !p.paid)).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  const out = (q.all ? list : list.filter(p => !p.paid)).slice()
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+    .map(p => ({ ...p, hasFile: !!(p.giExpenseId || p.draftId) }));
   json(res, { ok: true, payables: out });
+});
+
+// GET /api/supplier-payables/:id/file — צפייה/הורדה של קובץ החשבונית (מההוצאה בחשבונית ירוקה או מהטיוטה)
+add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const db = load();
+    const p = (db.supplierPayables || []).find(x => x.id === params[0]);
+    if (!p) return json(res, { error: 'לא נמצא' }, 404);
+    let fileUrl = null;
+    if (p.giExpenseId) { try { const e = await greenInvoice.getExpense(p.giExpenseId); fileUrl = (e?.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e?.url === 'string' ? e.url : null); } catch { } }
+    if (!fileUrl && p.draftId) { try { const d = await greenInvoice.getExpenseDraft(p.draftId); fileUrl = d?.url || null; } catch { } }
+    if (!fileUrl) return json(res, { error: 'אין קובץ למסמך זה' }, 404);
+    const r = await fetch(fileUrl, { redirect: 'follow' });
+    if (!r.ok) return json(res, { error: `שגיאה בטעינת הקובץ: ${r.status}` }, 502);
+    let ct = r.headers.get('content-type') || '';
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!ct || /octet-stream/i.test(ct)) {
+      if (buf.slice(0, 4).toString('latin1') === '%PDF') ct = 'application/pdf';
+      else if (buf[0] === 0x89 && buf[1] === 0x50) ct = 'image/png';
+      else if (buf[0] === 0xFF && buf[1] === 0xD8) ct = 'image/jpeg';
+      else ct = 'application/pdf';
+    }
+    if (/image\/jpg/i.test(ct)) ct = 'image/jpeg';
+    res.writeHead(200, { 'Content-Type': ct, 'Content-Disposition': 'inline', 'Cache-Control': 'private, max-age=300' });
+    res.end(buf);
+  } catch (e) { json(res, { error: e.message }, 500); }
 });
 
 // POST /api/supplier-payables/:id/paid { paid } — סימון הוצאת ספק כשולמה
