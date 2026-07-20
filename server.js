@@ -467,6 +467,21 @@ add('GET', /^\/api\/expense-drafts$/, async (req, res, _p, q) => {
   } catch (e) { json(res, { drafts: [], error: e.message }, 500); }
 });
 
+// קישור חשבונית לאירועים ב"קבלנים לתשלום" — מסמן אותם כשולמו (יורדים מהרשימה) עם ייחוס לחשבונית
+function applyLinkedEvents(db, linkedEvents, invoiceNumber, payableId) {
+  if (!Array.isArray(linkedEvents) || !linkedEvents.length) return 0;
+  let n = 0;
+  for (const le of linkedEvents) {
+    const ev = (db.events || []).find(e => String(e.id) === String(le.eventId));
+    if (!ev || !Array.isArray(ev.contractorDetails) || !ev.contractorDetails[le.index]) continue;
+    ev.contractorDetails[le.index].paid = true;
+    ev.contractorDetails[le.index].paidInvoice = invoiceNumber || ev.contractorDetails[le.index].paidInvoice || null;
+    ev.contractorDetails[le.index].paidPayableId = payableId || null;
+    n++;
+  }
+  return n;
+}
+
 // POST /api/expense-drafts/:id/approve — אישור טיוטה → יצירת הוצאה אמיתית מנתוני ה-OCR (עם תיקונים)
 // body: { supplierId, number, date, documentType, amount, vatIncluded, description, accountingClassificationId? }
 add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params, _q, body) => {
@@ -478,12 +493,19 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     const supplierId = body.supplierId || draft.supplierId;
     if (!supplierId) return json(res, { error: 'יש לבחור ספק עבור ההוצאה' }, 400);
 
-    // סיווג חשבונאי — מהטיוטה, מהבקשה, או מברירת המחדל של הספק
+    // חשבון עסקה (20) = רישום פנימי בלבד — לא נוצר בחשבונית ירוקה ולא נשלח לרו"ח
+    const isBusiness = Number(body.documentType) === 20;
+    const paidFlag = body.paid !== false; // ברירת מחדל שולם (הפרונט שולח במפורש)
+    const linkedEvents = Array.isArray(body.linkedEvents) ? body.linkedEvents : [];
+
+    // סיווג חשבונאי — נדרש רק למסמך מס אמיתי (לא לחשבון עסקה)
     let classId = body.accountingClassificationId || draft.accountingClassificationId || null;
-    if (!classId) {
-      try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { }
+    if (!isBusiness) {
+      if (!classId) {
+        try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { }
+      }
+      if (!classId) return json(res, { error: 'לספק אין סיווג הוצאה מוגדר בחשבונית ירוקה. הגדר לו "סיווג חשבונאי" בכרטיס הספק ונסה שוב.' }, 400);
     }
-    if (!classId) return json(res, { error: 'לספק אין סיווג הוצאה מוגדר בחשבונית ירוקה. הגדר לו "סיווג חשבונאי" בכרטיס הספק ונסה שוב.' }, 400);
 
     const amount = Number(body.amount != null ? body.amount : draft.amount) || 0; // כולל מע"מ
     if (amount <= 0) return json(res, { error: 'סכום לא תקין' }, 400);
@@ -503,12 +525,40 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     // מספר הקצאה (חובה לחשבונית מס/מס-קבלה מעל 5,000 ₪) — נשמר בתיאור ההוצאה כדי לתעד אותו
     const alloc = String(body.allocationNumber || '').replace(/[^\d]/g, '').trim();
     const baseDesc = (body.description || draft.description || '').trim() || 'הוצאת ספק';
+    const newPayable = (extra) => ({
+      id: 'pay_' + Math.random().toString(36).slice(2, 10),
+      supplierId, supplierName: body.supplierName || draft.supplierName || '',
+      taxId: (body.taxId || '').trim() || null,
+      documentType: Number(body.documentType || draft.documentType) || 305,
+      number, date, amount, amountExcludeVat: net, vat,
+      description: baseDesc, allocationNumber: alloc || null,
+      paid: paidFlag, paidAt: paidFlag ? new Date().toISOString() : null,
+      linkedEvents, createdAt: new Date().toISOString(),
+      ...extra,
+    });
+
+    // ===== חשבון עסקה — רישום פנימי בלבד (לא בחשבונית ירוקה, לא לרו"ח) =====
+    if (isBusiness) {
+      const db = load();
+      db.supplierPayables = db.supplierPayables || [];
+      const payable = newPayable({ isBusinessDoc: true, giExpenseId: null });
+      db.supplierPayables.push(payable);
+      const linked = applyLinkedEvents(db, linkedEvents, number, payable.id);
+      db.approvedDrafts = db.approvedDrafts || {};
+      db.approvedDrafts[draftId] = { businessPayableId: payable.id, at: new Date().toISOString() };
+      save(db);
+      let draftRemoved = false;
+      try { await greenInvoice.deleteExpenseDraft(draftId); draftRemoved = true; } catch { }
+      return json(res, { ok: true, businessDoc: true, payableId: payable.id, draftRemoved, linkedCount: linked });
+    }
+
+    // ===== מסמך מס אמיתי — נוצר בחשבונית ירוקה =====
     const expBody = {
       supplier: { id: supplierId },
       documentType: Number(body.documentType || draft.documentType) || 305,
       number,
       date, reportingDate: date,
-      currency: 'ILS', paymentType: 4,
+      currency: 'ILS', paymentType: paidFlag ? 4 : -1, // -1 = לא שולם
       amount, amountExcludeVat: net, vat,
       accountingClassification: { id: classId },
       description: alloc ? `${baseDesc} · מס' הקצאה ${alloc}` : baseDesc,
@@ -558,6 +608,15 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     const db = load();
     db.approvedDrafts = db.approvedDrafts || {};
     db.approvedDrafts[draftId] = { expenseId: created?.id || null, at: new Date().toISOString() };
+    // אם לא שולם — נוסיף ל"הוצאות ספקים לתשלום". בכל מקרה נקשר אירועים אם נבחרו.
+    let payableId = null;
+    if (!paidFlag) {
+      db.supplierPayables = db.supplierPayables || [];
+      const payable = newPayable({ isBusinessDoc: false, giExpenseId: created?.id || null });
+      db.supplierPayables.push(payable);
+      payableId = payable.id;
+    }
+    const linkedCount = applyLinkedEvents(db, linkedEvents, number, payableId);
     save(db);
 
     // שמירת הסיווג שנבחר כברירת מחדל לספק (אם התבקש) — כדי שקליטות הבאות יהיו אוטומטיות
@@ -565,8 +624,79 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       try { await greenInvoice.updateSupplier(supplierId, { accountingClassificationId: body.accountingClassificationId }); } catch { }
     }
 
-    json(res, { ok: true, expense: created, draftRemoved, forwarded, forwardError, forwardTo: mailer.forwardExpenseTo() });
+    json(res, { ok: true, expense: created, draftRemoved, forwarded, forwardError, forwardTo: mailer.forwardExpenseTo(), payableId, linkedCount });
   } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// GET /api/contractors/open-events?name=&amount=&date=&desc=&companyId= — אירועים פתוחים של קבלן + הצעה חכמה
+add('GET', /^\/api\/contractors\/open-events$/, (req, res, _p, q) => {
+  const db = load();
+  const name = (q.name || '').trim();
+  if (!name) return json(res, { ok: true, events: [] });
+  const amount = Number(q.amount) || 0;
+  const invDate = (q.date || '').slice(0, 10);
+  const desc = String(q.desc || '');
+  const evs = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  const norm = (s) => String(s || '').trim();
+  const items = [];
+  for (const ev of (evs || [])) {
+    const details = ev.contractorDetails || [];
+    for (let i = 0; i < details.length; i++) {
+      const c = details[i];
+      const cn = norm(c.name);
+      if (!cn || c.paid) continue;
+      if (!(cn === name || cn.includes(name) || name.includes(cn))) continue;
+      items.push({ eventId: ev.id, index: i, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0, suggested: false });
+    }
+  }
+  // הצעה חכמה 1: תאריך/מקום/אמן שמופיעים בתיאור החשבונית (התאמה כמעט ודאית)
+  const dateForms = (d) => { if (!d) return []; const [y, m, dd] = String(d).split('-'); if (!dd) return [d]; const yy = String(y).slice(2); return [`${dd}.${m}`, `${dd}/${m}`, `${dd}.${m}.${yy}`, `${dd}/${m}/${yy}`, d]; };
+  let anyByText = false;
+  for (const it of items) {
+    const hitDate = dateForms(it.date).some(f => f && desc.includes(f));
+    const hitLoc = it.location && desc.includes(it.location);
+    const hitArt = it.artist && desc.includes(it.artist);
+    if (hitDate || hitLoc || hitArt) { it.suggested = true; anyByText = true; }
+  }
+  // הצעה חכמה 2 (fallback): צירוף בחלון תאריכים שסכומו מסתדר עם החשבונית
+  if (!anyByText && amount > 0) {
+    const win = items.filter(it => {
+      if (!it.date || !invDate) return true;
+      const diff = (new Date(invDate) - new Date(it.date)) / 86400000;
+      return diff >= -3 && diff <= 75;
+    }).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    let acc = 0;
+    for (const it of win) { if (acc >= amount - 1) break; it.suggested = true; acc += it.amount; }
+    if (Math.abs(acc - amount) > Math.max(amount * 0.15, 50)) items.forEach(it => (it.suggested = false)); // לא בטוח — לא מציעים
+  }
+  items.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  json(res, { ok: true, events: items });
+});
+
+// GET /api/supplier-payables?all= — הוצאות ספקים לתשלום (ברירת מחדל: רק שלא שולמו)
+add('GET', /^\/api\/supplier-payables$/, (req, res, _p, q) => {
+  const db = load();
+  const list = db.supplierPayables || [];
+  const out = (q.all ? list : list.filter(p => !p.paid)).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  json(res, { ok: true, payables: out });
+});
+
+// POST /api/supplier-payables/:id/paid { paid } — סימון הוצאת ספק כשולמה
+add('POST', /^\/api\/supplier-payables\/([^/]+)\/paid$/, (req, res, params, _q, body) => {
+  const db = load();
+  const p = (db.supplierPayables || []).find(x => x.id === params[0]);
+  if (!p) return json(res, { error: 'לא נמצא' }, 404);
+  p.paid = body.paid !== false;
+  p.paidAt = p.paid ? new Date().toISOString() : null;
+  save(db); json(res, { ok: true, payable: p });
+});
+
+// POST /api/supplier-payables/:id/delete — הסרת רשומת הוצאת ספק פנימית
+add('POST', /^\/api\/supplier-payables\/([^/]+)\/delete$/, (req, res, params) => {
+  const db = load();
+  const before = (db.supplierPayables || []).length;
+  db.supplierPayables = (db.supplierPayables || []).filter(x => x.id !== params[0]);
+  save(db); json(res, { ok: true, removed: before - (db.supplierPayables || []).length });
 });
 
 // GET /api/mail/status — האם שליחת מייל מוגדרת ולאן מועברות הוצאות

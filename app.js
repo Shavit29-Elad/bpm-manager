@@ -1816,19 +1816,22 @@ async function renderContractors(c) {
   // עדכון אוטומטי של שמות הקבלנים לפי חשבונית ירוקה (רק התאמות ודאיות) לפני הטעינה
   const sync = await fetch('/api/contractors/auto-sync-names', { method: 'POST' }).then(x => x.json()).catch(() => ({ changed: 0 }));
   _ctrSyncNote = (sync && sync.changed) ? `עודכנו ${sync.changed} שמות קבלנים לפי חשבונית ירוקה` : '';
-  const [pay, sup, dr, ms] = await Promise.all([
+  const [pay, sup, dr, ms, spRes] = await Promise.all([
     api(`/api/contractors/payables?companyId=${state.company}`),
     api('/api/suppliers').catch(() => []),
     api('/api/expense-drafts').catch(() => ({ drafts: [] })),
     api('/api/mail/status').catch(() => null),
+    api('/api/supplier-payables').catch(() => ({ payables: [] })),
   ]);
   _mailStatus = ms || _mailStatus;
+  const supPayables = Array.isArray(spRes?.payables) ? spRes.payables : [];
   const payables = Array.isArray(pay) ? pay : [];
   _suppliers = Array.isArray(sup) ? sup : [];
   _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
   const totalUnpaid = payables.reduce((s, x) => s + (x.unpaidTotal || 0), 0);
   const totalPaid = payables.reduce((s, x) => s + (x.paidTotal || 0), 0);
   c.innerHTML = `<div class="panel" id="draftsPanel">${draftsSection()}</div>
+  <div class="panel">${supplierPayablesSection(supPayables)}</div>
   <div class="panel">
     <div class="row-between"><div><h2>קבלנים לתשלום</h2>
       <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום (ללא מע״מ) <b style="color:var(--danger)">${money(totalUnpaid)}</b> · כולל מע״מ <b>${money(totalUnpaid * (1 + VAT_RATE))}</b>. סמן אירועים (או הכל), לחץ "סמן כשולם" והזן מספר חשבונית.</span>${_ctrSyncNote ? `<div style="font-size:12px;color:var(--accent2);margin-top:2px">✓ ${_ctrSyncNote}</div>` : ''}</div>
@@ -2001,6 +2004,34 @@ function draftsSection() {
     </div>
     ${list.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${list.map(draftCard).join('')}</div>` : `<div class="empty">אין טיוטות ממתינות לאישור.</div>`}`;
 }
+// ===== הוצאות ספקים לתשלום (מסמכי מס שלא שולמו + חשבונות עסקה פנימיים) =====
+const PAYABLE_TYPE_NAMES = { 20: 'חשבון עסקה', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'מס-קבלה', 400: 'קבלה', 330: 'זיכוי' };
+function supplierPayablesSection(list) {
+  const items = Array.isArray(list) ? list : [];
+  const total = items.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const rows = items.map(p => `<div style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-top:1px solid var(--line);font-size:13px;flex-wrap:wrap">
+    <span class="tag" style="${p.isBusinessDoc ? 'background:#fff4e5;color:#8a5a00' : 'background:#eef;color:var(--accent)'}">${PAYABLE_TYPE_NAMES[p.documentType] || ('סוג ' + p.documentType)}${p.isBusinessDoc ? ' · פנימי' : ''}</span>
+    <span style="font-weight:600;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(p.description || '')}">${escapeHtml(p.supplierName || 'ספק')}</span>
+    <span class="muted" style="white-space:nowrap">#${escapeHtml(String(p.number || ''))} · ${fmtDate(p.date)}</span>
+    <span style="font-weight:700;white-space:nowrap">${money(p.amount)}</span>
+    <button class="btn success" style="padding:3px 10px;font-size:12px" onclick="markPayablePaid('${p.id}')">✓ סמן כשולם</button>
+    <button class="btn ghost" style="padding:3px 8px;font-size:12px" onclick="deletePayable('${p.id}')" title="הסר רישום">✕</button>
+  </div>`).join('');
+  return `<div class="row-between"><div><h2>🧾 הוצאות ספקים לתשלום</h2>
+      <span class="muted">${items.length ? `${items.length} הוצאות שטרם שולמו · סה"כ ${money(total)} (כולל מע"מ). "חשבון עסקה · פנימי" = רישום שלא נשלח לחשבונית ירוקה/רו״ח.` : 'אין הוצאות ספקים פתוחות. הוצאה שתסמן "לא שולם" (או חשבון עסקה) תופיע כאן.'}</span></div></div>
+    ${items.length ? `<div style="margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="empty">אין הוצאות פתוחות לתשלום.</div>'}`;
+}
+window.markPayablePaid = async (pid) => {
+  if (!confirm('לסמן את הוצאת הספק כשולמה? היא תרד מהרשימה.')) return;
+  const r = await fetch(`/api/supplier-payables/${pid}/paid`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paid: true }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) renderContractors($('#content')); else alert('שגיאה: ' + (r.error || ''));
+};
+window.deletePayable = async (pid) => {
+  if (!confirm('להסיר את רישום הוצאת הספק הזה מהרשימה?')) return;
+  const r = await fetch(`/api/supplier-payables/${pid}/delete`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) renderContractors($('#content')); else alert('שגיאה: ' + (r.error || ''));
+};
+
 function draftCard(d) {
   const ai = _aiByDraft[d.id] || d.ai || null;   // מה שה-AI קרא מהחשבונית (גובר על ה-OCR הכללי של מורנינג)
   const failed = d.status === 50 || d.status === 200;
@@ -2049,7 +2080,7 @@ window.dismissDraft = async (id) => {
   const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
 };
 // סוגי מסמך להוצאה (כמו בחשבונית ירוקה): חשבון עסקה / מס / מס-קבלה / קבלה
-const APPROVE_DOC_TYPES = [[20, 'חשבון עסקה / אישור תשלום'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
+const APPROVE_DOC_TYPES = [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה'], [20, 'חשבון עסקה / דרישת תשלום (רישום פנימי — לא לחשבונית ירוקה ולא לרו״ח)']];
 window.recalcApprVat = () => {
   const g = (x) => document.getElementById(x);
   const amount = +(g('apAmount')?.value) || 0;
@@ -2099,7 +2130,8 @@ window.openApproveDraft = (id) => {
           ${fld('סיווג הוצאה (חשבונית ירוקה) *', `<select id="apClass"><option value="">— טוען סיווגים… —</option></select>`)}
           <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:-4px 0 9px"><input type="checkbox" id="apClassSave" checked/> שמור כברירת מחדל לספק זה (כדי שהקליטה הבאה תהיה אוטומטית)</label>
           ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
-          ${fld('סוג המסמך *', `<select id="apType" onchange="checkAllocWarn()">${typeSel}</select>`)}
+          ${fld('סוג המסמך *', `<select id="apType" onchange="onApprTypeChange()">${typeSel}</select>`)}
+          <div id="apBusinessWarn" style="display:none;font-size:12px;background:#fff4e5;border:1px solid var(--warn);color:#8a5a00;border-radius:8px;padding:7px 9px;margin:-4px 0 10px">⚠ חשבון עסקה = <b>רישום פנימי בלבד</b>. לא ייווצר בחשבונית ירוקה ולא יישלח לרו״ח. יופיע ב"הוצאות ספקים לתשלום".</div>
           ${fld('מספר המסמך *', `<input id="apNum" dir="ltr" value="${escAttr(String(d.number || ''))}" placeholder="מספר"/>`)}
           ${fld('מספר הקצאה (חובה לחשבונית מס/מס-קבלה מעל 5,000 ₪)', `<input id="apAlloc" dir="ltr" value="${escAttr(String(d.allocationNumber || ''))}" placeholder="מספר הקצאה מרשות המסים" oninput="checkAllocWarn()"/>`)}
           <div id="apAllocWarn" style="font-size:12px;margin:-4px 0 9px;min-height:14px"></div>
@@ -2108,7 +2140,9 @@ window.openApproveDraft = (id) => {
           ${fld('סכום ללא מע"מ ₪', `<input id="apNet" type="number" inputmode="decimal" dir="ltr" value="${d.amountExcludeVat != null ? d.amountExcludeVat : ''}" placeholder="ריק = חישוב אוטומטי 18%" oninput="recalcApprVat()"/>`)}
           <div id="apVat" class="muted" style="font-size:12.5px;margin:-2px 0 10px"></div>
           ${fld('תיאור ההוצאה', `<input id="apDesc" value="${escAttr(String(d.description || ''))}" placeholder="תיאור"/>`)}
+          ${fld('סטטוס תשלום *', `<select id="apPaid"><option value="unpaid" selected>עדיין לא שולם (יופיע ב"הוצאות ספקים לתשלום")</option><option value="paid">שולם</option></select>`)}
         </div>
+        <div id="apLinkEvents" style="margin:2px 0 8px"></div>
         <div id="apStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
         <div class="modal-actions" style="margin-top:auto">
           <button class="btn ghost" onclick="document.getElementById('apprModal').classList.add('hidden')">ביטול</button>
@@ -2119,7 +2153,7 @@ window.openApproveDraft = (id) => {
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   _openApproveId = d.id;
-  setTimeout(() => { recalcApprVat(); loadApprClassifications(d); aiFillDraft(d.id); if (d.url) loadApprFilePreview(d.id); }, 30);
+  setTimeout(() => { recalcApprVat(); loadApprClassifications(d); onApprTypeChange(); aiFillDraft(d.id); if (d.url) loadApprFilePreview(d.id); loadApprLinkEvents(); }, 30);
 };
 // טוען את קובץ הטיוטה ומתאים את התצוגה: תמונה → img שמתאים לרוחב (לא ענק) · PDF → iframe
 async function loadApprFilePreview(id) {
@@ -2164,11 +2198,60 @@ window.syncApprClassForSupplier = (fallbackId) => {
   const cid = (sup && sup.accountingClassificationId) || fallbackId || '';
   if (cid && [...sel.options].some(o => o.value === String(cid))) sel.value = String(cid);
 };
-// בחירת ספק בקליטת הוצאה — ממלא אוטומטית את פרטי הספק הידועים (ח.פ) + הסיווג
+// בחירת ספק בקליטת הוצאה — ממלא אוטומטית את פרטי הספק הידועים (ח.פ) + הסיווג + בודק אירועים לקישור
 window.onApprSupplierChange = () => {
   fillApprSupplierDetails();
   syncApprClassForSupplier();
+  loadApprLinkEvents();
 };
+// שינוי סוג המסמך — מציג אזהרת "חשבון עסקה" (רישום פנימי)
+window.onApprTypeChange = () => {
+  checkAllocWarn();
+  const isBiz = +((document.getElementById('apType') || {}).value) === 20;
+  const w = document.getElementById('apBusinessWarn'); if (w) w.style.display = isBiz ? 'block' : 'none';
+  const cl = document.getElementById('apClass'); if (cl) cl.style.opacity = isBiz ? '0.5' : '1';
+};
+// טוען אירועים פתוחים של הקבלן ומציע קישור (עם הצעה חכמה מסומנת-מראש)
+let _apLinkEventsData = [];
+window.loadApprLinkEvents = async () => {
+  const box = document.getElementById('apLinkEvents'); if (!box) return;
+  const supId = document.getElementById('apSup')?.value;
+  const sup = (_suppliers || []).find(s => String(s.id) === String(supId));
+  const name = sup ? sup.name : '';
+  if (!name) { box.innerHTML = ''; _apLinkEventsData = []; return; }
+  const amount = document.getElementById('apAmount')?.value || '';
+  const date = document.getElementById('apDate')?.value || '';
+  const desc = document.getElementById('apDesc')?.value || '';
+  box.innerHTML = '<div class="muted" style="font-size:12px">בודק אירועים פתוחים של הקבלן…</div>';
+  const r = await fetch(`/api/contractors/open-events?name=${encodeURIComponent(name)}&amount=${encodeURIComponent(amount)}&date=${encodeURIComponent(date)}&desc=${encodeURIComponent(desc)}`).then(x => x.json()).catch(() => ({ events: [] }));
+  const evs = r.events || [];
+  _apLinkEventsData = evs;
+  if (!evs.length) { box.innerHTML = ''; return; }
+  const rows = evs.map((e, i) => `<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:5px 8px;border-top:1px solid var(--line)">
+    <input type="checkbox" class="ap-link-ev" data-i="${i}" ${e.suggested ? 'checked' : ''} onchange="updateApprLinkSum()">
+    <span style="flex:1;min-width:0"><b>${fmtDate(e.date)}</b> · ${escapeHtml(e.artist || '')}${e.location ? ' · ' + escapeHtml(e.location) : ''}</span>
+    <span style="font-weight:600;white-space:nowrap">${money(e.amount)}</span>
+    ${e.suggested ? '<span class="tag" style="background:#e7f7ee;color:var(--accent2);font-size:10px">מוצע</span>' : ''}
+  </label>`).join('');
+  box.innerHTML = `<div style="border:1px solid var(--accent);border-radius:10px;overflow:hidden;background:var(--panel2)">
+    <div style="padding:8px 10px;font-size:12.5px;font-weight:600;background:var(--panel)">🔗 קישור לאירועים ב"קבלנים לתשלום" (${evs.length} פתוחים)
+      <div class="muted" style="font-size:11px;font-weight:400;margin-top:2px">סימנתי מראש הצעה — ודא ותקן. האירועים שתסמן ירדו מ"קבלנים לתשלום" (מכוסים ע״י החשבונית).</div></div>
+    ${rows}
+    <div id="apLinkSum" style="padding:6px 10px;font-size:11.5px" class="muted"></div>
+  </div>`;
+  updateApprLinkSum();
+};
+window.updateApprLinkSum = () => {
+  const box = document.getElementById('apLinkSum'); if (!box) return;
+  let sum = 0, n = 0;
+  document.querySelectorAll('#apLinkEvents .ap-link-ev').forEach(cb => { if (cb.checked) { sum += Number(_apLinkEventsData[+cb.dataset.i]?.amount) || 0; n++; } });
+  box.textContent = n ? `נבחרו ${n} אירועים · סה"כ ${money(sum)}` : 'לא נבחרו אירועים לקישור';
+};
+function apGetLinkedEvents() {
+  const out = [];
+  document.querySelectorAll('#apLinkEvents .ap-link-ev').forEach(cb => { if (cb.checked) { const e = _apLinkEventsData[+cb.dataset.i]; if (e) out.push({ eventId: e.eventId, index: e.index }); } });
+  return out;
+}
 // ממלא את פרטי הספק הידועים מרשימת הספקים (ח.פ). overwrite=true דורס ערך קיים.
 function fillApprSupplierDetails(overwrite = true) {
   const supId = document.getElementById('apSup')?.value;
@@ -2190,6 +2273,8 @@ function applyAiFields(f) {
   if (f.amountExcludeVat) g('apNet').value = f.amountExcludeVat;
   if (f.description && !g('apDesc').value) g('apDesc').value = f.description;
   recalcApprVat();
+  onApprTypeChange();       // עדכון אזהרת חשבון עסקה לפי הסוג שה-AI זיהה
+  loadApprLinkEvents();     // בדיקת אירועים לקישור לפי הספק/סכום/תיאור שזוהו
 }
 window.aiFillDraft = async (id, force) => {
   const el = document.getElementById('apAi');
@@ -2286,25 +2371,35 @@ window.approveDraft = async (id, btn) => {
   if (!number) { st.innerHTML = '<span style="color:var(--danger)">חסר מספר מסמך.</span>'; return; }
   if (!amount || amount <= 0) { st.innerHTML = '<span style="color:var(--danger)">חסר סכום תקין.</span>'; return; }
   const docType = +g('apType').value;
+  const isBiz = docType === 20; // חשבון עסקה — רישום פנימי
   const alloc = (g('apAlloc')?.value || '').trim();
   const classId = (g('apClass')?.value || '').trim();
   const saveClass = !!(g('apClassSave') && g('apClassSave').checked);
-  // דורשים בחירת סיווג רק אם נטענו סיווגים לבחירה; אחרת נופלים לברירת המחדל של הספק בשרת
-  if (!classId && _classifications && _classifications.length) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור סיווג הוצאה (חשבונית ירוקה דורשת סיווג).</span>'; return; }
+  // סיווג נדרש רק למסמך מס אמיתי (לא לחשבון עסקה)
+  if (!isBiz && !classId && _classifications && _classifications.length) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור סיווג הוצאה (חשבונית ירוקה דורשת סיווג).</span>'; return; }
   // אזהרה רכה: מספר הקצאה חסר לחשבונית מס/מס-קבלה מעל 5,000 ₪
   const needsAlloc = [305, 320].includes(docType) && Math.max(amount, net || 0) > 5000;
   if (needsAlloc && !alloc && !confirm('חסר מספר הקצאה לחשבונית מס/מס-קבלה מעל 5,000 ₪.\nלהמשיך בכל זאת ולקלוט בלי מספר הקצאה?')) return;
-  const body = { supplierId, number, amount, amountExcludeVat: net, taxId: g('apTax').value.trim() || null, date: g('apDate').value || todayIso(), documentType: docType, description: g('apDesc').value.trim(), allocationNumber: alloc || null, accountingClassificationId: classId, saveClassToSupplier: saveClass };
-  btn.disabled = true; btn.textContent = 'מאשר…'; st.innerHTML = '<span class="muted">יוצר הוצאה בחשבונית ירוקה…</span>';
+  const paid = (g('apPaid')?.value === 'paid');
+  const supplierName = (_suppliers || []).find(s => String(s.id) === String(supplierId))?.name || '';
+  const linkedEvents = apGetLinkedEvents();
+  const body = { supplierId, supplierName, number, amount, amountExcludeVat: net, taxId: g('apTax').value.trim() || null, date: g('apDate').value || todayIso(), documentType: docType, description: g('apDesc').value.trim(), allocationNumber: alloc || null, accountingClassificationId: classId, saveClassToSupplier: saveClass, paid, linkedEvents };
+  btn.disabled = true; btn.textContent = 'מאשר…'; st.innerHTML = `<span class="muted">${isBiz ? 'רושם חשבון עסקה (פנימי)…' : 'יוצר הוצאה בחשבונית ירוקה…'}</span>`;
   const r = await fetch(`/api/expense-drafts/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ אשר וצור הוצאה';
   if (r.ok) {
-    const fwdNote = r.forwarded ? ` · 📧 נשלח גם לרו"ח (${escapeHtml(String(r.forwardTo || ''))})` : (r.forwardError ? ` · <span style="color:var(--warn)">שליחת המייל לרו"ח נכשלה</span>` : '');
-    st.innerHTML = r.duplicate
-      ? '<span style="color:var(--accent2)">✓ החשבונית כבר נקלטה במערכת — הקובץ הכפול נמחק.</span>'
-      : `<span style="color:var(--accent2)">✓ ההוצאה נוצרה ושויכה לספק!</span>${fwdNote}`;
+    const linkNote = r.linkedCount ? ` · 🔗 קושרו ${r.linkedCount} אירועים בקבלנים לתשלום` : '';
+    let msg;
+    if (r.duplicate) msg = '✓ החשבונית כבר נקלטה במערכת — הקובץ הכפול נמחק.';
+    else if (r.businessDoc) msg = `✓ נרשם כ"חשבון עסקה" ב"הוצאות ספקים לתשלום" (לא נשלח לחשבונית ירוקה/רו״ח).${linkNote}`;
+    else {
+      const fwdNote = r.forwarded ? ` · 📧 נשלח גם לרו"ח` : (r.forwardError ? ` · <span style="color:var(--warn)">שליחת המייל לרו"ח נכשלה</span>` : '');
+      const payNote = paid ? '' : ' · נוסף ל"הוצאות ספקים לתשלום"';
+      msg = `✓ ההוצאה נוצרה ושויכה לספק!${fwdNote}${payNote}${linkNote}`;
+    }
+    st.innerHTML = `<span style="color:var(--accent2)">${msg}</span>`;
     _drafts = _drafts.filter(x => x.id !== id);
-    setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection(); }, 1400);
+    setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); if (state.tab === 'contractors') renderContractors($('#content')); }, 1700);
   } else st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
 window.selectSupplier = async (id, nameEnc) => {
