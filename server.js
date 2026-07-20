@@ -580,26 +580,35 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       throw err;
     }
 
-    // העברת קובץ ההוצאה אוטומטית לכתובת רו"ח (best-effort) — לפני מחיקת הטיוטה כדי שה-URL עדיין תקף
+    // הורדת קובץ הטיוטה פעם אחת (לפני מחיקתה) — לצירוף להוצאה ולשליחה לרו"ח
+    let fileBuf = null, fileCt = 'application/pdf';
+    try {
+      if (draft.url) {
+        const fr = await fetch(draft.url, { redirect: 'follow' });
+        if (fr.ok) { fileBuf = Buffer.from(await fr.arrayBuffer()); fileCt = fr.headers.get('content-type') || 'application/pdf'; }
+      }
+    } catch { }
+    const fileExt = /pdf/i.test(fileCt) ? 'pdf' : (/png/i.test(fileCt) ? 'png' : (/jpe?g/i.test(fileCt) ? 'jpg' : 'pdf'));
+    const safeNum = String(number).replace(/[^\w.-]/g, '_');
+
+    // צירוף קובץ החשבונית להוצאה שנוצרה — כדי שתהיה אפשרות תצוגה/הורדה (best-effort)
+    if (created?.id && fileBuf) {
+      try { await greenInvoice.uploadExpenseFile(fileBuf.toString('base64'), `expense-${safeNum}.${fileExt}`, fileCt, created.id); } catch { }
+    }
+
+    // העברת קובץ ההוצאה אוטומטית לכתובת רו"ח (best-effort)
     let forwarded = false, forwardError = null;
     try {
       const fwd = mailer.forwardExpenseTo();
-      if (mailer.mailerConfigured() && fwd && draft.url) {
-        const fr = await fetch(draft.url, { redirect: 'follow' });
-        if (fr.ok) {
-          const fbuf = Buffer.from(await fr.arrayBuffer());
-          const ct = fr.headers.get('content-type') || 'application/pdf';
-          const ext = /pdf/i.test(ct) ? 'pdf' : (/png/i.test(ct) ? 'png' : (/jpe?g/i.test(ct) ? 'jpg' : 'pdf'));
-          const safeNum = String(number).replace(/[^\w.-]/g, '_');
-          await mailer.sendMail({
-            to: fwd,
-            subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
-            text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
-            attachments: [{ filename: `expense-${safeNum}.${ext}`, content: fbuf, contentType: ct }],
-          });
-          forwarded = true;
-        } else { forwardError = `הורדת הקובץ נכשלה (${fr.status})`; }
-      }
+      if (mailer.mailerConfigured() && fwd && fileBuf) {
+        await mailer.sendMail({
+          to: fwd,
+          subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
+          text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
+          attachments: [{ filename: `expense-${safeNum}.${fileExt}`, content: fileBuf, contentType: fileCt }],
+        });
+        forwarded = true;
+      } else if (mailer.mailerConfigured() && fwd && !fileBuf) { forwardError = 'הורדת הקובץ נכשלה'; }
     } catch (e) { forwardError = e.message; }
 
     // ננסה למחוק את הטיוטה במורנינג; אם לא נתמך — נסמן אצלנו כמאושרת כדי שלא תופיע שוב
