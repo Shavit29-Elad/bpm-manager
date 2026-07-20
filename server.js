@@ -288,6 +288,34 @@ add('POST', /^\/api\/invoicing\/preview-pdf$/, async (req, res, _p, _q, body) =>
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// POST /api/documents/preview-pdf — תצוגה מקדימה מעוצבת גנרית (הצעת מחיר / מסמך המשך וכו') — מחזיר PDF base64
+add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const items = (Array.isArray(body.items) ? body.items : [])
+      .map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }))
+      .filter(it => it.description);
+    if (!items.length) return json(res, { error: 'אין שורות לתצוגה' }, 400);
+    const type = Number(body.type) || 305;
+    const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim() };
+    const opts = { type, client, items, description: body.description || '', remarks: body.remarks || null };
+    if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (Array.isArray(body.payment) && body.payment.length) {
+      opts.payment = body.payment.map(p => {
+        const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
+        if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum);
+        if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName);
+        return row;
+      }).filter(p => Math.abs(p.price) > 0);
+    }
+    const pv = await greenInvoice.previewDocument(opts);
+    let pdfBase64 = pv.pdfBase64 || null;
+    if (!pdfBase64 && pv.url) { const fr = await fetch(pv.url, { redirect: 'follow' }).catch(() => null); if (fr && fr.ok) pdfBase64 = Buffer.from(await fr.arrayBuffer()).toString('base64'); }
+    if (!pdfBase64) return json(res, { error: 'לא התקבלה תצוגה מקדימה', debug: pv.raw || null });
+    json(res, { ok: true, pdfBase64 });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // POST /api/invoicing/generate — יוצר מסמך בחשבונית ירוקה ומסמן את האירועים כמחויבים
 add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
   const db = load();

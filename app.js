@@ -449,12 +449,22 @@ function renderDeriveEditor() {
     <div id="derEditStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="derPreviewPdf(this)">👁 תצוגה מקדימה מעוצבת</button>
       <button class="btn success" id="derConfirmBtn" onclick="derConfirm()">✓ הפק ${typeName}</button>
     </div>
   </div>`;
   m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
   derRecalc();
 }
+window.derPreviewPdf = async (btn) => {
+  derSyncFromDom(); const e = _derEdit; if (!e) return;
+  const items = e.items.map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
+  const st = document.getElementById('derEditStatus');
+  if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות לתצוגה.</span>'; return; }
+  let payment = [];
+  if (e.needsPay) payment = e.payments.map(p => ({ type: Number(p.type), price: Number(p.price) || 0, date: (p.date || e.date), chequeNum: p.chequeNum || '', bankName: p.bankName || '' })).filter(p => Math.abs(p.price) > 0);
+  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type, clientName: e.clientName || null, items, description: e.description, date: e.date, remarks: e.remarks, payment }, { statusEl: st, btn });
+};
 window.derConfirm = async () => {
   derSyncFromDom();
   const e = _derEdit; if (!e) return;
@@ -1374,6 +1384,27 @@ window.generateInvoice = async (btn) => {
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }
 };
+// עוזר כללי: מציג PDF מעוצב מ-endpoint תצוגה מקדימה כלשהו בתוך חלון צף
+async function openDesignedPdf(endpoint, body, { statusEl, btn, label } = {}) {
+  if (btn) { btn.disabled = true; btn.textContent = 'טוען…'; }
+  if (statusEl) statusEl.innerHTML = '<span class="muted">טוען תצוגה מקדימה מעוצבת מחשבונית ירוקה…</span>';
+  const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) { btn.disabled = false; btn.textContent = label || '👁 תצוגה מקדימה מעוצבת'; }
+  if (r.ok && r.pdfBase64) {
+    if (statusEl) statusEl.innerHTML = '';
+    const m = document.getElementById('designPvModal') || (() => { const x = document.createElement('div'); x.id = 'designPvModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+    m.classList.remove('hidden');
+    m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;overflow:hidden;display:flex;flex-direction:column">
+      <div class="row-between" style="margin-bottom:8px"><h3 style="margin:0">תצוגה מקדימה — כפי שייראה בחשבונית ירוקה</h3><button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('designPvModal').classList.add('hidden')">✕</button></div>
+      <iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:80vh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+      <p class="muted" style="font-size:12px;margin-top:8px">תצוגה מקדימה בלבד — עדיין לא נוצר מסמך.</p>
+    </div>`;
+    m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+    return true;
+  }
+  if (statusEl) statusEl.innerHTML = `<span style="color:var(--danger)">לא ניתן להציג תצוגה מקדימה: ${escapeHtml(String(r.error || ''))}</span>`;
+  return false;
+}
 // תצוגה מקדימה מעוצבת (PDF כפי שייראה בחשבונית ירוקה) — בלי להפיק מסמך
 window.showDesignedPreview = async (btn) => {
   const p = _invPreview;
@@ -1490,12 +1521,20 @@ function renderNewQuote() {
     <div id="nqStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('newQuoteModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="nqPreviewPdf(this)">👁 תצוגה מקדימה מעוצבת</button>
       <button class="btn success" onclick="createNewQuote(this)">✓ צור הצעת מחיר</button>
     </div>
   </div>`;
   m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
   nqRecalc();
 }
+window.nqPreviewPdf = async (btn) => {
+  nqSync(); const e = _nq;
+  const items = e.items.map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
+  const st = document.getElementById('nqStatus');
+  if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות לתצוגה.</span>'; return; }
+  await openDesignedPdf('/api/documents/preview-pdf', { type: 10, clientId: e.clientId || null, clientName: e.clientName || null, items, description: e.subject, date: e.date, remarks: e.remarks }, { statusEl: st, btn });
+};
 window.createNewQuote = async (btn) => {
   nqSync(); const e = _nq;
   const items = e.items.map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
