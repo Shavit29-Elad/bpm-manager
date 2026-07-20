@@ -1450,7 +1450,7 @@ function renderNewQuote() {
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;overflow:auto">
     <h3>הצעת מחיר חדשה</h3>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px">
-      <label style="font-size:13px;flex:1;min-width:220px">לקוח <select class="nq-client" onchange="nqClientChanged()" style="width:100%;padding:6px 8px;margin-top:3px">${clientOpts}</select></label>
+      <label style="font-size:13px;flex:1;min-width:260px">לקוח <div style="display:flex;gap:6px;align-items:center;margin-top:3px"><select class="nq-client" onchange="nqClientChanged()" style="flex:1;padding:6px 8px">${clientOpts}</select><button type="button" class="btn ghost" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="openAddClientForQuote()">+ לקוח חדש</button></div></label>
       <label style="font-size:13px">תאריך <input class="nq-date" type="date" value="${e.date}" style="padding:6px 8px;margin-top:3px"></label>
     </div>
     <label style="font-size:13px;display:block;margin-bottom:8px">נושא/כותרת <input class="nq-subject" value="${escAttr(e.subject)}" placeholder="נושא ההצעה" style="width:100%;padding:6px 8px;margin-top:3px"></label>
@@ -1484,6 +1484,50 @@ window.createNewQuote = async (btn) => {
   if (btn) btn.disabled = false;
   if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''}</span>`; setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); }, 1300); }
   else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
+};
+// הוספת לקוח חדש מתוך מסך הצעת המחיר — נוצר בחשבונית ירוקה ונבחר אוטומטית
+window.openAddClientForQuote = () => {
+  const m = document.getElementById('addClientModal') || (() => { const x = document.createElement('div'); x.id = 'addClientModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  m.classList.remove('hidden');
+  const fld = (lbl, inner) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px">${lbl}${inner}</label>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)">
+    <h3>הוספת לקוח חדש לחשבונית ירוקה</h3>
+    <p class="muted" style="font-size:12.5px;margin:4px 0 12px">הלקוח ייווצר בחשבונית ירוקה וייבחר אוטומטית להצעה זו.</p>
+    ${fld('שם לקוח *', `<input id="ncName" placeholder="שם הלקוח / העסק"/>`)}
+    ${fld('מס\' עסק / ח.פ', `<input id="ncTax" dir="ltr" placeholder="ח.פ / ע.מ / ת\"ז"/>`)}
+    ${fld('מייל', `<input id="ncEmail" type="email" dir="ltr" placeholder="mail@example.com"/>`)}
+    ${fld('שם איש קשר', `<input id="ncContact" placeholder="שם איש קשר"/>`)}
+    ${fld('מספר פלאפון', `<input id="ncPhone" type="tel" dir="ltr" placeholder="050-0000000"/>`)}
+    <div id="ncStatus" style="font-size:13px;min-height:18px;margin:4px 0"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('addClientModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="saveNewClientForQuote(this)">שמור ובחר</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  setTimeout(() => document.getElementById('ncName')?.focus(), 60);
+};
+window.saveNewClientForQuote = async (btn) => {
+  const g = (id) => document.getElementById(id);
+  const st = g('ncStatus');
+  const name = g('ncName').value.trim();
+  if (!name) { st.innerHTML = '<span style="color:var(--danger)">חובה להזין שם לקוח.</span>'; return; }
+  const email = g('ncEmail').value.trim();
+  const body = { name, taxId: g('ncTax').value.trim() || null, contactPerson: g('ncContact').value.trim() || null, phone: g('ncPhone').value.trim() || null, emails: [email].filter(Boolean) };
+  btn.disabled = true; btn.textContent = 'שומר…'; st.innerHTML = '<span class="muted">יוצר לקוח בחשבונית ירוקה…</span>';
+  const r = await fetch('/api/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false; btn.textContent = 'שמור ובחר';
+  if (!r.ok) { st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא נשמר'))}</span>`; return; }
+  const cl = r.client || {};
+  const newId = cl.id || cl.clientId || null;
+  const newName = cl.name || name;
+  _evClients = Array.isArray(_evClients) ? _evClients : [];
+  if (newId && !_evClients.some(c => String(c.id) === String(newId))) _evClients.push({ id: newId, name: newName, email: email || null });
+  state.clientsList = null; _linkClients = null; // רענון מטמוני לקוחות אחרים
+  if (typeof nqSync === 'function') nqSync();          // שמירת מצב ההצעה הנוכחי (שורות, נושא וכו')
+  if (_nq && newId) { _nq.clientId = String(newId); _nq.clientName = newName; if (email) _nq.email = email; }
+  st.innerHTML = '<span style="color:var(--accent2)">✓ הלקוח נוסף ונבחר</span>';
+  setTimeout(() => { document.getElementById('addClientModal').classList.add('hidden'); if (typeof renderNewQuote === 'function') renderNewQuote(); }, 700);
 };
 function quoteRow(d) {
   const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
@@ -1812,18 +1856,18 @@ window.openApproveDraft = (id) => {
   const preview = d.url
     ? `<iframe src="/api/expense-drafts/${d.id}/file#toolbar=1&navpanes=0" style="width:100%;height:100%;border:0;background:#fff" title="תצוגה מקדימה"></iframe>`
     : `<div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">אין קובץ לתצוגה</div>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-width:97vw">
+  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-width:97vw;max-height:92vh;overflow:auto">
     <div class="row-between" style="margin-bottom:6px"><h3 style="margin:0">אישור וקליטת הוצאה</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('apprModal').classList.add('hidden')">✕</button></div>
     <p class="muted" style="font-size:12.5px;margin:0 0 10px">ה-AI קורא את החשבונית וממלא את השדות אוטומטית — עליך רק לוודא ולאשר. תיווצר הוצאה בחשבונית ירוקה שתשויך לספק.</p>
     <div style="display:flex;gap:16px;align-items:stretch;flex-wrap:wrap">
-      <div style="flex:1 1 340px;min-width:300px;border:1px solid var(--line);border-radius:10px;overflow:hidden;height:64vh">${preview}</div>
+      <div style="flex:1 1 340px;min-width:300px;border:1px solid var(--line);border-radius:10px;overflow:hidden;height:64vh;position:sticky;top:0">${preview}</div>
       <div style="flex:1 1 320px;min-width:280px;display:flex;flex-direction:column">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
           <div id="apAi" style="font-size:12.5px;flex:1"></div>
           <button class="btn ghost" style="padding:3px 10px;font-size:12px;white-space:nowrap" onclick="aiFillDraft('${d.id}',true)">🤖 קרא עם AI</button>
         </div>
-        <div style="overflow:auto;padding-inline-start:2px">
+        <div style="padding-inline-start:2px">
           ${fld('שם הספק / קבלן *', `<div style="display:flex;gap:6px;align-items:center"><select id="apSup" style="flex:1" onchange="syncApprClassForSupplier()"><option value="">— בחר ספק —</option>${supOpts}</select><button type="button" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap" onclick="openAddSupplier()">+ ספק חדש</button></div>`)}
           ${fld('סיווג הוצאה (חשבונית ירוקה) *', `<select id="apClass"><option value="">— טוען סיווגים… —</option></select>`)}
           <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:-4px 0 9px"><input type="checkbox" id="apClassSave" checked/> שמור כברירת מחדל לספק זה (כדי שהקליטה הבאה תהיה אוטומטית)</label>
