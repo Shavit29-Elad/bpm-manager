@@ -574,6 +574,23 @@ add('GET', /^\/api\/mail\/status$/, (req, res) => {
   json(res, { configured: mailer.mailerConfigured(), forwardTo: mailer.forwardExpenseTo() });
 });
 
+// GET /api/mail/test — אימות SMTP ושליחת מייל בדיקה (ברירת מחדל: לכתובת השולחת עצמה, כדי לא להטריד את הרו"ח).
+// אפשר ?to=כתובת כדי לשלוח ליעד אחר.
+add('GET', /^\/api\/mail\/test$/, async (req, res, params, q) => {
+  if (!mailer.mailerConfigured()) return json(res, { ok: false, error: 'שליחת מייל לא מוגדרת (חסר SMTP_USER/SMTP_PASS)' }, 400);
+  const v = await mailer.verifyMailer();
+  if (!v.ok) return json(res, { ok: false, stage: 'verify', error: v.error }, 502);
+  const to = (q && q.to) ? String(q.to) : (process.env.SMTP_FROM || process.env.SMTP_USER);
+  try {
+    const info = await mailer.sendMail({
+      to,
+      subject: 'בדיקת חיבור מייל — מערכת BPM',
+      text: 'זהו מייל בדיקה אוטומטי שנשלח כדי לוודא שחיבור ה-SMTP של מערכת BPM עובד. אם קיבלת אותו — הכל תקין.',
+    });
+    json(res, { ok: true, verified: true, to, messageId: info?.messageId || null });
+  } catch (e) { json(res, { ok: false, stage: 'send', error: e.message }, 502); }
+});
+
 // GET /api/expense-drafts/:id/file — פרוקסי לקובץ הטיוטה (כדי שהתצוגה המקדימה תרוץ מאותו מקור, בלי חסימת iframe)
 add('GET', /^\/api\/expense-drafts\/([^/]+)\/file$/, async (req, res, params) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
