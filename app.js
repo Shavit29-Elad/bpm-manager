@@ -2088,7 +2088,7 @@ window.openApproveDraft = (id) => {
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('apprModal').classList.add('hidden')">✕</button></div>
     <p class="muted" style="font-size:12.5px;margin:0 0 10px">ה-AI קורא את החשבונית וממלא את השדות אוטומטית — עליך רק לוודא ולאשר. תיווצר הוצאה בחשבונית ירוקה שתשויך לספק.</p>
     <div style="display:flex;gap:16px;align-items:stretch;flex-wrap:wrap">
-      <div style="flex:1 1 340px;min-width:300px;border:1px solid var(--line);border-radius:10px;overflow:hidden;height:64vh;position:sticky;top:0">${preview}</div>
+      <div style="flex:1 1 380px;min-width:320px;border:1px solid var(--line);border-radius:10px;overflow:hidden;height:82vh;position:sticky;top:0">${preview}</div>
       <div style="flex:1 1 320px;min-width:280px;display:flex;flex-direction:column">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
           <div id="apAi" style="font-size:12.5px;flex:1"></div>
@@ -2133,7 +2133,8 @@ async function loadApprFilePreview(id) {
     if (t.includes('pdf')) {
       box.innerHTML = `<iframe src="${url}#toolbar=1&navpanes=0" style="width:100%;height:100%;border:0;background:#fff" title="תצוגה מקדימה"></iframe>`;
     } else if (t.startsWith('image')) {
-      box.innerHTML = `<div style="width:100%;height:100%;overflow:auto;display:flex;align-items:flex-start;justify-content:center;background:#fff;padding:6px;box-sizing:border-box"><img src="${url}" style="max-width:100%;height:auto;display:block" alt="חשבונית"/></div>`;
+      // תמונה: ממלאת את החלונית במלואה (fit) — כל החשבונית נראית בבת אחת, גדול, בלי גלילה
+      box.innerHTML = `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#fff;padding:4px;box-sizing:border-box"><img src="${url}" style="max-width:100%;max-height:100%;object-fit:contain;display:block" alt="חשבונית"/></div>`;
     } else {
       box.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:0;background:#fff"></iframe>`;
     }
