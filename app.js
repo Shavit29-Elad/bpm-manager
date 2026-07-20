@@ -1627,6 +1627,18 @@ window.openNewQuote = async () => {
   _nq = { clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
   renderNewQuote();
 };
+// שכפול הצעת מחיר קיימת לתוך מסך ההצעה החדשה — עם עריכה מלאה (כולל שינוי/הוספת לקוח)
+window.openDuplicateQuote = async (id) => {
+  const m = document.getElementById('newQuoteModal') || (() => { const x = document.createElement('div'); x.id = 'newQuoteModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען את ההצעה לשכפול…</div></div>`;
+  if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
+  const r = await api(`/api/documents/${id}/lines`).catch(() => null);
+  if (!r || !r.ok) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת ההצעה: ${escapeHtml(String(r?.error || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('newQuoteModal').classList.add('hidden')">סגור</button></div></div>`; return; }
+  const items = (r.items || []).map(it => ({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }));
+  _nq = { clientId: r.client?.id || '', clientName: r.client?.name || '', date: todayIso(), subject: r.description || '', remarks: r.remarks || '', email: '', sendEmail: false, isDuplicate: true, items: items.length ? items : [{ description: '', quantity: 1, price: 0 }] };
+  renderNewQuote();
+};
 function nqSync() {
   const e = _nq; if (!e) return;
   const m = document.getElementById('newQuoteModal'); if (!m) return;
@@ -1660,7 +1672,7 @@ function renderNewQuote() {
   const selClient = clients.find(c => String(c.id) === String(e.clientId));
   const email = e.email || (selClient && selClient.email) || '';
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;overflow:auto">
-    <h3>הצעת מחיר חדשה</h3>
+    <h3>${e.isDuplicate ? 'שכפול הצעת מחיר — ערוך ושמור כהצעה חדשה' : 'הצעת מחיר חדשה'}</h3>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px">
       <label style="font-size:13px;flex:1;min-width:260px">לקוח <div style="display:flex;gap:6px;align-items:center;margin-top:3px"><select class="nq-client" onchange="nqClientChanged()" style="flex:1;padding:6px 8px">${clientOpts}</select><button type="button" class="btn ghost" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="openAddClientForQuote()">+ לקוח חדש</button></div></label>
       <label style="font-size:13px">תאריך <input class="nq-date" type="date" value="${e.date}" style="padding:6px 8px;margin-top:3px"></label>
@@ -1752,13 +1764,14 @@ window.saveNewClientForQuote = async (btn) => {
 function quoteRow(d) {
   const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
   const follow = `<button class="btn primary" style="padding:2px 9px;font-size:12px" onclick="quoteFollowup('${d.id}','${encodeURIComponent(d.clientName || '')}','${d.number}')">הפק מסמך המשך</button>`;
+  const dup = `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="openDuplicateQuote('${d.id}')">שכפול ⧉</button>`;
   const close = `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="quoteClose('${d.id}','${d.number}')">סגור הצעה</button>`;
   return `<tr>
     <td style="text-align:center"><input type="checkbox" class="qchk" value="${d.id}" onchange="quoteSelChanged()"/></td>
     <td style="white-space:nowrap">${fmtDate(d.date)}</td><td>#${d.number}</td>
     <td>${escapeHtml(d.clientName || '')}</td><td>${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</td>
     <td style="white-space:nowrap;font-weight:600">${money(d.amount)}</td>
-    <td style="text-align:left"><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">${pv}${follow}${close}</div></td></tr>`;
+    <td style="text-align:left"><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">${pv}${dup}${follow}${close}</div></td></tr>`;
 }
 window.quoteToggleAll = (on) => { document.querySelectorAll('.qchk').forEach(x => { x.checked = on; }); quoteSelChanged(); };
 window.quoteSelChanged = () => {
