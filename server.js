@@ -910,8 +910,9 @@ add('GET', /^\/api\/suppliers$/, async (req, res, _p, q) => {
 });
 
 // GET /api/accounting/classifications — סיווגים חשבונאיים (סיווגי הוצאה) מחשבונית ירוקה
-add('GET', /^\/api\/accounting\/classifications$/, async (req, res) => {
+add('GET', /^\/api\/accounting\/classifications$/, async (req, res, _p, q) => {
   if (!greenInvoice.haveCredentials()) return json(res, { classifications: [], error: 'חשבונית ירוקה לא מחוברת' });
+  if (q.debug) { try { return json(res, { debug: await greenInvoice.debugClassifications() }); } catch (e) { return json(res, { error: e.message }); } }
   try { json(res, { classifications: await greenInvoice.listAccountingClassifications() }); }
   catch (e) { json(res, { classifications: [], error: e.message }); }
 });

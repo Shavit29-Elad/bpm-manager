@@ -355,6 +355,21 @@ export async function listAccountingClassifications() {
     return [];
   });
 }
+// אבחון: מנסה כמה נתיבים ומחזיר דגימה גולמית כדי לזהות את הנתיב הנכון לשמות סיווגים
+export async function debugClassifications() {
+  const out = [];
+  const gets = ['/accounting/classifications', '/expenses/classifications', '/accounting/classification', '/incomes/classifications', '/accounting/categories'];
+  for (const p of gets) {
+    try { const r = await api(p); const arr = Array.isArray(r) ? r : (r?.items || r?.data || []); out.push({ path: p, method: 'GET', ok: true, count: arr.length, sample: arr.slice(0, 2) }); }
+    catch (e) { out.push({ path: p, method: 'GET', ok: false, error: String(e.message).slice(0, 120) }); }
+  }
+  const posts = ['/accounting/classifications/search', '/expenses/classifications/search'];
+  for (const p of posts) {
+    try { const r = await api(p, { method: 'POST', body: { page: 1, pageSize: 10 } }); const arr = Array.isArray(r) ? r : (r?.items || r?.data || []); out.push({ path: p, method: 'POST', ok: true, count: arr.length, sample: arr.slice(0, 2) }); }
+    catch (e) { out.push({ path: p, method: 'POST', ok: false, error: String(e.message).slice(0, 120) }); }
+  }
+  return out;
+}
 // עדכון ספק קיים (למשל הגדרת סיווג חשבונאי ברירת מחדל)
 export async function updateSupplier(id, data) {
   const body = {};
@@ -507,5 +522,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;
