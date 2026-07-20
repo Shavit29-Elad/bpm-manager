@@ -1717,7 +1717,7 @@ window.openApproveDraft = (id) => {
           <button class="btn ghost" style="padding:3px 10px;font-size:12px;white-space:nowrap" onclick="aiFillDraft('${d.id}',true)">🤖 קרא עם AI</button>
         </div>
         <div style="overflow:auto;padding-inline-start:2px">
-          ${fld('שם הספק / קבלן *', `<select id="apSup"><option value="">— בחר ספק —</option>${supOpts}</select>`)}
+          ${fld('שם הספק / קבלן *', `<div style="display:flex;gap:6px;align-items:center"><select id="apSup" style="flex:1"><option value="">— בחר ספק —</option>${supOpts}</select><button type="button" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap" onclick="openAddSupplier()">+ ספק חדש</button></div>`)}
           ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
           ${fld('סוג המסמך *', `<select id="apType">${typeSel}</select>`)}
           ${fld('מספר המסמך *', `<input id="apNum" dir="ltr" value="${escAttr(String(d.number || ''))}" placeholder="מספר"/>`)}
@@ -1766,9 +1766,58 @@ window.aiFillDraft = async (id, force) => {
 function aiNote(f) {
   const g = document.getElementById('apSup');
   const matched = f.supplierId && g && [...g.options].some(o => o.value === String(f.supplierId));
-  if (f.supplierName && !matched) return `<span style="color:var(--warn)">🤖 זוהה ע"י AI · ספק "${escapeHtml(f.supplierName)}" לא קיים ברשימה — בחר או הוסף</span>`;
+  if (f.supplierName && !matched) return `<span style="color:var(--warn)">🤖 זוהה ע"י AI · ספק "${escapeHtml(f.supplierName)}" לא קיים ברשימה — לחץ "+ ספק חדש" כדי להוסיף</span>`;
   return '<span style="color:var(--accent2)">🤖 מולא ע"י AI — אנא ודא את הפרטים</span>';
 }
+// הוספת ספק חדש ישירות ממסך אישור ההוצאה — נוצר בחשבונית ירוקה ונבחר אוטומטית
+window.openAddSupplier = () => {
+  const detected = _aiByDraft[_openApproveId] || (_drafts || []).find(x => x.id === _openApproveId)?.ai || {};
+  const nameGuess = detected.supplierName || '';
+  const taxGuess = (document.getElementById('apTax')?.value || detected.taxId || '');
+  let m = document.getElementById('addSupModal');
+  if (!m) { m = document.createElement('div'); m.id = 'addSupModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  const fld = (lbl, inner) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px">${lbl}${inner}</label>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)">
+    <h3>הוספת ספק לחשבונית ירוקה</h3>
+    <p class="muted" style="font-size:12.5px;margin:4px 0 12px">הספק ייווצר אוטומטית בחשבונית ירוקה וייבחר להוצאה זו.</p>
+    ${fld('שם עסק *', `<input id="nsName" value="${escAttr(nameGuess)}" placeholder="שם העסק"/>`)}
+    ${fld('מס\' עוסק / ח.פ', `<input id="nsTax" dir="ltr" value="${escAttr(taxGuess)}" placeholder="מספר עוסק / ח.פ"/>`)}
+    ${fld('איש קשר', `<input id="nsContact" placeholder="שם איש קשר"/>`)}
+    ${fld('מס\' פלאפון', `<input id="nsPhone" type="tel" dir="ltr" placeholder="050-0000000"/>`)}
+    ${fld('מייל', `<input id="nsEmail" type="email" dir="ltr" placeholder="mail@example.com"/>`)}
+    <div id="nsStatus" style="font-size:13px;min-height:18px;margin:4px 0"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('addSupModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="saveNewSupplierInline(this)">שמור ובחר</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  setTimeout(() => document.getElementById('nsName')?.focus(), 60);
+};
+window.saveNewSupplierInline = async (btn) => {
+  const g = (id) => document.getElementById(id);
+  const st = g('nsStatus');
+  const name = g('nsName').value.trim();
+  if (!name) { st.innerHTML = '<span style="color:var(--danger)">חובה להזין שם עסק.</span>'; return; }
+  const tax = g('nsTax').value.trim();
+  const body = { name, taxId: tax || null, contactPerson: g('nsContact').value.trim() || null, phone: g('nsPhone').value.trim() || null, emails: [g('nsEmail').value.trim()].filter(Boolean) };
+  btn.disabled = true; btn.textContent = 'שומר…'; st.innerHTML = '<span class="muted">יוצר ספק בחשבונית ירוקה…</span>';
+  const r = await fetch('/api/suppliers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false; btn.textContent = 'שמור ובחר';
+  if (!r.ok) { st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא נשמר'))}</span>`; return; }
+  const sup = r.supplier || {};
+  const newId = sup.id || sup.supplierId || null;
+  const newSup = { id: newId, name: sup.name || name, taxId: tax || null };
+  _suppliers = Array.isArray(_suppliers) ? _suppliers : [];
+  if (newId && !_suppliers.some(s => s.id === newId)) _suppliers.push(newSup);
+  _evSuppliers = null; // אילוץ ריענון רשימת הספקים בעריכת אירועים
+  const sel = g('apSup');
+  if (sel && newId) { const o = document.createElement('option'); o.value = newId; o.textContent = newSup.name; sel.appendChild(o); sel.value = String(newId); }
+  if (tax && g('apTax') && !g('apTax').value) g('apTax').value = tax;
+  st.innerHTML = '<span style="color:var(--accent2)">✓ הספק נוסף לחשבונית ירוקה ונבחר</span>';
+  setTimeout(() => { document.getElementById('addSupModal').classList.add('hidden'); }, 800);
+};
 window.deleteDraft = async (id) => {
   if (!confirm('למחוק את מסמך ההוצאה הזה? הפעולה תמחק את הטיוטה מחשבונית ירוקה ולא תיווצר הוצאה.')) return;
   await fetch(`/api/expense-drafts/${id}/delete`, { method: 'POST' }).catch(() => {});
