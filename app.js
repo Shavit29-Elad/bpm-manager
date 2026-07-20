@@ -1614,7 +1614,7 @@ async function renderContractors(c) {
   c.innerHTML = `<div class="panel" id="draftsPanel">${draftsSection()}</div>
   <div class="panel">
     <div class="row-between"><div><h2>קבלנים לתשלום</h2>
-      <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום <b style="color:var(--danger)">${money(totalUnpaid)}</b>. סמן אירועים (או הכל), לחץ "סמן כשולם" והזן מספר חשבונית.</span>${_ctrSyncNote ? `<div style="font-size:12px;color:var(--accent2);margin-top:2px">✓ ${_ctrSyncNote}</div>` : ''}</div>
+      <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום (ללא מע״מ) <b style="color:var(--danger)">${money(totalUnpaid)}</b> · כולל מע״מ <b>${money(totalUnpaid * (1 + VAT_RATE))}</b>. סמן אירועים (או הכל), לחץ "סמן כשולם" והזן מספר חשבונית.</span>${_ctrSyncNote ? `<div style="font-size:12px;color:var(--accent2);margin-top:2px">✓ ${_ctrSyncNote}</div>` : ''}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn success" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
     ${payables.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${payables.map(contractorCard).join('')}</div>`
       : `<div class="empty">אין קבלנים עם סכומים עדיין. הוסף סכום לקבלן באירוע.</div>`}
@@ -1647,14 +1647,14 @@ function contractorCard(x) {
       <span style="width:28px;text-align:center">${sel}</span>
       <span class="muted" style="white-space:nowrap">${ddmy(ev.date)}</span>
       <span>${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''}</span>
-      <span style="margin-inline-start:auto;font-weight:600">${money(ev.amount)}</span>
+      <span style="margin-inline-start:auto;text-align:left;white-space:nowrap"><span style="font-weight:600">${money(ev.amount)}</span> <span class="muted" style="font-size:11px">ללא מע״מ</span><br><span class="muted" style="font-size:11px">כולל מע״מ ${money(ev.amount * (1 + VAT_RATE))}</span></span>
       <button class="btn ${ev.paid ? 'success' : 'ghost'}" style="padding:3px 10px;font-size:12px" onclick="toggleContractorPaid('${ev.eventId}',${ev.index},${ev.paid ? 0 : 1})">${ev.paid ? 'בטל תשלום' : 'שולם'}</button>
     </div>`;
   }).join('');
   return `<div class="card" style="padding:0;overflow:hidden">
     <div class="row-between" style="margin:0;padding:11px 13px;cursor:pointer" onclick="document.getElementById('${safe}').classList.toggle('hidden')">
       <div><b>${escapeHtml(x.name)}</b> <span class="muted">· ${x.events.length} אירועים</span></div>
-      <div style="font-size:13px">שולם ${money(x.paidTotal)} · <span style="color:var(--danger)">נותר ${money(x.unpaidTotal)}</span></div>
+      <div style="font-size:13px;text-align:left">שולם ${money(x.paidTotal)} · <span style="color:var(--danger)">נותר ${money(x.unpaidTotal)}</span> <span class="muted" style="font-size:11px">ללא מע״מ</span><div class="muted" style="font-size:11px">נותר כולל מע״מ ${money(x.unpaidTotal * (1 + VAT_RATE))}</div></div>
     </div>
     <div id="${safe}" class="${x.events.length > 3 ? 'hidden' : ''}">
       <div style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-top:1px solid var(--line);background:var(--panel2)">
