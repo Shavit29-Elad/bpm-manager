@@ -840,8 +840,8 @@ function invoiceCell(e) {
   const isReceipt = docs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(e.invoiceType));
   if (isBilledEv(e) || docs.length) {
     const tags = docs.length
-      ? docs.map(d => `<span class="tag invoiced" style="font-size:10.5px">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''}</span>`).join(' ')
-      : `<span class="tag invoiced">שויך · ${DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}</span>`;
+      ? docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="לחץ לפתיחת/הורדת המסמך" onclick="openLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} ⬇</span>`).join(' ')
+      : `<span class="tag invoiced" ${e.invoiceId ? `style="cursor:pointer;text-decoration:underline" title="לחץ לפתיחת/הורדת המסמך" onclick="openLinkedDoc('${e.invoiceId}',this)"` : ''}>שויך · ${DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}${e.invoiceId ? ' ⬇' : ''}</span>`;
     const status = isReceipt
       ? `<div style="font-size:10.5px;color:var(--accent2);font-weight:700">שולם ✓</div>`
       : `<div style="font-size:10.5px;color:var(--muted)">ממתין לקבלה</div>`;
@@ -856,6 +856,16 @@ function invoiceCell(e) {
 window.confirmEventRow = async (id, val) => {
   await fetch(`/api/events/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: val }) }).catch(() => {});
   renderCombined($('#content'));
+};
+// פתיחת/הורדת מסמך משויך מחשבונית ירוקה לפי מזהה
+window.openLinkedDoc = async (docId, el) => {
+  if (!docId) return;
+  const prevOpacity = el ? el.style.opacity : '';
+  if (el) { el.style.opacity = '0.5'; el.style.pointerEvents = 'none'; }
+  const r = await api(`/api/documents/${docId}/url`).catch(() => ({ error: 'שגיאת רשת' }));
+  if (el) { el.style.opacity = prevOpacity; el.style.pointerEvents = ''; }
+  if (r && r.ok && r.url) window.open(r.url, '_blank', 'noopener');
+  else alert('לא ניתן לפתוח את המסמך' + (r && r.error ? ': ' + r.error : ''));
 };
 // אירועים מקובצים לפי חודש — כל חודש בטבלה נפרדת עם סיכום
 const VAT_RATE = 0.18; // מע"מ בישראל
@@ -1149,7 +1159,7 @@ function invClientCard(g) {
   // מציגים אירועים שטרם "שולמו" (אין להם קבלה/מס-קבלה). אירוע עם קבלה מוסר לגמרי.
   const openEvents = g.events.filter(ev => !ev.paid);
   const rows = openEvents.map(ev => {
-    const tags = (ev.linkedDocs || []).map(d => `<span class="tag invoiced" style="font-size:10.5px">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''}</span>`).join(' ');
+    const tags = (ev.linkedDocs || []).map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="לחץ לפתיחת/הורדת המסמך" onclick="openLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} ⬇</span>`).join(' ');
     return `<tr>
       <td style="text-align:center"><input type="checkbox" class="invchk" data-c="${safe}" value="${ev.id}" ${ev.billed ? '' : 'checked'}/></td>
       <td>${ddmy(ev.date)}</td>

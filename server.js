@@ -613,6 +613,17 @@ add('GET', /^\/api\/documents\/([^/]+)\/lines$/, async (req, res, params) => {
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/documents/:id/url — קישור לקובץ המסמך (PDF) בחשבונית ירוקה, לפתיחה/הורדה
+add('GET', /^\/api\/documents\/([^/]+)\/url$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const raw = await greenInvoice.getDocument(params[0]);
+    const url = (raw.url && (raw.url.he || raw.url.origin || raw.url.pdf)) || (typeof raw.url === 'string' ? raw.url : null);
+    if (!url) return json(res, { error: 'לא נמצא קובץ למסמך זה' }, 404);
+    json(res, { ok: true, url });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // POST /api/documents/:id/derive { type, linked, items?, date?, payment?, description?, remarks? }
 // מסמך המשך (מקושר) או שכפול (חופשי). אם נשלחות שורות/תאריך/תקבולים ערוכים — משתמשים בהם.
 add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, body) => {
