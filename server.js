@@ -744,6 +744,15 @@ add('GET', /^\/api\/documents\/([^/]+)\/lines$/, async (req, res, params) => {
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/documents/quick-search?q= — חיפוש מסמכים לפי מספר/תיאור (לשורת החיפוש בלקוחות)
+add('GET', /^\/api\/documents\/quick-search$/, async (req, res, _p, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { items: [] });
+  const term = (q.q || '').trim();
+  if (term.length < 2) return json(res, { items: [] });
+  try { json(res, { ok: true, items: await greenInvoice.quickSearchDocuments(term) }); }
+  catch (e) { json(res, { items: [], error: e.message }); }
+});
+
 // GET /api/documents/last-date — תאריך המסמך האחרון (להגבלת בורר תאריך)
 add('GET', /^\/api\/documents\/last-date$/, async (req, res, _p, q) => {
   if (!greenInvoice.haveCredentials()) return json(res, { lastDocDate: null });

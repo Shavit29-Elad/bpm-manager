@@ -610,7 +610,7 @@ async function renderClients(c) {
       <button class="btn primary" onclick="openContactForm('client')">+ הוסף לקוח</button></div>
     <div style="display:flex;gap:16px;align-items:stretch;min-height:64vh">
       <div style="flex:0 0 300px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden">
-        <input id="clientSearch" placeholder="חיפוש לקוח…" style="border:none;border-bottom:1px solid var(--line);border-radius:0"/>
+        <input id="clientSearch" placeholder="חיפוש לקוח / מספר מסמך / תיאור…" style="border:none;border-bottom:1px solid var(--line);border-radius:0"/>
         <div id="clientsList" style="overflow-y:auto;flex:1;max-height:70vh">${clientRows(state.clientsList)}</div>
       </div>
       <div id="clientDetail" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;max-height:70vh">
@@ -619,9 +619,42 @@ async function renderClients(c) {
     </div>
   </div>`;
   const inp = $('#clientSearch');
-  inp.oninput = () => { $('#clientsList').innerHTML = clientRows((state.clientsList || []).filter(cl => !inp.value || (cl.name || '').includes(inp.value))); };
+  let _cliSearchTok = 0, _cliSearchTimer = null;
+  inp.oninput = () => {
+    const v = inp.value.trim();
+    const clients = (state.clientsList || []).filter(cl => !v || (cl.name || '').includes(v));
+    const listEl = $('#clientsList');
+    listEl.innerHTML = clientRows(clients);
+    clearTimeout(_cliSearchTimer);
+    if (v.length < 2) return;
+    // חיפוש מסמכים לפי מספר/תיאור — מוצג מעל רשימת הלקוחות (רק בחיפוש)
+    const tok = ++_cliSearchTok;
+    _cliSearchTimer = setTimeout(() => {
+      fetch('/api/documents/quick-search?q=' + encodeURIComponent(v)).then(r => r.json()).then(r => {
+        if (tok !== _cliSearchTok || inp.value.trim() !== v) return; // תוצאה מיושנת
+        const items = (r && r.items) || [];
+        if (items.length) listEl.innerHTML = docSearchRows(items) + clientRows(clients);
+      }).catch(() => {});
+    }, 250);
+  };
   inp.focus();
 }
+// שורות תוצאות חיפוש מסמכים (מספר/תיאור) — קליק פותח את הלקוח
+function docSearchRows(items) {
+  return `<div style="border-bottom:2px solid var(--accent)">
+    <div class="muted" style="font-size:11.5px;padding:7px 12px 3px;background:var(--panel2)">📄 מסמכים תואמים (${items.length})</div>
+    ${items.map(d => `<div class="chat-item" style="margin:0;border-radius:0;border-bottom:1px solid var(--line);cursor:pointer;background:var(--panel2)" onclick="openDocFromSearch('${d.clientId || ''}','${encodeURIComponent(d.clientName || '')}')">
+      <div style="min-width:0;flex:1">
+        <div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number || ''} · ${escapeHtml(d.clientName || '—')}</div>
+        <div class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fmtDate(d.date)}${d.description ? ' · ' + escapeHtml(d.description) : ''}</div>
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+window.openDocFromSearch = (clientId, nameEnc) => {
+  if (!clientId) { alert('למסמך זה אין לקוח משויך בחשבונית ירוקה.'); return; }
+  selectClient(clientId, nameEnc);
+};
 function clientRows(list) {
   if (!list.length) return `<div class="empty">לא נמצאו לקוחות.</div>`;
   return list.map(cl => `

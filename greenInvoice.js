@@ -162,6 +162,34 @@ export async function createInvoice({ client, items, type = DOC_TYPES.INVOICE, r
   return createDocument({ client, items, type, remarks, description, dueDate, payment });
 }
 
+// חיפוש מהיר של מסמכים לפי מספר או טקסט מהתיאור (לשורת החיפוש בלקוחות)
+export async function quickSearchDocuments(term) {
+  const q = String(term || '').trim();
+  if (q.length < 2) return [];
+  const byId = new Map();
+  const collect = (items) => { for (const d of (items || [])) if (d && d.id) byId.set(d.id, d); };
+  // לפי תיאור (חיפוש טקסט)
+  try {
+    const r = await api('/documents/search', { method: 'POST', body: { description: q, page: 1, pageSize: 40, sort: 'documentDate' } });
+    collect(r.items);
+  } catch { /* ממשיכים */ }
+  // לפי מספר מסמך (אם מספרי)
+  if (/^\d+$/.test(q)) {
+    try {
+      const r = await api('/documents/search', { method: 'POST', body: { number: Number(q), page: 1, pageSize: 40, sort: 'documentDate' } });
+      collect(r.items);
+    } catch { /* ממשיכים */ }
+  }
+  return [...byId.values()].slice(0, 25).map(d => ({
+    id: d.id, number: d.number, type: d.type, date: d.documentDate,
+    description: d.description || d.remarks || '',
+    clientName: d.client?.name || d.clientName || '—',
+    clientId: d.client?.id || null,
+    amount: d.amount,
+    url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null),
+  }));
+}
+
 // חיפוש מסמכים בטווח תאריכים (למעקב תשלומים/התאמות)
 export async function searchDocuments({ fromDate, toDate, page = 1, pageSize = 100 } = {}) {
   return api('/documents/search', {
@@ -564,5 +592,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, openDocument, latestDocumentDate, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;
