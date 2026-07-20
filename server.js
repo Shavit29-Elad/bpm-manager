@@ -356,6 +356,23 @@ add('GET', /^\/api\/open-quotes$/, async (req, res) => {
   catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
+// POST /api/quotes/create { clientId?, clientName?, items, date?, subject?, remarks?, sendEmail?, email? } — הצעת מחיר חדשה
+add('POST', /^\/api\/quotes\/create$/, async (req, res, _p, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const items = (Array.isArray(body.items) ? body.items : [])
+      .map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }))
+      .filter(it => it.description);
+    if (!items.length) return json(res, { error: 'אין שורות בהצעת המחיר' }, 400);
+    const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim(), add: true };
+    const opts = { type: 10, client, items, description: body.subject || '', remarks: body.remarks || null };
+    if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
+    const doc = await greenInvoice.createDocument(opts);
+    json(res, { ok: true, doc });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // POST /api/quotes/close-bulk { ids } — סגירת כמה הצעות מחיר
 add('POST', /^\/api\/quotes\/close-bulk$/, async (req, res, _p, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
@@ -463,6 +480,11 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     db.approvedDrafts = db.approvedDrafts || {};
     db.approvedDrafts[draftId] = { expenseId: created?.id || null, at: new Date().toISOString() };
     save(db);
+
+    // שמירת הסיווג שנבחר כברירת מחדל לספק (אם התבקש) — כדי שקליטות הבאות יהיו אוטומטיות
+    if (body.saveClassToSupplier && body.accountingClassificationId) {
+      try { await greenInvoice.updateSupplier(supplierId, { accountingClassificationId: body.accountingClassificationId }); } catch { }
+    }
 
     json(res, { ok: true, expense: created, draftRemoved });
   } catch (e) { json(res, { error: e.message }, 500); }
@@ -885,6 +907,13 @@ add('GET', /^\/api\/suppliers$/, async (req, res, _p, q) => {
   if (q.fresh) greenInvoice.clearDataCache();
   try { json(res, await greenInvoice.listSuppliers()); }
   catch (e) { json(res, { error: e.message }, 200); }
+});
+
+// GET /api/accounting/classifications — סיווגים חשבונאיים (סיווגי הוצאה) מחשבונית ירוקה
+add('GET', /^\/api\/accounting\/classifications$/, async (req, res) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { classifications: [], error: 'חשבונית ירוקה לא מחוברת' });
+  try { json(res, { classifications: await greenInvoice.listAccountingClassifications() }); }
+  catch (e) { json(res, { classifications: [], error: e.message }); }
 });
 
 // POST /api/clients — יצירת לקוח חדש בחשבונית ירוקה

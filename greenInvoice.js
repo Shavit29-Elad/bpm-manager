@@ -338,6 +338,32 @@ export async function uploadExpenseFile(fileBase64, fileName, mime, existingId) 
 export async function getExpense(id) { return api(`/expenses/${encodeURIComponent(id)}`); }
 export async function getSupplier(id) { return api(`/suppliers/${encodeURIComponent(id)}`); }
 export async function expenseStatuses() { return api('/expenses/statuses'); }
+// רשימת סיווגים חשבונאיים (סיווגי הוצאה) — מנסה כמה נתיבים אפשריים ומחזיר את הראשון שמצליח
+export async function listAccountingClassifications() {
+  return cached('acctClassifications', async () => {
+    const norm = (arr) => (Array.isArray(arr) ? arr : (arr?.items || arr?.data || []))
+      .map(c => ({ id: c.id ?? c.value ?? c.classificationId, name: c.name || c.description || c.label || String(c.id ?? '') }))
+      .filter(c => c.id != null);
+    // ניסיון GET בכמה נתיבים
+    for (const path of ['/accounting/classifications', '/expenses/classifications', '/accounting/classification']) {
+      try { const r = await api(path); const items = norm(r); if (items.length) return items; } catch { }
+    }
+    // ניסיון POST search
+    for (const path of ['/accounting/classifications/search', '/expenses/classifications/search']) {
+      try { const r = await api(path, { method: 'POST', body: { page: 1, pageSize: 100 } }); const items = norm(r); if (items.length) return items; } catch { }
+    }
+    return [];
+  });
+}
+// עדכון ספק קיים (למשל הגדרת סיווג חשבונאי ברירת מחדל)
+export async function updateSupplier(id, data) {
+  const body = {};
+  if (data.accountingClassificationId) body.accountingClassificationId = data.accountingClassificationId;
+  if (data.name) body.name = data.name;
+  const r = await api(`/suppliers/${encodeURIComponent(id)}`, { method: 'PUT', body });
+  clearDataCache();
+  return r;
+}
 export async function createExpense(body) { const r = await api('/expenses', { method: 'POST', body }); clearDataCache(); return r; }
 export async function deleteExpense(id) { const r = await api(`/expenses/${encodeURIComponent(id)}`, { method: 'DELETE' }); clearDataCache(); return r; }
 
@@ -481,5 +507,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;

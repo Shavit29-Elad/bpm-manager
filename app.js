@@ -1398,13 +1398,93 @@ async function renderQuotes(c) {
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>הצעות מחיר פתוחות</h2>
       <span class="muted">${docs.length} הצעות · ${money(total)}. סמן הצעות וסגור אותן יחד, או הפק מכל אחת מסמך המשך.</span></div>
-      <button class="btn ghost" id="closeSelBtn" onclick="quoteCloseSelected()" disabled>🔒 סגור נבחרות</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" onclick="openNewQuote()">+ הצעת מחיר חדשה</button><button class="btn ghost" id="closeSelBtn" onclick="quoteCloseSelected()" disabled>🔒 סגור נבחרות</button></div></div>
     ${r.error ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(r.error)}</div>` : ''}
     ${docs.length ? `<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th style="width:34px"><input type="checkbox" onchange="quoteToggleAll(this.checked)"/></th><th>תאריך</th><th>מספר</th><th>לקוח</th><th>תיאור</th><th>סכום</th><th></th></tr></thead>
       <tbody>${docs.map(quoteRow).join('')}</tbody></table></div>`
       : `<div class="empty">אין הצעות מחיר פתוחות 👌</div>`}
   </div>`;
 }
+// ---- הצעת מחיר חדשה ----
+let _nq = null;
+window.openNewQuote = async () => {
+  const m = document.getElementById('newQuoteModal') || (() => { const x = document.createElement('div'); x.id = 'newQuoteModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
+  if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
+  _nq = { clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
+  renderNewQuote();
+};
+function nqSync() {
+  const e = _nq; if (!e) return;
+  const m = document.getElementById('newQuoteModal'); if (!m) return;
+  const csel = m.querySelector('.nq-client'); if (csel) { e.clientId = csel.value; const c = (_evClients || []).find(x => String(x.id) === String(csel.value)); e.clientName = c ? c.name : ''; }
+  const d = m.querySelector('.nq-date'); if (d) e.date = d.value;
+  const s = m.querySelector('.nq-subject'); if (s) e.subject = s.value;
+  const r = m.querySelector('.nq-remarks'); if (r) e.remarks = r.value;
+  const em = m.querySelector('.nq-email'); if (em) e.email = em.value;
+  const se = m.querySelector('.nq-sendemail'); if (se) e.sendEmail = se.checked;
+  m.querySelectorAll('.nq-item').forEach((row, i) => { if (!e.items[i]) return; e.items[i].description = row.querySelector('.nq-desc')?.value ?? e.items[i].description; e.items[i].quantity = row.querySelector('.nq-qty')?.value ?? e.items[i].quantity; e.items[i].price = row.querySelector('.nq-price')?.value ?? e.items[i].price; });
+}
+window.nqAddItem = () => { nqSync(); _nq.items.push({ description: '', quantity: 1, price: 0 }); renderNewQuote(); };
+window.nqDelItem = (i) => { nqSync(); _nq.items.splice(i, 1); if (!_nq.items.length) _nq.items.push({ description: '', quantity: 1, price: 0 }); renderNewQuote(); };
+window.nqClientChanged = () => { nqSync(); renderNewQuote(); };
+window.nqRecalc = () => {
+  let sub = 0; document.querySelectorAll('#newQuoteModal .nq-item').forEach(row => { sub += (Number(row.querySelector('.nq-qty')?.value) || 0) * (Number(row.querySelector('.nq-price')?.value) || 0); });
+  const vat = sub * VAT_RATE, total = sub + vat;
+  const box = document.getElementById('nqTotals'); if (box) box.innerHTML = `ביניים: <b>${money(sub)}</b> · מע"מ ${Math.round(VAT_RATE * 100)}%: <b>${money(vat)}</b> · סה"כ: <b style="color:var(--accent2)">${money(total)}</b>`;
+};
+function renderNewQuote() {
+  const e = _nq; if (!e) return;
+  const m = document.getElementById('newQuoteModal');
+  const clients = (_evClients || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he'));
+  const clientOpts = `<option value="">— בחר לקוח —</option>` + clients.map(c => `<option value="${escAttr(String(c.id))}" ${String(c.id) === String(e.clientId) ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+  const itemRows = e.items.map((it, i) => `<div class="nq-item" style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;align-items:center;margin-bottom:6px">
+    <input class="nq-desc" value="${escAttr(it.description)}" placeholder="תיאור" style="padding:6px 8px">
+    <input class="nq-qty" type="number" step="any" value="${it.quantity}" oninput="nqRecalc()" style="padding:6px 6px;text-align:center" title="כמות">
+    <input class="nq-price" type="number" step="any" value="${it.price}" oninput="nqRecalc()" style="padding:6px 6px;text-align:left" title="מחיר יחידה (ללא מע״מ)">
+    <button class="btn ghost" style="padding:4px 8px;font-size:14px" onclick="nqDelItem(${i})" title="מחק שורה">✕</button>
+  </div>`).join('');
+  const selClient = clients.find(c => String(c.id) === String(e.clientId));
+  const email = e.email || (selClient && selClient.email) || '';
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;overflow:auto">
+    <h3>הצעת מחיר חדשה</h3>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px">
+      <label style="font-size:13px;flex:1;min-width:220px">לקוח <select class="nq-client" onchange="nqClientChanged()" style="width:100%;padding:6px 8px;margin-top:3px">${clientOpts}</select></label>
+      <label style="font-size:13px">תאריך <input class="nq-date" type="date" value="${e.date}" style="padding:6px 8px;margin-top:3px"></label>
+    </div>
+    <label style="font-size:13px;display:block;margin-bottom:8px">נושא/כותרת <input class="nq-subject" value="${escAttr(e.subject)}" placeholder="נושא ההצעה" style="width:100%;padding:6px 8px;margin-top:3px"></label>
+    <div style="font-weight:600;font-size:13px;margin:8px 0 4px">שורות</div>
+    <div style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;font-size:11px;color:var(--muted);margin-bottom:3px"><span>תיאור</span><span style="text-align:center">כמות</span><span style="text-align:left">מחיר</span><span></span></div>
+    <div id="nqItems">${itemRows}</div>
+    <button class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:2px" onclick="nqAddItem()">+ הוסף שורה</button>
+    <div id="nqTotals" style="margin-top:10px;font-size:14px"></div>
+    <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית (לא חובה) <input class="nq-remarks" value="${escAttr(e.remarks)}" style="width:100%;padding:6px 8px;margin-top:3px"></label>
+    <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:10px"><input type="checkbox" class="nq-sendemail" ${e.sendEmail ? 'checked' : ''}> שלח את ההצעה ללקוח במייל</label>
+    <input class="nq-email" type="email" dir="ltr" value="${escAttr(email)}" placeholder="mail@example.com" style="width:100%;padding:6px 8px;margin-top:6px">
+    <div id="nqStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('newQuoteModal').classList.add('hidden')">ביטול</button>
+      <button class="btn success" onclick="createNewQuote(this)">✓ צור הצעת מחיר</button>
+    </div>
+  </div>`;
+  m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
+  nqRecalc();
+}
+window.createNewQuote = async (btn) => {
+  nqSync(); const e = _nq;
+  const items = e.items.map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
+  if (!items.length) { alert('יש להזין לפחות שורה אחת עם תיאור.'); return; }
+  if (!e.clientId && !e.clientName) { alert('יש לבחור לקוח.'); return; }
+  if (e.sendEmail && !e.email.trim()) { alert('סמנת "שלח במייל" — יש להזין כתובת מייל.'); return; }
+  if (e.sendEmail && !confirm(`ליצור את הצעת המחיר ולשלוח אותה במייל ל-${e.email.trim()}?`)) return;
+  const st = document.getElementById('nqStatus'); if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">יוצר הצעת מחיר…</span>';
+  const body = { clientId: e.clientId || null, clientName: e.clientName || null, items, date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim() };
+  const r = await fetch('/api/quotes/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) btn.disabled = false;
+  if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''}</span>`; setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); }, 1300); }
+  else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
+};
 function quoteRow(d) {
   const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
   const follow = `<button class="btn primary" style="padding:2px 9px;font-size:12px" onclick="quoteFollowup('${d.id}','${encodeURIComponent(d.clientName || '')}','${d.number}')">הפק מסמך המשך</button>`;
@@ -1744,7 +1824,9 @@ window.openApproveDraft = (id) => {
           <button class="btn ghost" style="padding:3px 10px;font-size:12px;white-space:nowrap" onclick="aiFillDraft('${d.id}',true)">🤖 קרא עם AI</button>
         </div>
         <div style="overflow:auto;padding-inline-start:2px">
-          ${fld('שם הספק / קבלן *', `<div style="display:flex;gap:6px;align-items:center"><select id="apSup" style="flex:1"><option value="">— בחר ספק —</option>${supOpts}</select><button type="button" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap" onclick="openAddSupplier()">+ ספק חדש</button></div>`)}
+          ${fld('שם הספק / קבלן *', `<div style="display:flex;gap:6px;align-items:center"><select id="apSup" style="flex:1" onchange="syncApprClassForSupplier()"><option value="">— בחר ספק —</option>${supOpts}</select><button type="button" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap" onclick="openAddSupplier()">+ ספק חדש</button></div>`)}
+          ${fld('סיווג הוצאה (חשבונית ירוקה) *', `<select id="apClass"><option value="">— טוען סיווגים… —</option></select>`)}
+          <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:-4px 0 9px"><input type="checkbox" id="apClassSave" checked/> שמור כברירת מחדל לספק זה (כדי שהקליטה הבאה תהיה אוטומטית)</label>
           ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
           ${fld('סוג המסמך *', `<select id="apType" onchange="checkAllocWarn()">${typeSel}</select>`)}
           ${fld('מספר המסמך *', `<input id="apNum" dir="ltr" value="${escAttr(String(d.number || ''))}" placeholder="מספר"/>`)}
@@ -1766,7 +1848,31 @@ window.openApproveDraft = (id) => {
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   _openApproveId = d.id;
-  setTimeout(() => { recalcApprVat(); aiFillDraft(d.id); }, 30);
+  setTimeout(() => { recalcApprVat(); loadApprClassifications(d); aiFillDraft(d.id); }, 30);
+};
+// טוען את רשימת הסיווגים החשבונאיים ובוחר את ברירת המחדל של הספק (אם יש)
+let _classifications = null;
+async function loadApprClassifications(d) {
+  const sel = document.getElementById('apClass'); if (!sel) return;
+  if (!_classifications) {
+    const r = await api('/api/accounting/classifications').catch(() => ({ classifications: [] }));
+    _classifications = Array.isArray(r.classifications) ? r.classifications : [];
+  }
+  if (!document.getElementById('apClass')) return;
+  if (!_classifications.length) {
+    sel.innerHTML = '<option value="">— לא נמצאו סיווגים בחשבונית ירוקה —</option>';
+    return;
+  }
+  sel.innerHTML = '<option value="">— בחר סיווג הוצאה —</option>' + _classifications.map(c => `<option value="${escAttr(String(c.id))}">${escapeHtml(c.name)}</option>`).join('');
+  syncApprClassForSupplier(d && d.accountingClassificationId);
+}
+// בוחר בבורר הסיווג את ברירת המחדל של הספק הנבחר
+window.syncApprClassForSupplier = (fallbackId) => {
+  const sel = document.getElementById('apClass'); if (!sel) return;
+  const supId = document.getElementById('apSup')?.value;
+  const sup = (_suppliers || []).find(s => String(s.id) === String(supId));
+  const cid = (sup && sup.accountingClassificationId) || fallbackId || '';
+  if (cid && [...sel.options].some(o => o.value === String(cid))) sel.value = String(cid);
 };
 // קליטה חכמה: AI קורא את קובץ החשבונית וממלא את השדות (עם מטמון לכל טיוטה)
 function applyAiFields(f) {
@@ -1879,10 +1985,14 @@ window.approveDraft = async (id, btn) => {
   if (!amount || amount <= 0) { st.innerHTML = '<span style="color:var(--danger)">חסר סכום תקין.</span>'; return; }
   const docType = +g('apType').value;
   const alloc = (g('apAlloc')?.value || '').trim();
+  const classId = (g('apClass')?.value || '').trim();
+  const saveClass = !!(g('apClassSave') && g('apClassSave').checked);
+  // דורשים בחירת סיווג רק אם נטענו סיווגים לבחירה; אחרת נופלים לברירת המחדל של הספק בשרת
+  if (!classId && _classifications && _classifications.length) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור סיווג הוצאה (חשבונית ירוקה דורשת סיווג).</span>'; return; }
   // אזהרה רכה: מספר הקצאה חסר לחשבונית מס/מס-קבלה מעל 5,000 ₪
   const needsAlloc = [305, 320].includes(docType) && Math.max(amount, net || 0) > 5000;
   if (needsAlloc && !alloc && !confirm('חסר מספר הקצאה לחשבונית מס/מס-קבלה מעל 5,000 ₪.\nלהמשיך בכל זאת ולקלוט בלי מספר הקצאה?')) return;
-  const body = { supplierId, number, amount, amountExcludeVat: net, taxId: g('apTax').value.trim() || null, date: g('apDate').value || todayIso(), documentType: docType, description: g('apDesc').value.trim(), allocationNumber: alloc || null };
+  const body = { supplierId, number, amount, amountExcludeVat: net, taxId: g('apTax').value.trim() || null, date: g('apDate').value || todayIso(), documentType: docType, description: g('apDesc').value.trim(), allocationNumber: alloc || null, accountingClassificationId: classId, saveClassToSupplier: saveClass };
   btn.disabled = true; btn.textContent = 'מאשר…'; st.innerHTML = '<span class="muted">יוצר הוצאה בחשבונית ירוקה…</span>';
   const r = await fetch(`/api/expense-drafts/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ אשר וצור הוצאה';
