@@ -574,9 +574,11 @@ add('GET', /^\/api\/mail\/status$/, (req, res) => {
   json(res, { configured: mailer.mailerConfigured(), forwardTo: mailer.forwardExpenseTo() });
 });
 
-// GET /api/mail/test — אימות SMTP ושליחת מייל בדיקה (ברירת מחדל: לכתובת השולחת עצמה, כדי לא להטריד את הרו"ח).
-// אפשר ?to=כתובת כדי לשלוח ליעד אחר.
+// GET /api/mail/test — אימות SMTP ושליחת מייל בדיקה. דורש ?key=<MAIL_TEST_KEY> כדי למנוע הפעלה לא רצויה.
+// אפשר ?to=כתובת כדי לשלוח ליעד אחר (ברירת מחדל: הכתובת השולחת עצמה).
 add('GET', /^\/api\/mail\/test$/, async (req, res, params, q) => {
+  const expected = process.env.MAIL_TEST_KEY || 'bpm-mail-check';
+  if (!q || q.key !== expected) return json(res, { ok: false, error: 'נדרש מפתח (?key=...)' }, 403);
   if (!mailer.mailerConfigured()) return json(res, { ok: false, error: 'שליחת מייל לא מוגדרת (חסר SMTP_USER/SMTP_PASS)' }, 400);
   const v = await mailer.verifyMailer();
   if (!v.ok) return json(res, { ok: false, stage: 'verify', error: v.error }, 502);
