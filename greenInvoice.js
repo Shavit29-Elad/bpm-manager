@@ -342,7 +342,7 @@ export async function expenseStatuses() { return api('/expenses/statuses'); }
 export async function listAccountingClassifications() {
   return cached('acctClassifications', async () => {
     const norm = (arr) => (Array.isArray(arr) ? arr : (arr?.items || arr?.data || []))
-      .map(c => ({ id: c.id ?? c.value ?? c.classificationId, name: c.name || c.description || c.label || String(c.id ?? '') }))
+      .map(c => ({ ...(c && typeof c === 'object' ? c : {}), id: c.id ?? c.value ?? c.classificationId, name: c.name || c.description || c.label || c.title || c.he || c.text || c.categoryName || String(c.id ?? '') }))
       .filter(c => c.id != null);
     // ניסיון GET בכמה נתיבים
     for (const path of ['/accounting/classifications', '/expenses/classifications', '/accounting/classification']) {
