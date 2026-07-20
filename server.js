@@ -261,6 +261,33 @@ add('POST', /^\/api\/invoicing\/preview$/, async (req, res, _p, _q, body) => {
   json(res, { items, subtotal, vat: +(subtotal * 0.18).toFixed(2), total: +(subtotal * 1.18).toFixed(2), subject: subjectForEvents(evs), clientEmail });
 });
 
+// POST /api/invoicing/preview-pdf — תצוגה מקדימה מעוצבת של המסמך (לפני הפקה), מחזיר PDF ב-base64
+add('POST', /^\/api\/invoicing\/preview-pdf$/, async (req, res, _p, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const db = load();
+    const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(Boolean);
+    const items = (body.items && body.items.length) ? body.items : invoiceItemsFromEvents(evs);
+    if (!items.length) return json(res, { error: 'אין שורות לתצוגה' }, 400);
+    const type = Number(body.type) || greenInvoice.DOC_TYPES.INVOICE;
+    const client = body.clientId ? { id: body.clientId } : { name: body.clientName || 'לקוח' };
+    const opts = {
+      type, client, items,
+      description: body.description || subjectForEvents(evs),
+      remarks: body.remarks || null,
+      date: body.date || undefined,
+    };
+    const pv = await greenInvoice.previewDocument(opts);
+    let pdfBase64 = pv.pdfBase64 || null;
+    if (!pdfBase64 && pv.url) {
+      const fr = await fetch(pv.url, { redirect: 'follow' }).catch(() => null);
+      if (fr && fr.ok) pdfBase64 = Buffer.from(await fr.arrayBuffer()).toString('base64');
+    }
+    if (!pdfBase64) return json(res, { error: 'לא התקבלה תצוגה מקדימה', debug: pv.raw || null });
+    json(res, { ok: true, pdfBase64 });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // POST /api/invoicing/generate — יוצר מסמך בחשבונית ירוקה ומסמן את האירועים כמחויבים
 add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
   const db = load();

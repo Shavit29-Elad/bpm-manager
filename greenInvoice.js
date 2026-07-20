@@ -133,6 +133,28 @@ export async function createDocument(opts) {
   return { id: raw.id, number: raw.number, type: raw.type, url, raw };
 }
 
+// תצוגה מקדימה מעוצבת של מסמך לפני הפקה (POST /documents/preview) — לא יוצר מסמך אמיתי.
+// מחזיר { pdfBase64 } אם התקבל PDF, אחרת { url } / { raw }.
+export async function previewDocument(opts) {
+  const token = await getToken();
+  const res = await fetch(`${BASE}/documents/preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(documentBody(opts)),
+  });
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  if (!res.ok) { const t = await res.text().catch(() => ''); throw new Error(`חשבונית ירוקה POST /documents/preview: ${res.status} ${t.slice(0, 300)}`); }
+  if (ct.includes('application/pdf') || ct.includes('octet-stream')) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    return { pdfBase64: buf.toString('base64') };
+  }
+  const text = await res.text();
+  let data; try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  const url = (data.url && (data.url.he || data.url.origin || data.url.pdf)) || (typeof data.url === 'string' ? data.url : null);
+  const file = data.file || data.pdf || data.base64 || null;
+  return { url, pdfBase64: file, raw: data };
+}
+
 // תאימות לאחור — הפקת חשבונית מס (או סוג אחר עם type)
 export async function createInvoice({ client, items, type = DOC_TYPES.INVOICE, remarks, description, dueDate, payment }) {
   return createDocument({ client, items, type, remarks, description, dueDate, payment });
@@ -523,5 +545,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;

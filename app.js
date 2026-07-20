@@ -1331,6 +1331,7 @@ function renderInvoicePreviewModal() {
     <div id="invPvStatus" style="min-height:18px;font-size:13px;margin:6px 0"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('invPvModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="showDesignedPreview(this)">👁 תצוגה מקדימה מעוצבת</button>
       <button class="btn success" onclick="generateInvoice(this)">✓ הפק בחשבונית ירוקה</button>
     </div>
   </div>`;
@@ -1372,6 +1373,29 @@ window.generateInvoice = async (btn) => {
   } else {
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }
+};
+// תצוגה מקדימה מעוצבת (PDF כפי שייראה בחשבונית ירוקה) — בלי להפיק מסמך
+window.showDesignedPreview = async (btn) => {
+  const p = _invPreview;
+  const items = p.items.map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
+  const st = document.getElementById('invPvStatus');
+  if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות תקינות לתצוגה.</span>'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'טוען…'; }
+  if (st) st.innerHTML = '<span class="muted">טוען תצוגה מקדימה מעוצבת מחשבונית ירוקה…</span>';
+  const r = await fetch('/api/invoicing/preview-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ eventIds: p.ids, items, type: p.type, description: p.subject, date: p.docDate || null, clientId: p.clientId, clientName: p.client }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) { btn.disabled = false; btn.textContent = '👁 תצוגה מקדימה מעוצבת'; }
+  if (r.ok && r.pdfBase64) {
+    if (st) st.innerHTML = '';
+    const m = document.getElementById('designPvModal') || (() => { const x = document.createElement('div'); x.id = 'designPvModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+    m.classList.remove('hidden');
+    m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;overflow:hidden;display:flex;flex-direction:column">
+      <div class="row-between" style="margin-bottom:8px"><h3 style="margin:0">תצוגה מקדימה — כפי שייראה בחשבונית ירוקה</h3><button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('designPvModal').classList.add('hidden')">✕</button></div>
+      <iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:80vh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+      <p class="muted" style="font-size:12px;margin-top:8px">תצוגה מקדימה בלבד — עדיין לא הופק מסמך. סגור וחזור ל"✓ הפק בחשבונית ירוקה" כדי ליצור בפועל.</p>
+    </div>`;
+    m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  } else if (st) st.innerHTML = `<span style="color:var(--danger)">לא ניתן להציג תצוגה מקדימה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
 // חלון "החשבונית הופקה בהצלחה" עם אפשרות הורדה מיידית
 function showInvoiceDoneDialog(typeName, number, url) {
