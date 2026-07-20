@@ -88,7 +88,7 @@ const PAYMENT_REQUIRED = new Set([320, 400, 405]);
 
 // בונה גוף מסמך. items = [{ description, quantity, price }].
 // client = { id? , name, taxId?, emails? } — אם יש id משתמשים בו (נמנע כפילות לקוח).
-function documentBody({ client, items, type, remarks, description, dueDate, date, payment, sendEmail, email, linkedDocumentIds }) {
+function documentBody({ client, items, type, remarks, description, dueDate, date, payment, sendEmail, email, linkedDocumentIds, linkType }) {
   const total = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
   const body = {
     type,
@@ -112,6 +112,8 @@ function documentBody({ client, items, type, remarks, description, dueDate, date
   };
   // מסמך המשך — קישור למסמך מקור (למשל הצעת מחיר → חשבונית)
   if (Array.isArray(linkedDocumentIds) && linkedDocumentIds.length) body.linkedDocumentIds = linkedDocumentIds;
+  // linkType: "link" (קישור) או "cancel" (ביטול — לזיכוי/קבלה שלילית)
+  if (linkType) body.linkType = linkType;
   // שליחת מייל ללקוח רק אם המשתמש ביקש במפורש (ברירת מחדל: לא נשלח)
   if (sendEmail && email) body.emails = [String(email).trim()];
   if (description) body.description = description;   // כותרת/נושא המסמך
@@ -186,6 +188,7 @@ function mapDoc(d) {
   const vat = d.vat != null ? num(d.vat) : amount - amount / 1.18; // 18% אם לא סופק
   return {
     id: d.id, number: d.number, type: d.type, date: d.documentDate,
+    status: d.status, // 0=פתוח, 1=סגור, 2=סומן ידנית כסגור, 3=מבטל מסמך אחר, 4=מבוטל
     description: d.description || d.remarks || '',
     amount,
     amountIncVat: amount,
@@ -307,6 +310,22 @@ export async function openQuotes({ months = 36 } = {}) {
 export async function getDocument(id) { return api(`/documents/${encodeURIComponent(id)}`); }
 // סגירת מסמך (למשל הצעת מחיר שכבר לא רלוונטית) — status → 2 (סגור ידנית)
 export async function closeDocument(id) { const r = await api(`/documents/${encodeURIComponent(id)}/close`, { method: 'POST' }); clearDataCache(); return r; }
+// פתיחה מחדש של מסמך סגור
+export async function openDocument(id) { const r = await api(`/documents/${encodeURIComponent(id)}/open`, { method: 'POST' }); clearDataCache(); return r; }
+
+// התאריך של המסמך האחרון שהופק (לכל הסוגים, או לסוג מסוים) — להגבלת בורר התאריך בקליטה
+export async function latestDocumentDate(type = null) {
+  const today = new Date();
+  const from = new Date(today.getTime() - 400 * 864e5).toISOString().slice(0, 10);
+  const to = today.toISOString().slice(0, 10);
+  const body = { fromDate: from, toDate: to, page: 1, pageSize: 100, sort: 'documentDate' };
+  if (type) body.type = Array.isArray(type) ? type : [type];
+  const res = await api('/documents/search', { method: 'POST', body });
+  const items = res.items || [];
+  let max = null;
+  for (const d of items) { const dt = d.documentDate; if (dt && (!max || dt > max)) max = dt; }
+  return max; // 'YYYY-MM-DD' או null
+}
 
 // מיפוי מסמך הוצאה (ספק/קבלן)
 function mapExpense(e) {
@@ -545,5 +564,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, openDocument, latestDocumentDate, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;

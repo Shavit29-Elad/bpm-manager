@@ -730,6 +730,8 @@ add('GET', /^\/api\/documents\/([^/]+)\/lines$/, async (req, res, params) => {
       catalogNum: it.catalogNum || undefined, description: it.description,
       quantity: it.quantity ?? 1, price: it.price ?? 0,
     }));
+    let lastDocDate = null;
+    try { lastDocDate = await greenInvoice.latestDocumentDate(); } catch { /* לא חוסם */ }
     json(res, {
       ok: true,
       items,
@@ -737,7 +739,74 @@ add('GET', /^\/api\/documents\/([^/]+)\/lines$/, async (req, res, params) => {
       description: src.description || '',
       remarks: src.remarks || '',
       srcType: src.type, srcNumber: src.number,
+      lastDocDate,
     });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// GET /api/documents/last-date — תאריך המסמך האחרון (להגבלת בורר תאריך)
+add('GET', /^\/api\/documents\/last-date$/, async (req, res, _p, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { lastDocDate: null });
+  try {
+    const type = q.type ? Number(q.type) : null;
+    json(res, { ok: true, lastDocDate: await greenInvoice.latestDocumentDate(type) });
+  } catch (e) { json(res, { lastDocDate: null, error: e.message }); }
+});
+
+// POST /api/documents/:id/close — סימון מסמך כטופל (סגירה)
+add('POST', /^\/api\/documents\/([^/]+)\/close$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try { json(res, { ok: true, result: await greenInvoice.closeDocument(params[0]) }); }
+  catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/documents/:id/open — פתיחה מחדש של מסמך סגור
+add('POST', /^\/api\/documents\/([^/]+)\/open$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try { json(res, { ok: true, result: await greenInvoice.openDocument(params[0]) }); }
+  catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/documents/:id/credit { date? } — הפקת זיכוי
+//   חשבונית מס (305) → חשבונית זיכוי אחת (330, linkType cancel)
+//   חשבונית מס-קבלה (320) → זיכוי דו-שלבי: חשבונית זיכוי (330) + קבלה שלילית (400 עם תקבול שלילי)
+add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const src = await greenInvoice.getDocument(params[0]);
+    const srcType = Number(src.type);
+    if (![305, 320].includes(srcType)) return json(res, { error: 'זיכוי אפשרי רק מחשבונית מס או חשבונית מס-קבלה' }, 400);
+    const client = src.client?.id ? { id: src.client.id } : { name: src.client?.name || 'לקוח' };
+    const items = (src.income || []).map(it => ({
+      catalogNum: it.catalogNum || undefined, description: it.description,
+      quantity: Number(it.quantity) || 1, price: Number(it.price) || 0,
+    })).filter(it => it.description && String(it.description).trim());
+    if (!items.length) return json(res, { error: 'אין שורות במסמך המקור' }, 400);
+    const date = body && body.date ? String(body.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const baseDesc = `זיכוי עבור ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`;
+
+    // שלב 1 — חשבונית זיכוי (330), מקושרת כביטול המסמך המקורי
+    const credit = await greenInvoice.createDocument({
+      type: 330, client, items, date,
+      description: src.description ? `${baseDesc} — ${src.description}` : baseDesc,
+      linkedDocumentIds: [params[0]], linkType: 'cancel',
+    });
+
+    if (srcType === 305) return json(res, { ok: true, mode: 'single', credit });
+
+    // שלב 2 (רק ל-320) — קבלה שלילית לביטול חלק התקבול
+    const srcPay = Array.isArray(src.payment) ? src.payment : [];
+    const negPayment = (srcPay.length ? srcPay : [{ type: 4, price: Number(src.amount) || 0 }]).map(p => {
+      const row = { type: Number(p.type) || 4, price: -Math.abs(Number(p.price) || 0), date, currency: 'ILS' };
+      if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum);
+      if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName);
+      return row;
+    }).filter(p => Math.abs(p.price) > 0);
+    const negativeReceipt = await greenInvoice.createDocument({
+      type: 400, client, items: [], payment: negPayment, date,
+      description: `ביטול קבלה — חשבונית מס-קבלה #${src.number}`,
+    });
+    json(res, { ok: true, mode: 'two-stage', credit, negativeReceipt });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 

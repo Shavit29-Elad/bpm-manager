@@ -174,6 +174,21 @@ function docsTable(docs, opts = {}) {
   const totalEx = rows.reduce((s, d) => s + (Number(d.amountExVat) || 0), 0);
   const cc = opts.showClient;
   const s = opts.sort;
+  // כפתורי פעולה לכל מסמך (בטבלת לקוח): מסמך המשך / שכפול / זיכוי / סמן טופל / פתח מחדש
+  const actBtns = (d) => {
+    if (!opts.actions) return '';
+    const id = d.id, num = escAttr(String(d.number ?? '')), tp = Number(d.type), stt = Number(d.status);
+    const bs = 'padding:3px 8px;font-size:11.5px;white-space:nowrap';
+    const b = [];
+    if (FOLLOWUP_FOR[tp]?.length) b.push(`<button class="btn ghost" style="${bs}" onclick="openDerive('${id}','${num}',${tp},'followup',true)">מסמך המשך ↪</button>`);
+    b.push(`<button class="btn ghost" style="${bs}" onclick="openDerive('${id}','${num}',${tp},'duplicate',true)">שכפול ⧉</button>`);
+    if (tp === 305 || tp === 320) b.push(`<button class="btn ghost" style="${bs};color:var(--danger)" onclick="openCreditModal('${id}','${num}',${tp})">זיכוי ⊖</button>`);
+    if ([10, 300, 305, 320].includes(tp)) {
+      if (stt === 0) b.push(`<button class="btn ghost" style="${bs};color:var(--accent2)" onclick="docCloseOpen('${id}','close')">סמן טופל ✓</button>`);
+      else if (stt === 1 || stt === 2) b.push(`<button class="btn ghost" style="${bs}" onclick="docCloseOpen('${id}','open')">פתח מחדש ↺</button>`);
+    }
+    return b.join(' ');
+  };
   const th = (key, label) => {
     if (!opts.onSort || !key) return `<th>${label}</th>`;
     const on = s && s.key === key;
@@ -188,7 +203,7 @@ function docsTable(docs, opts = {}) {
       <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</td>
       <td>${money(d.amountExVat)}</td>
       <td>${money(d.amountIncVat)}</td>
-      <td>${d.url ? `<div style="display:flex;gap:8px;align-items:center;justify-content:flex-end"><button class="btn ghost" style="padding:5px 11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button><a href="${d.url}" target="_blank" class="muted" style="white-space:nowrap">הורדה ↓</a></div>` : ''}</td>
+      <td><div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap">${d.url ? `<button class="btn ghost" style="padding:5px 11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button><a href="${d.url}" target="_blank" class="muted" style="white-space:nowrap">הורדה ↓</a>` : ''}${actBtns(d)}</div></td>
     </tr>`).join('')}
     <tr style="background:var(--panel2)"><td colspan="${cc ? 5 : 4}"><b>סה"כ</b></td><td><b>${money(totalEx)}</b></td><td><b>${money(totalInc)}</b></td><td></td></tr>
     </tbody></table>`;
@@ -281,11 +296,13 @@ function openInvClientHtml(cl) {
     <div id="${rid}" class="${cl.ds.length > 1 ? 'hidden' : ''}">${rows}</div>
   </div>`;
 }
-// מסמכי המשך מותרים לפי סוג המקור: עסקה→מס/מס-קבלה ; מס→קבלה
-const FOLLOWUP_FOR = { 300: [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 305: [[400, 'קבלה']] };
+// מסמכי המשך מותרים לפי סוג המקור: הצעה→עסקה/מס/מס-קבלה ; עסקה→מס/מס-קבלה ; מס→קבלה
+const FOLLOWUP_FOR = { 10: [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 300: [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 305: [[400, 'קבלה']] };
 // שכפול — אפשר לבחור כל סוג (כולל הצעת מחיר)
 const DUPLICATE_TYPES = [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה'], [10, 'הצעת מחיר']];
-window.openDerive = (id, number, srcType, mode) => {
+window._docActionRefresh = null; // פונקציית רענון אחרי פעולת מסמך (לפי המסך שממנו נפתח)
+window.openDerive = (id, number, srcType, mode, fromClient) => {
+  window._docActionRefresh = fromClient ? window.reloadClientDocs : null;
   const followup = mode === 'followup';
   const opts = followup ? (FOLLOWUP_FOR[srcType] || []) : DUPLICATE_TYPES;
   let m = document.getElementById('derModal');
@@ -314,7 +331,7 @@ window.doDerive = async (id, type, linked, btn) => {
   const r = await fetch(`/api/documents/${id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, linked }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
     st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
-    setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); }, 1400);
+    setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); if (typeof _docActionRefresh === 'function') _docActionRefresh(); }, 1400);
   } else {
     [...document.querySelectorAll('#derModal button')].forEach(b => b.disabled = false);
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
@@ -336,6 +353,7 @@ window.openDeriveEditor = async (id, type, linked) => {
   _derEdit = {
     id, type: Number(type), linked: linked === true || linked === 'true',
     clientName: r.client?.name || '', date: todayIso(),
+    lastDocDate: r.lastDocDate || null, allowBackdate: false,
     description: r.description || '', remarks: r.remarks || '',
     items: (r.items || []).map(it => ({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })),
     payments: needsPay ? [{ type: 4, price: 0, date: todayIso(), chequeNum: '', bankName: '' }] : [],
@@ -370,6 +388,7 @@ window.derDelItem = (i) => { derSyncFromDom(); _derEdit.items.splice(i, 1); if (
 window.derAddPay = () => { derSyncFromDom(); _derEdit.payments.push({ type: 4, price: 0, date: _derEdit.date, chequeNum: '', bankName: '' }); renderDeriveEditor(); };
 window.derDelPay = (i) => { derSyncFromDom(); _derEdit.payments.splice(i, 1); renderDeriveEditor(); };
 window.derPayTypeChanged = () => { derSyncFromDom(); renderDeriveEditor(); }; // מציג שדה צ'ק/בנק לפי הסוג
+window.derToggleBackdate = (checked) => { derSyncFromDom(); _derEdit.allowBackdate = !!checked; renderDeriveEditor(); }; // אישור תאריך מוקדם
 // מילוי אוטומטי של יתרת התקבול הראשון לפי סה"כ המסמך
 window.derFillBalance = () => {
   derSyncFromDom();
@@ -424,8 +443,15 @@ function renderDeriveEditor() {
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;overflow:auto">
     <div class="row-between"><h3>${e.linked ? 'מסמך המשך' : 'שכפול'} — ${typeName}</h3><span class="muted">${escapeHtml(e.clientName)}</span></div>
 
-    <div style="display:flex;gap:14px;flex-wrap:wrap;margin:8px 0 4px">
-      <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" style="padding:6px 8px;margin-inline-start:6px"></label>
+    <div style="margin:8px 0 4px">
+      <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" ${(!e.allowBackdate && e.lastDocDate) ? `min="${e.lastDocDate}"` : ''} style="padding:6px 8px;margin-inline-start:6px"></label>
+      ${e.lastDocDate ? `<div style="margin-top:6px;font-size:12px">
+        <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer">
+          <input type="checkbox" ${e.allowBackdate ? 'checked' : ''} onchange="derToggleBackdate(this.checked)">
+          <span>אפשר תאריך מוקדם מ-${fmtDate(e.lastDocDate)} (תאריך המסמך האחרון)</span>
+        </label>
+        ${e.allowBackdate ? `<div class="warn-banner" style="margin-top:6px;font-size:11.5px">⚠ הפקת מסמך בתאריך מוקדם מהמסמך האחרון היא באחריותך — מומלץ להתייעץ עם רו״ח.</div>` : ''}
+      </div>` : ''}
     </div>
     <label style="font-size:13px;display:block;margin-bottom:8px">נושא/כותרת <input class="der-descr" value="${escAttr(e.description)}" placeholder="נושא המסמך" style="width:100%;padding:6px 8px;margin-top:3px"></label>
 
@@ -486,7 +512,61 @@ window.derConfirm = async () => {
     body: JSON.stringify({ type: e.type, linked: e.linked, items, date: e.date, description: e.description, remarks: e.remarks, payment }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
     if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
-    setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); }, 1400);
+    setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); if (typeof _docActionRefresh === 'function') _docActionRefresh(); }, 1400);
+  } else {
+    if (btn) btn.disabled = false;
+    if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
+  }
+};
+
+// ============ סימון טופל (סגירה) / פתיחה מחדש ============
+window.docCloseOpen = async (id, action) => {
+  const isClose = action === 'close';
+  if (!confirm(isClose
+    ? 'לסמן את המסמך כטופל (סגור)?\nניתן לפתוח אותו מחדש בכל עת.'
+    : 'לפתוח מחדש את המסמך הסגור?')) return;
+  const r = await fetch(`/api/documents/${id}/${action}`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) { if (typeof reloadClientDocs === 'function') reloadClientDocs(); }
+  else alert('שגיאה: ' + (r.error || 'הפעולה נכשלה'));
+};
+
+// ============ זיכוי (חד-שלבי מחשבונית מס / דו-שלבי מחשבונית מס-קבלה) ============
+window.openCreditModal = (id, number, srcType) => {
+  const twoStage = Number(srcType) === 320;
+  const srcName = srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס';
+  let m = document.getElementById('creditModal');
+  if (!m) { m = document.createElement('div'); m.id = 'creditModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(500px,95vw)">
+    <h3 style="color:var(--danger)">הפקת זיכוי — ${srcName} #${escapeHtml(String(number))}</h3>
+    <div class="warn-banner" style="margin:8px 0">${twoStage
+      ? 'זיכוי לחשבונית מס-קבלה מפיק <b>שני מסמכים</b> לביטול מלא:<br>1) חשבונית זיכוי — לביטול חלק החשבונית.<br>2) קבלה שלילית — לביטול חלק הקבלה (התקבול).'
+      : 'תופק <b>חשבונית זיכוי</b> אחת, מקושרת כביטול של החשבונית המקורית.'}</div>
+    <label style="font-size:13px;display:block;margin-bottom:8px">תאריך הזיכוי
+      <input id="creditDate" type="date" value="${todayIso()}" style="padding:6px 8px;margin-inline-start:6px"></label>
+    <p class="muted" style="font-size:12px">המסמכים ייווצרו בחשבונית ירוקה עם אותן שורות/סכומים כמו המקור, ולא ניתנים למחיקה.</p>
+    <div id="creditStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('creditModal').classList.add('hidden')">ביטול</button>
+      <button class="btn" style="background:var(--danger);color:#fff" id="creditBtn" onclick="doCredit('${id}',${Number(srcType)})">⊖ הפק זיכוי</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+};
+window.doCredit = async (id, srcType) => {
+  const twoStage = Number(srcType) === 320;
+  const date = (document.getElementById('creditDate')?.value || todayIso());
+  if (!confirm(twoStage
+    ? 'להפיק חשבונית זיכוי + קבלה שלילית לביטול מלא של החשבונית?\nהפעולה יוצרת מסמכים אמיתיים בחשבונית ירוקה.'
+    : 'להפיק חשבונית זיכוי לביטול החשבונית?\nהפעולה יוצרת מסמך אמיתי בחשבונית ירוקה.')) return;
+  const btn = document.getElementById('creditBtn'); if (btn) btn.disabled = true;
+  const st = document.getElementById('creditStatus'); if (st) st.innerHTML = '<span class="muted">מפיק זיכוי…</span>';
+  const r = await fetch(`/api/documents/${id}/credit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) {
+    const parts = [`✓ חשבונית זיכוי #${r.credit?.number || ''}`];
+    if (r.negativeReceipt) parts.push(`קבלה שלילית #${r.negativeReceipt?.number || ''}`);
+    if (st) st.innerHTML = `<span style="color:var(--accent2)">${parts.join(' · ')}</span>`;
+    setTimeout(() => { document.getElementById('creditModal').classList.add('hidden'); if (typeof reloadClientDocs === 'function') reloadClientDocs(); }, 1600);
   } else {
     if (btn) btn.disabled = false;
     if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
@@ -550,7 +630,7 @@ function clientRows(list) {
       <span class="muted" style="margin-inline-start:auto;font-size:14px">‹</span>
     </div>`).join('');
 }
-let _clientDocs = [], _clientName = '', _clientSort = { key: 'date', dir: 'desc' }, _clientYear = 'all';
+let _clientDocs = [], _clientName = '', _clientId = null, _clientSort = { key: 'date', dir: 'desc' }, _clientYear = 'all';
 window.selectClient = async (id, name) => {
   name = decodeURIComponent(name);
   document.querySelectorAll('#clientsList .chat-item').forEach(el => el.classList.remove('active'));
@@ -561,9 +641,16 @@ window.selectClient = async (id, name) => {
   const docs = await api(`/api/clients/${id}/documents`);
   _clientDocs = Array.isArray(docs) ? docs : [];
   _clientName = name;
+  _clientId = id;
   _clientSort = { key: 'date', dir: 'desc' };
   _clientYear = 'all';
   renderClientDetail();
+};
+// רענון מסמכי הלקוח מהשרת (אחרי פעולה: סגירה/פתיחה/זיכוי/שכפול/מסמך המשך)
+window.reloadClientDocs = async () => {
+  if (!_clientId) return;
+  const docs = await api(`/api/clients/${_clientId}/documents?fresh=1`).catch(() => null);
+  if (Array.isArray(docs)) { _clientDocs = docs; renderClientDetail(); }
 };
 window.setClientYear = (v) => { _clientYear = v; renderClientDetail(); };
 function sortClientDocs(docs, s) {
@@ -599,7 +686,7 @@ function renderClientDetail() {
   if (_clientYear !== 'all') docs = docs.filter(d => (d.date || '').slice(0, 4) === _clientYear);
   docs = sortClientDocs(docs, _clientSort);
   const yearSel = `<select onchange="setClientYear(this.value)" style="padding:6px 10px"><option value="all" ${_clientYear === 'all' ? 'selected' : ''}>כל השנים</option>${years.map(y => `<option value="${y}" ${_clientYear === y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
-  detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${_clientName}</h2><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים</span></div></div><div class="muted" style="font-size:12.5px;margin:8px 0 2px">לחיצה על כותרת מיינת לפיה (▲ עולה / ▼ יורד)</div>${docsTable(docs, { showClient: false, sort: _clientSort, onSort: 'setClientSort' })}`;
+  detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${_clientName}</h2><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים</span></div></div><div class="muted" style="font-size:12.5px;margin:8px 0 2px">לחיצה על כותרת מיינת לפיה (▲ עולה / ▼ יורד)</div>${docsTable(docs, { showClient: false, sort: _clientSort, onSort: 'setClientSort', actions: true })}`;
 }
 
 // ---- אירועים + אי-התאמות + יומן (לשונית אחת מאוחדת) ----
@@ -1393,6 +1480,7 @@ async function openDesignedPdf(endpoint, body, { statusEl, btn, label } = {}) {
   if (r.ok && r.pdfBase64) {
     if (statusEl) statusEl.innerHTML = '';
     const m = document.getElementById('designPvModal') || (() => { const x = document.createElement('div'); x.id = 'designPvModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+    m.style.zIndex = '10050'; // מעל מודל התצוגה המקדימה של האתר כדי שלא יופיע מאחור
     m.classList.remove('hidden');
     m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;overflow:hidden;display:flex;flex-direction:column">
       <div class="row-between" style="margin-bottom:8px"><h3 style="margin:0">תצוגה מקדימה — כפי שייראה בחשבונית ירוקה</h3><button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('designPvModal').classList.add('hidden')">✕</button></div>
@@ -1419,6 +1507,7 @@ window.showDesignedPreview = async (btn) => {
   if (r.ok && r.pdfBase64) {
     if (st) st.innerHTML = '';
     const m = document.getElementById('designPvModal') || (() => { const x = document.createElement('div'); x.id = 'designPvModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+    m.style.zIndex = '10050'; // מעל מודל התצוגה המקדימה של האתר כדי שלא יופיע מאחור
     m.classList.remove('hidden');
     m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;overflow:hidden;display:flex;flex-direction:column">
       <div class="row-between" style="margin-bottom:8px"><h3 style="margin:0">תצוגה מקדימה — כפי שייראה בחשבונית ירוקה</h3><button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('designPvModal').classList.add('hidden')">✕</button></div>
