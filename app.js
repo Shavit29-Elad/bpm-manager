@@ -180,16 +180,17 @@ function docsTable(docs, opts = {}) {
     const arw = on ? (s.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕';
     return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="${opts.onSort}('${key}')">${label}<span class="muted" style="font-size:11px">${arw}</span></th>`;
   };
-  return `<table><thead><tr>${th('date', 'תאריך')}${cc ? th('client', 'לקוח') : ''}${th('type', 'סוג')}${th('number', 'מספר')}${th('amount', 'סכום ללא מע"מ')}${th('amount', 'סכום כולל מע"מ')}<th></th></tr></thead>
+  return `<table><thead><tr>${th('date', 'תאריך')}${cc ? th('client', 'לקוח') : ''}${th('type', 'סוג')}${th('number', 'מספר')}<th>כותרת</th>${th('amount', 'סכום ללא מע"מ')}${th('amount', 'סכום כולל מע"מ')}<th></th></tr></thead>
     <tbody>${rows.map(d => `<tr>
       <td>${fmtDate(d.date)}</td>${cc ? `<td>${d.clientName || '—'}</td>` : ''}
       <td>${DOC_TYPE_NAMES[d.type] || `סוג ${d.type}`}</td>
       <td>${d.number ?? '—'}</td>
+      <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</td>
       <td>${money(d.amountExVat)}</td>
       <td>${money(d.amountIncVat)}</td>
       <td>${d.url ? `<div style="display:flex;gap:8px;align-items:center;justify-content:flex-end"><button class="btn ghost" style="padding:5px 11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button><a href="${d.url}" target="_blank" class="muted" style="white-space:nowrap">הורדה ↓</a></div>` : ''}</td>
     </tr>`).join('')}
-    <tr style="background:var(--panel2)"><td colspan="${cc ? 4 : 3}"><b>סה"כ</b></td><td><b>${money(totalEx)}</b></td><td><b>${money(totalInc)}</b></td><td></td></tr>
+    <tr style="background:var(--panel2)"><td colspan="${cc ? 5 : 4}"><b>סה"כ</b></td><td><b>${money(totalEx)}</b></td><td><b>${money(totalInc)}</b></td><td></td></tr>
     </tbody></table>`;
 }
 

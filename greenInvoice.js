@@ -164,6 +164,7 @@ function mapDoc(d) {
   const vat = d.vat != null ? num(d.vat) : amount - amount / 1.18; // 18% אם לא סופק
   return {
     id: d.id, number: d.number, type: d.type, date: d.documentDate,
+    description: d.description || d.remarks || '',
     amount,
     amountIncVat: amount,
     amountExVat: amount - vat,
