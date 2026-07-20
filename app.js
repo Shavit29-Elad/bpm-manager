@@ -2081,7 +2081,7 @@ window.openApproveDraft = (id) => {
   const supOpts = (_suppliers || []).map(s => `<option value="${s.id}" ${s.id === d.supplierId ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('');
   const typeSel = APPROVE_DOC_TYPES.map(([v, l]) => `<option value="${v}" ${v === d.documentType ? 'selected' : ''}>${l}</option>`).join('');
   const preview = d.url
-    ? `<iframe src="/api/expense-drafts/${d.id}/file#toolbar=1&navpanes=0" style="width:100%;height:100%;border:0;background:#fff" title="תצוגה מקדימה"></iframe>`
+    ? `<div id="apprFilePreview" style="width:100%;height:100%;background:#fff"><div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">טוען קובץ…</div></div>`
     : `<div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">אין קובץ לתצוגה</div>`;
   m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-width:97vw;max-height:92vh;overflow:auto">
     <div class="row-between" style="margin-bottom:6px"><h3 style="margin:0">אישור וקליטת הוצאה</h3>
@@ -2119,8 +2119,26 @@ window.openApproveDraft = (id) => {
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   _openApproveId = d.id;
-  setTimeout(() => { recalcApprVat(); loadApprClassifications(d); aiFillDraft(d.id); }, 30);
+  setTimeout(() => { recalcApprVat(); loadApprClassifications(d); aiFillDraft(d.id); if (d.url) loadApprFilePreview(d.id); }, 30);
 };
+// טוען את קובץ הטיוטה ומתאים את התצוגה: תמונה → img שמתאים לרוחב (לא ענק) · PDF → iframe
+async function loadApprFilePreview(id) {
+  const box = document.getElementById('apprFilePreview'); if (!box) return;
+  try {
+    const resp = await fetch(`/api/expense-drafts/${id}/file`);
+    if (!resp.ok) throw new Error('load');
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const t = (blob.type || '').toLowerCase();
+    if (t.includes('pdf')) {
+      box.innerHTML = `<iframe src="${url}#toolbar=1&navpanes=0" style="width:100%;height:100%;border:0;background:#fff" title="תצוגה מקדימה"></iframe>`;
+    } else if (t.startsWith('image')) {
+      box.innerHTML = `<div style="width:100%;height:100%;overflow:auto;display:flex;align-items:flex-start;justify-content:center;background:#fff;padding:6px;box-sizing:border-box"><img src="${url}" style="max-width:100%;height:auto;display:block" alt="חשבונית"/></div>`;
+    } else {
+      box.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:0;background:#fff"></iframe>`;
+    }
+  } catch { box.innerHTML = `<div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">לא ניתן לטעון את הקובץ. <a href="/api/expense-drafts/${id}/file" target="_blank" style="margin-inline-start:6px">פתח בכרטיסייה ↗</a></div>`; }
+}
 // טוען את רשימת הסיווגים החשבונאיים ובוחר את ברירת המחדל של הספק (אם יש)
 let _classifications = null;
 async function loadApprClassifications(d) {

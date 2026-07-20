@@ -277,8 +277,27 @@ async function callGeminiVision(system, prompt, fileBase64, mime, { maxTokens = 
   throw new Error(`אף מודל Gemini זמין לקריאת מסמכים. פרט: ${lastErr}`);
 }
 // חילוץ שדות חשבונית ספק מקובץ (PDF/תמונה) והתאמה לספק קיים
+// זיהוי סוג הקובץ מהבייטים עצמם (base64) — כדי לספק media_type תקין ל-Anthropic/Gemini
+// (חשבונית ירוקה מחזירה לפעמים content-type כללי כמו application/octet-stream או image/jpg שנדחים)
+function sniffMediaType(base64, fallback) {
+  const h = String(base64 || '').slice(0, 16);
+  if (h.startsWith('JVBER')) return 'application/pdf';       // %PDF
+  if (h.startsWith('iVBORw0KGgo')) return 'image/png';       // \x89PNG
+  if (h.startsWith('/9j/')) return 'image/jpeg';             // JPEG
+  if (h.startsWith('R0lGOD')) return 'image/gif';            // GIF
+  if (h.startsWith('UklGR')) return 'image/webp';            // RIFF/WEBP
+  const f = String(fallback || '').toLowerCase();
+  if (f.includes('pdf')) return 'application/pdf';
+  if (f.includes('png')) return 'image/png';
+  if (f.includes('gif')) return 'image/gif';
+  if (f.includes('webp')) return 'image/webp';
+  if (f.includes('jp')) return 'image/jpeg';                 // jpg/jpeg
+  return 'image/jpeg';
+}
+
 export async function extractInvoiceFields(fileBase64, mime, suppliers = []) {
   if (!chatConfigured()) throw new Error('AI לא מוגדר (חסר ANTHROPIC_API_KEY או GEMINI_API_KEY)');
+  const mediaType = sniffMediaType(fileBase64, mime);
   const supList = (suppliers || []).slice(0, 500)
     .map(s => `${s.id}\t${s.name}${s.taxId ? ' | ח.פ ' + s.taxId : ''}`).join('\n');
   const system = 'אתה מומחה לקריאת חשבוניות ספק ישראליות (הוצאות). אתה מחלץ נתונים במדויק ומחזיר JSON תקין בלבד, בלי טקסט לפני או אחרי.';
@@ -299,13 +318,13 @@ ${supList || '(אין)'}`;
 
   let raw;
   if (process.env.ANTHROPIC_API_KEY) {
-    const isPdf = String(mime || '').includes('pdf');
+    const isPdf = mediaType === 'application/pdf';
     const block = isPdf
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
-      : { type: 'image', source: { type: 'base64', media_type: mime || 'image/jpeg', data: fileBase64 } };
+      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: fileBase64 } };
     raw = await callAnthropicVision(system, [block, { type: 'text', text: prompt }]);
   } else {
-    raw = await callGeminiVision(system, prompt, fileBase64, mime);
+    raw = await callGeminiVision(system, prompt, fileBase64, mediaType);
   }
   const jsonStr = (String(raw).replace(/```json/gi, '').replace(/```/g, '').match(/\{[\s\S]*\}/) || ['{}'])[0];
   let out; try { out = JSON.parse(jsonStr); } catch { throw new Error('ה-AI לא החזיר נתונים תקינים'); }

@@ -601,8 +601,18 @@ add('GET', /^\/api\/expense-drafts\/([^/]+)\/file$/, async (req, res, params) =>
     if (!draft?.url) return json(res, { error: 'אין קובץ לטיוטה' }, 404);
     const r = await fetch(draft.url, { redirect: 'follow' });
     if (!r.ok) return json(res, { error: `שגיאה בטעינת הקובץ: ${r.status}` }, 502);
-    const ct = r.headers.get('content-type') || 'application/pdf';
+    let ct = r.headers.get('content-type') || '';
     const buf = Buffer.from(await r.arrayBuffer());
+    // זיהוי סוג מהבייטים אם ה-content-type חסר/כללי (חשבונית ירוקה מחזירה לעיתים octet-stream)
+    if (!ct || /octet-stream/i.test(ct)) {
+      if (buf.slice(0, 4).toString('latin1') === '%PDF') ct = 'application/pdf';
+      else if (buf[0] === 0x89 && buf[1] === 0x50) ct = 'image/png';
+      else if (buf[0] === 0xFF && buf[1] === 0xD8) ct = 'image/jpeg';
+      else if (buf.slice(0, 3).toString('latin1') === 'GIF') ct = 'image/gif';
+      else if (buf.slice(0, 4).toString('latin1') === 'RIFF') ct = 'image/webp';
+      else ct = 'application/pdf';
+    }
+    if (/image\/jpg/i.test(ct)) ct = 'image/jpeg'; // נרמול
     res.writeHead(200, { 'Content-Type': ct, 'Content-Disposition': 'inline', 'Cache-Control': 'private, max-age=300' });
     res.end(buf);
   } catch (e) { json(res, { error: e.message }, 500); }
