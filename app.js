@@ -150,11 +150,17 @@ window.previewDoc = async (url) => {
   m.onclick = (e) => { if (e.target === m) closePreview(); };
   try {
     const r = await fetch(url);
-    const buf = await r.arrayBuffer();
+    const blob = await r.blob();
+    const t = (blob.type || r.headers.get('content-type') || '').toLowerCase();
     if (_previewBlobUrl) URL.revokeObjectURL(_previewBlobUrl);
-    _previewBlobUrl = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
+    _previewBlobUrl = URL.createObjectURL(blob);
     const cur = document.getElementById('docPreview');
-    if (cur && !cur.classList.contains('hidden')) cur.innerHTML = shell(`<iframe src="${_previewBlobUrl}#toolbar=1" style="flex:1;width:100%;border:none;background:#fff"></iframe>`);
+    if (cur && !cur.classList.contains('hidden')) {
+      const body = t.startsWith('image')
+        ? `<div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;background:#fff;padding:6px"><img src="${_previewBlobUrl}" style="max-width:100%;max-height:100%;object-fit:contain" alt="מסמך"/></div>`
+        : `<iframe src="${_previewBlobUrl}#toolbar=1" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
+      cur.innerHTML = shell(body);
+    }
   } catch (e) {
     const cur = document.getElementById('docPreview');
     if (cur) cur.innerHTML = shell(`<div class="empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px"><div>לא ניתן להציג את המסמך כאן.</div><a href="${url}" target="_blank" class="btn primary" style="text-decoration:none">פתח בכרטיסייה חדשה ↗</a></div>`);
@@ -2023,7 +2029,7 @@ function supplierPayablesSection(list) {
       <span style="font-size:12.5px">ללא מע"מ: <b>${money(p.amountExcludeVat)}</b></span>
       <span style="font-size:12.5px">כולל מע"מ: <b style="color:var(--danger)">${money(p.amount)}</b></span>
       <span style="flex:1;min-width:8px"></span>
-      ${p.hasFile ? `<a class="btn ghost" style="padding:3px 10px;font-size:12px;text-decoration:none" href="/api/supplier-payables/${p.id}/file" target="_blank" rel="noopener">תצוגה 👁</a>
+      ${p.hasFile ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="previewDoc('/api/supplier-payables/${p.id}/file')">תצוגה 👁</button>
       <a class="btn ghost" style="padding:3px 10px;font-size:12px;text-decoration:none" href="/api/supplier-payables/${p.id}/file" download target="_blank" rel="noopener">הורדה ↓</a>` : ''}
       <button class="btn success" style="padding:3px 10px;font-size:12px" onclick="markPayablePaid('${p.id}')">✓ סמן כשולם</button>
       <button class="btn ghost" style="padding:3px 8px;font-size:12px" onclick="deletePayable('${p.id}')" title="הסר רישום">✕</button>
