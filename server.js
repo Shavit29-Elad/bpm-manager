@@ -20,6 +20,7 @@ import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
 import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields } from './chat.js';
+import mailer from './mailer.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
 
@@ -473,6 +474,28 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       throw err;
     }
 
+    // העברת קובץ ההוצאה אוטומטית לכתובת רו"ח (best-effort) — לפני מחיקת הטיוטה כדי שה-URL עדיין תקף
+    let forwarded = false, forwardError = null;
+    try {
+      const fwd = mailer.forwardExpenseTo();
+      if (mailer.mailerConfigured() && fwd && draft.url) {
+        const fr = await fetch(draft.url, { redirect: 'follow' });
+        if (fr.ok) {
+          const fbuf = Buffer.from(await fr.arrayBuffer());
+          const ct = fr.headers.get('content-type') || 'application/pdf';
+          const ext = /pdf/i.test(ct) ? 'pdf' : (/png/i.test(ct) ? 'png' : (/jpe?g/i.test(ct) ? 'jpg' : 'pdf'));
+          const safeNum = String(number).replace(/[^\w.-]/g, '_');
+          await mailer.sendMail({
+            to: fwd,
+            subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
+            text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
+            attachments: [{ filename: `expense-${safeNum}.${ext}`, content: fbuf, contentType: ct }],
+          });
+          forwarded = true;
+        } else { forwardError = `הורדת הקובץ נכשלה (${fr.status})`; }
+      }
+    } catch (e) { forwardError = e.message; }
+
     // ננסה למחוק את הטיוטה במורנינג; אם לא נתמך — נסמן אצלנו כמאושרת כדי שלא תופיע שוב
     let draftRemoved = false;
     try { await greenInvoice.deleteExpenseDraft(draftId); draftRemoved = true; } catch { }
@@ -486,8 +509,13 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       try { await greenInvoice.updateSupplier(supplierId, { accountingClassificationId: body.accountingClassificationId }); } catch { }
     }
 
-    json(res, { ok: true, expense: created, draftRemoved });
+    json(res, { ok: true, expense: created, draftRemoved, forwarded, forwardError, forwardTo: mailer.forwardExpenseTo() });
   } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// GET /api/mail/status — האם שליחת מייל מוגדרת ולאן מועברות הוצאות
+add('GET', /^\/api\/mail\/status$/, (req, res) => {
+  json(res, { configured: mailer.mailerConfigured(), forwardTo: mailer.forwardExpenseTo() });
 });
 
 // GET /api/expense-drafts/:id/file — פרוקסי לקובץ הטיוטה (כדי שהתצוגה המקדימה תרוץ מאותו מקור, בלי חסימת iframe)

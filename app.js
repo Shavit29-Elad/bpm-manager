@@ -1601,11 +1601,13 @@ async function renderContractors(c) {
   // עדכון אוטומטי של שמות הקבלנים לפי חשבונית ירוקה (רק התאמות ודאיות) לפני הטעינה
   const sync = await fetch('/api/contractors/auto-sync-names', { method: 'POST' }).then(x => x.json()).catch(() => ({ changed: 0 }));
   _ctrSyncNote = (sync && sync.changed) ? `עודכנו ${sync.changed} שמות קבלנים לפי חשבונית ירוקה` : '';
-  const [pay, sup, dr] = await Promise.all([
+  const [pay, sup, dr, ms] = await Promise.all([
     api(`/api/contractors/payables?companyId=${state.company}`),
     api('/api/suppliers').catch(() => []),
     api('/api/expense-drafts').catch(() => ({ drafts: [] })),
+    api('/api/mail/status').catch(() => null),
   ]);
+  _mailStatus = ms || _mailStatus;
   const payables = Array.isArray(pay) ? pay : [];
   _suppliers = Array.isArray(sup) ? sup : [];
   _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
@@ -1743,6 +1745,7 @@ function supplierRows(list) {
 }
 let _supDocs = [], _supName = '', _supYear = 'all', _supId = '';
 let _drafts = [];
+let _mailStatus = null; // סטטוס שליחת מייל לרו"ח
 const _aiByDraft = {};      // מטמון תוצאות ה-AI לכל טיוטה (id -> fields)
 const _aiInFlight = {};     // מונע קריאות כפולות במקביל
 let _openApproveId = null;  // איזו טיוטה פתוחה כרגע במסך הקליטה
@@ -1769,8 +1772,12 @@ window.kickDraftsAi = async () => {
 const DRAFT_TYPE_NAMES = { 20: 'חשבון/אישור', 305: 'חשבונית מס', 320: 'מס-קבלה', 330: 'זיכוי', 400: 'קבלה', 405: 'קבלה תרומה' };
 function draftsSection() {
   const list = _drafts || [];
+  const ms = _mailStatus || {};
+  const mailNote = ms.configured
+    ? `<div style="font-size:12px;color:var(--accent2);margin-top:2px">📧 כל הוצאה שנקלטת נשלחת אוטומטית לרו"ח: ${escapeHtml(String(ms.forwardTo || ''))}</div>`
+    : `<div style="font-size:12px;color:var(--warn);margin-top:2px">📧 שליחת הוצאות לרו"ח (${escapeHtml(String(ms.forwardTo || '516942349@rivh.it'))}) עדיין לא מחוברת — צריך להגדיר חשבון מייל שולח.</div>`;
   return `<div class="row-between"><div><h2>🧾 טיוטות הוצאה לאישור</h2>
-      <span class="muted">${list.length ? `${list.length} טיוטות שהעלית וממתינות לאישור. בדוק את מה שהזיהוי האוטומטי קלט, תקן אם צריך, ואשר — תיווצר הוצאה אמיתית שמשויכת לספק.` : 'אין טיוטות ממתינות. העלה קובץ הוצאה כדי שיופיע כאן אחרי זיהוי אוטומטי (OCR).'}</span></div>
+      <span class="muted">${list.length ? `${list.length} טיוטות שהעלית וממתינות לאישור. בדוק את מה שהזיהוי האוטומטי קלט, תקן אם צריך, ואשר — תיווצר הוצאה אמיתית שמשויכת לספק.` : 'אין טיוטות ממתינות. העלה קובץ הוצאה כדי שיופיע כאן אחרי זיהוי אוטומטי (OCR).'}</span>${mailNote}</div>
       <button class="btn ghost" onclick="reloadDrafts(this)">↻ רענן</button></div>
     ${list.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${list.map(draftCard).join('')}</div>` : `<div class="empty">אין טיוטות ממתינות לאישור.</div>`}`;
 }
@@ -2041,9 +2048,10 @@ window.approveDraft = async (id, btn) => {
   const r = await fetch(`/api/expense-drafts/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ אשר וצור הוצאה';
   if (r.ok) {
+    const fwdNote = r.forwarded ? ` · 📧 נשלח גם לרו"ח (${escapeHtml(String(r.forwardTo || ''))})` : (r.forwardError ? ` · <span style="color:var(--warn)">שליחת המייל לרו"ח נכשלה</span>` : '');
     st.innerHTML = r.duplicate
       ? '<span style="color:var(--accent2)">✓ החשבונית כבר נקלטה במערכת — הקובץ הכפול נמחק.</span>'
-      : '<span style="color:var(--accent2)">✓ ההוצאה נוצרה ושויכה לספק!</span>';
+      : `<span style="color:var(--accent2)">✓ ההוצאה נוצרה ושויכה לספק!</span>${fwdNote}`;
     _drafts = _drafts.filter(x => x.id !== id);
     setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection(); }, 1400);
   } else st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
@@ -2657,6 +2665,48 @@ function bankPeriodControls() {
   return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('all', 'הכל')}${seg('month', 'חודשי')}${seg('year', 'שנתי')}${seg('range', 'טווח')}</div>${extra}</div>`;
 }
 
+// מצב חשבון: עו"ש עדכני (יתרה מהתנועה האחרונה), עד איזה תאריך מעודכן, ומתי הועלה לאחרונה
+function bankAccountStatus() {
+  const all = _bankList || [];
+  if (!all.length) return null;
+  const key = (d) => { const m = (d || '').match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}${m[2]}${m[1]}` : '00000000'; };
+  const sorted = [...all].sort((a, b) => key(b.date).localeCompare(key(a.date)) || String(b.importedAt || '').localeCompare(String(a.importedAt || '')));
+  const withBal = sorted.find(t => t.balance != null);
+  const lastImport = all.map(t => t.importedAt).filter(Boolean).sort().pop();
+  return { balance: withBal ? withBal.balance : null, throughDate: sorted[0] ? sorted[0].date : null, lastImport };
+}
+function bankHeaderHtml() {
+  const s = bankAccountStatus(); if (!s) return '';
+  const fmtDt = (iso) => { if (!iso) return '—'; const d = new Date(iso); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const stat = (label, val, color) => `<div class="card" style="padding:11px 14px"><div class="label" style="font-size:12px">${label}</div><div style="font-size:18px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
+  return `<div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin-top:12px">
+    ${stat('עו"ש עדכני', s.balance != null ? money(s.balance) : '—', (s.balance != null && s.balance < 0) ? 'var(--danger)' : 'var(--accent2)')}
+    ${stat('מעודכן עד (תנועה אחרונה)', s.throughDate || '—')}
+    ${stat('הועלה לאחרונה', fmtDt(s.lastImport))}
+  </div>`;
+}
+// זכות / חובה לפי חודשים
+function bankMonthlyHtml() {
+  const all = _bankList || [];
+  const by = {};
+  for (const t of all) {
+    const m = (t.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/); if (!m) continue;
+    const k = `${m[3]}-${m[2]}`;
+    if (!by[k]) by[k] = { credit: 0, debit: 0 };
+    if (t.direction === 'credit') by[k].credit += (t.absAmount || 0);
+    else if (t.direction === 'debit') by[k].debit += (t.absAmount || 0);
+  }
+  const keys = Object.keys(by).sort((a, b) => b.localeCompare(a));
+  if (!keys.length) return '';
+  const label = (k) => { const [y, mo] = k.split('-'); return `${MONTHS_HE[+mo - 1]} ${y}`; };
+  const rows = keys.map(k => { const v = by[k]; const net = v.credit - v.debit; return `<tr>
+    <td style="white-space:nowrap">${label(k)}</td>
+    <td style="color:var(--accent2);font-weight:600">${money(v.credit)}</td>
+    <td style="color:var(--danger);font-weight:600">${money(v.debit)}</td>
+    <td style="font-weight:700;color:${net >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(net)}</td></tr>`; }).join('');
+  return `<details style="margin-top:14px" open><summary style="cursor:pointer;font-weight:600;font-size:14px">📊 זכות / חובה לפי חודשים (${keys.length} חודשים)</summary>
+    <div style="overflow-x:auto;margin-top:8px"><table style="min-width:440px;font-size:13px"><thead><tr><th>חודש</th><th>זכות (הכנסות)</th><th>חובה (הוצאות)</th><th>נטו</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+}
 function bankVisibleRows() {
   const dir = state.bankFilter || 'credit';
   let rows = (_bankList || []).filter(t => dir === 'all' ? true : dir === 'credit' ? t.direction === 'credit' : t.direction === 'debit');
@@ -2727,7 +2777,9 @@ async function renderBank(c, soft) {
         <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
       </div>
     </div>
-    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px">${bankDirControls()}${bankPeriodControls()}</div>
+    ${bankHeaderHtml()}
+    ${bankMonthlyHtml()}
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px">${bankDirControls()}${bankPeriodControls()}</div>
     ${summary}
     <p class="muted" style="font-size:12.5px;margin-top:10px">תגית ירוקה <b>"מדויק"</b> = סכום זהה או מספר חשבונית (בטוח לאישור) · צהובה <b>"לבדיקה"</b> = ניכוי 5% / צירוף / שם בלבד (כדאי לוודא בתצוגה) · שורות אדומות = לא מותאמות · 🔗 שייך לשיוך ידני.</p>
     ${table}
