@@ -257,12 +257,13 @@ export async function extractInvoiceFields(fileBase64, mime, suppliers = []) {
   const system = 'אתה מומחה לקריאת חשבוניות ספק ישראליות (הוצאות). אתה מחלץ נתונים במדויק ומחזיר JSON תקין בלבד, בלי טקסט לפני או אחרי.';
   const prompt = `זוהי חשבונית/קבלה של ספק (מסמך הוצאה של העסק). קרא את המסמך וחלץ את הנתונים.
 החזר אך ורק JSON במבנה המדויק:
-{"supplierName":"שם הספק המנפיק","taxId":"ח.פ/עוסק מורשה של הספק (ספרות בלבד) או ריק","invoiceNumber":"מספר המסמך/חשבונית","date":"YYYY-MM-DD","documentType":305,"amountInclVat":0,"amountExclVat":0,"vat":0,"description":"תיאור קצר של ההוצאה","supplierId":""}
+{"supplierName":"שם הספק המנפיק","taxId":"ח.פ/עוסק מורשה של הספק (ספרות בלבד) או ריק","supplierPhone":"טלפון הספק או ריק","supplierEmail":"אימייל הספק או ריק","supplierContact":"שם איש קשר אצל הספק או ריק","invoiceNumber":"מספר המסמך/חשבונית","allocationNumber":"מספר הקצאה של רשות המסים אם מופיע (בדרך כלל 9 ספרות) או ריק","date":"YYYY-MM-DD","documentType":305,"amountInclVat":0,"amountExclVat":0,"vat":0,"description":"תיאור קצר של ההוצאה","supplierId":""}
 
 כללים:
 - documentType: 305=חשבונית מס, 320=חשבונית מס/קבלה, 400=קבלה, 20=חשבון עסקה/דרישת תשלום. בחר לפי כותרת המסמך.
 - amountInclVat = הסכום הכולל לתשלום (כולל מע"מ). amountExclVat = הסכום לפני מע"מ. vat = סכום המע"מ. אם רק חלק מהם מופיע — חשב את השאר (מע"מ בישראל 18%). כל הסכומים כמספרים בלבד.
 - הספק הוא מי שהנפיק את החשבונית (לא "בי פי אם" שהוא הלקוח/מקבל).
+- supplierPhone/supplierEmail/supplierContact = פרטי הקשר של הספק המנפיק כפי שמופיעים על המסמך (טלפון, אימייל, איש קשר). אם לא מופיע — ריק.
 - אם הספק תואם לאחד מהרשימה למטה (לפי שם או ח.פ), החזר את ה-id שלו ב-supplierId. אחרת supplierId ריק.
 - אם שדה לא נמצא — החזר ריק ("") למחרוזות ו-0 למספרים.
 
@@ -294,7 +295,11 @@ ${supList || '(אין)'}`;
     supplierId,
     supplierName: String(out.supplierName || '').trim(),
     taxId: String(out.taxId || '').replace(/[^\d]/g, ''),
+    supplierPhone: String(out.supplierPhone || '').trim(),
+    supplierEmail: String(out.supplierEmail || '').trim(),
+    supplierContact: String(out.supplierContact || '').trim(),
     invoiceNumber: String(out.invoiceNumber || '').trim(),
+    allocationNumber: String(out.allocationNumber || '').replace(/[^\d]/g, ''),
     date: /^\d{4}-\d{2}-\d{2}$/.test(out.date || '') ? out.date : '',
     documentType: [20, 305, 320, 400].includes(+out.documentType) ? +out.documentType : 305,
     amountInclVat: incl || 0,

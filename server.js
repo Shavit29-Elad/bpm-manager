@@ -426,6 +426,9 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     const number = String(body.number || draft.number || '').trim();
     if (!number) return json(res, { error: 'חסר מספר חשבונית של הספק' }, 400);
 
+    // מספר הקצאה (חובה לחשבונית מס/מס-קבלה מעל 5,000 ₪) — נשמר בתיאור ההוצאה כדי לתעד אותו
+    const alloc = String(body.allocationNumber || '').replace(/[^\d]/g, '').trim();
+    const baseDesc = (body.description || draft.description || '').trim() || 'הוצאת ספק';
     const expBody = {
       supplier: { id: supplierId },
       documentType: Number(body.documentType || draft.documentType) || 305,
@@ -434,7 +437,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       currency: 'ILS', paymentType: 4,
       amount, amountExcludeVat: net, vat,
       accountingClassification: { id: classId },
-      description: (body.description || draft.description || '').trim() || 'הוצאת ספק',
+      description: alloc ? `${baseDesc} · מס' הקצאה ${alloc}` : baseDesc,
     };
     let created;
     try {

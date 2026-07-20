@@ -1667,9 +1667,12 @@ function draftCard(d) {
     ? '<span class="tag" style="background:#e7f7ee;color:var(--accent2)">🤖 נקרא — מוכן לקליטה</span>'
     : '<span class="tag muted">🤖 קורא…</span>';
   const statusTag = failed ? ` <span class="tag" style="background:#fde8e8;color:var(--danger)">${escapeHtml(d.statusText)}</span>` : '';
+  // חוסר מספר הקצאה בחשבונית מס/מס-קבלה מעל 5,000 ₪
+  const allocMissing = ai && [305, 320].includes(+ai.documentType) && Math.max(+ai.amountInclVat || 0, +ai.amountExcludeVat || 0) > 5000 && !String(ai.allocationNumber || '').trim();
+  const allocTag = allocMissing ? ' <span class="tag" style="background:#fde8e8;color:var(--danger)">⚠ חסר מספר הקצאה</span>' : '';
   return `<div class="card" style="padding:12px 14px">
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <div style="min-width:190px"><b>${supTxt}</b> ${aiBadge}${statusTag}<br><span class="muted" style="font-size:12.5px">${typeTxt}${number ? ` · מס' ${escapeHtml(String(number))}` : ''}${date ? ` · ${ddmy(date)}` : ''}</span></div>
+      <div style="min-width:190px"><b>${supTxt}</b> ${aiBadge}${allocTag}${statusTag}<br><span class="muted" style="font-size:12.5px">${typeTxt}${number ? ` · מס' ${escapeHtml(String(number))}` : ''}${date ? ` · ${ddmy(date)}` : ''}</span></div>
       <div style="font-weight:700;font-size:15px;min-width:90px">${amt}</div>
       <div style="flex:1;min-width:120px" class="muted">${escapeHtml(desc)}</div>
       <div style="display:flex;gap:6px;margin-inline-start:auto">
@@ -1703,6 +1706,20 @@ window.recalcApprVat = () => {
   const net = netIn !== '' && netIn != null ? +netIn : (amount ? +(amount / 1.18).toFixed(2) : 0);
   const vat = +(amount - net).toFixed(2);
   const el = g('apVat'); if (el) el.textContent = amount ? `מע"מ מחושב: ${money(vat)} · ללא מע"מ: ${money(net)}` : '';
+  checkAllocWarn();
+};
+// מספר הקצאה חובה לחשבונית מס (305) / מס-קבלה (320) מעל 5,000 ₪ (כולל או ללא מע"מ)
+window.checkAllocWarn = () => {
+  const g = (x) => document.getElementById(x);
+  const w = g('apAllocWarn'); if (!w) return;
+  const type = +(g('apType')?.value || 0);
+  const amount = +(g('apAmount')?.value || 0);
+  const netIn = g('apNet')?.value; const net = (netIn !== '' && netIn != null) ? +netIn : 0;
+  const needs = [305, 320].includes(type) && Math.max(amount, net) > 5000;
+  const alloc = (g('apAlloc')?.value || '').trim();
+  if (needs && !alloc) w.innerHTML = '<span style="color:var(--danger);font-weight:600">⚠ חסר מספר הקצאה — חובה לחשבונית מס / מס-קבלה מעל 5,000 ₪</span>';
+  else if (needs && alloc) w.innerHTML = '<span style="color:var(--accent2)">✓ מספר הקצאה קיים</span>';
+  else w.innerHTML = '';
 };
 window.openApproveDraft = (id) => {
   const d = (_drafts || []).find(x => x.id === id); if (!d) return;
@@ -1729,8 +1746,10 @@ window.openApproveDraft = (id) => {
         <div style="overflow:auto;padding-inline-start:2px">
           ${fld('שם הספק / קבלן *', `<div style="display:flex;gap:6px;align-items:center"><select id="apSup" style="flex:1"><option value="">— בחר ספק —</option>${supOpts}</select><button type="button" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap" onclick="openAddSupplier()">+ ספק חדש</button></div>`)}
           ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
-          ${fld('סוג המסמך *', `<select id="apType">${typeSel}</select>`)}
+          ${fld('סוג המסמך *', `<select id="apType" onchange="checkAllocWarn()">${typeSel}</select>`)}
           ${fld('מספר המסמך *', `<input id="apNum" dir="ltr" value="${escAttr(String(d.number || ''))}" placeholder="מספר"/>`)}
+          ${fld('מספר הקצאה (חובה לחשבונית מס/מס-קבלה מעל 5,000 ₪)', `<input id="apAlloc" dir="ltr" value="${escAttr(String(d.allocationNumber || ''))}" placeholder="מספר הקצאה מרשות המסים" oninput="checkAllocWarn()"/>`)}
+          <div id="apAllocWarn" style="font-size:12px;margin:-4px 0 9px;min-height:14px"></div>
           ${fld('תאריך המסמך *', `<input id="apDate" type="date" value="${d.date || todayIso()}"/>`)}
           ${fld('סכום ההוצאה (כולל מע"מ) ₪ *', `<input id="apAmount" type="number" inputmode="decimal" dir="ltr" value="${d.amount != null ? d.amount : ''}" placeholder="0" oninput="recalcApprVat()"/>`)}
           ${fld('סכום ללא מע"מ ₪', `<input id="apNet" type="number" inputmode="decimal" dir="ltr" value="${d.amountExcludeVat != null ? d.amountExcludeVat : ''}" placeholder="ריק = חישוב אוטומטי 18%" oninput="recalcApprVat()"/>`)}
@@ -1757,6 +1776,7 @@ function applyAiFields(f) {
   if (f.taxId && !g('apTax').value) g('apTax').value = f.taxId;
   if (f.documentType && [...g('apType').options].some(o => +o.value === +f.documentType)) g('apType').value = String(f.documentType);
   if (f.invoiceNumber) g('apNum').value = f.invoiceNumber;
+  if (f.allocationNumber && g('apAlloc') && !g('apAlloc').value) g('apAlloc').value = f.allocationNumber;
   if (f.date) g('apDate').value = f.date;
   if (f.amountInclVat) g('apAmount').value = f.amountInclVat;
   if (f.amountExcludeVat) g('apNet').value = f.amountExcludeVat;
@@ -1779,31 +1799,44 @@ function aiNote(f) {
   if (f.supplierName && !matched) return `<span style="color:var(--warn)">🤖 זוהה ע"י AI · ספק "${escapeHtml(f.supplierName)}" לא קיים ברשימה — לחץ "+ ספק חדש" כדי להוסיף</span>`;
   return '<span style="color:var(--accent2)">🤖 מולא ע"י AI — אנא ודא את הפרטים</span>';
 }
-// הוספת ספק חדש ישירות ממסך אישור ההוצאה — נוצר בחשבונית ירוקה ונבחר אוטומטית
-window.openAddSupplier = () => {
-  const detected = _aiByDraft[_openApproveId] || (_drafts || []).find(x => x.id === _openApproveId)?.ai || {};
-  const nameGuess = detected.supplierName || '';
-  const taxGuess = (document.getElementById('apTax')?.value || detected.taxId || '');
+// הוספת ספק חדש ישירות ממסך אישור ההוצאה — ה-AI קורא את פרטי הספק מהחשבונית, ואז נוצר בחשבונית ירוקה ונבחר
+window.openAddSupplier = async () => {
+  const getDet = () => _aiByDraft[_openApproveId] || (_drafts || []).find(x => x.id === _openApproveId)?.ai || {};
+  const taxCur = document.getElementById('apTax')?.value || '';
   let m = document.getElementById('addSupModal');
   if (!m) { m = document.createElement('div'); m.id = 'addSupModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
   const fld = (lbl, inner) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px">${lbl}${inner}</label>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)">
-    <h3>הוספת ספק לחשבונית ירוקה</h3>
-    <p class="muted" style="font-size:12.5px;margin:4px 0 12px">הספק ייווצר אוטומטית בחשבונית ירוקה וייבחר להוצאה זו.</p>
-    ${fld('שם עסק *', `<input id="nsName" value="${escAttr(nameGuess)}" placeholder="שם העסק"/>`)}
-    ${fld('מס\' עוסק / ח.פ', `<input id="nsTax" dir="ltr" value="${escAttr(taxGuess)}" placeholder="מספר עוסק / ח.פ"/>`)}
-    ${fld('איש קשר', `<input id="nsContact" placeholder="שם איש קשר"/>`)}
-    ${fld('מס\' פלאפון', `<input id="nsPhone" type="tel" dir="ltr" placeholder="050-0000000"/>`)}
-    ${fld('מייל', `<input id="nsEmail" type="email" dir="ltr" placeholder="mail@example.com"/>`)}
-    <div id="nsStatus" style="font-size:13px;min-height:18px;margin:4px 0"></div>
-    <div class="modal-actions">
-      <button class="btn ghost" onclick="document.getElementById('addSupModal').classList.add('hidden')">ביטול</button>
-      <button class="btn primary" onclick="saveNewSupplierInline(this)">שמור ובחר</button>
-    </div>
-  </div>`;
-  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  const draw = (det, reading) => {
+    m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)">
+      <h3>הוספת ספק לחשבונית ירוקה</h3>
+      <div id="nsAi" style="font-size:12px;margin:2px 0 10px">${reading
+        ? '<span class="muted">🤖 קורא את פרטי הספק מהחשבונית…</span>'
+        : '<span style="color:var(--accent2)">🤖 מולא ע"י AI מהחשבונית — ערוך אם צריך</span>'}</div>
+      ${fld('שם עסק *', `<input id="nsName" value="${escAttr(det.supplierName || '')}" placeholder="שם העסק"/>`)}
+      ${fld('מס\' עוסק / ח.פ', `<input id="nsTax" dir="ltr" value="${escAttr(taxCur || det.taxId || '')}" placeholder="מספר עוסק / ח.פ"/>`)}
+      ${fld('איש קשר', `<input id="nsContact" value="${escAttr(det.supplierContact || '')}" placeholder="שם איש קשר"/>`)}
+      ${fld('מס\' פלאפון', `<input id="nsPhone" type="tel" dir="ltr" value="${escAttr(det.supplierPhone || '')}" placeholder="050-0000000"/>`)}
+      ${fld('מייל', `<input id="nsEmail" type="email" dir="ltr" value="${escAttr(det.supplierEmail || '')}" placeholder="mail@example.com"/>`)}
+      <div id="nsStatus" style="font-size:13px;min-height:18px;margin:4px 0"></div>
+      <div class="modal-actions">
+        <button class="btn ghost" onclick="document.getElementById('addSupModal').classList.add('hidden')">ביטול</button>
+        <button class="btn primary" onclick="saveNewSupplierInline(this)">שמור ובחר</button>
+      </div>
+    </div>`;
+    m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  };
+  let det = getDet();
+  const hasAny = det.supplierName || det.supplierPhone || det.supplierEmail || det.supplierContact || det.taxId;
+  draw(det, !hasAny);
   setTimeout(() => document.getElementById('nsName')?.focus(), 60);
+  // אם ה-AI עדיין לא קרא את החשבונית — נקרא עכשיו ואז נמלא את הפרטים
+  if (!hasAny && _openApproveId) {
+    await aiFillDraft(_openApproveId, false).catch(() => {});
+    det = getDet();
+    const still = document.getElementById('addSupModal');
+    if (still && !still.classList.contains('hidden')) { draw(det, false); setTimeout(() => document.getElementById('nsName')?.focus(), 40); }
+  }
 };
 window.saveNewSupplierInline = async (btn) => {
   const g = (id) => document.getElementById(id);
@@ -1844,7 +1877,12 @@ window.approveDraft = async (id, btn) => {
   if (!supplierId) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור ספק.</span>'; return; }
   if (!number) { st.innerHTML = '<span style="color:var(--danger)">חסר מספר מסמך.</span>'; return; }
   if (!amount || amount <= 0) { st.innerHTML = '<span style="color:var(--danger)">חסר סכום תקין.</span>'; return; }
-  const body = { supplierId, number, amount, amountExcludeVat: net, taxId: g('apTax').value.trim() || null, date: g('apDate').value || todayIso(), documentType: +g('apType').value, description: g('apDesc').value.trim() };
+  const docType = +g('apType').value;
+  const alloc = (g('apAlloc')?.value || '').trim();
+  // אזהרה רכה: מספר הקצאה חסר לחשבונית מס/מס-קבלה מעל 5,000 ₪
+  const needsAlloc = [305, 320].includes(docType) && Math.max(amount, net || 0) > 5000;
+  if (needsAlloc && !alloc && !confirm('חסר מספר הקצאה לחשבונית מס/מס-קבלה מעל 5,000 ₪.\nלהמשיך בכל זאת ולקלוט בלי מספר הקצאה?')) return;
+  const body = { supplierId, number, amount, amountExcludeVat: net, taxId: g('apTax').value.trim() || null, date: g('apDate').value || todayIso(), documentType: docType, description: g('apDesc').value.trim(), allocationNumber: alloc || null };
   btn.disabled = true; btn.textContent = 'מאשר…'; st.innerHTML = '<span class="muted">יוצר הוצאה בחשבונית ירוקה…</span>';
   const r = await fetch(`/api/expense-drafts/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ אשר וצור הוצאה';
