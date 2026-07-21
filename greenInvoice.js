@@ -190,21 +190,27 @@ export async function quickSearchDocuments(term) {
   }));
 }
 
-// חיפוש מסמכי הוצאה (ספקים) לפי מספר/תיאור — לשיוך ידני בבנק
+// חיפוש מסמכי הוצאה (ספקים) לפי מספר/תיאור — לשיוך ידני בבנק.
+// הערה: /expenses/search לא מסנן לפי מספר/תיאור, לכן מושכים חלון אחרון ומסננים מקומית.
 export async function quickSearchExpenses(term) {
   const q = String(term || '').trim();
   if (q.length < 2) return [];
-  const byId = new Map();
-  const collect = (items) => { for (const d of (items || [])) if (d && d.id) byId.set(d.id, mapExpense(d)); };
-  // לפי תיאור
-  try { const r = await api('/expenses/search', { method: 'POST', body: { description: q, page: 1, pageSize: 30, sort: 'documentDate' } }); collect(r.items); } catch { /* ממשיכים */ }
-  // לפי מספר מסמך (אם מספרי)
-  if (/^\d+$/.test(q)) {
-    try { const r = await api('/expenses/search', { method: 'POST', body: { number: Number(q), page: 1, pageSize: 30, sort: 'documentDate' } }); collect(r.items); } catch { /* ממשיכים */ }
-    // גיבוי: חיפוש טקסטואלי על המספר (חלק מהחשבוניות שומרות את המספר בשדה reference)
-    try { const r = await api('/expenses/search', { method: 'POST', body: { search: q, page: 1, pageSize: 30, sort: 'documentDate' } }); collect(r.items); } catch { /* ממשיכים */ }
+  const nq = q.toLowerCase();
+  const all = [];
+  for (let page = 1; page <= 8; page++) {
+    let res;
+    try { res = await api('/expenses/search', { method: 'POST', body: { page, pageSize: 100, sort: 'documentDate' } }); }
+    catch { break; }
+    const items = res.items || [];
+    all.push(...items);
+    if (items.length < 100) break;
   }
-  return [...byId.values()].slice(0, 20);
+  const matched = all.filter(e => {
+    const num = String(e.number ?? e.documentNumber ?? e.reference ?? e.ref ?? '').toLowerCase();
+    const desc = String(e.description ?? e.category?.name ?? e.categoryName ?? e.supplier?.name ?? e.supplierName ?? '').toLowerCase();
+    return (num && num.includes(nq)) || (nq.length >= 2 && desc.includes(nq));
+  });
+  return matched.slice(0, 20).map(mapExpense);
 }
 
 // חיפוש מסמכים בטווח תאריכים (למעקב תשלומים/התאמות)
