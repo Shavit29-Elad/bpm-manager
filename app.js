@@ -373,7 +373,9 @@ window.doDerive = async (id, type, linked, btn) => {
 const DER_PAY_TYPES = [[4, 'העברה בנקאית'], [2, "צ'ק"], [0, 'ניכוי מס במקור'], [1, 'מזומן'], [3, 'כרטיס אשראי']];
 const DER_PAYMENT_DOCS = new Set([320, 400]); // מסמכים שמחייבים תקבול (מס-קבלה / קבלה)
 let _derEdit = null;
-window.openDeriveEditor = async (id, type, linked) => {
+let _derBankLink = null; // כשמפיקים מתוך "צור הכנסה" בבנק — לקשר את המסמך שנוצר לתנועת הבנק
+window.openDeriveEditor = async (id, type, linked, opts) => {
+  opts = opts || {};
   const m = document.getElementById('derModal') || (() => { const x = document.createElement('div'); x.id = 'derModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען שורות מהמסמך…</div></div>`;
@@ -384,16 +386,30 @@ window.openDeriveEditor = async (id, type, linked) => {
   ]);
   if (!r || !r.ok) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת השורות: ${escapeHtml(String(r?.error || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">סגור</button></div></div>`; return; }
   const needsPay = DER_PAYMENT_DOCS.has(Number(type));
+  const items = (r.items || []).map(it => ({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }));
+  const date = opts.date || todayIso();
   _derEdit = {
     id, type: Number(type), linked: linked === true || linked === 'true',
-    clientName: r.client?.name || '', date: todayIso(),
+    clientName: r.client?.name || '', date,
     lastDocDate: (ld && ld.lastDocDate) || null, lastDocTypeName: DOC_TYPE_NAMES[Number(type)] || 'מסוג זה', allowBackdate: false,
     description: r.description || '', remarks: r.remarks || '',
-    items: (r.items || []).map(it => ({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })),
-    payments: needsPay ? [{ type: 4, price: 0, date: todayIso(), chequeNum: '', bankName: '' }] : [],
-    needsPay,
+    items,
+    payments: [], needsPay,
   };
   if (!_derEdit.items.length) _derEdit.items.push({ description: '', quantity: 1, price: 0 });
+  // תקבולים: אם הגיע סכום שהתקבל בבנק — נבנה תקבול העברה בנקאית, ובניכוי מס במקור נוסיף שורת ניכוי
+  if (needsPay) {
+    if (opts.bankReceived != null) {
+      const total = derTotals().total;
+      const recv = Math.min(Number(opts.bankReceived) || 0, total);
+      _derEdit.payments = [{ type: 4, price: +recv.toFixed(2), date, chequeNum: '', bankName: '' }];
+      const wh = +(total - recv).toFixed(2);
+      if (opts.withholding && wh > 0.5) _derEdit.payments.push({ type: 0, price: wh, date, chequeNum: '', bankName: '' });
+    } else {
+      _derEdit.payments = [{ type: 4, price: 0, date, chequeNum: '', bankName: '' }];
+    }
+  }
+  _derBankLink = opts.bankTxId ? { txId: opts.bankTxId } : null;
   renderDeriveEditor();
 };
 // סנכרון ערכי ה-DOM לתוך ה-state לפני רינדור מחדש
@@ -547,12 +563,26 @@ window.derConfirm = async () => {
   if (r.ok) {
     if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
     autoDownloadDoc(r.doc?.url);
+    // אם הופק מתוך "צור הכנסה" בבנק — לקשר את המסמך שנוצר לתנועת הבנק כדי שתסומן כמותאמת
+    if (_derBankLink && r.doc) {
+      const entry = { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: t.total, url: r.doc.url || null };
+      await linkDocToBankTx(_derBankLink.txId, entry);
+      _derBankLink = null;
+    }
     setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); if (typeof _docActionRefresh === 'function') _docActionRefresh(); }, 1400);
   } else {
     if (btn) btn.disabled = false;
     if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }
 };
+// קישור מסמך שהופק לתנועת בנק (מוסיף ל-matchedInvoices ומעדכן את השורה)
+async function linkDocToBankTx(txId, entry) {
+  const tx = (_bankList || []).find(t => t.id === txId); if (!tx) return;
+  const matched = [...(tx.matchedInvoices || [])];
+  if (!matched.find(x => x.id === entry.id)) matched.push(entry);
+  const r = await fetch(`/api/bank/${txId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual', matchedInvoices: matched }) }).then(x => x.json()).catch(() => null);
+  if (r && r.tx) { const i = _bankList.findIndex(t => t.id === txId); if (i >= 0) _bankList[i] = r.tx; if (typeof updateBankRow === 'function') updateBankRow(r.tx); }
+}
 
 // ============ סימון טופל (סגירה) / פתיחה מחדש ============
 window.docCloseOpen = async (id, action) => {
@@ -1675,8 +1705,11 @@ function renderNewQuote() {
   </div>`).join('');
   const selClient = clients.find(c => String(c.id) === String(e.clientId));
   const email = e.email || (selClient && selClient.email) || '';
+  const isIncome = e.type && e.type !== 10;
+  const titleTxt = isIncome ? `${DOC_TYPE_NAMES[e.type] || 'מסמך'} חדשה — מאפס` : (e.isDuplicate ? 'שכפול הצעת מחיר — ערוך ושמור כהצעה חדשה' : 'הצעת מחיר חדשה');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;overflow:auto">
-    <h3>${e.isDuplicate ? 'שכפול הצעת מחיר — ערוך ושמור כהצעה חדשה' : 'הצעת מחיר חדשה'}</h3>
+    <h3>${titleTxt}</h3>
+    ${isIncome ? `<div class="muted" style="font-size:12px;margin:2px 0 6px">ייווצר ${DOC_TYPE_NAMES[e.type]} בחשבונית ירוקה, עם תקבול בהעברה בנקאית על מלוא הסכום בתאריך התנועה${e.bankTxId ? ' ויקושר לתנועת הבנק' : ''}.</div>` : ''}
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px">
       <label style="font-size:13px;flex:1;min-width:260px">לקוח <div style="display:flex;gap:6px;align-items:center;margin-top:3px"><select class="nq-client" onchange="nqClientChanged()" style="flex:1;padding:6px 8px">${clientOpts}</select><button type="button" class="btn ghost" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="openAddClientForQuote()">+ לקוח חדש</button></div></label>
       <label style="font-size:13px">תאריך <input class="nq-date" type="date" value="${e.date}" style="padding:6px 8px;margin-top:3px"></label>
@@ -1694,7 +1727,7 @@ function renderNewQuote() {
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('newQuoteModal').classList.add('hidden')">ביטול</button>
       <button class="btn primary" onclick="nqPreviewPdf(this)">👁 תצוגה מקדימה מעוצבת</button>
-      <button class="btn success" onclick="createNewQuote(this)">✓ צור הצעת מחיר</button>
+      <button class="btn success" onclick="createNewQuote(this)">✓ ${isIncome ? 'צור ' + (DOC_TYPE_NAMES[e.type] || 'מסמך') : 'צור הצעת מחיר'}</button>
     </div>
   </div>`;
   m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
@@ -1705,16 +1738,37 @@ window.nqPreviewPdf = async (btn) => {
   const items = e.items.map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
   const st = document.getElementById('nqStatus');
   if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות לתצוגה.</span>'; return; }
-  await openDesignedPdf('/api/documents/preview-pdf', { type: 10, clientId: e.clientId || null, clientName: e.clientName || null, items, description: e.subject, date: e.date, remarks: e.remarks }, { statusEl: st, btn });
+  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type || 10, clientId: e.clientId || null, clientName: e.clientName || null, items, description: e.subject, date: e.date, remarks: e.remarks }, { statusEl: st, btn });
 };
 window.createNewQuote = async (btn) => {
   nqSync(); const e = _nq;
   const items = e.items.map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
   if (!items.length) { alert('יש להזין לפחות שורה אחת עם תיאור.'); return; }
   if (!e.clientId && !e.clientName) { alert('יש לבחור לקוח.'); return; }
+  const isIncome = e.type && e.type !== 10;
+  const st = document.getElementById('nqStatus');
+  // --- מסמך הכנסה מאפס (מס-קבלה / קבלה) ---
+  if (isIncome) {
+    const total = items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.price) || 0), 0) * (1 + VAT_RATE);
+    const docName = DOC_TYPE_NAMES[e.type] || 'מסמך';
+    if (!confirm(`ליצור ${docName} על סך ${money(total)} עבור ${e.clientName || 'הלקוח'}?\nהמסמך ייווצר בחשבונית ירוקה ולא ניתן למחיקה (רק לזכות).`)) return;
+    if (btn) btn.disabled = true; if (st) st.innerHTML = `<span class="muted">יוצר ${docName}…</span>`;
+    const payment = [{ type: 4, price: +total.toFixed(2), date: e.date }];
+    const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items, date: e.date, subject: e.subject, remarks: e.remarks, payment };
+    const r = await fetch('/api/documents/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (btn) btn.disabled = false;
+    if (r.ok) {
+      if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצר ${docName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
+      autoDownloadDoc(r.doc?.url);
+      if (e.bankTxId && r.doc) await linkDocToBankTx(e.bankTxId, { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: +total.toFixed(2), url: r.doc.url || null });
+      setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); }, 1300);
+    } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
+    return;
+  }
+  // --- הצעת מחיר (ברירת מחדל) ---
   if (e.sendEmail && !e.email.trim()) { alert('סמנת "שלח במייל" — יש להזין כתובת מייל.'); return; }
   if (e.sendEmail && !confirm(`ליצור את הצעת המחיר ולשלוח אותה במייל ל-${e.email.trim()}?`)) return;
-  const st = document.getElementById('nqStatus'); if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">יוצר הצעת מחיר…</span>';
+  if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">יוצר הצעת מחיר…</span>';
   const body = { clientId: e.clientId || null, clientName: e.clientName || null, items, date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim() };
   const r = await fetch('/api/quotes/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
@@ -3237,6 +3291,8 @@ function bankTr(t) {
   }
 
   const linkBtn = `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="openLinkModal('${t.id}')">🔗 שייך</button>`;
+  // "צור הכנסה" — רק על תנועות זכות (הכנסה): מפיק מס-קבלה/קבלה מחשבונית פתוחה תואמת או מסמך חדש
+  const incomeBtn = credit ? `<button class="btn ghost" style="padding:3px 9px;font-size:12px;color:var(--accent2)" onclick="openCreateIncome('${t.id}')">➕ צור הכנסה</button>` : '';
   const rowStyle = (credit && t.matchStatus === 'unmatched') ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)' : (credit && t.matchStatus === 'ignored' ? 'opacity:.55' : '');
   return `<tr id="btr-${t.id}" style="${rowStyle}">
     <td style="white-space:nowrap">${t.date}</td>
@@ -3247,7 +3303,7 @@ function bankTr(t) {
     <td>${invNo}</td>
     <td>${recNo}</td>
     <td>${notesInput}</td>
-    <td style="white-space:nowrap"><div style="display:flex;gap:5px;flex-wrap:wrap">${action}${linkBtn}</div></td>
+    <td style="white-space:nowrap"><div style="display:flex;gap:5px;flex-wrap:wrap">${action}${incomeBtn}${linkBtn}</div></td>
   </tr>`;
 }
 // כרטיס חשבונית בודדת בתא ההתאמה — שם עסק, סוג+מספר, סכום, קבלה נפרדת, תצוגה+הורדה
@@ -3447,6 +3503,89 @@ window.linkSave = async () => {
   const r = await fetch(`/api/bank/${_linkTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: _linkSel.length ? 'manual' : 'unmatched', matchedInvoices: _linkSel }) }).then(x => x.json()).catch(() => null);
   const m = document.getElementById('linkModal'); if (m) m.classList.add('hidden');
   if (r && r.tx) { const i = _bankList.findIndex(t => t.id === _linkTxId); if (i >= 0) _bankList[i] = r.tx; updateBankRow(r.tx); }
+};
+
+// ============ צור הכנסה מתנועת בנק (זכות) ============
+// מפיק מס-קבלה/קבלה מחשבונית עסקה/מס פתוחה תואמת (סכום זהה או −5% ניכוי מס), או מסמך חדש מאפס.
+let _incOpenDocs = null, _incCtx = null, _incQuery = '';
+const incTargetFor = (srcType) => Number(srcType) === 300 ? 320 : 400; // עסקה→מס-קבלה, מס→קבלה
+function incMatchKind(A, X) {
+  if (!A || !X) return null;
+  if (Math.abs(A - X) <= Math.max(2, A * 0.01)) return { kind: 'exact', withheld: 0 };
+  if (Math.abs(X - A * 0.95) <= Math.max(2, A * 0.012)) return { kind: 'wh', withheld: +(A - X).toFixed(2) };
+  return null;
+}
+function txIsoDate(txId) { const d = (_bankList.find(t => t.id === txId) || {}).date || ''; return d.split('/').reverse().join('-'); }
+window.openCreateIncome = async (txId) => {
+  const tx = (_bankList || []).find(t => t.id === txId); if (!tx) return;
+  _incCtx = { txId, X: Number(tx.absAmount) || 0 }; _incQuery = '';
+  let m = document.getElementById('incModal');
+  if (!m) { m = document.createElement('div'); m.id = 'incModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,95vw);max-height:90vh;overflow:auto"><div class="empty">טוען חשבוניות פתוחות…</div></div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  if (!_incOpenDocs) { const r = await api('/api/open-invoices').catch(() => ({ docs: [] })); _incOpenDocs = r.docs || []; }
+  renderCreateIncome();
+};
+function renderCreateIncome() {
+  const m = document.getElementById('incModal'); if (!m || !_incCtx) return;
+  const { txId, X } = _incCtx;
+  const docs = _incOpenDocs || [];
+  const matches = [];
+  for (const d of docs) { const A = Number(d.amountDue ?? d.amount) || 0; const mk = incMatchKind(A, X); if (mk) matches.push({ d, ...mk, A }); }
+  matches.sort((a, b) => (a.kind === 'exact' ? 0 : 1) - (b.kind === 'exact' ? 0 : 1) || Math.abs(a.A - X) - Math.abs(b.A - X));
+  const tgtName = (srcType) => DOC_TYPE_SHORT[incTargetFor(srcType)] || 'מסמך';
+  const matchRow = (mm) => {
+    const d = mm.d;
+    const tag = mm.kind === 'wh'
+      ? `<span class="tag" style="background:#fff3d6;color:var(--warn);font-size:10px">−5% ניכוי מס</span>`
+      : `<span class="tag" style="background:#e7f7ee;color:var(--accent2);font-size:10px">סכום זהה</span>`;
+    const extra = mm.kind === 'wh' ? ` · התקבל ${money(X)} + ניכוי ${money(mm.withheld)}` : '';
+    return `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)">
+      <span style="flex:1">${tag} ${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${money(mm.A)}${extra}</span>
+      <button class="btn success" style="padding:3px 12px;font-size:11.5px;white-space:nowrap" onclick="incProduce('${d.id}',${d.type},'${txId}',${X},${mm.kind === 'wh' ? 'true' : 'false'})">הפק ${tgtName(d.type)} ←</button></div>`;
+  };
+  const listDocs = docs.filter(d => !_incQuery || String(d.number || '').includes(_incQuery) || (d.clientName || '').includes(_incQuery)).slice(0, 60);
+  const pickRow = (d) => `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--line)">
+      <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${money(Number(d.amountDue ?? d.amount) || 0)}</span>
+      <button class="btn ghost" style="padding:3px 10px;font-size:11.5px;white-space:nowrap" onclick="incProduce('${d.id}',${d.type},'${txId}',${X},false)">בחר → ${tgtName(d.type)}</button></div>`;
+  const txDate = (_bankList.find(t => t.id === txId) || {}).date || '';
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,95vw);max-height:90vh;overflow:auto">
+    <h3>➕ צור הכנסה — ${txDate} · ${money(X)}</h3>
+    <p class="muted" style="font-size:12.5px;margin:2px 0 10px">בחר חשבונית עסקה/מס פתוחה כדי להפיק לה מסמך-המשך (מס-קבלה / קבלה), או צור מסמך חדש לגמרי. התקבול והתאריך ימולאו לפי התנועה.</p>
+    ${matches.length ? `<div style="border:1px solid var(--accent);border-radius:10px;padding:8px 10px;background:var(--panel2);margin-bottom:10px">
+      <b style="font-size:13px">🎯 התאמות מוצעות לסכום ${money(X)}</b>${matches.map(matchRow).join('')}</div>`
+      : `<div class="muted" style="font-size:12.5px;margin-bottom:10px">לא נמצאה חשבונית פתוחה בסכום ${money(X)} (או ${money(+(X / 0.95).toFixed(2))} עם ניכוי 5%). בחר ידנית מהרשימה או צור מסמך חדש.</div>`}
+    <details ${matches.length ? '' : 'open'}><summary style="cursor:pointer;font-weight:600;font-size:13px">📋 כל החשבוניות הפתוחות (${docs.length})</summary>
+      <input placeholder="חפש לפי מספר / לקוח…" style="width:100%;margin:8px 0" oninput="incSearch(this.value)">
+      <div id="incList">${listDocs.map(pickRow).join('') || '<span class="muted">אין.</span>'}</div>
+    </details>
+    <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+      <b style="font-size:13px">מסמך חדש לגמרי</b>
+      <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn primary" style="padding:5px 12px;font-size:12.5px" onclick="incNewDoc('${txId}',320,${X})">חשבונית מס-קבלה חדשה</button>
+        <button class="btn primary" style="padding:5px 12px;font-size:12.5px" onclick="incNewDoc('${txId}',400,${X})">קבלה חדשה</button>
+      </div>
+    </div>
+    <div class="modal-actions" style="margin-top:14px"><button class="btn ghost" onclick="document.getElementById('incModal').classList.add('hidden')">סגור</button></div>
+  </div>`;
+}
+window.incSearch = (q) => { _incQuery = q || ''; const box = document.getElementById('incList'); if (!box || !_incCtx) return; const { txId } = _incCtx; const tgtName = (s) => DOC_TYPE_SHORT[incTargetFor(s)] || 'מסמך'; const docs = (_incOpenDocs || []).filter(d => !_incQuery || String(d.number || '').includes(_incQuery) || (d.clientName || '').includes(_incQuery)).slice(0, 60); box.innerHTML = docs.map(d => `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--line)"><span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${money(Number(d.amountDue ?? d.amount) || 0)}</span><button class="btn ghost" style="padding:3px 10px;font-size:11.5px;white-space:nowrap" onclick="incProduce('${d.id}',${d.type},'${txId}',${_incCtx.X},false)">בחר → ${tgtName(d.type)}</button></div>`).join('') || '<span class="muted">אין תוצאות.</span>'; };
+// הפקת מסמך-המשך מחשבונית פתוחה, עם תאריך+תקבול לפי התנועה, וקישור לבנק
+window.incProduce = (docId, srcType, txId, X, isWh) => {
+  const im = document.getElementById('incModal'); if (im) im.classList.add('hidden');
+  openDeriveEditor(docId, incTargetFor(srcType), true, { date: txIsoDate(txId) || todayIso(), bankReceived: Number(X) || 0, withholding: isWh === true || isWh === 'true', bankTxId: txId });
+};
+// מסמך הכנסה חדש מאפס (מס-קבלה/קבלה) — דרך עורך המסמך החדש, עם קישור לבנק
+window.incNewDoc = async (txId, type, X) => {
+  const im = document.getElementById('incModal'); if (im) im.classList.add('hidden');
+  const m = document.getElementById('newQuoteModal') || (() => { const x = document.createElement('div'); x.id = 'newQuoteModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
+  if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
+  const exVat = +((Number(X) || 0) / (1 + VAT_RATE)).toFixed(2);
+  _nq = { type: Number(type), bankTxId: txId, clientId: '', clientName: '', date: txIsoDate(txId) || todayIso(), subject: '', remarks: '', email: '', sendEmail: false, items: [{ description: 'הכנסה', quantity: 1, price: exVat }] };
+  renderNewQuote();
 };
 window.openBankImport = () => {
   let m = document.getElementById('bankModal');

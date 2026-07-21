@@ -505,6 +505,33 @@ add('POST', /^\/api\/quotes\/create$/, async (req, res, _p, _q, body) => {
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// POST /api/documents/create { type, clientId?, clientName?, items, date?, subject?, remarks?, payment? }
+// יצירת מסמך חדש מאפס (מס-קבלה / קבלה / חשבונית מס וכו') — כולל תקבולים
+add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const type = Number(body.type);
+    if (!type) return json(res, { error: 'חסר סוג מסמך' }, 400);
+    const items = (Array.isArray(body.items) ? body.items : [])
+      .map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }))
+      .filter(it => it.description);
+    if (!items.length) return json(res, { error: 'אין שורות במסמך' }, 400);
+    const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim(), add: true };
+    const opts = { type, client, items, description: body.subject || body.description || '', remarks: body.remarks || null };
+    if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (Array.isArray(body.payment) && body.payment.length) {
+      opts.payment = body.payment.map(p => {
+        const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
+        if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum);
+        if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName);
+        return row;
+      }).filter(p => Math.abs(p.price) > 0);
+    }
+    const doc = await greenInvoice.createDocument(opts);
+    json(res, { ok: true, doc });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // POST /api/quotes/close-bulk { ids } — סגירת כמה הצעות מחיר
 add('POST', /^\/api\/quotes\/close-bulk$/, async (req, res, _p, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
