@@ -14,7 +14,7 @@ import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByC
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
 import { parseBank, extractAccountBalance } from './bankParser.js';
-import { matchCredits, attachReceipts } from './bankMatch.js';
+import { matchCredits, matchDebits, attachReceipts } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
@@ -1701,15 +1701,23 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   }
   const parsed = parseBank(text);
   if (!parsed.length) return json(res, { ok: true, added: 0, total: 0, accountBalance: acctBal || null, message: acctBal ? `עודכנה יתרת עו"ש: ${acctBal.balance}` : 'לא זוהו תנועות בטקסט' });
-  // טווח תאריכים לשליפת חשבוניות
-  let invoices = [], receipts = [];
+  // טווח תאריכים לשליפת חשבוניות (הכנסה) + הוצאות (ספקים) להתאמה אוטומטית בשני הצדדים
+  let invoices = [], receipts = [], expenses = [];
   const iso = parsed.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
   if (greenInvoice.haveCredentials() && iso.length) {
     const from = shiftISODays(iso[0], -75), to = shiftISODays(iso[iso.length - 1], 5);
     try { const inc = await greenInvoice.incomeForRange(from, to); invoices = inc.docs || []; } catch (e) { /* נמשיך בלי התאמה */ }
     try { receipts = await greenInvoice.receiptsForRange(from, to); } catch (e) { /* קבלות אופציונליות */ }
+    try { expenses = await greenInvoice.expensesInRange(from, to); } catch (e) { /* הוצאות אופציונליות */ }
   }
   const matched = attachReceipts(matchCredits(parsed, invoices), receipts);
+  // התאמת צד ההוצאות: חשבוניות ספקים ↔ תנועות חובה (אוטומטי כמו בהכנסות)
+  try {
+    for (const dm of matchDebits(parsed, expenses)) {
+      const t = matched[dm.i];
+      if (t) { t.matchStatus = dm.matchStatus; t.matchedInvoices = dm.matchedInvoices; t.suggestions = dm.suggestions; }
+    }
+  } catch { /* לא חוסם ייבוא */ }
   const db = load();
   db.bankTx = db.bankTx || [];
   const bySig = new Map(db.bankTx.filter(t => !companyId || t.companyId === companyId).map(t => [t.sig, t]));
@@ -1720,6 +1728,10 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
     if (ex) {
       // תנועה קיימת — נשלים יתרה רצה (balance) אם חסרה, כדי שעו"ש יתעדכן גם בלי כותרת
       if (t.balance != null && ex.balance !== t.balance) { ex.balance = t.balance; backfilled++; }
+      // רענון התאמת חובה על תנועות קיימות שטרם הותאמו ידנית (כדי שהתאמת ההוצאות תחול גם על מה שכבר יובא)
+      if (ex.direction === 'debit' && ex.matchStatus !== 'manual') {
+        ex.matchStatus = t.matchStatus; ex.matchedInvoices = t.matchedInvoices || []; ex.suggestions = t.suggestions || [];
+      }
       continue;
     }
     const rec = {
@@ -1734,7 +1746,8 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   }
   save(db);
   const credits = matched.filter(t => t.direction === 'credit');
-  json(res, { ok: true, added, backfilled, total: parsed.length, credits: credits.length, autoMatched: credits.filter(t => t.matchStatus === 'auto').length, invoicesLoaded: invoices.length, accountBalance: acctBal || null });
+  const debits = matched.filter(t => t.direction === 'debit');
+  json(res, { ok: true, added, backfilled, total: parsed.length, credits: credits.length, autoMatched: credits.filter(t => t.matchStatus === 'auto').length, debits: debits.length, debitMatched: debits.filter(t => t.matchStatus === 'auto').length, invoicesLoaded: invoices.length, expensesLoaded: expenses.length, accountBalance: acctBal || null });
 });
 
 // GET /api/bank/balance?companyId= — יתרת עו"ש הרשמית האחרונה שנקלטה

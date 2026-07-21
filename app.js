@@ -3335,7 +3335,7 @@ async function renderBank(c, soft) {
     : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
   c.innerHTML = `<div class="panel">
     <div class="row-between">
-      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמת תנועות הבנק לחשבוניות ההכנסה מחשבונית ירוקה</span></div>
+      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמה אוטומטית: תנועות זכות ↔ חשבוניות הכנסה · תנועות חובה ↔ חשבוניות ספקים</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn success" onclick="approveAllStrong(this)">✓ אשר את כל ההתאמות המדויקות</button>
         <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
@@ -3354,7 +3354,7 @@ function bankTr(t) {
   const amt = `${credit ? '' : '−'}${money(t.absAmount)}`;
   const esc = (u) => String(u).replace(/'/g, '%27');
   const mis = t.matchedInvoices || [];
-  const isMatched = credit && mis.length && (t.matchStatus === 'auto' || t.matchStatus === 'manual');
+  const isMatched = mis.length && (t.matchStatus === 'auto' || t.matchStatus === 'manual'); // זכות או חובה
   const notesInput = `<input value="${(t.notes || '').replace(/"/g, '&quot;')}" placeholder="הערה…" onchange="saveBankNotes('${t.id}', this.value)" style="width:120px;padding:4px 7px;font-size:12px"/>`;
   const stack = (arr) => arr.map(x => `<div style="padding:2px 0${arr.length > 1 ? ';border-bottom:1px dashed var(--line)' : ''}">${x}</div>`).join('');
   // תצוגה 👁 + הורדה ↓ צמודים לשם המסמך (במקום עמודות נפרדות)
@@ -3380,11 +3380,12 @@ function bankTr(t) {
     const conf = bankConfidence(t);
     const confBadge = t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'מדויק' : 'לבדיקה'}</span>` : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '');
     action = `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
-  } else if (credit && t.matchStatus === 'ignored') {
+  } else if (t.matchStatus === 'ignored') {
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
     invNo = '<span class="muted">ללא התאמה</span>';
     action = `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',false)">החזר</button>`;
-  } else if (credit) {
+  } else if (t.matchStatus === 'unmatched' || (t.suggestions || []).length) {
+    // לא מותאם — זכות (חשבוניות הכנסה) או חובה (חשבוניות ספקים). מציג הצעות ללחיצה.
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
     const sugg = (t.suggestions || []).map(s => { const j = encodeURIComponent(JSON.stringify(s)); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
     invNo = `<span class="tag miss" style="font-size:10px">לא מותאם</span>${sugg ? `<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;max-width:280px">${sugg}</div>` : ''}`;
@@ -3396,7 +3397,7 @@ function bankTr(t) {
   const linkBtn = `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="openLinkModal('${t.id}')">🔗 שייך</button>`;
   // "צור הכנסה" — רק על תנועות זכות (הכנסה): מפיק מס-קבלה/קבלה מחשבונית פתוחה תואמת או מסמך חדש
   const incomeBtn = credit ? `<button class="btn ghost" style="padding:3px 9px;font-size:12px;color:var(--accent2)" onclick="openCreateIncome('${t.id}')">➕ צור הכנסה</button>` : '';
-  const rowStyle = (credit && t.matchStatus === 'unmatched') ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)' : (credit && t.matchStatus === 'ignored' ? 'opacity:.55' : '');
+  const rowStyle = (t.matchStatus === 'unmatched') ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)' : (t.matchStatus === 'ignored' ? 'opacity:.55' : '');
   return `<tr id="btr-${t.id}" style="${rowStyle}">
     <td style="white-space:nowrap">${t.date}</td>
     <td style="white-space:nowrap;color:${credit ? 'var(--accent2)' : 'var(--danger)'};font-weight:600">${amt}</td>
@@ -3739,7 +3740,8 @@ window.doBankImport = async (btn) => {
     btn.disabled = false; btn.textContent = 'ייבא והתאם';
     if (r.error) { if (status) status.innerHTML = `<span style="color:var(--danger)">${r.error}</span>`; return; }
     const balMsg = r.accountBalance ? ` · יתרת עו"ש עודכנה ל-${money(r.accountBalance.balance)}${r.accountBalance.date ? ' (' + r.accountBalance.date + ')' : ''}` : '';
-    if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות · מתוך ${r.credits} זכות, ${r.autoMatched} הותאמו אוטומטית.${balMsg}</span>`;
+    const debitMsg = r.debitMatched ? ` · חובה: ${r.debitMatched} הותאמו לחשבוניות ספקים` : '';
+    if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות · זכות: ${r.autoMatched} הותאמו אוטומטית${debitMsg}.${balMsg}</span>`;
     await renderBank($('#content'));
     setTimeout(() => { const mm = document.getElementById('bankModal'); if (mm) mm.classList.add('hidden'); }, 1400);
   } catch (e) {

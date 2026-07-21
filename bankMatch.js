@@ -114,6 +114,48 @@ export function matchCredits(txns, invoices) {
   });
 }
 
+// ===== צד ההוצאות: התאמת תנועות חובה לחשבוניות ספקים (הוצאות מחשבונית ירוקה) =====
+function scoreExpense(tx, exp) {
+  let score = 0; const reasons = [];
+  if (tx.invoiceNumber && exp.number != null && String(exp.number) === String(tx.invoiceNumber)) { score += 100; reasons.push('מספר חשבונית'); }
+  const ak = amountKind(tx.absAmount, exp.amountIncVat);
+  if (ak === 'exact') { score += 50; reasons.push('סכום זהה'); }
+  else if (ak === 'wh') { score += 45; reasons.push('סכום פחות 5% (ניכוי מס)'); }
+  if (tx.nameHint && exp.supplierName && nameMatch(tx.nameHint, exp.supplierName)) { score += 40; reasons.push('שם ספק'); }
+  const dd = daysBetween(tx.date, exp.date);
+  if (dd <= 7) score += 12; else if (dd <= 30) score += 6;
+  return { score, reasons, amountKind: ak };
+}
+const toExp = (e, extra = {}) => ({ id: e.id, number: e.number, type: e.type, clientName: e.supplierName || '—', amount: e.amountIncVat ?? e.amount, date: e.date, url: e.url || null, kind: 'expense', ...extra });
+
+// מחזיר מערך של { i, matchStatus, matchedInvoices, suggestions } עבור אינדקסי תנועות החובה בלבד
+export function matchDebits(txns, expenses) {
+  const used = new Set(); const result = new Map();
+  const debits = []; txns.forEach((t, i) => { if (t.direction === 'debit') debits.push({ t, i }); });
+  const pairs = [];
+  debits.forEach(({ t, i }) => (expenses || []).forEach(exp => {
+    const s = scoreExpense(t, exp);
+    const strong = s.amountKind !== null || s.reasons.includes('מספר חשבונית');
+    if (strong && s.score >= 45) pairs.push({ i, exp, ...s });
+  }));
+  pairs.sort((a, b) => b.score - a.score);
+  for (const p of pairs) {
+    if (result.has(p.i) || used.has(p.exp.id)) continue;
+    result.set(p.i, { matchStatus: 'auto', matchedInvoices: [toExp(p.exp, { reasons: p.reasons })], suggestions: [] });
+    used.add(p.exp.id);
+  }
+  const out = [];
+  for (const { t, i } of debits) {
+    const r = result.get(i);
+    if (r) { out.push({ i, ...r }); continue; }
+    const sugg = (expenses || []).map(exp => ({ exp, ...scoreExpense(t, exp) }))
+      .filter(s => s.score >= 40 && !used.has(s.exp.id))
+      .sort((a, b) => b.score - a.score).slice(0, 5).map(s => toExp(s.exp, { reasons: s.reasons, score: s.score }));
+    out.push({ i, matchStatus: 'unmatched', matchedInvoices: [], suggestions: sugg });
+  }
+  return out;
+}
+
 // קישור קבלה (סוג 400) לכל חשבונית מס (סוג 305) לפי לקוח+סכום
 export function attachReceipts(matched, receipts) {
   if (!receipts || !receipts.length) return matched;
@@ -127,4 +169,4 @@ export function attachReceipts(matched, receipts) {
   return matched;
 }
 
-export default { scoreMatch, matchCredits, attachReceipts };
+export default { scoreMatch, matchCredits, matchDebits, attachReceipts };
