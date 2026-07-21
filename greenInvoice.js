@@ -352,8 +352,9 @@ export async function openQuotes({ months = 36 } = {}) {
     const to = new Date(); const from = new Date(); from.setMonth(from.getMonth() - months);
     const items = await documentsInRange(from.toISOString().slice(0, 10), to.toISOString().slice(0, 10), [10]);
     return items.filter(d => Number(d.status) === 0).map(d => {
-      const amount = num(d.amount ?? d.total ?? d.sum);
-      return { id: d.id, number: d.number, type: d.type, date: d.documentDate, clientName: d.client?.name || d.clientName || '—', description: d.description || '', amount, status: d.status, url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null) };
+      const amount = num(d.amount ?? d.total ?? d.sum); // כולל מע"מ
+      const vat = d.vat != null ? num(d.vat) : amount - amount / 1.18; // 18% אם לא סופק
+      return { id: d.id, number: d.number, type: d.type, date: d.documentDate, clientName: d.client?.name || d.clientName || '—', description: d.description || '', amount, amountIncVat: amount, amountExVat: amount - vat, vat, status: d.status, url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null) };
     });
   });
 }

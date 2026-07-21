@@ -118,13 +118,13 @@ export function matchCredits(txns, invoices) {
 function scoreExpense(tx, exp) {
   let score = 0; const reasons = [];
   if (tx.invoiceNumber && exp.number != null && String(exp.number) === String(tx.invoiceNumber)) { score += 100; reasons.push('מספר חשבונית'); }
-  const ak = amountKind(tx.absAmount, exp.amountIncVat);
-  if (ak === 'exact') { score += 50; reasons.push('סכום זהה'); }
-  else if (ak === 'wh') { score += 45; reasons.push('סכום פחות 5% (ניכוי מס)'); }
+  // בהוצאות (חשבוניות ספק) אין ניכוי מס במקור — התאמה אוטומטית רק לפי סכום זהה (+ תאריך), לא פחות 5%
+  const exact = amountKind(tx.absAmount, exp.amountIncVat) === 'exact';
+  if (exact) { score += 50; reasons.push('סכום זהה'); }
   if (tx.nameHint && exp.supplierName && nameMatch(tx.nameHint, exp.supplierName)) { score += 40; reasons.push('שם ספק'); }
   const dd = daysBetween(tx.date, exp.date);
   if (dd <= 7) score += 12; else if (dd <= 30) score += 6;
-  return { score, reasons, amountKind: ak };
+  return { score, reasons, amountKind: exact ? 'exact' : null };
 }
 const toExp = (e, extra = {}) => ({ id: e.id, number: e.number, type: e.type, clientName: e.supplierName || '—', amount: e.amountIncVat ?? e.amount, date: e.date, url: e.url || null, kind: 'expense', description: e.description || e.category || '', ...extra });
 

@@ -1794,6 +1794,32 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   json(res, { ok: true, added, backfilled, total: parsed.length, credits: credits.length, autoMatched: credits.filter(t => t.matchStatus === 'auto').length, debits: debits.length, debitMatched: debits.filter(t => t.matchStatus === 'auto').length, invoicesLoaded: invoices.length, expensesLoaded: expenses.length, accountBalance: acctBal || null });
 });
 
+// POST /api/bank/rematch { companyId } — הרצת התאמה אוטומטית מחדש של תנועות חובה על התנועות הקיימות (בלי העלאה חוזרת)
+add('POST', /^\/api\/bank\/rematch$/, async (req, res, _p, _q, body) => {
+  const companyId = body?.companyId || null;
+  const db = load();
+  const txns = (db.bankTx || []).filter(t => !companyId || t.companyId === companyId);
+  if (!txns.length) return json(res, { ok: true, updated: 0, message: 'אין תנועות' });
+  const iso = txns.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
+  let expenses = [];
+  if (greenInvoice.haveCredentials() && iso.length) {
+    const from = shiftISODays(iso[0], -75), to = shiftISODays(iso[iso.length - 1], 5);
+    try { expenses = await greenInvoice.expensesInRange(from, to); } catch { /* בלי התאמה */ }
+  }
+  try { const _notes = db.expenseNotes || {}; if (Object.keys(_notes).length) expenses.forEach(e => { if (_notes[e.id]) e.description = _notes[e.id]; }); } catch { }
+  const dmap = new Map();
+  for (const dm of matchDebits(txns, expenses)) dmap.set(dm.i, dm);
+  let updated = 0;
+  txns.forEach((t, i) => {
+    if (t.direction !== 'debit' || t.matchStatus === 'manual' || t.matchStatus === 'ignored') return; // לא נוגעים בידני/מסומן
+    const dm = dmap.get(i);
+    if (dm) { t.matchStatus = dm.matchStatus; t.matchedInvoices = dm.matchedInvoices || []; t.suggestions = dm.suggestions || []; updated++; }
+  });
+  save(db);
+  const debits = txns.filter(t => t.direction === 'debit');
+  json(res, { ok: true, updated, debits: debits.length, debitMatched: debits.filter(t => t.matchStatus === 'auto').length, expensesLoaded: expenses.length });
+});
+
 // GET /api/bank/balance?companyId= — יתרת עו"ש הרשמית האחרונה שנקלטה
 add('GET', /^\/api\/bank\/balance$/, (req, res, _p, q) => {
   const db = load();

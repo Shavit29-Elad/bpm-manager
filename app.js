@@ -1857,14 +1857,16 @@ async function renderQuotes(c) {
   c.innerHTML = `<div class="panel"><div class="empty">טוען הצעות מחיר…</div></div>`;
   const r = await api('/api/open-quotes').catch(() => ({ docs: [], error: 'שגיאת טעינה' }));
   const docs = r.docs || [];
-  const total = docs.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const total = docs.reduce((s, d) => s + (Number(d.amountIncVat ?? d.amount) || 0), 0);
+  const totalEx = docs.reduce((s, d) => s + (Number(d.amountExVat ?? d.amount) || 0), 0);
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>הצעות מחיר פתוחות</h2>
-      <span class="muted">${docs.length} הצעות · ${money(total)}. סמן הצעות וסגור אותן יחד, או הפק מכל אחת מסמך המשך.</span></div>
+      <span class="muted">${docs.length} הצעות · ${money(totalEx)} ללא מע"מ · ${money(total)} כולל מע"מ. סמן הצעות וסגור אותן יחד, או הפק מכל אחת מסמך המשך.</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" onclick="openNewQuote()">+ הצעת מחיר חדשה</button><button class="btn ghost" id="closeSelBtn" onclick="quoteCloseSelected()" disabled>🔒 סגור נבחרות</button></div></div>
     ${r.error ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(r.error)}</div>` : ''}
-    ${docs.length ? `<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th style="width:34px"><input type="checkbox" onchange="quoteToggleAll(this.checked)"/></th><th>תאריך</th><th>מספר</th><th>לקוח</th><th>תיאור</th><th>סכום</th><th></th></tr></thead>
-      <tbody>${docs.map(quoteRow).join('')}</tbody></table></div>`
+    ${docs.length ? `<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th style="width:34px"><input type="checkbox" onchange="quoteToggleAll(this.checked)"/></th><th>תאריך</th><th>מספר</th><th>לקוח</th><th>תיאור</th><th>סכום ללא מע"מ</th><th>סכום כולל מע"מ</th><th></th></tr></thead>
+      <tbody>${docs.map(quoteRow).join('')}</tbody>
+      <tfoot><tr style="background:var(--panel2)"><td colspan="5"><b>סה"כ</b></td><td><b>${money(totalEx)}</b></td><td><b>${money(total)}</b></td><td></td></tr></tfoot></table></div>`
       : `<div class="empty">אין הצעות מחיר פתוחות 👌</div>`}
   </div>`;
 }
@@ -2045,7 +2047,8 @@ function quoteRow(d) {
     <td style="text-align:center"><input type="checkbox" class="qchk" value="${d.id}" onchange="quoteSelChanged()"/></td>
     <td style="white-space:nowrap">${fmtDate(d.date)}</td><td>#${d.number}</td>
     <td>${escapeHtml(d.clientName || '')}</td><td>${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</td>
-    <td style="white-space:nowrap;font-weight:600">${money(d.amount)}</td>
+    <td style="white-space:nowrap">${money(d.amountExVat ?? d.amount)}</td>
+    <td style="white-space:nowrap;font-weight:600">${money(d.amountIncVat ?? d.amount)}</td>
     <td style="text-align:left"><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">${pv}${dup}${follow}${close}</div></td></tr>`;
 }
 window.quoteToggleAll = (on) => { document.querySelectorAll('.qchk').forEach(x => { x.checked = on; }); quoteSelChanged(); };
@@ -3574,6 +3577,15 @@ async function bankAction(id, body) {
   const tx = r && r.tx;
   if (tx) { const i = _bankList.findIndex(t => t.id === id); if (i >= 0) _bankList[i] = tx; updateBankRow(tx); }
 }
+window.rematchBank = async (btn) => {
+  if (btn) { btn.disabled = true; btn.textContent = 'מריץ התאמה…'; }
+  const r = await fetch(`/api/bank/rematch?companyId=${state.company}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) { btn.disabled = false; btn.textContent = '↻ הרץ התאמה מחדש'; }
+  if (r.error) { alert('שגיאה: ' + r.error); return; }
+  _bankList = null; // לרענן מהשרת
+  const y = window.scrollY; await renderBank($('#content')); window.scrollTo(0, y);
+  alert(`הותאמו מחדש ${r.debitMatched ?? 0} מתוך ${r.debits ?? 0} תנועות חובה (לפי סכום זהה ותאריך, בלי ניכוי 5%).`);
+};
 window.approveAllStrong = async (btn) => {
   const strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
   if (!strong.length) { alert('אין התאמות מדויקות שממתינות לאישור בתצוגה הנוכחית.'); return; }
@@ -3608,6 +3620,7 @@ async function renderBank(c, soft) {
     <div class="row-between">
       <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמה אוטומטית: תנועות זכות ↔ חשבוניות הכנסה · תנועות חובה ↔ חשבוניות ספקים</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ghost" onclick="rematchBank(this)">↻ הרץ התאמה מחדש</button>
         <button class="btn success" onclick="approveAllStrong(this)">✓ אשר את כל ההתאמות המדויקות</button>
         <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
       </div>
