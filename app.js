@@ -2353,8 +2353,8 @@ function draftsSection() {
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn success" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn ghost" onclick="reloadDrafts(this)">↻ רענן</button></div></div>
     <div id="expDropZone" ondragover="expDragOver(event)" ondragleave="expDragLeave(event)" ondrop="expDrop(event)" onclick="pickExpenseFile()" style="border:2px dashed var(--line);border-radius:12px;padding:16px;text-align:center;margin-top:12px;cursor:pointer;transition:border-color .15s,background .15s">
       <div style="font-size:22px">📎⬇️</div>
-      <div style="font-size:13.5px;font-weight:600;margin-top:4px">גרור לכאן קובץ הוצאה (PDF / תמונה) או לחץ לבחירה</div>
-      <div class="muted" style="font-size:11.5px;margin-top:2px">הקובץ יעלה לחשבונית ירוקה ויעבור זיהוי אוטומטי (OCR)</div>
+      <div style="font-size:13.5px;font-weight:600;margin-top:4px">גרור לכאן קבצי הוצאה (PDF / תמונה) — אפשר כמה יחד — או לחץ לבחירה</div>
+      <div class="muted" style="font-size:11.5px;margin-top:2px">כל קובץ יעלה כהוצאה נפרדת לחשבונית ירוקה ויעבור זיהוי אוטומטי (OCR)</div>
     </div>
     ${list.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${list.map(draftCard).join('')}</div>` : `<div class="empty">אין טיוטות ממתינות לאישור.</div>`}`;
 }
@@ -2875,49 +2875,57 @@ window.editExpenseNote = async (id) => {
 // העלאת קובץ חשבונית של קבלן → נכנס לחשבונית ירוקה כטיוטת הוצאה (OCR), ממתין לאישור
 window.pickExpenseFile = () => {
   const inp = document.createElement('input');
-  inp.type = 'file'; inp.accept = '.pdf,.png,.jpg,.jpeg,application/pdf,image/*';
-  inp.onchange = () => { const f = inp.files[0]; if (f) handleExpenseFile(f); };
+  inp.type = 'file'; inp.accept = '.pdf,.png,.jpg,.jpeg,application/pdf,image/*'; inp.multiple = true; // אפשר לבחור כמה קבצים
+  inp.onchange = () => { if (inp.files && inp.files.length) handleExpenseFiles(inp.files); };
   inp.click();
 };
-// גרירת קובץ הוצאה לאזור השחרור
+// גרירת קובצי הוצאה לאזור השחרור (תומך בכמה קבצים)
 window.expDragOver = (e) => { e.preventDefault(); const z = document.getElementById('expDropZone'); if (z) { z.style.borderColor = 'var(--accent)'; z.style.background = 'var(--panel2)'; } };
 window.expDragLeave = (e) => { e.preventDefault(); const z = document.getElementById('expDropZone'); if (z) { z.style.borderColor = 'var(--line)'; z.style.background = ''; } };
-window.expDrop = (e) => { e.preventDefault(); window.expDragLeave(e); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) handleExpenseFile(f); };
-// העלאת קובץ הוצאה לחשבונית ירוקה + מעקב אחר זיהוי אוטומטי (משמש גם בבחירה וגם בגרירה)
-window.handleExpenseFile = async (f) => {
-    if (!f) return;
-    if (!/\.(pdf|png|jpe?g)$/i.test(f.name) && !/(pdf|image)/i.test(f.type || '')) { alert('יש להעלות קובץ PDF או תמונה.'); return; }
-    if (f.size > 10 * 1024 * 1024) { alert('הקובץ גדול מדי (עד 10MB)'); return; }
-    let toast = document.getElementById('expToast');
-    if (!toast) { toast = document.createElement('div'); toast.id = 'expToast'; toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 18px;font-size:14px;z-index:9999;box-shadow:0 6px 24px rgba(0,0,0,.15)'; document.body.appendChild(toast); }
-    toast.style.display = 'block'; toast.innerHTML = `מעלה את "${escapeHtml(f.name)}" לחשבונית ירוקה…`;
-    const data = await fileToB64(f);
-    const r = await fetch('/api/expenses/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileBase64: data, fileName: f.name, mime: f.type || 'application/pdf' }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-    if (r.ok) {
-      // הזיהוי האוטומטי (OCR) של חשבונית ירוקה עשוי לקחת עד ~דקה — לכן נבדוק שוב ושוב עד שהטיוטה מופיעה
-      const baseline = (_drafts || []).length;
-      toast.innerHTML = '✓ הקובץ הועלה! מזהה את החשבונית אוטומטית (OCR)… זה עשוי לקחת עד דקה.';
-      let tries = 0;
-      const poll = async () => {
-        tries++;
-        const dr = await api('/api/expense-drafts?fresh=1').catch(() => null);
-        const list = Array.isArray(dr?.drafts) ? dr.drafts : null;
-        if (list) { _drafts = list; const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection(); }
-        if ((list && list.length > baseline)) {
-          toast.innerHTML = '✓ החשבונית זוהתה ונוספה ל"טיוטות הוצאה לאישור". ה-AI קורא אותה עכשיו…';
-          kickDraftsAi(); // מיד קורא את החשבונית עם AI כדי שהכרטיס והמסך יהיו מוכנים
-          setTimeout(() => { toast.style.display = 'none'; }, 4000);
-        } else if (tries >= 15) {
-          toast.innerHTML = 'הקובץ הועלה בהצלחה. הזיהוי האוטומטי עדיין מתעבד — לחץ "↻ רענן" בעוד רגע כדי לראות אותו.';
-          setTimeout(() => { toast.style.display = 'none'; }, 6000);
-        } else {
-          toast.innerHTML = `✓ הקובץ הועלה! מזהה את החשבונית אוטומטית (OCR)… (${tries*5} שנ')`;
-          setTimeout(poll, 5000);
-        }
-      };
-      setTimeout(poll, 4000);
-    } else { toast.innerHTML = `<span style="color:var(--danger)">שגיאה בהעלאה: ${escapeHtml(String(r.error || ''))}</span>`; setTimeout(() => { toast.style.display = 'none'; }, 5000); }
+window.expDrop = (e) => { e.preventDefault(); window.expDragLeave(e); const fs = e.dataTransfer && e.dataTransfer.files; if (fs && fs.length) handleExpenseFiles(fs); };
+const _expToast = () => { let t = document.getElementById('expToast'); if (!t) { t = document.createElement('div'); t.id = 'expToast'; t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 18px;font-size:14px;z-index:9999;box-shadow:0 6px 24px rgba(0,0,0,.15)'; document.body.appendChild(t); } t.style.display = 'block'; return t; };
+// העלאת קובץ בודד (תאימות לאחור) — מפנה לטיפול הרב-קבצי
+window.handleExpenseFile = (f) => handleExpenseFiles(f ? [f] : []);
+// העלאת כמה קובצי הוצאה — כל קובץ כהוצאה נפרדת + זיהוי אוטומטי (OCR) לכל אחד בנפרד
+window.handleExpenseFiles = async (fileList) => {
+  const all = Array.from(fileList || []);
+  const files = all.filter(f => (/\.(pdf|png|jpe?g)$/i.test(f.name) || /(pdf|image)/i.test(f.type || '')) && f.size <= 10 * 1024 * 1024);
+  const skipped = all.length - files.length;
+  if (!files.length) { alert('יש להעלות קובצי PDF או תמונה (עד 10MB לכל קובץ).'); return; }
+  const toast = _expToast();
+  const baseline = (_drafts || []).length;
+  let uploaded = 0, failed = 0;
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    toast.innerHTML = files.length > 1 ? `מעלה קובץ ${i + 1} מתוך ${files.length}: "${escapeHtml(f.name)}"…` : `מעלה את "${escapeHtml(f.name)}" לחשבונית ירוקה…`;
+    try {
+      const data = await fileToB64(f);
+      const r = await fetch('/api/expenses/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileBase64: data, fileName: f.name, mime: f.type || 'application/pdf' }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+      if (r.ok) uploaded++; else failed++;
+    } catch { failed++; }
+  }
+  if (!uploaded) { toast.innerHTML = `<span style="color:var(--danger)">שגיאה בהעלאה (${failed} נכשלו).</span>`; setTimeout(() => { toast.style.display = 'none'; }, 5000); return; }
+  toast.innerHTML = `✓ הועלו ${uploaded} קבצים${failed ? ` · ${failed} נכשלו` : ''}${skipped ? ` · ${skipped} דולגו` : ''}. מזהה כל חשבונית אוטומטית (OCR)… זה עשוי לקחת עד דקה.`;
+  let tries = 0;
+  const poll = async () => {
+    tries++;
+    const dr = await api('/api/expense-drafts?fresh=1').catch(() => null);
+    const list = Array.isArray(dr?.drafts) ? dr.drafts : null;
+    if (list) { _drafts = list; const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection(); }
+    const found = list ? Math.max(0, list.length - baseline) : 0;
+    if (list && found >= uploaded) {
+      toast.innerHTML = `✓ ${uploaded} חשבוניות זוהו ונוספו ל"טיוטות הוצאה לאישור". ה-AI קורא אותן עכשיו…`;
+      kickDraftsAi(); setTimeout(() => { toast.style.display = 'none'; }, 4500);
+    } else if (tries >= 24) {
+      toast.innerHTML = `הקבצים הועלו. חלק מהזיהוי עדיין מתעבד (${found}/${uploaded}) — לחץ "↻ רענן" בעוד רגע.`;
+      if (list) kickDraftsAi(); setTimeout(() => { toast.style.display = 'none'; }, 6000);
+    } else {
+      toast.innerHTML = `✓ הועלו ${uploaded} קבצים · זוהו ${found}/${uploaded} (${tries * 5} שנ')…`;
+      setTimeout(poll, 5000);
+    }
+  };
+  setTimeout(poll, 4000);
 };
 // רישום הוצאה של קבלן ישירות בחשבונית ירוקה
 const EXPENSE_DOC_TYPES = [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
