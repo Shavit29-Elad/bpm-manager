@@ -1772,8 +1772,8 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
     if (ex) {
       // תנועה קיימת — נשלים יתרה רצה (balance) אם חסרה, כדי שעו"ש יתעדכן גם בלי כותרת
       if (t.balance != null && ex.balance !== t.balance) { ex.balance = t.balance; backfilled++; }
-      // רענון התאמת חובה על תנועות קיימות שטרם הותאמו ידנית (כדי שהתאמת ההוצאות תחול גם על מה שכבר יובא)
-      if (ex.direction === 'debit' && ex.matchStatus !== 'manual') {
+      // רענון הצעות החובה על תנועות קיימות שלא אושרו/סומנו ידנית (בלי התאמה אוטומטית — רק הצעות)
+      if (ex.direction === 'debit' && ex.matchStatus !== 'manual' && ex.matchStatus !== 'ignored') {
         ex.matchStatus = t.matchStatus; ex.matchedInvoices = t.matchedInvoices || []; ex.suggestions = t.suggestions || [];
       }
       continue;

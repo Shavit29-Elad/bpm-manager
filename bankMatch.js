@@ -128,29 +128,17 @@ function scoreExpense(tx, exp) {
 }
 const toExp = (e, extra = {}) => ({ id: e.id, number: e.number, type: e.type, clientName: e.supplierName || '—', amount: e.amountIncVat ?? e.amount, date: e.date, url: e.url || null, kind: 'expense', description: e.description || e.category || '', ...extra });
 
-// מחזיר מערך של { i, matchStatus, matchedInvoices, suggestions } עבור אינדקסי תנועות החובה בלבד
+// מחזיר מערך של { i, matchStatus, matchedInvoices, suggestions } עבור אינדקסי תנועות החובה בלבד.
+// אין התאמה אוטומטית להוצאות (לפי בקשת המנהל) — כל תנועת חובה נשארת "לא מותאמת" לשיוך ידני,
+// עם רשימת הצעות בלבד (עוזר לשיוך הידני, לא מוחל אוטומטית).
 export function matchDebits(txns, expenses) {
-  const used = new Set(); const result = new Map();
   const debits = []; txns.forEach((t, i) => { if (t.direction === 'debit') debits.push({ t, i }); });
-  const pairs = [];
-  debits.forEach(({ t, i }) => (expenses || []).forEach(exp => {
-    const s = scoreExpense(t, exp);
-    const strong = s.amountKind !== null || s.reasons.includes('מספר חשבונית');
-    if (strong && s.score >= 45) pairs.push({ i, exp, ...s });
-  }));
-  pairs.sort((a, b) => b.score - a.score);
-  for (const p of pairs) {
-    if (result.has(p.i) || used.has(p.exp.id)) continue;
-    result.set(p.i, { matchStatus: 'auto', matchedInvoices: [toExp(p.exp, { reasons: p.reasons })], suggestions: [] });
-    used.add(p.exp.id);
-  }
   const out = [];
   for (const { t, i } of debits) {
-    const r = result.get(i);
-    if (r) { out.push({ i, ...r }); continue; }
+    // הצעות בעלות סיכוי גבוה בלבד: סכום זהה (+ תאריך קרוב לדירוג) או מספר חשבונית — לא שם בלבד
     const sugg = (expenses || []).map(exp => ({ exp, ...scoreExpense(t, exp) }))
-      .filter(s => s.score >= 40 && !used.has(s.exp.id))
-      .sort((a, b) => b.score - a.score).slice(0, 5).map(s => toExp(s.exp, { reasons: s.reasons, score: s.score }));
+      .filter(s => s.amountKind === 'exact' || s.reasons.includes('מספר חשבונית'))
+      .sort((a, b) => b.score - a.score).slice(0, 6).map(s => toExp(s.exp, { reasons: s.reasons, score: s.score }));
     out.push({ i, matchStatus: 'unmatched', matchedInvoices: [], suggestions: sugg });
   }
   return out;

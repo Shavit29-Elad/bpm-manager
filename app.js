@@ -32,6 +32,8 @@ const api = (p) => {
 })();
 
 const TAB_LABELS = { home: '🏠 בית', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים' };
+// התאמת שם לפי כל המילים בשאילתה (בכל מיקום) — עמיד לשמות עם תיאור באמצע, למשל "אורן מושייב" מול "אורן אירועים - אורן מושייב"
+const nameHas = (name, q) => { const toks = String(q || '').trim().split(/\s+/).filter(Boolean); const nm = String(name || ''); return !toks.length || toks.every(t => nm.includes(t)); };
 
 async function boot() {
   const st = await api('/api/auth/status').catch(() => ({ error: 'net' }));
@@ -906,7 +908,7 @@ async function renderClients(c) {
   let _cliSearchTok = 0, _cliSearchTimer = null;
   inp.oninput = () => {
     const v = inp.value.trim();
-    const clients = (state.clientsList || []).filter(cl => !v || (cl.name || '').includes(v));
+    const clients = (state.clientsList || []).filter(cl => nameHas(cl.name, v));
     const listEl = $('#clientsList');
     listEl.innerHTML = clientRows(clients);
     clearTimeout(_cliSearchTimer);
@@ -2157,7 +2159,7 @@ async function renderContractors(c) {
     </div>
   </div>`;
   const inp = $('#supSearch');
-  if (inp) inp.oninput = () => { $('#supList').innerHTML = supplierRows((_suppliers || []).filter(s => !inp.value || (s.name || '').includes(inp.value))); };
+  if (inp) inp.oninput = () => { $('#supList').innerHTML = supplierRows((_suppliers || []).filter(s => nameHas(s.name, inp.value))); };
   kickDraftsAi(); // AI קורא את הטיוטות ברקע כדי שהכרטיסים יציגו ספק/סכום/תיאור והמסך יהיה מוכן מראש
 }
 function contractorCard(x) {
@@ -3586,13 +3588,13 @@ async function bankAction(id, body) {
   if (tx) { const i = _bankList.findIndex(t => t.id === id); if (i >= 0) _bankList[i] = tx; updateBankRow(tx); }
 }
 window.rematchBank = async (btn) => {
-  if (btn) { btn.disabled = true; btn.textContent = 'מריץ התאמה…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'מרענן…'; }
   const r = await fetch(`/api/bank/rematch?companyId=${state.company}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (btn) { btn.disabled = false; btn.textContent = '↻ הרץ התאמה מחדש'; }
+  if (btn) { btn.disabled = false; btn.textContent = '↻ רענן הצעות חובה'; }
   if (r.error) { alert('שגיאה: ' + r.error); return; }
   _bankList = null; // לרענן מהשרת
   const y = window.scrollY; await renderBank($('#content')); window.scrollTo(0, y);
-  alert(`הותאמו מחדש ${r.debitMatched ?? 0} מתוך ${r.debits ?? 0} תנועות חובה (לפי סכום זהה ותאריך, בלי ניכוי 5%).`);
+  alert(`רועננו ${r.updated ?? 0} תנועות חובה — במצב "לא מותאם" עם הצעות לאישור ידני (ללא התאמה אוטומטית, לפי סכום זהה + תאריך).`);
 };
 window.approveAllStrong = async (btn) => {
   const strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
@@ -3628,7 +3630,7 @@ async function renderBank(c, soft) {
     <div class="row-between">
       <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמה אוטומטית: תנועות זכות ↔ חשבוניות הכנסה · תנועות חובה ↔ חשבוניות ספקים</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn ghost" onclick="rematchBank(this)">↻ הרץ התאמה מחדש</button>
+        <button class="btn ghost" onclick="rematchBank(this)">↻ רענן הצעות חובה</button>
         <button class="btn success" onclick="approveAllStrong(this)">✓ אשר את כל ההתאמות המדויקות</button>
         <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
       </div>
@@ -3810,7 +3812,9 @@ window.renderLinkContacts = (q) => {
   const box = document.getElementById('linkClients'); if (!box) return;
   const pool = _linkMode === 'suppliers' ? (_linkSuppliers || []) : (_linkClients || []);
   const icon = _linkMode === 'suppliers' ? '🏭' : '🏢';
-  const list = pool.filter(c => !q || (c.name || '').includes(q)).slice(0, 40);
+  // התאמה לפי כל המילים (בכל מיקום) — כדי ש"אורן מושייב" ימצא את "אורן אירועים - אורן מושייב"
+  const toks = (q || '').trim().split(/\s+/).filter(Boolean);
+  const list = pool.filter(c => { const nm = c.name || ''; return !toks.length || toks.every(t => nm.includes(t)); }).slice(0, 40);
   box.innerHTML = list.length ? list.map(c => `<div class="chat-item" style="margin:0;padding:6px 10px" onclick="linkPickContact('${c.id}','${encodeURIComponent(c.name || '')}')">${icon} ${escapeHtml(c.name)}</div>`).join('') : '<span class="muted">אין תוצאות.</span>';
 };
 // חיפוש ישיר של מסמכים לפי מספר/תיאור — הכנסה (לקוחות) והוצאה (ספקים) יחד
@@ -3841,6 +3845,10 @@ async function linkNumberSearch(term) {
 window.linkAddFromNum = (j) => { linkAdd(j); const { ids } = linkedDocIds(); const nb = document.getElementById('linkNumResults'); if (nb && nb.querySelector('button')) linkNumberSearch(_linkQuery.trim()); };
 window.linkPickContact = async (id, name) => {
   const box = document.getElementById('linkDocs'); if (!box) return;
+  // ניקוי שאילתת החיפוש — כעת מציגים את מסמכי איש הקשר שנבחר (החיפוש היה לפי שם, לא לפי מספר מסמך)
+  _linkQuery = '';
+  const si = document.getElementById('linkClientSearch'); if (si) si.value = '';
+  const nb = document.getElementById('linkNumResults'); if (nb) nb.innerHTML = '';
   box.innerHTML = '<div class="muted" style="font-size:13px">טוען מסמכים…</div>';
   _linkDocsKind = _linkMode === 'suppliers' ? 'expense' : 'income';
   const url = _linkMode === 'suppliers' ? `/api/suppliers/${id}/documents` : `/api/clients/${id}/documents`;
