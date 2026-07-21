@@ -3020,6 +3020,7 @@ window.setBankSort = (key) => {
 
 const DOC_TYPE_SHORT = { 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 300: 'חשבון עסקה', 330: 'זיכוי', 10: 'הצעת מחיר' };
 let _bankList = [];
+let _bankBalance = null;
 
 function bankPeriodMatch(t) {
   const per = state.bankPer || { mode: 'all' };
@@ -3061,23 +3062,29 @@ function bankPeriodControls() {
   return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('all', 'הכל')}${seg('month', 'חודשי')}${seg('year', 'שנתי')}${seg('range', 'טווח')}</div>${extra}</div>`;
 }
 
-// מצב חשבון: עו"ש עדכני (יתרה מהתנועה האחרונה), עד איזה תאריך מעודכן, ומתי הועלה לאחרונה
+// מצב חשבון: עו"ש עדכני. מעדיפים את היתרה הרשמית מכותרת הקובץ (_bankBalance);
+// אם אין — נופלים ליתרה מהתנועה האחרונה שיש בה יתרה.
 function bankAccountStatus() {
   const all = _bankList || [];
-  if (!all.length) return null;
+  const bb = _bankBalance;
+  if (!all.length && !bb) return null;
   const key = (d) => { const m = (d || '').match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}${m[2]}${m[1]}` : '00000000'; };
   const sorted = [...all].sort((a, b) => key(b.date).localeCompare(key(a.date)) || String(b.importedAt || '').localeCompare(String(a.importedAt || '')));
   const withBal = sorted.find(t => t.balance != null);
-  const lastImport = all.map(t => t.importedAt).filter(Boolean).sort().pop();
-  return { balance: withBal ? withBal.balance : null, throughDate: sorted[0] ? sorted[0].date : null, lastImport };
+  const lastImport = [...all.map(t => t.importedAt), bb && bb.importedAt].filter(Boolean).sort().pop();
+  // יתרה קובעת: הכותרת הרשמית אם קיימת, אחרת מהתנועה האחרונה
+  const balance = bb && bb.balance != null ? bb.balance : (withBal ? withBal.balance : null);
+  const balanceDate = bb && bb.date ? bb.date : (sorted[0] ? sorted[0].date : null);
+  return { balance, balanceDate, throughDate: sorted[0] ? sorted[0].date : null, lastImport, official: !!(bb && bb.balance != null) };
 }
 function bankHeaderHtml() {
   const s = bankAccountStatus(); if (!s) return '';
   const fmtDt = (iso) => { if (!iso) return '—'; const d = new Date(iso); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`; };
   const stat = (label, val, color) => `<div class="card" style="padding:11px 14px"><div class="label" style="font-size:12px">${label}</div><div style="font-size:18px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
+  const balLabel = s.official ? 'עו"ש עדכני (יתרת חשבון)' : 'עו"ש עדכני';
   return `<div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin-top:12px">
-    ${stat('עו"ש עדכני', s.balance != null ? money(s.balance) : '—', (s.balance != null && s.balance < 0) ? 'var(--danger)' : 'var(--accent2)')}
-    ${stat('מעודכן עד (תנועה אחרונה)', s.throughDate || '—')}
+    ${stat(balLabel, s.balance != null ? money(s.balance) : '—', (s.balance != null && s.balance < 0) ? 'var(--danger)' : 'var(--accent2)')}
+    ${stat(s.official ? 'יתרה נכונה לתאריך' : 'מעודכן עד (תנועה אחרונה)', s.balanceDate || s.throughDate || '—')}
     ${stat('הועלה לאחרונה', fmtDt(s.lastImport))}
   </div>`;
 }
@@ -3152,6 +3159,7 @@ async function renderBank(c, soft) {
   if (!soft) c.innerHTML = `<div class="panel"><div class="empty">טוען תנועות…</div></div>`;
   const all = await api(`/api/bank?companyId=${state.company}`);
   _bankList = all;
+  _bankBalance = await api(`/api/bank/balance?companyId=${state.company}`).catch(() => null);
   const dir = state.bankFilter || 'credit';
   const rows = bankVisibleRows();
   const summary = `<div id="bankSummary" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(125px,1fr));margin-top:12px;gap:12px">${bankSummaryHtml(rows)}</div>`;
@@ -3400,7 +3408,8 @@ window.doBankImport = async (btn) => {
     const r = await fetch('/api/bank/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, companyId: state.company }) }).then(x => x.json());
     btn.disabled = false; btn.textContent = 'ייבא והתאם';
     if (r.error) { if (status) status.innerHTML = `<span style="color:var(--danger)">${r.error}</span>`; return; }
-    if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות · מתוך ${r.credits} זכות, ${r.autoMatched} הותאמו אוטומטית.</span>`;
+    const balMsg = r.accountBalance ? ` · יתרת עו"ש עודכנה ל-${money(r.accountBalance.balance)}${r.accountBalance.date ? ' (' + r.accountBalance.date + ')' : ''}` : '';
+    if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות · מתוך ${r.credits} זכות, ${r.autoMatched} הותאמו אוטומטית.${balMsg}</span>`;
     await renderBank($('#content'));
     setTimeout(() => { const mm = document.getElementById('bankModal'); if (mm) mm.classList.add('hidden'); }, 1400);
   } catch (e) {

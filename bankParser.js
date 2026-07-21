@@ -143,10 +143,24 @@ export function parseMizrahiExcel(htmlText) {
   return txns;
 }
 
+// חילוץ יתרת החשבון הרשמית מכותרת הקובץ: "יתרה בחשבון: 391,252.69 לתאריך - 16/07/26 14:38"
+// זו היתרה הקובעת (עו"ש) — מדויקת יותר מהיתרה שבשורת התנועה האחרונה (שלרוב ריקה).
+export function extractAccountBalance(text) {
+  const flat = String(text || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(BIDI, '').replace(/\s+/g, ' ');
+  const m = flat.match(/יתרה בחשבון\s*:?\s*(-?[\d,]+\.\d{2})/);
+  if (!m) return null;
+  const balance = parseFloat(m[1].replace(/,/g, ''));
+  if (isNaN(balance)) return null;
+  const dm = flat.slice(m.index).match(/לתאריך\s*-?\s*(\d{2}\/\d{2}\/\d{2,4})(?:\s+(\d{2}:\d{2}))?/);
+  const date = dm ? normDate(dm[1]) : null;
+  const time = dm && dm[2] ? dm[2] : null;
+  return { balance, date, time };
+}
+
 // זיהוי אוטומטי: אם זה טבלת HTML (קובץ אקסל של מזרחי) — פרסר אקסל, אחרת פרסר הדבקה
 export function parseBank(text) {
   if (/<tr[\s>]/i.test(text) || /<table/i.test(text)) return parseMizrahiExcel(text);
   return parseMizrahi(text);
 }
 
-export default { parseMizrahi, parseMizrahiExcel, parseBank };
+export default { parseMizrahi, parseMizrahiExcel, parseBank, extractAccountBalance };

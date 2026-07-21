@@ -13,7 +13,7 @@ import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
-import { parseBank } from './bankParser.js';
+import { parseBank, extractAccountBalance } from './bankParser.js';
 import { matchCredits, attachReceipts } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
@@ -1608,8 +1608,16 @@ function bankSig(t) { return `${t.date}|${t.absAmount}|${t.reference || ''}|${(t
 add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   const text = body?.text || '';
   const companyId = body?.companyId || null;
+  // יתרת עו"ש רשמית מכותרת הקובץ — נשמרת בנפרד ומשמשת כיתרה הקובעת
+  const acctBal = extractAccountBalance(text);
+  if (acctBal) {
+    const db2 = load();
+    db2.bankBalance = (db2.bankBalance || []).filter(b => b.companyId !== companyId);
+    db2.bankBalance.push({ companyId, balance: acctBal.balance, date: acctBal.date, time: acctBal.time || null, importedAt: new Date().toISOString() });
+    save(db2);
+  }
   const parsed = parseBank(text);
-  if (!parsed.length) return json(res, { ok: true, added: 0, total: 0, message: 'לא זוהו תנועות בטקסט' });
+  if (!parsed.length) return json(res, { ok: true, added: 0, total: 0, accountBalance: acctBal || null, message: acctBal ? `עודכנה יתרת עו"ש: ${acctBal.balance}` : 'לא זוהו תנועות בטקסט' });
   // טווח תאריכים לשליפת חשבוניות
   let invoices = [], receipts = [];
   const iso = parsed.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
@@ -1638,7 +1646,14 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   }
   save(db);
   const credits = matched.filter(t => t.direction === 'credit');
-  json(res, { ok: true, added, total: parsed.length, credits: credits.length, autoMatched: credits.filter(t => t.matchStatus === 'auto').length, invoicesLoaded: invoices.length });
+  json(res, { ok: true, added, total: parsed.length, credits: credits.length, autoMatched: credits.filter(t => t.matchStatus === 'auto').length, invoicesLoaded: invoices.length, accountBalance: acctBal || null });
+});
+
+// GET /api/bank/balance?companyId= — יתרת עו"ש הרשמית האחרונה שנקלטה
+add('GET', /^\/api\/bank\/balance$/, (req, res, _p, q) => {
+  const db = load();
+  const b = (db.bankBalance || []).find(x => x.companyId === (q.companyId || null)) || (db.bankBalance || [])[0] || null;
+  json(res, b);
 });
 
 // GET /api/bank?companyId=
