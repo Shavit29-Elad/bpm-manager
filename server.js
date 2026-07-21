@@ -1599,6 +1599,20 @@ add('GET', /^\/api\/clients\/([^/]+)\/documents$/, async (req, res, params) => {
   try { json(res, await greenInvoice.clientDocuments(params[0])); } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/suppliers/:id/documents — מסמכי ההוצאה של ספק (לשיוך ידני בבנק)
+add('GET', /^\/api\/suppliers\/([^/]+)\/documents$/, async (req, res, params) => {
+  try { json(res, await greenInvoice.supplierExpenses(params[0])); } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// GET /api/expenses/quick-search?q= — חיפוש מסמכי הוצאה לפי מספר/תיאור
+add('GET', /^\/api\/expenses\/quick-search$/, async (req, res, _p, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { items: [] });
+  const term = (q.q || '').trim();
+  if (term.length < 2) return json(res, { items: [] });
+  try { json(res, { ok: true, items: await greenInvoice.quickSearchExpenses(term) }); }
+  catch (e) { json(res, { items: [], error: e.message }); }
+});
+
 // ---- בנק: ייבוא תנועות + התאמה לחשבוניות הכנסה ----
 function ddmmyyyyToISO(d) { const m = String(d || '').match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; }
 function shiftISODays(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }

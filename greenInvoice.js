@@ -190,6 +190,23 @@ export async function quickSearchDocuments(term) {
   }));
 }
 
+// חיפוש מסמכי הוצאה (ספקים) לפי מספר/תיאור — לשיוך ידני בבנק
+export async function quickSearchExpenses(term) {
+  const q = String(term || '').trim();
+  if (q.length < 2) return [];
+  const byId = new Map();
+  const collect = (items) => { for (const d of (items || [])) if (d && d.id) byId.set(d.id, mapExpense(d)); };
+  // לפי תיאור
+  try { const r = await api('/expenses/search', { method: 'POST', body: { description: q, page: 1, pageSize: 30, sort: 'documentDate' } }); collect(r.items); } catch { /* ממשיכים */ }
+  // לפי מספר מסמך (אם מספרי)
+  if (/^\d+$/.test(q)) {
+    try { const r = await api('/expenses/search', { method: 'POST', body: { number: Number(q), page: 1, pageSize: 30, sort: 'documentDate' } }); collect(r.items); } catch { /* ממשיכים */ }
+    // גיבוי: חיפוש טקסטואלי על המספר (חלק מהחשבוניות שומרות את המספר בשדה reference)
+    try { const r = await api('/expenses/search', { method: 'POST', body: { search: q, page: 1, pageSize: 30, sort: 'documentDate' } }); collect(r.items); } catch { /* ממשיכים */ }
+  }
+  return [...byId.values()].slice(0, 20);
+}
+
 // חיפוש מסמכים בטווח תאריכים (למעקב תשלומים/התאמות)
 export async function searchDocuments({ fromDate, toDate, page = 1, pageSize = 100 } = {}) {
   return api('/documents/search', {
@@ -592,5 +609,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;
