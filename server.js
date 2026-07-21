@@ -30,6 +30,39 @@ const PUBLIC = __dirname; // בגרסה השטוחה קובצי הממשק יו�
 const STATIC_ALLOW = new Set(['index.html', 'styles.css', 'app.js']);
 const PORT = process.env.PORT || 3000;
 
+// ---- מיפוי זמר → לקוח ברירת-מחדל ----
+// מנרמל שם לצורך השוואה: מסיר רווחים כפולים, גרשיים/מרכאות, ומאחיד סוגים.
+function normName(s) {
+  return String(s || '')
+    .replace(/["'׳״`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim().toLowerCase();
+}
+// מוצא את שם-הלקוח הממופה לזמר (אם קיים במיפוי)
+function mappedClientName(db, artist) {
+  const a = normName(artist);
+  if (!a) return null;
+  const map = db.artistClientMap || [];
+  // התאמה: שם הזמר במיפוי מוכל בשם הזמר של האירוע (או להפך)
+  const hit = map.find(m => {
+    const key = normName(m.artist);
+    return key && (a === key || a.includes(key) || key.includes(a));
+  });
+  return hit ? hit.clientName : null;
+}
+// ממפה שם-לקוח (מהמיפוי) ל-clientId בחשבונית ירוקה
+async function resolveClientByName(name) {
+  if (!name) return null;
+  try {
+    const clients = await greenInvoice.listClients();
+    const target = normName(name);
+    // התאמה מדויקת קודם, אח״כ הכלה דו-כיוונית
+    let hit = clients.find(c => normName(c.name) === target);
+    if (!hit) hit = clients.find(c => { const cn = normName(c.name); return cn && (cn.includes(target) || target.includes(cn)); });
+    return hit ? { clientId: hit.id, clientName: hit.name } : { clientId: null, clientName: name };
+  } catch { return { clientId: null, clientName: name }; }
+}
+
 // ---- קליטת אירוע/ים מטקסט (ווטסאפ / הדבקה ידנית) — תומך בכמה אירועים בהודעה אחת ----
 // קודם ניסיון עם AI (מטפל גם בפורמט חופשי), ואם אין AI/נכשל — פרסור regex מובנה.
 async function ingestText(text, companyId) {
@@ -40,14 +73,28 @@ async function ingestText(text, companyId) {
     try { const ai = await extractEvents(text, 2026); if (ai && ai.length) list = ai; } catch { /* נופל ל-regex */ }
   }
   if (!list || !list.length) list = parseEventMessages(text);
-  const created = list.map(parsed => {
+  // מיפוי זמר→לקוח: נפתור פעם אחת את שמות-הלקוח מול חשבונית ירוקה (מטמון קטן)
+  const nameCache = new Map();
+  const resolveCached = async (nm) => {
+    if (!nameCache.has(nm)) nameCache.set(nm, await resolveClientByName(nm));
+    return nameCache.get(nm);
+  };
+  const created = [];
+  for (const parsed of list) {
     const ctrDetails = (parsed.contractorDetails && parsed.contractorDetails.length)
       ? parsed.contractorDetails
       : (parsed.contractors || []).map(name => ({ name, amount: null }));
+    // מיפוי זמר → לקוח ברירת-מחדל
+    let clientName = null, clientId = null;
+    const mapped = mappedClientName(db, parsed.artist);
+    if (mapped) {
+      const r = await resolveCached(mapped);
+      clientName = r.clientName; clientId = r.clientId;
+    }
     const event = {
       id: id('ev'), companyId: cid,
       ...parsed,
-      client: parsed.artist, clientName: null, clientId: null,
+      client: parsed.artist, clientName, clientId,
       priceSound: parsed.priceSound ?? null, priceExtras: parsed.priceExtras ?? null,
       invoiceStatus: 'pending',
       createdAt: new Date().toISOString(),
@@ -57,8 +104,8 @@ async function ingestText(text, companyId) {
       contractorDetails: ctrDetails,
     };
     upsertEvent(db, event);
-    return event;
-  });
+    created.push(event);
+  }
   save(db);
   return created;
 }
@@ -88,8 +135,31 @@ add('POST', /^\/api\/events\/ingest$/, async (req, res, _p, _q, body) => {
   catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// ---- מיפוי זמר → לקוח ברירת-מחדל (צפייה/עריכה) ----
+// GET /api/artist-map — כל המיפויים
+add('GET', /^\/api\/artist-map$/, (req, res) => json(res, load().artistClientMap || []));
+// POST /api/artist-map — הוספה/עדכון { artist, clientName }
+add('POST', /^\/api\/artist-map$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const artist = String(body?.artist || '').trim();
+  const clientName = String(body?.clientName || '').trim();
+  if (!artist || !clientName) return json(res, { error: 'חסר זמר או שם לקוח' }, 400);
+  db.artistClientMap = db.artistClientMap || [];
+  const i = db.artistClientMap.findIndex(m => normName(m.artist) === normName(artist));
+  if (i >= 0) db.artistClientMap[i].clientName = clientName;
+  else db.artistClientMap.push({ artist, clientName });
+  save(db); json(res, { ok: true, map: db.artistClientMap });
+});
+// DELETE /api/artist-map/:artist — הסרת מיפוי
+add('DELETE', /^\/api\/artist-map\/(.+)$/, (req, res, params) => {
+  const db = load();
+  const target = normName(decodeURIComponent(params[0]));
+  db.artistClientMap = (db.artistClientMap || []).filter(m => normName(m.artist) !== target);
+  save(db); json(res, { ok: true, map: db.artistClientMap });
+});
+
 // POST /api/events  — יצירה ידנית או "אימוץ" אירוע מיומן גוגל לרשומה שניתן לערוך
-add('POST', /^\/api\/events$/, (req, res, _p, _q, body) => {
+add('POST', /^\/api\/events$/, async (req, res, _p, _q, body) => {
   const db = load();
   const b = body || {};
   const companyId = b.companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
@@ -97,6 +167,11 @@ add('POST', /^\/api\/events$/, (req, res, _p, _q, body) => {
   if (b.gcalId) {
     const exist = db.events.find(e => e.gcalId === b.gcalId && e.companyId === companyId);
     if (exist) return json(res, exist);
+  }
+  // מיפוי זמר → לקוח ברירת-מחדל (רק אם לא נבחר לקוח ידנית)
+  if (!b.clientId && !b.clientName) {
+    const mapped = mappedClientName(db, b.artist || b.title);
+    if (mapped) { const r = await resolveClientByName(mapped); b.clientId = r.clientId; b.clientName = r.clientName; }
   }
   const event = {
     id: id('ev'), companyId,
