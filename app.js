@@ -4,7 +4,7 @@ const $ = (s) => document.querySelector(s);
 const money = (n) => (n == null ? '—' : '₪' + Number(n).toLocaleString('he-IL'));
 const api = (p) => fetch(p).then(r => r.json());
 
-const TAB_LABELS = { home: '🏠 בית', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', devrequests: '🛠️ בקשות פיתוח', team: '👥 הצוות', connections: '🔌 חיבורים' };
+const TAB_LABELS = { home: '🏠 בית', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים' };
 
 async function boot() {
   const st = await api('/api/auth/status').catch(() => ({ error: 'net' }));
@@ -197,13 +197,7 @@ const pill = (label, ok, text) =>
 function render() {
   const c = $('#content');
   ({ home: renderHome, events: renderCombined, clients: renderClients, invoicing: renderInvoicing, quotes: renderQuotes, team: renderTeam,
-     bank: renderBank, contractors: renderContractors, payroll: renderPayroll, devrequests: renderDevRequests, connections: renderConnections }[state.tab])(c);
-}
-
-// ---- בקשות פיתוח (לשונית ייעודית — מציגה את הבקשות שנוצרות מסיכום שיחות עם איריס/הצוות) ----
-async function renderDevRequests(c) {
-  c.innerHTML = `<div class="panel" id="requestsBody"><div class="empty">טוען…</div></div>`;
-  renderRequestsBody($('#requestsBody'));
+     bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----

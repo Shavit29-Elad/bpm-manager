@@ -1835,7 +1835,7 @@ add('DELETE', /^\/api\/bank$/, (req, res, _p, q) => {
 });
 
 // ================= התחברות והרשאות =================
-const VALID_TABS = ['home', 'events', 'clients', 'invoicing', 'quotes', 'contractors', 'payroll', 'bank', 'devrequests', 'team', 'connections'];
+const VALID_TABS = ['home', 'events', 'clients', 'invoicing', 'quotes', 'contractors', 'payroll', 'bank', 'team', 'connections'];
 const uid = () => id('usr');
 const cleanUsername = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
 
