@@ -117,13 +117,14 @@ export function contractorPayables(events) {
       const c = details[i];
       const name = (c.name || '').trim();
       if (!name) continue;
+      if (c.handled) continue; // סומן "טופל" — יורד מרשימת הפתוחים
       if (!byContractor[name]) byContractor[name] = { name, total: 0, paidTotal: 0, unpaidTotal: 0, events: [] };
       const amt = Number(c.amount) || 0;
       const paid = Boolean(c.paid);
       const g = byContractor[name];
       g.total += amt;
       if (paid) g.paidTotal += amt; else g.unpaidTotal += amt;
-      g.events.push({ eventId: ev.id, index: i, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: amt, paid });
+      g.events.push({ eventId: ev.id, index: i, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: amt, paid, paidInvoice: c.paidInvoice || null, paidExpenseUrl: c.paidExpenseUrl || null });
     }
   }
   for (const g of Object.values(byContractor)) g.events.sort((a, b) => (a.date || '').localeCompare(b.date || ''));

@@ -830,6 +830,28 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/paid$/, (req, res, params, _q, 
   save(db); json(res, { ok: true, payable: p });
 });
 
+// POST /api/supplier-payables/:id/update — עריכת פרטי הוצאת ספק (השלמת מידע חסר, למשל מס' הקצאה)
+add('POST', /^\/api\/supplier-payables\/([^/]+)\/update$/, (req, res, params, _q, body) => {
+  const db = load();
+  const p = (db.supplierPayables || []).find(x => x.id === params[0]);
+  if (!p) return json(res, { error: 'לא נמצא' }, 404);
+  const b = body || {};
+  if (b.number != null) p.number = String(b.number).trim();
+  if (b.date) p.date = String(b.date).slice(0, 10);
+  if (b.description != null) p.description = String(b.description).trim();
+  if (b.documentType != null) p.documentType = Number(b.documentType) || p.documentType;
+  if (b.allocationNumber !== undefined) p.allocationNumber = String(b.allocationNumber || '').replace(/[^\d]/g, '').trim() || null;
+  if (b.amount != null && b.amount !== '') {
+    p.amount = Number(b.amount) || 0;
+    p.amountExcludeVat = (b.amountExcludeVat != null && b.amountExcludeVat !== '') ? Number(b.amountExcludeVat) : +(p.amount / (1 + 0.18)).toFixed(2);
+    p.vat = +(p.amount - p.amountExcludeVat).toFixed(2);
+  } else if (b.amountExcludeVat != null && b.amountExcludeVat !== '') {
+    p.amountExcludeVat = Number(b.amountExcludeVat) || 0;
+  }
+  p.updatedAt = new Date().toISOString();
+  save(db); json(res, { ok: true, payable: p });
+});
+
 // POST /api/supplier-payables/:id/delete — הסרת רשומת הוצאת ספק פנימית
 add('POST', /^\/api\/supplier-payables\/([^/]+)\/delete$/, (req, res, params) => {
   const db = load();
@@ -1177,9 +1199,29 @@ add('POST', /^\/api\/contractors\/mark-paid-bulk$/, (req, res, _p, _q, body) => 
   for (const it of items) {
     const ev = db.events.find(e => e.id === it.eventId);
     if (ev && ev.contractorDetails && ev.contractorDetails[it.index]) {
-      ev.contractorDetails[it.index].paid = paid;
-      ev.contractorDetails[it.index].paidInvoice = paid ? (body.invoiceNumber || null) : null;
+      const cd = ev.contractorDetails[it.index];
+      cd.paid = paid;
+      cd.paidInvoice = paid ? (body.invoiceNumber || null) : null;
+      cd.paidExpenseId = paid ? (body.expenseId || null) : null;
+      cd.paidExpenseUrl = paid ? (body.expenseUrl || null) : null;
       n++;
+    }
+  }
+  save(db); json(res, { ok: true, updated: n });
+});
+
+// POST /api/contractors/dismiss-supplier { name } — סימון כל האירועים שנותרו (לא שולמו) של הספק כ"טופל"
+add('POST', /^\/api\/contractors\/dismiss-supplier$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const name = String(body?.name || '').trim();
+  if (!name) return json(res, { error: 'חסר שם ספק' }, 400);
+  const undo = body?.undo === true;
+  let n = 0;
+  for (const ev of db.events) {
+    for (const c of (ev.contractorDetails || [])) {
+      if ((c.name || '').trim() !== name) continue;
+      if (undo) { if (c.handled) { c.handled = false; n++; } }
+      else if (!c.paid && !c.handled) { c.handled = true; n++; }
     }
   }
   save(db); json(res, { ok: true, updated: n });

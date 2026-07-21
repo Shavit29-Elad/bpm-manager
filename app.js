@@ -1902,6 +1902,7 @@ async function renderContractors(c) {
   ]);
   _mailStatus = ms || _mailStatus;
   const supPayables = Array.isArray(spRes?.payables) ? spRes.payables : [];
+  _supPayables = supPayables;
   const payables = Array.isArray(pay) ? pay : [];
   _suppliers = Array.isArray(sup) ? sup : [];
   _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
@@ -1910,8 +1911,8 @@ async function renderContractors(c) {
   c.innerHTML = `<div class="panel" id="draftsPanel">${draftsSection()}</div>
   <div class="panel">${supplierPayablesSection(supPayables)}</div>
   <div class="panel">
-    <div class="row-between"><div><h2>קבלנים לתשלום</h2>
-      <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום (ללא מע״מ) <b style="color:var(--danger)">${money(totalUnpaid)}</b> · כולל מע״מ <b>${money(totalUnpaid * (1 + VAT_RATE))}</b>. סמן אירועים (או הכל), לחץ "סמן כשולם" והזן מספר חשבונית.</span>${_ctrSyncNote ? `<div style="font-size:12px;color:var(--accent2);margin-top:2px">✓ ${_ctrSyncNote}</div>` : ''}</div>
+    <div class="row-between"><div><h2>רשימת ספקים לתשלום לפי הכנסת אירועים</h2>
+      <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום (ללא מע״מ) <b style="color:var(--danger)">${money(totalUnpaid)}</b> · כולל מע״מ <b>${money(totalUnpaid * (1 + VAT_RATE))}</b>. סמן אירועים (או הכל) וקשר אותם לחשבונית הספק, או לחץ "טופל" לסגירת מה שנותר.</span>${_ctrSyncNote ? `<div style="font-size:12px;color:var(--accent2);margin-top:2px">✓ ${_ctrSyncNote}</div>` : ''}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
     ${payables.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${payables.map(contractorCard).join('')}</div>`
       : `<div class="empty">אין קבלנים עם סכומים עדיין. הוסף סכום לקבלן באירוע.</div>`}
@@ -1938,7 +1939,7 @@ function contractorCard(x) {
   const safe = 'ct_' + String(x.name).replace(/[^a-zA-Z0-9֐-׿]/g, '_');
   const rows = x.events.map(ev => {
     const sel = ev.paid
-      ? `<span class="tag invoiced" style="white-space:nowrap">שולם${ev.paidInvoice ? ` · חשבונית ${escapeHtml(String(ev.paidInvoice))}` : ''}</span>`
+      ? `<span class="tag invoiced" style="white-space:nowrap">שולם${ev.paidInvoice ? ` · חשבונית ${escapeHtml(String(ev.paidInvoice))}` : ''}</span>${ev.paidExpenseUrl ? ` <button class="btn ghost" style="padding:1px 7px;font-size:10.5px" onclick="previewDoc('${String(ev.paidExpenseUrl).replace(/'/g, '%27')}')">👁</button>` : ''}`
       : `<input type="checkbox" class="ctchk" data-c="${safe}" data-ev="${ev.eventId}" data-ix="${ev.index}"/>`;
     return `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
       <span style="width:28px;text-align:center">${sel}</span>
@@ -1956,21 +1957,72 @@ function contractorCard(x) {
     <div id="${safe}" class="${x.events.length > 3 ? 'hidden' : ''}">
       <div style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-top:1px solid var(--line);background:var(--panel2)">
         <label style="font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" onchange="ctSelectAll('${safe}',this.checked)"/> בחר הכל</label>
-        <button class="btn success" style="margin-inline-start:auto;padding:4px 12px;font-size:12px" onclick="ctMarkPaid('${safe}')">✓ סמן נבחרים כשולם + מס' חשבונית</button>
+        <button class="btn success" style="margin-inline-start:auto;padding:4px 12px;font-size:12px" onclick="ctMarkPaid('${safe}','${encodeURIComponent(x.name)}')">🔗 קשר נבחרים לחשבונית ספק</button>
+        <button class="btn ghost" style="padding:4px 12px;font-size:12px" onclick="ctDismissSupplier('${encodeURIComponent(x.name)}')" title="סמן שכל מה שנותר מול הספק טופל">✓ טופל</button>
       </div>
       ${rows}
     </div>
   </div>`;
 }
 window.ctSelectAll = (safe, on) => { document.querySelectorAll(`.ctchk[data-c="${safe}"]`).forEach(x => { x.checked = on; }); };
-window.ctMarkPaid = async (safe) => {
+// קישור אירועי קבלן שנבחרו לחשבונית ספק אמיתית (מסמכי ההוצאה של הספק בחשבונית ירוקה)
+let _ctLink = null;
+window.ctMarkPaid = async (safe, nameEnc) => {
+  const name = decodeURIComponent(nameEnc);
   const boxes = [...document.querySelectorAll(`.ctchk[data-c="${safe}"]:checked`)];
   if (!boxes.length) { alert('לא נבחרו אירועים'); return; }
-  const inv = prompt(`מספר חשבונית הקבלן עבור ${boxes.length} אירועים (אפשר להשאיר ריק):`, '');
-  if (inv === null) return;
   const items = boxes.map(b => ({ eventId: b.dataset.ev, index: +b.dataset.ix }));
+  const sup = (_suppliers || []).find(s => (s.name || '').trim() === String(name).trim());
+  _ctLink = { items, name, supplierId: sup ? sup.id : null, docs: null, selected: null };
+  let m = document.getElementById('ctLinkModal');
+  if (!m) { m = document.createElement('div'); m.id = 'ctLinkModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:88vh;overflow:auto"><div class="empty">טוען חשבוניות של ${escapeHtml(name)}…</div></div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  if (_ctLink.supplierId) { const docs = await api(`/api/suppliers/${_ctLink.supplierId}/documents`).catch(() => []); _ctLink.docs = Array.isArray(docs) ? docs : []; }
+  else _ctLink.docs = [];
+  renderCtLink();
+};
+function renderCtLink() {
+  const m = document.getElementById('ctLinkModal'); if (!m || !_ctLink) return;
+  const docs = _ctLink.docs || [];
+  const rows = docs.map(d => {
+    const on = _ctLink.selected && _ctLink.selected.id === d.id;
+    const jj = encodeURIComponent(JSON.stringify({ id: d.id, number: d.number, url: d.url || null }));
+    return `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:6px 8px;border-top:1px solid var(--line);${on ? 'background:#e7f7ee' : ''}">
+      <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${fmtDate(d.date)} · ${money(d.amountIncVat ?? d.amount)}</span>
+      ${d.url ? `<button class="btn ghost" style="padding:1px 8px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">👁</button>` : ''}
+      <button class="btn ${on ? 'success' : 'ghost'}" style="padding:2px 12px;font-size:11px" onclick="ctLinkPick('${jj}')">${on ? '✓ נבחר' : 'בחר'}</button></div>`;
+  }).join('');
+  m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:88vh;overflow:auto">
+    <h3>קישור לחשבונית ספק — ${escapeHtml(_ctLink.name)}</h3>
+    <p class="muted" style="font-size:12.5px;margin:2px 0 8px">${_ctLink.items.length} אירועים נבחרו. בחר את חשבונית ההוצאה של הספק שאליה הם שייכים, או הזן מספר ידנית.</p>
+    ${_ctLink.supplierId ? (docs.length ? `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="muted" style="font-size:12.5px">לא נמצאו מסמכי הוצאה לספק זה בחשבונית ירוקה. הזן מספר ידנית למטה.</div>') : '<div class="muted" style="font-size:12.5px">הספק לא מזוהה בחשבונית ירוקה. הזן מספר חשבונית ידנית.</div>'}
+    <label style="display:block;font-size:13px;margin-top:10px">או מספר חשבונית ידני <input id="ctManualNum" dir="ltr" placeholder="מספר חשבונית" style="width:100%;padding:6px 8px;margin-top:3px" value="${_ctLink.selected ? escAttr(String(_ctLink.selected.number || '')) : ''}"></label>
+    <div id="ctLinkStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('ctLinkModal').classList.add('hidden')">ביטול</button>
+      <button class="btn success" onclick="ctLinkConfirm(this)">✓ קשר וסמן כשולם</button>
+    </div>
+  </div>`;
+}
+window.ctLinkPick = (jj) => { _ctLink.selected = JSON.parse(decodeURIComponent(jj)); renderCtLink(); };
+window.ctLinkConfirm = async (btn) => {
+  const manual = (document.getElementById('ctManualNum')?.value || '').trim();
+  const sel = _ctLink.selected;
+  const invoiceNumber = manual || (sel ? String(sel.number) : '') || null;
+  if (!invoiceNumber && !sel) { const st = document.getElementById('ctLinkStatus'); if (st) st.innerHTML = '<span style="color:var(--danger)">בחר חשבונית או הזן מספר.</span>'; return; }
+  if (btn) btn.disabled = true;
   await fetch('/api/contractors/mark-paid-bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items, invoiceNumber: inv.trim() || null, paid: true }) }).catch(() => {});
+    body: JSON.stringify({ items: _ctLink.items, invoiceNumber, expenseId: sel ? sel.id : null, expenseUrl: sel ? sel.url : null, paid: true }) }).catch(() => {});
+  document.getElementById('ctLinkModal').classList.add('hidden');
+  renderContractors($('#content'));
+};
+// "טופל" — סימון כל האירועים שנותרו מול הספק כטופלו (יורדים מהרשימה הפתוחה)
+window.ctDismissSupplier = async (nameEnc) => {
+  const name = decodeURIComponent(nameEnc);
+  if (!confirm(`לסמן שכל האירועים שנותרו מול "${name}" טופלו?\nהם ירדו מרשימת הספקים לתשלום (אפשר להחזיר דרך האירוע).`)) return;
+  await fetch('/api/contractors/dismiss-supplier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }).catch(() => {});
   renderContractors($('#content'));
 };
 window.toggleContractorPaid = async (eventId, index, paid) => {
@@ -2102,15 +2154,58 @@ function supplierPayablesSection(list) {
       <span style="flex:1;min-width:8px"></span>
       ${p.hasFile ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="previewDoc('/api/supplier-payables/${p.id}/file')">תצוגה 👁</button>
       <a class="btn ghost" style="padding:3px 10px;font-size:12px;text-decoration:none" href="/api/supplier-payables/${p.id}/file" download target="_blank" rel="noopener">הורדה ↓</a>` : ''}
+      <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openEditPayable('${p.id}')" title="עריכת פרטים / השלמת מס׳ הקצאה">✏️ עריכה</button>
       <button class="btn success" style="padding:3px 10px;font-size:12px" onclick="markPayablePaid('${p.id}')">✓ סמן כשולם</button>
       <button class="btn ghost" style="padding:3px 8px;font-size:12px" onclick="deletePayable('${p.id}')" title="הסר רישום">✕</button>
     </div>
   </div>`;
   }).join('');
-  return `<div class="row-between"><div><h2>🧾 הוצאות ספקים לתשלום</h2>
+  return `<div class="row-between"><div><h2>🧾 רשימת ספקים לתשלום</h2>
       <span class="muted">${items.length ? `${items.length} הוצאות שטרם שולמו · סה"כ ${money(total)} (כולל מע"מ). "חשבון עסקה · פנימי" = רישום שלא נשלח לחשבונית ירוקה/רו״ח.` : 'אין הוצאות ספקים פתוחות. הוצאה שתסמן "לא שולם" (או חשבון עסקה) תופיע כאן.'}</span></div></div>
     ${items.length ? `<div style="margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="empty">אין הוצאות פתוחות לתשלום.</div>'}`;
 }
+let _supPayables = [];
+// עריכת פרטי הוצאת ספק — השלמת מידע שהיה חסר (מס' הקצאה, סכום, תיאור וכו')
+window.openEditPayable = (pid) => {
+  const p = (_supPayables || []).find(x => x.id === pid); if (!p) return;
+  let m = document.getElementById('editPayModal');
+  if (!m) { m = document.createElement('div'); m.id = 'editPayModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  const fld = (lbl, inner) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px">${lbl}${inner}</label>`;
+  const typeOpts = [[305, 'חשבונית מס'], [320, 'מס-קבלה'], [300, 'חשבון עסקה'], [400, 'קבלה'], [330, 'זיכוי']].map(([v, l]) => `<option value="${v}" ${Number(p.documentType) === v ? 'selected' : ''}>${l}</option>`).join('');
+  m.innerHTML = `<div class="modal-card" style="width:min(520px,95vw)">
+    <h3>עריכת הוצאת ספק — ${escapeHtml(p.supplierName || '')}</h3>
+    <p class="muted" style="font-size:12px;margin:2px 0 10px">השלם/תקן פרטים שהיו חסרים (למשל מספר הקצאה). העדכון נשמר ברשימת הספקים לתשלום.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:130px">${fld('מספר חשבונית', `<input id="epNum" dir="ltr" value="${escAttr(String(p.number || ''))}"/>`)}</div>
+      <div style="flex:1;min-width:130px">${fld('תאריך', `<input id="epDate" type="date" value="${p.date ? String(p.date).slice(0, 10) : ''}"/>`)}</div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:130px">${fld('סוג מסמך', `<select id="epType">${typeOpts}</select>`)}</div>
+      <div style="flex:1;min-width:130px">${fld('מספר הקצאה', `<input id="epAlloc" dir="ltr" value="${escAttr(String(p.allocationNumber || ''))}" placeholder="מס' הקצאה"/>`)}</div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:130px">${fld('סכום כולל מע"מ', `<input id="epAmount" type="number" step="any" value="${p.amount ?? ''}"/>`)}</div>
+      <div style="flex:1;min-width:130px">${fld('סכום ללא מע"מ', `<input id="epNet" type="number" step="any" value="${p.amountExcludeVat ?? ''}"/>`)}</div>
+    </div>
+    ${fld('תיאור', `<input id="epDesc" value="${escAttr(String(p.description || ''))}"/>`)}
+    <div id="epStatus" style="font-size:13px;min-height:18px;margin:4px 0"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('editPayModal').classList.add('hidden')">ביטול</button>
+      <button class="btn success" onclick="savePayableEdit('${pid}',this)">💾 שמור</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+};
+window.savePayableEdit = async (pid, btn) => {
+  const g = (id) => document.getElementById(id);
+  const body = { number: g('epNum').value.trim(), date: g('epDate').value || null, documentType: g('epType').value, allocationNumber: g('epAlloc').value.trim(), amount: g('epAmount').value, amountExcludeVat: g('epNet').value, description: g('epDesc').value.trim() };
+  const st = g('epStatus'); if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">שומר…</span>';
+  const r = await fetch(`/api/supplier-payables/${pid}/update`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) btn.disabled = false;
+  if (r.ok) { document.getElementById('editPayModal').classList.add('hidden'); renderContractors($('#content')); }
+  else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
+};
 window.markPayablePaid = async (pid) => {
   if (!confirm('לסמן את הוצאת הספק כשולמה? היא תרד מהרשימה.')) return;
   const r = await fetch(`/api/supplier-payables/${pid}/paid`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paid: true }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
@@ -2491,7 +2586,7 @@ window.approveDraft = async (id, btn) => {
   if (r.ok) {
     const linkNote = r.linkedCount ? ` · 🔗 קושרו ${r.linkedCount} אירועים בקבלנים לתשלום` : '';
     let msg;
-    if (r.duplicate) msg = '✓ החשבונית כבר נקלטה במערכת — הקובץ הכפול נמחק.';
+    if (r.duplicate) { alert('⚠ המסמך כבר קיים במערכת\n\nחשבונית זו כבר נקלטה קודם לכן. כדי למנוע כפילות, הקובץ הכפול נמחק ולא נוצרה הוצאה נוספת.'); msg = '✓ המסמך כבר קיים במערכת — לא נוצרה כפילות.'; }
     else if (r.businessDoc) msg = `✓ נרשם כ"חשבון עסקה" ב"הוצאות ספקים לתשלום" (לא נשלח לחשבונית ירוקה/רו״ח).${linkNote}`;
     else {
       const fwdNote = r.forwarded ? ` · 📧 נשלח גם לרו"ח` : (r.forwardError ? ` · <span style="color:var(--warn)">שליחת המייל לרו"ח נכשלה</span>` : '');
