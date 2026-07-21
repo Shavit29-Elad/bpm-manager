@@ -126,7 +126,7 @@ function scoreExpense(tx, exp) {
   if (dd <= 7) score += 12; else if (dd <= 30) score += 6;
   return { score, reasons, amountKind: ak };
 }
-const toExp = (e, extra = {}) => ({ id: e.id, number: e.number, type: e.type, clientName: e.supplierName || '—', amount: e.amountIncVat ?? e.amount, date: e.date, url: e.url || null, kind: 'expense', ...extra });
+const toExp = (e, extra = {}) => ({ id: e.id, number: e.number, type: e.type, clientName: e.supplierName || '—', amount: e.amountIncVat ?? e.amount, date: e.date, url: e.url || null, kind: 'expense', description: e.description || e.category || '', ...extra });
 
 // מחזיר מערך של { i, matchStatus, matchedInvoices, suggestions } עבור אינדקסי תנועות החובה בלבד
 export function matchDebits(txns, expenses) {

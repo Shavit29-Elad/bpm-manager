@@ -391,6 +391,7 @@ function mapExpense(e) {
     amount, amountIncVat: amount,
     amountExVat: e.amountExcludeVat != null ? num(e.amountExcludeVat) : amount,
     category: e.category?.name || e.categoryName || e.description || '',
+    description: e.description || e.category?.name || e.categoryName || e.remarks || '',
     url: (e.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e.url === 'string' ? e.url : null),
   };
 }

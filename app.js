@@ -3330,7 +3330,7 @@ async function renderBank(c, soft) {
   const table = rows.length ? `<div style="overflow-x:auto;margin-top:14px"><table style="min-width:1120px;font-size:13px">
     <thead><tr>
       ${th('date', 'תאריך')}${th('amount', 'סכום בבנק')}${p('סכום חשבונית')}${p('ניכוי במקור')}${th('name', 'שם עסק')}
-      ${p('חשבונית מס / מס-קבלה')}${p('קבלה')}${p('הערות')}${p('אישור')}
+      ${p('חשבונית מס / מס-קבלה')}${p(dir === 'debit' ? 'תיאור החשבונית' : 'קבלה')}${p('הערות')}${p('אישור')}
     </tr></thead><tbody>${rows.map(bankTr).join('')}</tbody></table></div>`
     : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
   c.innerHTML = `<div class="panel">
@@ -3394,6 +3394,11 @@ function bankTr(t) {
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
   }
 
+  // בתצוגת "רק חובה" — העמודה השביעית מציגה את תיאור החשבונית שהותאמה במקום "קבלה"
+  if (state.bankFilter === 'debit') {
+    const descs = mis.map(i => escapeHtml(i.description || '')).filter(Boolean);
+    recNo = descs.length ? stack(descs) : '<span class="muted">—</span>';
+  }
   const linkBtn = `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="openLinkModal('${t.id}')">🔗 שייך</button>`;
   // "צור הכנסה" — רק על תנועות זכות (הכנסה): מפיק מס-קבלה/קבלה מחשבונית פתוחה תואמת או מסמך חדש
   const incomeBtn = credit ? `<button class="btn ghost" style="padding:3px 9px;font-size:12px;color:var(--accent2)" onclick="openCreateIncome('${t.id}')">➕ צור הכנסה</button>` : '';
