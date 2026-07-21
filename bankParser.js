@@ -147,9 +147,12 @@ export function parseMizrahiExcel(htmlText) {
 // זו היתרה הקובעת (עו"ש) — מדויקת יותר מהיתרה שבשורת התנועה האחרונה (שלרוב ריקה).
 export function extractAccountBalance(text) {
   const flat = String(text || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(BIDI, '').replace(/\s+/g, ' ');
-  const m = flat.match(/יתרה בחשבון\s*:?\s*(-?[\d,]+\.\d{2})/);
+  // תומך בגרסאות שונות של הכותרת + מספר עם/בלי עשרוני ומינוס מוביל/נגרר
+  const m = flat.match(/(?:יתרה\s*(?:ב|ה)?חשבון|יתרה\s*משוערכת|היתרה\s*בחשבון)\s*:?\s*(-?[\d,]+(?:\.\d{1,2})?-?)/);
   if (!m) return null;
-  const balance = parseFloat(m[1].replace(/,/g, ''));
+  let raw = m[1].trim();
+  const neg = raw.startsWith('-') || raw.endsWith('-');
+  const balance = (neg ? -1 : 1) * parseFloat(raw.replace(/[^\d.]/g, ''));
   if (isNaN(balance)) return null;
   const dm = flat.slice(m.index).match(/לתאריך\s*-?\s*(\d{2}\/\d{2}\/\d{2,4})(?:\s+(\d{2}:\d{2}))?/);
   const date = dm ? normDate(dm[1]) : null;

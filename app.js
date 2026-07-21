@@ -3070,12 +3070,19 @@ function bankAccountStatus() {
   if (!all.length && !bb) return null;
   const key = (d) => { const m = (d || '').match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}${m[2]}${m[1]}` : '00000000'; };
   const sorted = [...all].sort((a, b) => key(b.date).localeCompare(key(a.date)) || String(b.importedAt || '').localeCompare(String(a.importedAt || '')));
-  const withBal = sorted.find(t => t.balance != null);
+  const withBal = sorted.find(t => t.balance != null); // התנועה החדשה ביותר שיש בה יתרה רצה
   const lastImport = [...all.map(t => t.importedAt), bb && bb.importedAt].filter(Boolean).sort().pop();
-  // יתרה קובעת: הכותרת הרשמית אם קיימת, אחרת מהתנועה האחרונה
-  const balance = bb && bb.balance != null ? bb.balance : (withBal ? withBal.balance : null);
-  const balanceDate = bb && bb.date ? bb.date : (sorted[0] ? sorted[0].date : null);
-  return { balance, balanceDate, throughDate: sorted[0] ? sorted[0].date : null, lastImport, official: !!(bb && bb.balance != null) };
+  // שני מקורות ליתרה: כותרת הקובץ (רשמית) והיתרה הרצה מהתנועה האחרונה. בוחרים את המאוחר בתאריך.
+  const headerSrc = (bb && bb.balance != null) ? { balance: bb.balance, date: bb.date, official: true } : null;
+  const txSrc = withBal ? { balance: withBal.balance, date: withBal.date, official: false } : null;
+  let src = headerSrc;
+  if (txSrc && (!headerSrc || key(txSrc.date) > key(headerSrc.date))) src = txSrc;
+  return {
+    balance: src ? src.balance : null,
+    balanceDate: src ? src.date : (sorted[0] ? sorted[0].date : null),
+    throughDate: sorted[0] ? sorted[0].date : null,
+    lastImport, official: !!(src && src.official),
+  };
 }
 function bankHeaderHtml() {
   const s = bankAccountStatus(); if (!s) return '';

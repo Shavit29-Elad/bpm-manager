@@ -1629,24 +1629,29 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   const matched = attachReceipts(matchCredits(parsed, invoices), receipts);
   const db = load();
   db.bankTx = db.bankTx || [];
-  const existing = new Set(db.bankTx.filter(t => !companyId || t.companyId === companyId).map(t => t.sig));
-  let added = 0;
+  const bySig = new Map(db.bankTx.filter(t => !companyId || t.companyId === companyId).map(t => [t.sig, t]));
+  let added = 0, backfilled = 0;
   for (const t of matched) {
     const sig = bankSig(t);
-    if (existing.has(sig)) continue;
-    db.bankTx.push({
+    const ex = bySig.get(sig);
+    if (ex) {
+      // תנועה קיימת — נשלים יתרה רצה (balance) אם חסרה, כדי שעו"ש יתעדכן גם בלי כותרת
+      if (t.balance != null && ex.balance !== t.balance) { ex.balance = t.balance; backfilled++; }
+      continue;
+    }
+    const rec = {
       id: id('btx'), companyId, sig,
       date: t.date, description: t.description, amount: t.amount, absAmount: t.absAmount,
       direction: t.direction, reference: t.reference, invoiceNumber: t.invoiceNumber,
-      nameHint: t.nameHint, memo: t.memo,
+      nameHint: t.nameHint, memo: t.memo, balance: t.balance ?? null,
       matchStatus: t.matchStatus, matchedInvoices: t.matchedInvoices || [], suggestions: t.suggestions || [],
       importedAt: new Date().toISOString(),
-    });
-    existing.add(sig); added++;
+    };
+    db.bankTx.push(rec); bySig.set(sig, rec); added++;
   }
   save(db);
   const credits = matched.filter(t => t.direction === 'credit');
-  json(res, { ok: true, added, total: parsed.length, credits: credits.length, autoMatched: credits.filter(t => t.matchStatus === 'auto').length, invoicesLoaded: invoices.length, accountBalance: acctBal || null });
+  json(res, { ok: true, added, backfilled, total: parsed.length, credits: credits.length, autoMatched: credits.filter(t => t.matchStatus === 'auto').length, invoicesLoaded: invoices.length, accountBalance: acctBal || null });
 });
 
 // GET /api/bank/balance?companyId= — יתרת עו"ש הרשמית האחרונה שנקלטה
