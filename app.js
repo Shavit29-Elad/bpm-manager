@@ -1,15 +1,66 @@
 // app.js — לוגיקת הממשק (SPA פשוט ללא ספריות)
-const state = { company: null, companies: [], tab: 'home' };
+const state = { company: null, companies: [], tab: 'home', user: null };
 const $ = (s) => document.querySelector(s);
 const money = (n) => (n == null ? '—' : '₪' + Number(n).toLocaleString('he-IL'));
 const api = (p) => fetch(p).then(r => r.json());
 
+const TAB_LABELS = { home: '🏠 בית', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים' };
+
 async function boot() {
+  const st = await api('/api/auth/status').catch(() => ({ error: 'net' }));
+  if (st && st.setupNeeded) return renderAuthScreen('setup');
+  if (!st || !st.authenticated) return renderAuthScreen('login');
+  state.user = st.user;
+  await startApp();
+}
+
+// ---- מסך התחברות / הגדרה ראשונית ----
+function renderAuthScreen(mode) {
+  document.querySelectorAll('.topbar, .tabs').forEach(el => el.style.display = 'none');
+  const isSetup = mode === 'setup';
+  const c = $('#content');
+  c.innerHTML = `<div style="min-height:70vh;display:flex;align-items:center;justify-content:center">
+    <div class="panel" style="width:min(420px,94vw);padding:28px 26px">
+      <div style="text-align:center;margin-bottom:6px"><div style="font-size:28px">🎛️</div><h2 style="margin:6px 0 2px">א.ש ניהול פיננסי</h2>
+      <div class="muted" style="font-size:13px">${isSetup ? 'הגדרה ראשונית — יצירת משתמש הנהלה' : 'התחברות למערכת'}</div></div>
+      ${isSetup ? '<div class="muted" style="font-size:12px;background:var(--panel2);border-radius:8px;padding:8px 10px;margin:8px 0">זו הכניסה הראשונה. בחר שם משתמש וסיסמה למנהל המערכת. הסיסמה נשמרת מוצפנת ונשארת רק אצלך.</div>' : ''}
+      <label style="display:block;font-size:13px;margin:12px 0 3px">שם משתמש</label>
+      <input id="authUser" autocomplete="username" dir="ltr" style="width:100%;padding:9px 10px" />
+      <label style="display:block;font-size:13px;margin:12px 0 3px">סיסמה</label>
+      <input id="authPass" type="password" autocomplete="${isSetup ? 'new-password' : 'current-password'}" dir="ltr" style="width:100%;padding:9px 10px" onkeydown="if(event.key==='Enter')doAuth('${mode}',this)" />
+      ${isSetup ? `<label style="display:block;font-size:13px;margin:12px 0 3px">אימות סיסמה</label><input id="authPass2" type="password" dir="ltr" style="width:100%;padding:9px 10px" onkeydown="if(event.key==='Enter')doAuth('${mode}',this)" />` : ''}
+      <div id="authStatus" style="font-size:13px;min-height:20px;margin:10px 0;color:var(--danger)"></div>
+      <button class="btn primary" style="width:100%;padding:10px" onclick="doAuth('${mode}',this)">${isSetup ? 'צור והתחבר' : 'התחבר'}</button>
+    </div></div>`;
+  setTimeout(() => { const u = document.getElementById('authUser'); if (u) u.focus(); }, 50);
+}
+window.doAuth = async (mode, btn) => {
+  const username = (document.getElementById('authUser').value || '').trim();
+  const password = document.getElementById('authPass').value || '';
+  const st = document.getElementById('authStatus');
+  if (!username || !password) { st.textContent = 'יש למלא שם משתמש וסיסמה.'; return; }
+  if (mode === 'setup') {
+    if (password.length < 6) { st.textContent = 'הסיסמה חייבת להיות באורך 6 תווים לפחות.'; return; }
+    if (password !== (document.getElementById('authPass2').value || '')) { st.textContent = 'הסיסמאות אינן תואמות.'; return; }
+  }
+  if (btn) btn.disabled = true; st.style.color = 'var(--muted)'; st.textContent = 'מתחבר…';
+  const r = await fetch(`/api/auth/${mode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) { document.querySelectorAll('.topbar, .tabs').forEach(el => el.style.display = ''); state.user = r.user; await startApp(); }
+  else { if (btn) btn.disabled = false; st.style.color = 'var(--danger)'; st.textContent = r.error || 'שגיאה בהתחברות.'; }
+};
+window.logout = async () => {
+  if (!confirm('להתנתק מהמערכת?')) return;
+  await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+  location.reload();
+};
+
+async function startApp() {
   state.companies = await api('/api/companies');
   const sel = $('#companySelect');
   sel.innerHTML = state.companies.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   state.company = state.companies[0]?.id;
   sel.onchange = () => { state.company = sel.value; render(); };
+  applyPermissions();
 
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
@@ -19,6 +70,119 @@ async function boot() {
   await renderStatus();
   render();
 }
+
+// ---- החלת הרשאות: הסתרת לשוניות, מצב צפייה, פרטי משתמש בכותרת ----
+function applyPermissions() {
+  const u = state.user || {};
+  const isAdmin = u.role === 'admin';
+  const allowed = isAdmin || u.tabs === 'all' ? null : new Set(u.tabs || []);
+  document.querySelectorAll('.tab').forEach(t => {
+    const show = !allowed || allowed.has(t.dataset.tab);
+    t.style.display = show ? '' : 'none';
+  });
+  // לשונית פעילה ראשונה מתוך המותרות
+  const firstVisible = [...document.querySelectorAll('.tab')].find(t => t.style.display !== 'none');
+  if (firstVisible) { document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); firstVisible.classList.add('active'); state.tab = firstVisible.dataset.tab; }
+  // מצב צפייה — הסתרת כפתורי פעולה
+  document.body.classList.toggle('viewer-mode', !isAdmin);
+  // פרטי משתמש + התנתקות + ניהול משתמשים (למנהל) בכותרת
+  let box = document.getElementById('userBox');
+  if (!box) { box = document.createElement('div'); box.id = 'userBox'; box.style.cssText = 'display:flex;gap:8px;align-items:center;margin-inline-start:auto'; document.querySelector('.topbar').appendChild(box); }
+  box.innerHTML = `<span class="muted" style="font-size:12.5px">👤 ${escapeHtml(u.username || '')}${isAdmin ? ' · הנהלה' : ' · צפייה'}</span>
+    ${isAdmin ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openUsersModal()">👥 משתמשים</button>` : ''}
+    <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="logout()">התנתק</button>`;
+}
+
+// ---- ניהול משתמשים (מנהל בלבד) ----
+let _usersList = [];
+const _tabChecks = (cls, sel) => Object.entries(TAB_LABELS).map(([k, l]) => `<label style="display:inline-flex;gap:4px;align-items:center;font-size:12px;margin:2px 8px 2px 0"><input type="checkbox" class="${cls}" value="${k}" ${sel && sel.includes(k) ? 'checked' : ''}> ${l}</label>`).join('');
+const _compChecks = (cls, sel) => (state.companies || []).map(c => `<label style="display:inline-flex;gap:4px;align-items:center;font-size:12px;margin:2px 8px 2px 0"><input type="checkbox" class="${cls}" value="${c.id}" ${sel && sel.includes(c.id) ? 'checked' : ''}> ${escapeHtml(c.name)}</label>`).join('');
+window.openUsersModal = async () => {
+  let m = document.getElementById('usersModal');
+  if (!m) { m = document.createElement('div'); m.id = 'usersModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;overflow:auto"><div class="empty">טוען משתמשים…</div></div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  const r = await api('/api/users').catch(() => ({ users: [] }));
+  _usersList = r.users || [];
+  renderUsersModal();
+};
+function renderUsersModal() {
+  const m = document.getElementById('usersModal'); if (!m) return;
+  const comps = state.companies || [];
+  const admins = _usersList.filter(u => u.role === 'admin');
+  const viewers = _usersList.filter(u => u.role !== 'admin');
+  const userRow = (u) => `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+    <div class="row-between"><div><b>${escapeHtml(u.username)}</b> <span class="muted" style="font-size:12px">· צפייה</span></div>
+      <div style="display:flex;gap:6px"><button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="editUserRow('${u.id}')">✏️ ערוך</button><button class="btn ghost" style="padding:2px 9px;font-size:11.5px;color:var(--danger)" onclick="deleteUser('${u.id}')">מחק ✕</button></div></div>
+    <div class="muted" style="font-size:11.5px;margin-top:4px">לשוניות: ${(u.tabs || []).map(t => TAB_LABELS[t] || t).join(', ') || '—'} · עסקים: ${(u.companies || []).map(id => (comps.find(c => c.id === id) || {}).name || id).join(', ') || '—'}</div>
+    <div id="edit-${u.id}"></div></div>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;overflow:auto">
+    <div class="row-between"><h3>👥 ניהול משתמשים</h3><button class="btn ghost" onclick="document.getElementById('usersModal').classList.add('hidden')">סגור</button></div>
+    <div class="muted" style="font-size:12px;margin:2px 0 10px">משתמשי הנהלה רואים הכל. משתמשי צפייה רואים רק את הלשוניות והעסקים שתסמן, במצב קריאה בלבד.</div>
+    ${admins.map(a => `<div class="muted" style="font-size:12.5px">👑 הנהלה: <b>${escapeHtml(a.username)}</b></div>`).join('')}
+    <b style="font-size:13px;display:block;margin-top:10px">משתמשי צפייה (${viewers.length})</b>
+    <div style="margin-top:6px">${viewers.map(userRow).join('') || '<div class="muted" style="font-size:12.5px">אין עדיין משתמשי צפייה.</div>'}</div>
+    <div id="addUserForm" style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+      <b style="font-size:13px">➕ הוסף משתמש צפייה</b>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+        <input id="nuUser" placeholder="שם משתמש" dir="ltr" style="flex:1;min-width:130px;padding:7px 9px">
+        <input id="nuPass" type="text" placeholder="סיסמה (6+ תווים)" dir="ltr" style="flex:1;min-width:130px;padding:7px 9px">
+      </div>
+      <div style="margin-top:8px;font-size:12px;font-weight:600">לשוניות מותרות:</div><div>${_tabChecks('nu-tab', [])}</div>
+      <div style="margin-top:8px;font-size:12px;font-weight:600">עסקים מותרים:</div><div>${_compChecks('nu-comp', [])}</div>
+      <div id="nuStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
+      <button class="btn success" onclick="createUser(this)">צור משתמש</button>
+    </div></div>`;
+}
+window.createUser = async (btn) => {
+  const f = document.getElementById('addUserForm');
+  const username = f.querySelector('#nuUser').value.trim();
+  const password = f.querySelector('#nuPass').value;
+  const tabs = [...f.querySelectorAll('.nu-tab:checked')].map(x => x.value);
+  const companies = [...f.querySelectorAll('.nu-comp:checked')].map(x => x.value);
+  const st = document.getElementById('nuStatus');
+  if (!username || password.length < 6) { st.style.color = 'var(--danger)'; st.textContent = 'יש להזין שם משתמש וסיסמה (6+ תווים).'; return; }
+  if (!tabs.length) { st.style.color = 'var(--danger)'; st.textContent = 'בחר לפחות לשונית אחת.'; return; }
+  if (!companies.length) { st.style.color = 'var(--danger)'; st.textContent = 'בחר לפחות עסק אחד.'; return; }
+  if (btn) btn.disabled = true;
+  const r = await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, tabs, companies }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) btn.disabled = false;
+  if (r.ok) { _usersList.push(r.user); renderUsersModal(); }
+  else { st.style.color = 'var(--danger)'; st.textContent = r.error || 'שגיאה.'; }
+};
+window.editUserRow = (id) => {
+  const u = _usersList.find(x => x.id === id); if (!u) return;
+  const box = document.getElementById('edit-' + id); if (!box) return;
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div style="border-top:1px dashed var(--line);margin-top:8px;padding-top:8px">
+    <div style="font-size:12px;font-weight:600">לשוניות:</div><div>${_tabChecks('eu-tab-' + id, u.tabs)}</div>
+    <div style="margin-top:6px;font-size:12px;font-weight:600">עסקים:</div><div>${_compChecks('eu-comp-' + id, u.companies)}</div>
+    <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="eu-pass-${id}" type="text" placeholder="סיסמה חדשה (לא חובה)" dir="ltr" style="padding:6px 8px;font-size:12px">
+      <button class="btn success" style="padding:3px 12px;font-size:12px" onclick="saveUserEdit('${id}',this)">💾 שמור</button>
+    </div><div id="eu-st-${id}" style="font-size:12px;color:var(--danger);min-height:16px"></div></div>`;
+};
+window.saveUserEdit = async (id, btn) => {
+  const tabs = [...document.querySelectorAll('.eu-tab-' + id + ':checked')].map(x => x.value);
+  const companies = [...document.querySelectorAll('.eu-comp-' + id + ':checked')].map(x => x.value);
+  const pass = document.getElementById('eu-pass-' + id).value;
+  const st = document.getElementById('eu-st-' + id);
+  if (!tabs.length || !companies.length) { st.textContent = 'בחר לפחות לשונית ועסק אחד.'; return; }
+  const body = { tabs, companies }; if (pass) { if (pass.length < 6) { st.textContent = 'סיסמה קצרה מדי.'; return; } body.password = pass; }
+  if (btn) btn.disabled = true;
+  const r = await fetch('/api/users/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) btn.disabled = false;
+  if (r.ok) { const i = _usersList.findIndex(x => x.id === id); if (i >= 0) _usersList[i] = r.user; renderUsersModal(); }
+  else st.textContent = r.error || 'שגיאה.';
+};
+window.deleteUser = async (id) => {
+  const u = _usersList.find(x => x.id === id); if (!u) return;
+  if (!confirm(`למחוק את המשתמש "${u.username}"?`)) return;
+  const r = await fetch('/api/users/' + id, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) { _usersList = _usersList.filter(x => x.id !== id); renderUsersModal(); }
+  else alert(r.error || 'שגיאה');
+};
 
 async function renderStatus() {
   const h = await api('/api/health');

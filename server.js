@@ -21,6 +21,7 @@ import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connect
 import { listTeam, findMember, TEAM } from './team.js';
 import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields } from './chat.js';
 import mailer from './mailer.js';
+import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
 
@@ -118,8 +119,13 @@ const json = (res, data, code = 200) => {
   res.end(JSON.stringify(data));
 };
 
-// GET /api/companies
-add('GET', /^\/api\/companies$/, (req, res) => json(res, load().companies));
+// GET /api/companies — משתמש צפייה רואה רק את העסקים שהורשה אליהם
+add('GET', /^\/api\/companies$/, (req, res) => {
+  const all = load().companies || [];
+  const u = req.user;
+  if (u && u.role !== 'admin' && Array.isArray(u.companies)) return json(res, all.filter(c => u.companies.includes(c.id)));
+  json(res, all);
+});
 
 // GET /api/events?companyId=
 add('GET', /^\/api\/events$/, (req, res, _p, q) => {
@@ -1794,6 +1800,114 @@ add('DELETE', /^\/api\/bank$/, (req, res, _p, q) => {
   json(res, { ok: true });
 });
 
+// ================= התחברות והרשאות =================
+const VALID_TABS = ['home', 'events', 'clients', 'invoicing', 'quotes', 'contractors', 'payroll', 'bank', 'team', 'connections'];
+const uid = () => id('usr');
+const cleanUsername = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
+
+// GET /api/auth/status — האם צריך הגדרה ראשונית, והאם המשתמש מחובר
+add('GET', /^\/api\/auth\/status$/, (req, res) => {
+  const db = load();
+  const setupNeeded = !(db.users || []).some(u => u.role === 'admin');
+  const user = getSessionUser(db, req);
+  json(res, { ok: true, setupNeeded, authenticated: !!user, user: publicUser(user) });
+});
+
+// POST /api/auth/setup { username, password } — יצירת משתמש ההנהלה הראשון (רק אם אין עדיין מנהל)
+add('POST', /^\/api\/auth\/setup$/, (req, res, _p, _q, body) => {
+  const db = load();
+  if ((db.users || []).some(u => u.role === 'admin')) return json(res, { error: 'המערכת כבר מוגדרת' }, 400);
+  const username = cleanUsername(body?.username);
+  const password = String(body?.password || '');
+  if (username.length < 2) return json(res, { error: 'שם משתמש קצר מדי' }, 400);
+  if (password.length < 6) return json(res, { error: 'הסיסמה חייבת להיות באורך 6 תווים לפחות' }, 400);
+  const { salt, hash } = hashPassword(password);
+  const user = { id: uid(), username, salt, hash, role: 'admin', tabs: [], companies: [], createdAt: new Date().toISOString() };
+  db.users = db.users || []; db.users.push(user);
+  const token = createSession(db, user.id);
+  save(db);
+  setSessionCookie(res, token);
+  json(res, { ok: true, user: publicUser(user) });
+});
+
+// POST /api/auth/login { username, password }
+add('POST', /^\/api\/auth\/login$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const username = cleanUsername(body?.username);
+  const u = (db.users || []).find(x => x.username === username);
+  if (!u || !verifyPassword(String(body?.password || ''), u.salt, u.hash)) {
+    return json(res, { error: 'שם משתמש או סיסמה שגויים' }, 401);
+  }
+  const token = createSession(db, u.id);
+  save(db);
+  setSessionCookie(res, token);
+  json(res, { ok: true, user: publicUser(u) });
+});
+
+// POST /api/auth/logout
+add('POST', /^\/api\/auth\/logout$/, (req, res) => {
+  const db = load();
+  const u = getSessionUser(db, req);
+  if (u && u._token) { destroySession(db, u._token); save(db); }
+  clearSessionCookie(res);
+  json(res, { ok: true });
+});
+
+// GET /api/auth/me — פרטי המשתמש המחובר
+add('GET', /^\/api\/auth\/me$/, (req, res) => {
+  const db = load();
+  json(res, { ok: true, user: publicUser(getSessionUser(db, req)) });
+});
+
+// GET /api/users — רשימת משתמשים (מנהל בלבד)
+add('GET', /^\/api\/users$/, (req, res) => {
+  const db = load();
+  json(res, { ok: true, users: (db.users || []).map(publicUser) });
+});
+
+// POST /api/users { username, password, tabs, companies } — יצירת משתמש צפייה (מנהל בלבד)
+add('POST', /^\/api\/users$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const username = cleanUsername(body?.username);
+  const password = String(body?.password || '');
+  if (username.length < 2) return json(res, { error: 'שם משתמש קצר מדי' }, 400);
+  if (password.length < 6) return json(res, { error: 'הסיסמה חייבת להיות באורך 6 תווים לפחות' }, 400);
+  if ((db.users || []).some(u => u.username === username)) return json(res, { error: 'שם המשתמש כבר קיים' }, 400);
+  const tabs = Array.isArray(body?.tabs) ? body.tabs.filter(t => VALID_TABS.includes(t)) : [];
+  const companies = Array.isArray(body?.companies) ? body.companies.filter(Boolean) : [];
+  const { salt, hash } = hashPassword(password);
+  const user = { id: uid(), username, salt, hash, role: 'viewer', tabs, companies, createdAt: new Date().toISOString() };
+  db.users = db.users || []; db.users.push(user);
+  save(db);
+  json(res, { ok: true, user: publicUser(user) });
+});
+
+// PUT /api/users/:id { tabs?, companies?, password? } — עדכון משתמש צפייה (מנהל בלבד)
+add('PUT', /^\/api\/users\/([^/]+)$/, (req, res, params, _q, body) => {
+  const db = load();
+  const u = (db.users || []).find(x => x.id === params[0]);
+  if (!u) return json(res, { error: 'לא נמצא' }, 404);
+  if (u.role === 'admin') return json(res, { error: 'לא ניתן לשנות הרשאות של משתמש הנהלה' }, 400);
+  if (Array.isArray(body?.tabs)) u.tabs = body.tabs.filter(t => VALID_TABS.includes(t));
+  if (Array.isArray(body?.companies)) u.companies = body.companies.filter(Boolean);
+  if (body?.password) { if (String(body.password).length < 6) return json(res, { error: 'סיסמה קצרה מדי' }, 400); const { salt, hash } = hashPassword(String(body.password)); u.salt = salt; u.hash = hash; }
+  save(db);
+  json(res, { ok: true, user: publicUser(u) });
+});
+
+// DELETE /api/users/:id — מחיקת משתמש צפייה (מנהל בלבד)
+add('DELETE', /^\/api\/users\/([^/]+)$/, (req, res, params) => {
+  const db = load();
+  const u = (db.users || []).find(x => x.id === params[0]);
+  if (!u) return json(res, { error: 'לא נמצא' }, 404);
+  if (u.role === 'admin') return json(res, { error: 'לא ניתן למחוק משתמש הנהלה' }, 400);
+  db.users = (db.users || []).filter(x => x.id !== params[0]);
+  // מחיקת סשנים של המשתמש
+  for (const [t, s] of Object.entries(db.sessions || {})) if (s && s.userId === params[0]) delete db.sessions[t];
+  save(db);
+  json(res, { ok: true });
+});
+
 // GET /api/health
 add('GET', /^\/api\/health$/, (req, res) => json(res, {
   ok: true,
@@ -1852,6 +1966,30 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const q = Object.fromEntries(url.searchParams);
   if (url.pathname.startsWith('/api/')) {
+    // ---- שכבת הרשאות ----
+    const authDb = load();
+    const anyAdmin = (authDb.users || []).some(u => u.role === 'admin');
+    const authUser = getSessionUser(authDb, req);
+    const isPublicAuth = (url.pathname === '/api/auth/status')
+      || (url.pathname === '/api/auth/login' && req.method === 'POST')
+      || (url.pathname === '/api/auth/setup' && req.method === 'POST');
+    const isLogout = url.pathname === '/api/auth/logout';
+    const isUsersRoute = /^\/api\/users(\/|$)/.test(url.pathname);
+    if (!isPublicAuth) {
+      if (!anyAdmin) return json(res, { error: 'setup_required' }, 401);
+      if (!authUser) return json(res, { error: 'unauthorized' }, 401);
+      // ניהול משתמשים — מנהל בלבד
+      if (isUsersRoute && authUser.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+      // משתמש צפייה — קריאה בלבד + הגבלת עסקים
+      if (authUser.role !== 'admin' && !isLogout) {
+        if (req.method !== 'GET') return json(res, { error: 'אין הרשאה לפעולה זו (צפייה בלבד)' }, 403);
+        const comp = q.companyId || null;
+        if (comp && Array.isArray(authUser.companies) && !authUser.companies.includes(comp)) {
+          return json(res, { error: 'אין הרשאה לעסק זה' }, 403);
+        }
+      }
+    }
+    req.user = authUser;
     const route = routes.find(r => r.method === req.method && r.pattern.test(url.pathname));
     if (!route) return json(res, { error: 'route not found' }, 404);
     const params = (url.pathname.match(route.pattern) || []).slice(1);

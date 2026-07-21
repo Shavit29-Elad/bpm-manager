@@ -171,3 +171,8 @@ tbody tr:last-child td{border-bottom:none}
 ::-webkit-scrollbar{width:11px;height:11px}
 ::-webkit-scrollbar-thumb{background:#d4d8e8;border-radius:8px;border:3px solid transparent;background-clip:content-box}
 ::-webkit-scrollbar-thumb:hover{background:#c0c5db;background-clip:content-box}
+
+/* מצב צפייה (משתמש עם הרשאות צפייה בלבד) — הסתרת כפתורי פעולה (יצירה/עריכה/מחיקה) */
+.viewer-mode .btn.primary,
+.viewer-mode .btn.success,
+.viewer-mode .btn.danger { display: none !important; }
