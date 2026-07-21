@@ -475,6 +475,15 @@ export async function updateSupplier(id, data) {
 }
 export async function createExpense(body) { const r = await api('/expenses', { method: 'POST', body }); clearDataCache(); return r; }
 export async function deleteExpense(id) { const r = await api(`/expenses/${encodeURIComponent(id)}`, { method: 'DELETE' }); clearDataCache(); return r; }
+// עדכון תיאור של הוצאה קיימת בחשבונית ירוקה (שולף את המסמך המלא ומעדכן רק את התיאור)
+export async function updateExpenseDescription(id, description) {
+  const cur = await getExpense(id);
+  const body = { ...cur, description: String(description || '') };
+  delete body.url; delete body.creationDate; delete body.updated; delete body.status;
+  const r = await api(`/expenses/${encodeURIComponent(id)}`, { method: 'PUT', body });
+  clearDataCache();
+  return r;
+}
 
 // ===== טיוטות הוצאה (מה שהעלינו וממתין ל-OCR/אישור) =====
 const DRAFT_STATUS = { 10: 'ממתין לאישור', 50: 'נכשל', 200: 'נדחה' };
@@ -633,5 +642,5 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;

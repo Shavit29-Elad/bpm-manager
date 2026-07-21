@@ -844,7 +844,15 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/update$/, (req, res, params, _q
   const b = body || {};
   if (b.number != null) p.number = String(b.number).trim();
   if (b.date) p.date = String(b.date).slice(0, 10);
-  if (b.description != null) p.description = String(b.description).trim();
+  if (b.description != null) {
+    p.description = String(b.description).trim();
+    // סנכרון לתיאור-הוצאה מותאם כדי שישתקף בהתאמות הבנק (אם ההוצאה קיימת בחשבונית ירוקה)
+    if (p.giExpenseId) {
+      db.expenseNotes = db.expenseNotes || {};
+      if (p.description) db.expenseNotes[p.giExpenseId] = p.description; else delete db.expenseNotes[p.giExpenseId];
+      for (const t of (db.bankTx || [])) for (const inv of (t.matchedInvoices || [])) if (inv.id === p.giExpenseId) inv.description = p.description;
+    }
+  }
   if (b.documentType != null) p.documentType = Number(b.documentType) || p.documentType;
   if (b.allocationNumber !== undefined) p.allocationNumber = String(b.allocationNumber || '').replace(/[^\d]/g, '').trim() || null;
   if (b.amount != null && b.amount !== '') {
@@ -1679,6 +1687,28 @@ add('GET', /^\/api\/suppliers\/([^/]+)\/documents$/, async (req, res, params) =>
   try { json(res, await greenInvoice.supplierExpenses(params[0])); } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/expenses/notes — מפת תיאורים מותאמים להוצאות (override) לשימוש בהתאמות הבנק
+add('GET', /^\/api\/expenses\/notes$/, (req, res) => json(res, load().expenseNotes || {}));
+
+// POST /api/expenses/:id/note { description } — עריכת תיאור הוצאה בחשבונית ירוקה + עדכון בהתאמות הבנק
+add('POST', /^\/api\/expenses\/([^/]+)\/note$/, async (req, res, params, _q, body) => {
+  const id = params[0];
+  const desc = String(body?.description ?? '').trim();
+  // 1) עדכון בחשבונית ירוקה עצמה (המסמך האמיתי)
+  let greenInvoiceUpdated = false, giError = null;
+  if (greenInvoice.haveCredentials()) {
+    try { await greenInvoice.updateExpenseDescription(id, desc); greenInvoiceUpdated = true; }
+    catch (e) { giError = e.message; }
+  }
+  // 2) שמירת override מקומי + עדכון תנועות הבנק המותאמות (כדי שישתקף גם אם ה-API נכשל)
+  const db = load();
+  db.expenseNotes = db.expenseNotes || {};
+  if (desc) db.expenseNotes[id] = desc; else delete db.expenseNotes[id];
+  for (const t of (db.bankTx || [])) for (const inv of (t.matchedInvoices || [])) if (inv.id === id) inv.description = desc;
+  save(db);
+  json(res, { ok: true, id, description: desc, greenInvoiceUpdated, giError });
+});
+
 // GET /api/expenses/quick-search?q= — חיפוש מסמכי הוצאה לפי מספר/תיאור
 add('GET', /^\/api\/expenses\/quick-search$/, async (req, res, _p, q) => {
   if (!greenInvoice.haveCredentials()) return json(res, { items: [] });
@@ -1717,6 +1747,8 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
     try { expenses = await greenInvoice.expensesInRange(from, to); } catch (e) { /* הוצאות אופציונליות */ }
   }
   const matched = attachReceipts(matchCredits(parsed, invoices), receipts);
+  // החלת תיאורים מותאמים (override) על ההוצאות לפני ההתאמה
+  try { const _notes = load().expenseNotes || {}; if (Object.keys(_notes).length) expenses.forEach(e => { if (_notes[e.id]) e.description = _notes[e.id]; }); } catch { }
   // התאמת צד ההוצאות: חשבוניות ספקים ↔ תנועות חובה (אוטומטי כמו בהכנסות)
   try {
     for (const dm of matchDebits(parsed, expenses)) {

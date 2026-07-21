@@ -2057,13 +2057,15 @@ async function renderContractors(c) {
   // עדכון אוטומטי של שמות הקבלנים לפי חשבונית ירוקה (רק התאמות ודאיות) לפני הטעינה
   const sync = await fetch('/api/contractors/auto-sync-names', { method: 'POST' }).then(x => x.json()).catch(() => ({ changed: 0 }));
   _ctrSyncNote = (sync && sync.changed) ? `עודכנו ${sync.changed} שמות קבלנים לפי חשבונית ירוקה` : '';
-  const [pay, sup, dr, ms, spRes] = await Promise.all([
+  const [pay, sup, dr, ms, spRes, notes] = await Promise.all([
     api(`/api/contractors/payables?companyId=${state.company}`),
     api('/api/suppliers').catch(() => []),
     api('/api/expense-drafts').catch(() => ({ drafts: [] })),
     api('/api/mail/status').catch(() => null),
     api('/api/supplier-payables').catch(() => ({ payables: [] })),
+    api('/api/expenses/notes').catch(() => ({})),
   ]);
+  _expenseNotes = (notes && typeof notes === 'object' && !notes.error) ? notes : {};
   _mailStatus = ms || _mailStatus;
   const supPayables = Array.isArray(spRes?.payables) ? spRes.payables : [];
   _supPayables = supPayables;
@@ -2788,11 +2790,29 @@ function renderSupplierDetail() {
       : `<div class="empty">לא נמצאו מסמכי הוצאה לקבלן זה בחשבונית ירוקה.</div>`}`;
 }
 function supDocRow(d) {
-  const acts = d.url ? `<div style="display:flex;gap:6px"><a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">תצוגה 👁</a>
-    <a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" download target="_blank" rel="noopener">הורדה ↓</a></div>` : '<span class="muted">—</span>';
+  const desc = (_expenseNotes[d.id] != null ? _expenseNotes[d.id] : d.category) || '';
+  const isAdmin = state.user && state.user.role === 'admin';
+  const viewDl = d.url ? `<a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">תצוגה 👁</a>
+    <a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" download target="_blank" rel="noopener">הורדה ↓</a>` : '';
+  const editBtn = (d.id && isAdmin) ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="editExpenseNote('${d.id}')">✏️ ערוך תיאור</button>` : '';
+  const acts = (viewDl || editBtn) ? `<div style="display:flex;gap:6px;flex-wrap:wrap">${viewDl}${editBtn}</div>` : '<span class="muted">—</span>';
   return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>${escapeHtml(String(d.number || '—'))}</td>
-    <td>${escapeHtml(d.category || '')}</td><td style="white-space:nowrap">${money(d.amount)}</td><td>${acts}</td></tr>`;
+    <td>${escapeHtml(desc)}</td><td style="white-space:nowrap">${money(d.amount)}</td><td>${acts}</td></tr>`;
 }
+// עריכת תיאור חשבונית ספק — מעדכן בחשבונית ירוקה ובהתאמות הבנק
+window.editExpenseNote = async (id) => {
+  const cur = (_expenseNotes[id] != null ? _expenseNotes[id] : ((_supDocs || []).find(d => d.id === id) || {}).category) || '';
+  const v = prompt('תיאור החשבונית (יעודכן בחשבונית ירוקה ובהתאמות הבנק):', cur);
+  if (v === null) return;
+  const r = await fetch(`/api/expenses/${id}/note`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: v }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r.ok) { alert('שגיאה: ' + (r.error || '')); return; }
+  _expenseNotes[id] = v;
+  for (const d of (_supDocs || [])) if (d.id === id) d.category = v;
+  for (const t of (_bankList || [])) for (const inv of (t.matchedInvoices || [])) if (inv.id === id) inv.description = v;
+  if (r.greenInvoiceUpdated === false) alert('התיאור עודכן במערכת ובהתאמות הבנק. העדכון בחשבונית ירוקה עצמה לא הצליח' + (r.giError ? ': ' + r.giError : '') + '.');
+  if (state.tab === 'contractors') renderSupplierDetail();
+  else if (state.tab === 'bank') renderBank($('#content'), true);
+};
 // העלאת קובץ חשבונית של קבלן → נכנס לחשבונית ירוקה כטיוטת הוצאה (OCR), ממתין לאישור
 window.pickExpenseFile = () => {
   const inp = document.createElement('input');
@@ -3338,6 +3358,7 @@ window.setBankSort = (key) => {
 const DOC_TYPE_SHORT = { 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 300: 'חשבון עסקה', 330: 'זיכוי', 10: 'הצעת מחיר' };
 let _bankList = [];
 let _bankBalance = null;
+let _expenseNotes = {};
 
 function bankPeriodMatch(t) {
   const per = state.bankPer || { mode: 'all' };
