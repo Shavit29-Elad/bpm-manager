@@ -377,13 +377,17 @@ window.openDeriveEditor = async (id, type, linked) => {
   const m = document.getElementById('derModal') || (() => { const x = document.createElement('div'); x.id = 'derModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען שורות מהמסמך…</div></div>`;
-  const r = await api(`/api/documents/${id}/lines`).catch(() => ({ error: 'שגיאת רשת' }));
+  // שולפים במקביל: שורות המקור + התאריך של המסמך האחרון *מסוג היעד* (כמו שחשבונית ירוקה בודקת לכל סוג בנפרד)
+  const [r, ld] = await Promise.all([
+    api(`/api/documents/${id}/lines`).catch(() => ({ error: 'שגיאת רשת' })),
+    api(`/api/documents/last-date?type=${Number(type)}`).catch(() => ({})),
+  ]);
   if (!r || !r.ok) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת השורות: ${escapeHtml(String(r?.error || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">סגור</button></div></div>`; return; }
   const needsPay = DER_PAYMENT_DOCS.has(Number(type));
   _derEdit = {
     id, type: Number(type), linked: linked === true || linked === 'true',
     clientName: r.client?.name || '', date: todayIso(),
-    lastDocDate: r.lastDocDate || null, allowBackdate: false,
+    lastDocDate: (ld && ld.lastDocDate) || null, lastDocTypeName: DOC_TYPE_NAMES[Number(type)] || 'מסוג זה', allowBackdate: false,
     description: r.description || '', remarks: r.remarks || '',
     items: (r.items || []).map(it => ({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })),
     payments: needsPay ? [{ type: 4, price: 0, date: todayIso(), chequeNum: '', bankName: '' }] : [],
@@ -478,9 +482,9 @@ function renderDeriveEditor() {
       ${e.lastDocDate ? `<div style="margin-top:6px;font-size:12px">
         <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer">
           <input type="checkbox" ${e.allowBackdate ? 'checked' : ''} onchange="derToggleBackdate(this.checked)">
-          <span>אפשר תאריך מוקדם מ-${fmtDate(e.lastDocDate)} (תאריך המסמך האחרון)</span>
+          <span>אפשר תאריך מוקדם מ-${fmtDate(e.lastDocDate)} (${escapeHtml(e.lastDocTypeName || '')} האחרון/ה)</span>
         </label>
-        ${e.allowBackdate ? `<div class="warn-banner" style="margin-top:6px;font-size:11.5px">⚠ הפקת מסמך בתאריך מוקדם מהמסמך האחרון היא באחריותך — מומלץ להתייעץ עם רו״ח.</div>` : ''}
+        ${e.allowBackdate ? `<div class="warn-banner" style="margin-top:6px;font-size:11.5px">⚠ הפקת מסמך בתאריך מוקדם מ${escapeHtml(e.lastDocTypeName || 'המסמך')} האחרון/ה היא באחריותך — מומלץ להתייעץ עם רו״ח.</div>` : ''}
       </div>` : ''}
     </div>
     <label style="font-size:13px;display:block;margin-bottom:8px">נושא/כותרת <input class="der-descr" value="${escAttr(e.description)}" placeholder="נושא המסמך" style="width:100%;padding:6px 8px;margin-top:3px"></label>
