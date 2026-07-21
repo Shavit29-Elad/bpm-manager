@@ -2266,17 +2266,28 @@ window.loadApprLinkEvents = async () => {
     ${e.suggested ? '<span class="tag" style="background:#e7f7ee;color:var(--accent2);font-size:10px">מוצע</span>' : ''}
   </label>`).join('');
   box.innerHTML = `<div style="border:1px solid var(--accent);border-radius:10px;overflow:hidden;background:var(--panel2)">
-    <div style="padding:8px 10px;font-size:12.5px;font-weight:600;background:var(--panel)">🔗 קישור לאירועים ב"קבלנים לתשלום" (${evs.length} פתוחים)
-      <div class="muted" style="font-size:11px;font-weight:400;margin-top:2px">סימנתי מראש הצעה — ודא ותקן. האירועים שתסמן ירדו מ"קבלנים לתשלום" (מכוסים ע״י החשבונית).</div></div>
+    <div style="padding:8px 10px;font-size:12.5px;font-weight:600;background:var(--panel);display:flex;align-items:center;gap:8px">
+      <span style="flex:1">🔗 קישור לאירועים ב"קבלנים לתשלום" (${evs.length} פתוחים)
+      <div class="muted" style="font-size:11px;font-weight:400;margin-top:2px">סימנתי מראש הצעה — ודא ותקן. האירועים שתסמן ירדו מ"קבלנים לתשלום" (מכוסים ע״י החשבונית).</div></span>
+      <label style="display:flex;gap:5px;align-items:center;font-size:12px;font-weight:600;white-space:nowrap;cursor:pointer">
+        <input type="checkbox" id="apLinkSelectAll" onchange="toggleApprLinkAll(this.checked)"> סמן הכל</label>
+    </div>
     ${rows}
     <div id="apLinkSum" style="padding:6px 10px;font-size:11.5px" class="muted"></div>
   </div>`;
   updateApprLinkSum();
 };
+window.toggleApprLinkAll = (checked) => {
+  document.querySelectorAll('#apLinkEvents .ap-link-ev').forEach(cb => { cb.checked = checked; });
+  updateApprLinkSum();
+};
 window.updateApprLinkSum = () => {
   const box = document.getElementById('apLinkSum'); if (!box) return;
   let sum = 0, n = 0;
-  document.querySelectorAll('#apLinkEvents .ap-link-ev').forEach(cb => { if (cb.checked) { sum += Number(_apLinkEventsData[+cb.dataset.i]?.amount) || 0; n++; } });
+  const all = document.querySelectorAll('#apLinkEvents .ap-link-ev');
+  all.forEach(cb => { if (cb.checked) { sum += Number(_apLinkEventsData[+cb.dataset.i]?.amount) || 0; n++; } });
+  const selAll = document.getElementById('apLinkSelectAll');
+  if (selAll) selAll.checked = all.length > 0 && n === all.length;
   box.textContent = n ? `נבחרו ${n} אירועים · סה"כ ${money(sum)}` : 'לא נבחרו אירועים לקישור';
 };
 function apGetLinkedEvents() {
