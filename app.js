@@ -2,7 +2,34 @@
 const state = { company: null, companies: [], tab: 'home', user: null };
 const $ = (s) => document.querySelector(s);
 const money = (n) => (n == null ? '—' : '₪' + Number(n).toLocaleString('he-IL'));
-const api = (p) => fetch(p).then(r => r.json());
+
+// ---- מטמון בזיכרון לבקשות GET: מעבר חוזר ללשונית מציג מיד מהמטמון (מתרענן אחרי כתיבה) ----
+const _apiCache = new Map(); // url -> { t, txt }
+const API_TTL = 60000;       // תוקף 60 שניות
+function clearApiCache() { _apiCache.clear(); }
+const api = (p) => {
+  const noCache = p.indexOf('fresh=1') !== -1; // כפתורי "רענן" תמיד מהשרת
+  const hit = noCache ? null : _apiCache.get(p);
+  if (hit && Date.now() - hit.t < API_TTL) {
+    try { return Promise.resolve(JSON.parse(hit.txt)); } catch { /* נטען מחדש */ }
+  }
+  return fetch(p).then(r => r.text().then(txt => {
+    let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = {}; }
+    if (!noCache && r.ok && (r.headers.get('content-type') || '').includes('json')) _apiCache.set(p, { t: Date.now(), txt });
+    return data;
+  }));
+};
+// כל כתיבה (POST/PUT/DELETE) ל-API מנקה את המטמון כדי שהנתונים יישארו טריים
+(() => {
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const method = ((init && init.method) || 'GET').toUpperCase();
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const pr = _origFetch(input, init);
+    if (method !== 'GET' && url.indexOf('/api/') !== -1) pr.then(() => clearApiCache()).catch(() => {});
+    return pr;
+  };
+})();
 
 const TAB_LABELS = { home: '🏠 בית', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים' };
 
@@ -64,7 +91,18 @@ async function startApp() {
 
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-    t.classList.add('active'); state.tab = t.dataset.tab; render();
+    t.classList.add('active'); state.tab = t.dataset.tab;
+    if ((location.hash || '').replace('#', '') !== state.tab) location.hash = state.tab; // שמירה ב-URL (רענון/אחורה)
+    render();
+  });
+  // ניווט אחורה/קדימה בדפדפן + רענון — מכבד את הלשונית ב-URL
+  window.addEventListener('hashchange', () => {
+    const h = (location.hash || '').replace('#', '');
+    if (!h || h === state.tab) return;
+    const el = [...document.querySelectorAll('.tab')].find(x => x.dataset.tab === h && x.style.display !== 'none');
+    if (!el) return;
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    el.classList.add('active'); state.tab = h; render();
   });
   setupModal();
   await renderStatus();
@@ -80,9 +118,12 @@ function applyPermissions() {
     const show = !allowed || allowed.has(t.dataset.tab);
     t.style.display = show ? '' : 'none';
   });
-  // לשונית פעילה ראשונה מתוך המותרות
-  const firstVisible = [...document.querySelectorAll('.tab')].find(t => t.style.display !== 'none');
-  if (firstVisible) { document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); firstVisible.classList.add('active'); state.tab = firstVisible.dataset.tab; }
+  // לשונית פעילה: לפי ה-URL אם תקפה ומותרת (כדי שרענון יחזיר לאותה לשונית), אחרת הראשונה המותרת
+  const tabsArr = [...document.querySelectorAll('.tab')];
+  const hashTab = (location.hash || '').replace('#', '');
+  const hashEl = tabsArr.find(t => t.dataset.tab === hashTab && t.style.display !== 'none');
+  const target = hashEl || tabsArr.find(t => t.style.display !== 'none');
+  if (target) { tabsArr.forEach(x => x.classList.remove('active')); target.classList.add('active'); state.tab = target.dataset.tab; }
   // מצב צפייה — הסתרת כפתורי פעולה
   document.body.classList.toggle('viewer-mode', !isAdmin);
   // פרטי משתמש + התנתקות + ניהול משתמשים (למנהל) בכותרת
@@ -2053,10 +2094,13 @@ window.doFollowup = async (id, type, btn) => {
 let _suppliers = [];
 let _ctrSyncNote = ''; // הודעה על עדכון אוטומטי של שמות קבלנים לפי חשבונית ירוקה
 async function renderContractors(c) {
-  c.innerHTML = `<div class="panel"><div class="empty">טוען קבלנים ומעדכן שמות לפי חשבונית ירוקה…</div></div>`;
-  // עדכון אוטומטי של שמות הקבלנים לפי חשבונית ירוקה (רק התאמות ודאיות) לפני הטעינה
-  const sync = await fetch('/api/contractors/auto-sync-names', { method: 'POST' }).then(x => x.json()).catch(() => ({ changed: 0 }));
-  _ctrSyncNote = (sync && sync.changed) ? `עודכנו ${sync.changed} שמות קבלנים לפי חשבונית ירוקה` : '';
+  c.innerHTML = `<div class="panel"><div class="empty">טוען קבלנים…</div></div>`;
+  // עדכון אוטומטי של שמות הקבלנים לפי חשבונית ירוקה — רק בפתיחה הראשונה בסשן (לא בכל מעבר לשונית)
+  if (!state._namesSynced) {
+    state._namesSynced = true;
+    const sync = await fetch('/api/contractors/auto-sync-names', { method: 'POST' }).then(x => x.json()).catch(() => ({ changed: 0 }));
+    _ctrSyncNote = (sync && sync.changed) ? `עודכנו ${sync.changed} שמות קבלנים לפי חשבונית ירוקה` : '';
+  }
   const [pay, sup, dr, ms, spRes, notes] = await Promise.all([
     api(`/api/contractors/payables?companyId=${state.company}`),
     api('/api/suppliers').catch(() => []),
