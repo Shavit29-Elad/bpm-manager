@@ -3283,9 +3283,12 @@ async function renderTeam(c) {
       </div>
       ${notice}
       <div id="chatMsgs" style="flex:1;overflow:auto;display:flex;flex-direction:column;gap:10px;padding:4px"></div>
-      <div style="display:flex;gap:8px;margin-top:12px">
-        <input id="chatInput" placeholder="כתוב הודעה..." style="flex:1" ${data.configured ? '' : 'disabled'} onkeydown="if(event.key==='Enter')sendChat()"/>
-        <button class="btn primary" onclick="sendChat()" ${data.configured ? '' : 'disabled'}>שלח</button>
+      <div id="chatAttach" class="muted" style="display:none;align-items:center;gap:8px;margin-top:8px;font-size:12px"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;align-items:flex-end">
+        <input type="file" id="chatImgInput" accept="image/*" style="display:none" onchange="onChatImage(this)">
+        <button class="btn ghost" title="צרף צילום מסך" style="padding:9px 12px" onclick="document.getElementById('chatImgInput').click()" ${data.configured ? '' : 'disabled'}>📷</button>
+        <textarea id="chatInput" rows="1" placeholder="כתוב הודעה… (Enter לשליחה · Shift+Enter לשורה חדשה · אפשר להדביק צילום מסך)" style="flex:1;resize:none;min-height:42px;max-height:150px;font-family:inherit;line-height:1.5" ${data.configured ? '' : 'disabled'} onkeydown="chatKeydown(event)" oninput="chatAutoGrow(this)" onpaste="onChatPaste(event)"></textarea>
+        <button class="btn primary" style="align-self:flex-end" onclick="sendChat()" ${data.configured ? '' : 'disabled'}>שלח</button>
       </div>
     </div>`;
   }
@@ -3316,15 +3319,42 @@ function renderMsgs(msgs, typing) {
   box.scrollTop = box.scrollHeight;
 }
 
+// ---- צירוף צילום מסך לצ'אט (המנהל מראה לאיריס מסך מהמערכת) ----
+let _chatImage = null; // { data(base64), mime, name }
+function _readImageFile(f) {
+  const rd = new FileReader();
+  rd.onload = () => { _chatImage = { data: String(rd.result).split(',')[1] || '', mime: f.type || 'image/png', name: f.name || 'screenshot.png' }; showChatAttach(); };
+  rd.readAsDataURL(f);
+}
+window.onChatImage = (inp) => { const f = inp.files && inp.files[0]; if (f) _readImageFile(f); };
+window.onChatPaste = (e) => {
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for (const it of items) { if (it.type && it.type.indexOf('image/') === 0) { const f = it.getAsFile(); if (f) { _readImageFile(f); e.preventDefault(); return; } } }
+};
+window.clearChatImage = () => { _chatImage = null; const i = document.getElementById('chatImgInput'); if (i) i.value = ''; showChatAttach(); };
+function showChatAttach() {
+  const el = document.getElementById('chatAttach'); if (!el) return;
+  if (_chatImage) { el.style.display = 'flex'; el.innerHTML = `📷 ${escapeHtml(_chatImage.name)} מצורף <button class="btn ghost" style="padding:1px 8px;font-size:11px" onclick="clearChatImage()">הסר ✕</button>`; }
+  else { el.style.display = 'none'; el.innerHTML = ''; }
+}
+
+// Enter שולח, Shift+Enter יורד שורה; הטקסטאריה גדלה לפי התוכן
+window.chatKeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } };
+window.chatAutoGrow = (el) => { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 150) + 'px'; };
+
 window.sendChat = async () => {
   const inp = $('#chatInput'); if (!inp) return;
-  const text = inp.value.trim(); if (!text) return;
-  inp.value = ''; inp.disabled = true;
+  const text = inp.value.trim();
+  const img = _chatImage;
+  if (!text && !img) return;
+  inp.value = ''; inp.style.height = 'auto'; inp.disabled = true;
   const existing = await api(`/api/team/${state.activeChat}/messages`);
-  renderMsgs([...existing, { role: 'user', content: text }], true);
+  renderMsgs([...existing, { role: 'user', content: (img ? '📷 צילום מסך' + (text ? ' — ' + text : '') : text) }], true);
   const r = await fetch(`/api/team/${state.activeChat}/message`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(img ? { text, image: { data: img.data, mime: img.mime } } : { text }),
   }).then(r => r.json());
+  _chatImage = null; showChatAttach();
   inp.disabled = false;
   renderMsgs(r.messages || existing);
   if (r.error) { const b = $('#chatMsgs'); if (b) b.innerHTML += `<div class="warn-banner">${r.error}</div>`; }

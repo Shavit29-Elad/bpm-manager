@@ -20,7 +20,7 @@ import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
 import { buildAppMap } from './appMap.js';
-import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields } from './chat.js';
+import { chatWithMember, chatWithMemberVision, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields } from './chat.js';
 import mailer from './mailer.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
 
@@ -1550,7 +1550,8 @@ add('GET', /^\/api\/team\/([^/]+)\/messages$/, (req, res, params) => {
 add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body) => {
   const id = params[0];
   const text = (body?.text || '').trim();
-  if (!text) return json(res, { error: 'חסר טקסט' }, 400);
+  const image = (body?.image && body.image.data) ? { data: String(body.image.data), mime: body.image.mime || 'image/png' } : null;
+  if (!text && !image) return json(res, { error: 'חסר טקסט' }, 400);
   if (!chatConfigured()) return json(res, { error: 'הצ\'אט לא מוגדר — הוסף ANTHROPIC_API_KEY ב-Render' }, 400);
 
   const db = load();
@@ -1578,9 +1579,12 @@ add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body
   const member = findMember(id);
   if (!member) return json(res, { error: 'עובד לא נמצא' }, 404);
   const history = db.chats[id] = db.chats[id] || [];
-  history.push({ role: 'user', content: text, at: now });
+  // לא שומרים את ה-base64 של התמונה ב-DB (רק סימון) כדי לא לנפח את המסמך
+  history.push({ role: 'user', content: image ? ('📷 צילום מסך' + (text ? ' — ' + text : '')) : text, hasImage: !!image, at: now });
   try {
-    const reply = await chatWithMember(member, history, db.memory[id] || '', appMap);
+    const reply = image
+      ? await chatWithMemberVision(member, history, db.memory[id] || '', appMap, image, text)
+      : await chatWithMember(member, history, db.memory[id] || '', appMap);
     history.push({ role: 'assistant', content: reply, at: new Date().toISOString() });
     save(db);
     json(res, { ok: true, messages: history });

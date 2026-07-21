@@ -87,6 +87,23 @@ export async function chatGroupReply(member, transcript, memory = '', appMap = '
   return complete(withContext(member, memory, appMap), [{ role: 'user', content }]);
 }
 
+// צ'אט אישי עם צילום מסך — המנהל מראה למעצבת מסך מהמערכת, והיא מנתחת אותו (ראייה ממוחשבת)
+export async function chatWithMemberVision(member, history, memory = '', appMap = '', image = {}, userText = '') {
+  const system = withContext(member, memory, appMap);
+  const recent = (history || []).slice(-8, -1).map(m => `${m.role === 'user' ? 'מנהל' : member.name}: ${m.content}`).join('\n');
+  const prompt = `${recent ? 'הקשר השיחה עד כה:\n' + recent + '\n\n' : ''}המנהל שלח צילום מסך מהמערכת (asfinance.co.il). ${userText ? 'הודעתו: ' + userText : 'נתחי אותו כמעצבת מוצר — מה את רואה, מה עובד טוב, ומה היית משפרת. תני המלצות קונקרטיות (צבעים, מרווחים, היררכיה) ובר-יישום.'}`;
+  const media = image.mime || 'image/png';
+  const data = image.data || '';
+  if (process.env.ANTHROPIC_API_KEY) {
+    const isPdf = media === 'application/pdf';
+    const block = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
+      : { type: 'image', source: { type: 'base64', media_type: media, data } };
+    return callAnthropicVision(system, [block, { type: 'text', text: prompt }], { maxTokens: 1300 });
+  }
+  return callGeminiVision(system, prompt, data, media, { maxTokens: 1300 });
+}
+
 // סיכום שיחה כבקשת פיתוח מובנית (JSON)
 export async function summarizeAsRequest(member, transcript) {
   const system = `אתה עוזר שממיר שיחה עם ${member.name} (${member.role}) לבקשת פיתוח מסודרת עבור מערכת הניהול. ענה אך ורק ב-JSON תקין, בלי טקסט נוסף.`;
