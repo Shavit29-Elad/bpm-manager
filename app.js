@@ -3268,8 +3268,16 @@ function bankTr(t) {
 
   if (isMatched) {
     biz = stack(mis.map(i => `<b>${escapeHtml(i.clientName || '')}</b>`));
-    invNo = stack(mis.map(i => `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url)}</span>`));
-    recNo = stack(mis.map(i => i.receipt ? `<span style="white-space:nowrap">קבלה #${i.receipt.number}${act(i.receipt.url)}</span>` : ((i.type == 320) ? '<span class="muted" style="font-size:11px">כלול בחשבונית</span>' : '—')));
+    // מסמך מסוג קבלה (400) תמיד בעמודת "קבלה". שאר הסוגים (מס/מס-קבלה/זיכוי) בעמודת החשבונית.
+    invNo = stack(mis.map(i => Number(i.type) === 400
+      ? '<span class="muted">—</span>'
+      : `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url)}</span>`));
+    recNo = stack(mis.map(i => {
+      if (Number(i.type) === 400) return `<span style="white-space:nowrap">קבלה #${i.number}${act(i.url)}</span>`;
+      if (i.receipt) return `<span style="white-space:nowrap">קבלה #${i.receipt.number}${act(i.receipt.url)}</span>`;
+      if (Number(i.type) === 320) return '<span class="muted" style="font-size:11px">כלול בחשבונית</span>';
+      return '—';
+    }));
     invAmt = stack(mis.map(i => money(i.amount)));
     const sumInv = mis.reduce((s, i) => s + (Number(i.amount) || 0), 0);
     const whAmt = sumInv - t.absAmount;
@@ -3331,7 +3339,7 @@ window.saveBankNotes = (id, val) => fetch(`/api/bank/${id}`, { method: 'PUT', he
 
 // ---- שיוך ידני של חשבונית/קבלה לתנועת בנק ----
 let _linkTxId = null, _linkSel = [], _linkClients = null, _linkSuppliers = null, _linkClientDocs = [], _linkClientName = '';
-let _linkMode = 'clients', _linkDocsKind = 'income', _linkQuery = '', _linkNumTimer = null, _linkNumResults = [];
+let _linkMode = 'clients', _linkDocsKind = 'income', _linkQuery = '', _linkNumTimer = null, _linkNumResults = [], _linkIncludeCredits = false;
 // התאמת סכום בין קבלה לחשבונית (מלא או פחות 5% ניכוי)
 const _amtClose = (a, b) => { const t = Math.max(3, (a || 0) * 0.004); return Math.min(Math.abs(a - b), Math.abs(a - b * 0.95)) <= t; };
 function linkSelHtml() {
@@ -3348,7 +3356,7 @@ window.openLinkModal = async (txId) => {
   const tx = (_bankList || []).find(t => t.id === txId);
   _linkTxId = txId;
   _linkSel = tx ? JSON.parse(JSON.stringify(tx.matchedInvoices || [])) : [];
-  _linkClientDocs = []; _linkClientName = ''; _linkQuery = ''; _linkNumResults = [];
+  _linkClientDocs = []; _linkClientName = ''; _linkQuery = ''; _linkNumResults = []; _linkIncludeCredits = false;
   // תנועת זכות → ברירת מחדל לקוחות (הכנסה) · תנועת חובה → ספקים (הוצאה)
   _linkMode = (tx && tx.direction === 'debit') ? 'suppliers' : 'clients';
   let m = document.getElementById('linkModal');
@@ -3359,6 +3367,7 @@ window.openLinkModal = async (txId) => {
     <h3>שיוך ידני של מסמך${tx ? ` — ${tx.date} · ${money(tx.absAmount)}${tx.direction === 'debit' ? ' (חובה)' : ' (זכות)'}` : ''}</h3>
     <div style="margin:8px 0;padding:8px 10px;background:var(--panel2);border-radius:10px"><b style="font-size:13px">מקושר כרגע:</b><div id="linkSelBox" style="margin-top:4px">${linkSelHtml()}</div></div>
     <div style="display:flex;gap:6px;margin:6px 0">${seg('clients', '🏢 לקוחות')}${seg('suppliers', '🏭 ספקים')}</div>
+    <label id="linkCreditsWrap" style="display:${_linkMode === 'clients' ? 'flex' : 'none'};gap:6px;align-items:center;font-size:12px;margin:2px 0 4px;cursor:pointer"><input type="checkbox" id="linkCreditsChk" ${_linkIncludeCredits ? 'checked' : ''} onchange="toggleLinkCredits(this.checked)"> כלול גם חשבוניות זיכוי וקבלות שליליות</label>
     <input id="linkClientSearch" placeholder="חפש שם, או מספר מסמך…" style="width:100%;margin:6px 0" oninput="onLinkSearch(this.value)"/>
     <div id="linkNumResults"></div>
     <div id="linkClients" style="max-height:170px;overflow:auto"></div>
@@ -3385,10 +3394,12 @@ window.setLinkMode = async (mode) => {
   if (_linkMode === mode) return;
   _linkMode = mode; _linkClientDocs = []; _linkClientName = '';
   ['clients', 'suppliers'].forEach(mo => { const b = document.getElementById('linkSeg-' + mo); if (b) b.className = 'btn ' + (mo === mode ? 'primary' : 'ghost'); });
+  const cw = document.getElementById('linkCreditsWrap'); if (cw) cw.style.display = mode === 'clients' ? 'flex' : 'none';
   const dbox = document.getElementById('linkDocs'); if (dbox) dbox.innerHTML = '';
   await ensureLinkPool();
   renderLinkContacts(_linkQuery);
 };
+window.toggleLinkCredits = (v) => { _linkIncludeCredits = !!v; if (_linkClientDocs.length) renderLinkDocs(); };
 // חיפוש: מסנן את רשימת הלקוחות/ספקים לפי שם, ובמקביל מחפש מסמכים לפי מספר/תיאור
 window.onLinkSearch = (q) => {
   _linkQuery = q || '';
@@ -3463,7 +3474,12 @@ window.renderLinkDocs = () => {
   const qMatch = (d) => !q || String(d.number || '').includes(q) || (d.category || d.description || '').includes(q);
   const amountOf = (d) => isExp ? (d.amountIncVat ?? d.amount) : d.amountIncVat;
   let avail = _linkClientDocs.filter(d => !ids.has(d.id) && qMatch(d));
-  if (!isExp) { const allowed = [305, 320, 400]; avail = avail.filter(d => allowed.includes(Number(d.type)) && !(Number(d.type) === 400 && recs.has(String(d.number)))); }
+  if (!isExp) {
+    // ברירת מחדל: חשבונית מס / מס-קבלה / קבלה (חיוביות בלבד). עם הסימון — גם זיכוי (330) וקבלות שליליות.
+    const allowed = _linkIncludeCredits ? [305, 320, 400, 330] : [305, 320, 400];
+    avail = avail.filter(d => allowed.includes(Number(d.type)) && !(Number(d.type) === 400 && recs.has(String(d.number))));
+    if (!_linkIncludeCredits) avail = avail.filter(d => (Number(d.amountIncVat ?? d.amount) || 0) >= 0);
+  }
   const rows = avail.map(d => {
     const cn = isExp ? (d.supplierName || _linkClientName) : d.clientName;
     const j = encodeURIComponent(JSON.stringify({ id: d.id, number: d.number, type: d.type, clientName: cn, amount: amountOf(d), date: d.date, url: d.url, kind: isExp ? 'expense' : 'income' }));
