@@ -255,7 +255,7 @@ const DOC_TYPE_OPTIONS = [
 ];
 function initPeriod() {
   const now = new Date();
-  if (!state.period) state.period = 'year';
+  if (!state.period) state.period = 'month'; // ברירת מחדל: החודש הנוכחי (חלק המסמכים)
   if (!state.dashMonth) state.dashMonth = now.toISOString().slice(0, 7);
   if (!state.dashYear) state.dashYear = now.getFullYear();
   if (!state.rangeFrom) state.rangeFrom = state.dashMonth;
@@ -445,43 +445,48 @@ function docsTable(docs, opts = {}) {
 
 async function renderHome(c) {
   initPeriod();
+  const curYear = new Date().getFullYear();
   c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מחשבונית ירוקה…</div></div>`;
-  const d = await api(`/api/dashboard?companyId=${state.company}&${periodQuery()}`);
+  // סיכום עליון = סקירה שנתית קבועה (השנה הנוכחית); חלק המסמכים = לפי הבוררים שלמטה (ברירת מחדל: החודש הנוכחי)
+  const [sum, d] = await Promise.all([
+    api(`/api/dashboard?companyId=${state.company}&from=${curYear}-01&to=${curYear}-12&types=305,320`),
+    api(`/api/dashboard?companyId=${state.company}&${periodQuery()}`),
+  ]);
   const label = periodLabel();
-  const err = d.errors || {};
+  const err = d.errors || sum.errors || {};
   const kpi = (lbl, val, sub, color) => `<div class="card"><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
   const otherErrs = Object.keys(err).filter(k => k !== 'greenInvoice').map(k => err[k]);
   const docs = d.docs || [];
-  const incomeLabel = state.period === 'month' ? 'הכנסה החודש' : 'הכנסה בתקופה';
   c.innerHTML = `
     <div class="panel">
       <div class="row-between">
-        <div><h2>דף הבית — ${label}</h2><span class="muted">נתונים חיים מחשבונית ירוקה</span></div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${docTypeSelect()}${periodControls()}</div>
+        <div><h2>דף הבית — שנת ${curYear}</h2><span class="muted">סקירה שנתית · נתונים חיים מחשבונית ירוקה</span></div>
       </div>
       ${err.greenInvoice ? `<div class="warn-banner">חשבונית ירוקה לא מחוברת — חבר אותה בלשונית 🔌 חיבורים כדי לראות נתונים.</div>` : ''}
       <div class="cards" style="margin-top:14px">
-        ${kpi(incomeLabel, money(d.income), d.monthDocs != null ? `${d.monthDocs} מסמכים` : '', 'var(--accent2)')}
-        ${kpi('צפי מע"מ (18%)', money(d.vat), 'מתוך ההכנסה', 'var(--warn)')}
-        ${kpi('חיובים פתוחים', d.openInvoices != null ? d.openInvoices : '—', 'חשבון עסקה + חשבונית מס', 'var(--danger)')}
-        ${kpi('סכום מסמכים פתוחים', d.openInvoicesSum != null ? money(d.openInvoicesSum) : '—', 'סה"כ עסקה + מס פתוחים', 'var(--warn)')}
+        ${kpi('הכנסה השנה', money(sum.income), sum.monthDocs != null ? `${sum.monthDocs} מסמכים` : '', 'var(--accent2)')}
+        ${kpi('צפי מע"מ (18%)', money(sum.vat), 'מתוך ההכנסה', 'var(--warn)')}
+        ${kpi('חיובים פתוחים', sum.openInvoices != null ? sum.openInvoices : '—', 'חשבון עסקה + חשבונית מס', 'var(--danger)')}
+        ${kpi('סכום מסמכים פתוחים', sum.openInvoicesSum != null ? money(sum.openInvoicesSum) : '—', 'סה"כ עסקה + מס פתוחים', 'var(--warn)')}
       </div>
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
     </div>
-    ${state.period !== 'month' ? `<div class="panel">
-      <div class="row-between"><h2>פירוט לפי חודש</h2><span class="muted">${label}</span></div>
-      ${monthlyBreakdown(docs)}
-    </div>` : ''}
     <div class="panel" id="openInvWrap"><div class="empty">טוען חשבוניות פתוחות…</div></div>
     <div class="panel">
-      <div class="row-between"><h2>מסמכים — ${label}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
-      ${docsTable(docs, { showClient: true })}
+      <div class="row-between">
+        <div><h2>מסמכים — ${label}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${docTypeSelect()}${periodControls()}</div>
+      </div>
+      ${state.period !== 'month' ? `<div style="margin-top:12px">${monthlyBreakdown(docs)}</div>` : ''}
+      <div style="margin-top:12px">${docsTable(docs, { showClient: true })}</div>
     </div>`;
   loadOpenInvoices();
 }
 
 // ---- חשבוניות פתוחות בדף הבית (כמו "חיובים קרובים" בחשבונית ירוקה) ----
-let _openInv = null, _openInvErr = null, _openInvFilter = 'all';
+let _openInv = null, _openInvErr = null, _openInvFilter = 'all', _openInvExpanded = false;
+const OPEN_INV_PREVIEW = 4; // כמה לקוחות מציגים לפני "הצג עוד"
+window.toggleOpenInvExpand = () => { _openInvExpanded = !_openInvExpanded; renderOpenInvoices(); };
 async function loadOpenInvoices() {
   const wrap = document.getElementById('openInvWrap'); if (!wrap) return;
   const r = await api('/api/open-invoices').catch(() => ({ docs: [], error: 'שגיאת טעינה' }));
@@ -507,7 +512,14 @@ function renderOpenInvoices() {
       <div style="display:flex;gap:6px;flex-wrap:wrap">${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
     </div>
     ${_openInvErr ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(_openInvErr)}</div>` : ''}
-    ${clients.length ? `<div style="margin-top:12px;display:flex;flex-direction:column;gap:8px">${clients.map(openInvClientHtml).join('')}</div>`
+    ${clients.length ? (() => {
+      const shown = _openInvExpanded ? clients : clients.slice(0, OPEN_INV_PREVIEW);
+      const hidden = clients.length - shown.length;
+      const moreBtn = (hidden > 0 || _openInvExpanded)
+        ? `<button class="btn ghost" style="align-self:center;margin-top:4px;padding:7px 18px" onclick="toggleOpenInvExpand()">${_openInvExpanded ? 'הצג פחות ▲' : `הצג עוד ${hidden} לקוחות ▼`}</button>`
+        : '';
+      return `<div style="margin-top:12px;display:flex;flex-direction:column;gap:8px">${shown.map(openInvClientHtml).join('')}${moreBtn}</div>`;
+    })()
       : `<div class="empty">אין חשבוניות פתוחות 👌</div>`}`;
 }
 function openInvClientHtml(cl) {
@@ -3661,7 +3673,10 @@ function bankTr(t) {
   const linkBtn = `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="openLinkModal('${t.id}')">🔗 שייך</button>`;
   // "צור הכנסה" — רק על תנועות זכות (הכנסה): מפיק מס-קבלה/קבלה מחשבונית פתוחה תואמת או מסמך חדש
   const incomeBtn = credit ? `<button class="btn ghost" style="padding:3px 9px;font-size:12px;color:var(--accent2)" onclick="openCreateIncome('${t.id}')">➕ צור הכנסה</button>` : '';
-  const rowStyle = (t.matchStatus === 'unmatched') ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)' : (t.matchStatus === 'ignored' ? 'opacity:.55' : '');
+  // חובה: כל שורה שאינה מותאמת אדומה — עד שמסמנים "התעלם". זכות: אדום רק ב"ממתין לאישור".
+  const rowStyle = (t.matchStatus === 'ignored') ? 'opacity:.55'
+    : (!isMatched && (t.direction === 'debit' || t.matchStatus === 'unmatched')) ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)'
+    : '';
   return `<tr id="btr-${t.id}" style="${rowStyle}">
     <td style="white-space:nowrap">${t.date}</td>
     <td style="white-space:nowrap;color:${credit ? 'var(--accent2)' : 'var(--danger)'};font-weight:600">${amt}</td>
