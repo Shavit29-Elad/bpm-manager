@@ -176,3 +176,5 @@ tbody tr:last-child td{border-bottom:none}
 .viewer-mode .btn.primary,
 .viewer-mode .btn.success,
 .viewer-mode .btn.danger { display: none !important; }
+/* כפתור מותר גם למשתמש צפייה (למשל הגשת בקשת פיתוח) */
+.viewer-mode .btn.dev-allow { display: inline-flex !important; }

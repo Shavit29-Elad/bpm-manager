@@ -27,6 +27,7 @@ const EMPTY = {
   memory: {},      // זיכרון מתמשך לכל דמות: { memberId: "עובדות שנלמדו..." }
   users: [],       // משתמשי המערכת: { id, username, salt, hash, role:'admin'|'viewer', tabs:[], companies:[] }
   sessions: {},    // סשנים פעילים: { token: { userId, exp } }
+  devRequests: [], // בקשות פיתוח: { id, title, description, author, status:'new'|'in_progress'|'done', createdAt, updatedAt, notes }
   expenseNotes: {},// תיאור מותאם להוצאה (override): { [expenseId]: 'תיאור' } — משמש גם בהתאמות הבנק
   artistClientMap: [ // מיפוי זמר → לקוח ברירת-מחדל (מולא אוטומטית בקליטת אירוע)
     { artist: 'ששון שאולוב', clientName: 'אבי גואטה הפקות בע״מ' },
