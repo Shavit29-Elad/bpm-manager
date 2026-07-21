@@ -58,7 +58,6 @@ export function publicUser(u) {
     id: u.id, username: u.username, role: u.role,
     tabs: u.role === 'admin' ? 'all' : (u.tabs || []),
     companies: u.role === 'admin' ? 'all' : (u.companies || []),
-    designMode: !!u.designMode, // מצב עיצוב: כפתורים גלויים אך השרת חוסם שינוי נתונים
     createdAt: u.createdAt || null,
   };
 }

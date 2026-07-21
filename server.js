@@ -19,6 +19,7 @@ import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
+import { buildAppMap } from './appMap.js';
 import { chatWithMember, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields } from './chat.js';
 import mailer from './mailer.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
@@ -1555,16 +1556,17 @@ add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body
   const db = load();
   db.chats = db.chats || {};
   db.memory = db.memory || {};
+  const appMap = buildAppMap(db); // מפה מלאה ומתעדכנת של האפליקציה — מוזרקת לכל דמות
   const now = new Date().toISOString();
 
   if (id === 'group') {
     const history = db.chats.group = db.chats.group || [];
     history.push({ role: 'user', name: 'אתה', content: text, at: now });
     try {
-      // כל חבר צוות עונה בתורו על סמך התמלול המתעדכן, עם הזיכרון האישי שלו
+      // כל חבר צוות עונה בתורו על סמך התמלול המתעדכן, עם הזיכרון האישי שלו ומפת האפליקציה
       for (const member of TEAM) {
         const transcript = history.map(m => `${m.name || (m.role === 'user' ? 'אתה' : 'צוות')}: ${m.content}`).join('\n');
-        const reply = await chatGroupReply(member, transcript, db.memory[member.id] || '');
+        const reply = await chatGroupReply(member, transcript, db.memory[member.id] || '', appMap);
         history.push({ role: 'assistant', memberId: member.id, name: member.name, emoji: member.emoji, content: reply, at: new Date().toISOString() });
       }
       save(db);
@@ -1578,7 +1580,7 @@ add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body
   const history = db.chats[id] = db.chats[id] || [];
   history.push({ role: 'user', content: text, at: now });
   try {
-    const reply = await chatWithMember(member, history, db.memory[id] || '');
+    const reply = await chatWithMember(member, history, db.memory[id] || '', appMap);
     history.push({ role: 'assistant', content: reply, at: new Date().toISOString() });
     save(db);
     json(res, { ok: true, messages: history });
@@ -1907,9 +1909,8 @@ add('POST', /^\/api\/users$/, (req, res, _p, _q, body) => {
   if ((db.users || []).some(u => u.username === username)) return json(res, { error: 'שם המשתמש כבר קיים' }, 400);
   const tabs = Array.isArray(body?.tabs) ? body.tabs.filter(t => VALID_TABS.includes(t)) : [];
   const companies = Array.isArray(body?.companies) ? body.companies.filter(Boolean) : [];
-  const designMode = !!body?.designMode;
   const { salt, hash } = hashPassword(password);
-  const user = { id: uid(), username, salt, hash, role: 'viewer', tabs, companies, designMode, createdAt: new Date().toISOString() };
+  const user = { id: uid(), username, salt, hash, role: 'viewer', tabs, companies, createdAt: new Date().toISOString() };
   db.users = db.users || []; db.users.push(user);
   save(db);
   json(res, { ok: true, user: publicUser(user) });
@@ -1923,7 +1924,6 @@ add('PUT', /^\/api\/users\/([^/]+)$/, (req, res, params, _q, body) => {
   if (u.role === 'admin') return json(res, { error: 'לא ניתן לשנות הרשאות של משתמש הנהלה' }, 400);
   if (Array.isArray(body?.tabs)) u.tabs = body.tabs.filter(t => VALID_TABS.includes(t));
   if (Array.isArray(body?.companies)) u.companies = body.companies.filter(Boolean);
-  if (typeof body?.designMode === 'boolean') u.designMode = body.designMode;
   if (body?.password) { if (String(body.password).length < 6) return json(res, { error: 'סיסמה קצרה מדי' }, 400); const { salt, hash } = hashPassword(String(body.password)); u.salt = salt; u.hash = hash; }
   save(db);
   json(res, { ok: true, user: publicUser(u) });
@@ -1938,62 +1938,6 @@ add('DELETE', /^\/api\/users\/([^/]+)$/, (req, res, params) => {
   db.users = (db.users || []).filter(x => x.id !== params[0]);
   // מחיקת סשנים של המשתמש
   for (const [t, s] of Object.entries(db.sessions || {})) if (s && s.userId === params[0]) delete db.sessions[t];
-  save(db);
-  json(res, { ok: true });
-});
-
-// ================= בקשות פיתוח =================
-const DEV_STATUSES = ['new', 'in_progress', 'done'];
-
-// GET /api/dev-requests — כל משתמש מחובר רואה את הבקשות
-add('GET', /^\/api\/dev-requests$/, (req, res) => {
-  const db = load();
-  const list = (db.devRequests || []).slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-  json(res, { ok: true, requests: list });
-});
-
-// POST /api/dev-requests { title, description } — כל משתמש מחובר (כולל צפייה) יכול להגיש בקשה
-add('POST', /^\/api\/dev-requests$/, (req, res, _p, _q, body) => {
-  const db = load();
-  const title = String(body?.title || '').trim();
-  if (!title) return json(res, { error: 'חסרה כותרת לבקשה' }, 400);
-  const now = new Date().toISOString();
-  const item = {
-    id: id('dev'),
-    title,
-    description: String(body?.description || '').trim(),
-    author: (req.user && req.user.username) || 'לא ידוע',
-    status: 'new',
-    createdAt: now,
-    updatedAt: now,
-    notes: '',
-  };
-  db.devRequests = db.devRequests || [];
-  db.devRequests.push(item);
-  save(db);
-  json(res, { ok: true, request: item });
-});
-
-// PUT /api/dev-requests/:id { status?, title?, description?, notes? } — עדכון (מנהל בלבד)
-add('PUT', /^\/api\/dev-requests\/([^/]+)$/, (req, res, params, _q, body) => {
-  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
-  const db = load();
-  const r = (db.devRequests || []).find(x => x.id === params[0]);
-  if (!r) return json(res, { error: 'לא נמצא' }, 404);
-  if (typeof body?.status === 'string' && DEV_STATUSES.includes(body.status)) r.status = body.status;
-  if (typeof body?.title === 'string') r.title = body.title.trim();
-  if (typeof body?.description === 'string') r.description = body.description.trim();
-  if (typeof body?.notes === 'string') r.notes = body.notes;
-  r.updatedAt = new Date().toISOString();
-  save(db);
-  json(res, { ok: true, request: r });
-});
-
-// DELETE /api/dev-requests/:id — מחיקה (מנהל בלבד)
-add('DELETE', /^\/api\/dev-requests\/([^/]+)$/, (req, res, params) => {
-  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
-  const db = load();
-  db.devRequests = (db.devRequests || []).filter(x => x.id !== params[0]);
   save(db);
   json(res, { ok: true });
 });
@@ -2031,6 +1975,24 @@ function seedIfEmpty() {
   ];
   save(db);
   console.log('נזרעו החברות (בלי אירוע דוגמה)');
+}
+
+// מיגרציות חד-פעמיות בעליית השרת
+function runMigrations() {
+  const db = load();
+  let changed = false;
+  // הסרת חשבון ההתחברות 'iris' שנוצר בטעות (איריס היא סוכנת בצוות, לא משתמשת אנושית)
+  const before = (db.users || []).length;
+  db.users = (db.users || []).filter(u => !(u.username === 'iris' && u.role === 'viewer'));
+  if (db.users.length !== before) {
+    // ניקוי סשנים של המשתמש שהוסר
+    for (const [t, s] of Object.entries(db.sessions || {})) {
+      if (s && !(db.users || []).some(u => u.id === s.userId)) delete db.sessions[t];
+    }
+    changed = true;
+    console.log('מיגרציה: הוסר חשבון ההתחברות iris (מיותר — איריס היא סוכנת)');
+  }
+  if (changed) save(db);
 }
 
 // זיהוי-מחדש אוטומטי של חיבורים בכל הפעלה: אם המפתחות קיימים (למשל כמשתני סביבה
@@ -2072,9 +2034,7 @@ const server = http.createServer((req, res) => {
       if (isUsersRoute && authUser.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
       // משתמש צפייה — קריאה בלבד + הגבלת עסקים
       if (authUser.role !== 'admin' && !isLogout) {
-        // חריגה: הגשת בקשת פיתוח (POST) מותרת גם למשתמש צפייה
-        const isDevReqCreate = url.pathname === '/api/dev-requests' && req.method === 'POST';
-        if (req.method !== 'GET' && !isDevReqCreate) return json(res, { error: 'אין הרשאה לפעולה זו (צפייה בלבד)' }, 403);
+        if (req.method !== 'GET') return json(res, { error: 'אין הרשאה לפעולה זו (צפייה בלבד)' }, 403);
         const comp = q.companyId || null;
         if (comp && Array.isArray(authUser.companies) && !authUser.companies.includes(comp)) {
           return json(res, { error: 'אין הרשאה לעסק זה' }, 403);
@@ -2101,6 +2061,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, async () => {
   await initStore();          // מחבר ל-Postgres (Neon) לפני שמתחילים לקרוא/לכתוב נתונים
   seedIfEmpty();
+  runMigrations();
   autoVerifyConnections();
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);
   startWhatsappBridge(async (text) => { try { await ingestText(text); } catch {} })

@@ -68,21 +68,23 @@ async function complete(system, messages, opts = {}) {
   return process.env.ANTHROPIC_API_KEY ? callAnthropic(system, messages, opts) : callGemini(system, messages, opts);
 }
 
-// שילוב הזיכרון המתמשך לתוך פרומפט המערכת של הדמות
-function withMemory(member, memory) {
-  if (!memory) return member.system;
-  return `${member.system}\n\n## הזיכרון המתמשך שלך (מה שלמדת על העסק, המערכת וההעדפות של המנהל — השתמש/י בזה):\n${memory}`;
+// שילוב מפת האפליקציה (מעודכנת) + הזיכרון המתמשך לתוך פרומפט המערכת של הדמות
+function withContext(member, memory, appMap) {
+  let sys = member.system;
+  if (appMap) sys += `\n\n${appMap}`;
+  if (memory) sys += `\n\n## הזיכרון המתמשך שלך (מה שלמדת על העסק, המערכת וההעדפות של המנהל — השתמש/י בזה):\n${memory}`;
+  return sys;
 }
 
-// צ'אט אישי (עם זיכרון)
-export async function chatWithMember(member, history, memory = '') {
-  return complete(withMemory(member, memory), history.map(m => ({ role: m.role, content: m.content })));
+// צ'אט אישי (עם מפת אפליקציה + זיכרון)
+export async function chatWithMember(member, history, memory = '', appMap = '') {
+  return complete(withContext(member, memory, appMap), history.map(m => ({ role: m.role, content: m.content })));
 }
 
-// צ'אט קבוצתי — כל חבר עונה בתורו על סמך תמלול השיחה (עם זיכרון)
-export async function chatGroupReply(member, transcript, memory = '') {
+// צ'אט קבוצתי — כל חבר עונה בתורו על סמך תמלול השיחה (עם מפת אפליקציה + זיכרון)
+export async function chatGroupReply(member, transcript, memory = '', appMap = '') {
   const content = `זו שיחה קבוצתית של צוות החברה (כמה עובדים וירטואליים + המנהל). התמלול עד כה:\n\n${transcript}\n\nהשב/י עכשיו כ${member.name} (${member.role}) בלבד — בקצרה, באופי שלך, ורק בתחום שלך. אם אין לך מה להוסיף, כתב/י משפט קצר. אל תדבר/י בשם אחרים.`;
-  return complete(withMemory(member, memory), [{ role: 'user', content }]);
+  return complete(withContext(member, memory, appMap), [{ role: 'user', content }]);
 }
 
 // סיכום שיחה כבקשת פיתוח מובנית (JSON)

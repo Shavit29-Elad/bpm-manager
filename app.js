@@ -83,13 +83,12 @@ function applyPermissions() {
   // לשונית פעילה ראשונה מתוך המותרות
   const firstVisible = [...document.querySelectorAll('.tab')].find(t => t.style.display !== 'none');
   if (firstVisible) { document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); firstVisible.classList.add('active'); state.tab = firstVisible.dataset.tab; }
-  // מצב צפייה — הסתרת כפתורי פעולה. במצב עיצוב (designMode) הכפתורים נשארים גלויים (השרת עדיין חוסם שינוי נתונים).
-  document.body.classList.toggle('viewer-mode', !isAdmin && !u.designMode);
-  document.body.classList.toggle('design-mode', !isAdmin && !!u.designMode);
+  // מצב צפייה — הסתרת כפתורי פעולה
+  document.body.classList.toggle('viewer-mode', !isAdmin);
   // פרטי משתמש + התנתקות + ניהול משתמשים (למנהל) בכותרת
   let box = document.getElementById('userBox');
   if (!box) { box = document.createElement('div'); box.id = 'userBox'; box.style.cssText = 'display:flex;gap:8px;align-items:center;margin-inline-start:auto'; document.querySelector('.topbar').appendChild(box); }
-  box.innerHTML = `<span class="muted" style="font-size:12.5px">👤 ${escapeHtml(u.username || '')}${isAdmin ? ' · הנהלה' : (u.designMode ? ' · עיצוב' : ' · צפייה')}</span>
+  box.innerHTML = `<span class="muted" style="font-size:12.5px">👤 ${escapeHtml(u.username || '')}${isAdmin ? ' · הנהלה' : ' · צפייה'}</span>
     ${isAdmin ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openUsersModal()">👥 משתמשים</button>` : ''}
     <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="logout()">התנתק</button>`;
 }
@@ -116,7 +115,7 @@ function renderUsersModal() {
   const userRow = (u) => `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
     <div class="row-between"><div><b>${escapeHtml(u.username)}</b> <span class="muted" style="font-size:12px">· צפייה</span></div>
       <div style="display:flex;gap:6px"><button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="editUserRow('${u.id}')">✏️ ערוך</button><button class="btn ghost" style="padding:2px 9px;font-size:11.5px;color:var(--danger)" onclick="deleteUser('${u.id}')">מחק ✕</button></div></div>
-    <div class="muted" style="font-size:11.5px;margin-top:4px">לשוניות: ${(u.tabs || []).map(t => TAB_LABELS[t] || t).join(', ') || '—'} · עסקים: ${(u.companies || []).map(id => (comps.find(c => c.id === id) || {}).name || id).join(', ') || '—'}${u.designMode ? ' · <b>מצב עיצוב</b>' : ''}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:4px">לשוניות: ${(u.tabs || []).map(t => TAB_LABELS[t] || t).join(', ') || '—'} · עסקים: ${(u.companies || []).map(id => (comps.find(c => c.id === id) || {}).name || id).join(', ') || '—'}</div>
     <div id="edit-${u.id}"></div></div>`;
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;overflow:auto">
     <div class="row-between"><h3>👥 ניהול משתמשים</h3><button class="btn ghost" onclick="document.getElementById('usersModal').classList.add('hidden')">סגור</button></div>
@@ -132,7 +131,6 @@ function renderUsersModal() {
       </div>
       <div style="margin-top:8px;font-size:12px;font-weight:600">לשוניות מותרות:</div><div>${_tabChecks('nu-tab', [])}</div>
       <div style="margin-top:8px;font-size:12px;font-weight:600">עסקים מותרים:</div><div>${_compChecks('nu-comp', [])}</div>
-      <label style="display:inline-flex;gap:6px;align-items:center;font-size:12px;margin-top:8px"><input type="checkbox" id="nuDesign"> מצב עיצוב — רואה את כל כפתורי הפעולה (השרת עדיין חוסם שינוי נתונים)</label>
       <div id="nuStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
       <button class="btn success" onclick="createUser(this)">צור משתמש</button>
     </div></div>`;
@@ -143,13 +141,12 @@ window.createUser = async (btn) => {
   const password = f.querySelector('#nuPass').value;
   const tabs = [...f.querySelectorAll('.nu-tab:checked')].map(x => x.value);
   const companies = [...f.querySelectorAll('.nu-comp:checked')].map(x => x.value);
-  const designMode = !!f.querySelector('#nuDesign')?.checked;
   const st = document.getElementById('nuStatus');
   if (!username || password.length < 6) { st.style.color = 'var(--danger)'; st.textContent = 'יש להזין שם משתמש וסיסמה (6+ תווים).'; return; }
   if (!tabs.length) { st.style.color = 'var(--danger)'; st.textContent = 'בחר לפחות לשונית אחת.'; return; }
   if (!companies.length) { st.style.color = 'var(--danger)'; st.textContent = 'בחר לפחות עסק אחד.'; return; }
   if (btn) btn.disabled = true;
-  const r = await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, tabs, companies, designMode }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const r = await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, tabs, companies }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
   if (r.ok) { _usersList.push(r.user); renderUsersModal(); }
   else { st.style.color = 'var(--danger)'; st.textContent = r.error || 'שגיאה.'; }
@@ -161,7 +158,6 @@ window.editUserRow = (id) => {
   box.innerHTML = `<div style="border-top:1px dashed var(--line);margin-top:8px;padding-top:8px">
     <div style="font-size:12px;font-weight:600">לשוניות:</div><div>${_tabChecks('eu-tab-' + id, u.tabs)}</div>
     <div style="margin-top:6px;font-size:12px;font-weight:600">עסקים:</div><div>${_compChecks('eu-comp-' + id, u.companies)}</div>
-    <label style="display:inline-flex;gap:6px;align-items:center;font-size:12px;margin-top:6px"><input type="checkbox" id="eu-design-${id}" ${u.designMode ? 'checked' : ''}> מצב עיצוב (כפתורים גלויים)</label>
     <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input id="eu-pass-${id}" type="text" placeholder="סיסמה חדשה (לא חובה)" dir="ltr" style="padding:6px 8px;font-size:12px">
       <button class="btn success" style="padding:3px 12px;font-size:12px" onclick="saveUserEdit('${id}',this)">💾 שמור</button>
@@ -170,11 +166,10 @@ window.editUserRow = (id) => {
 window.saveUserEdit = async (id, btn) => {
   const tabs = [...document.querySelectorAll('.eu-tab-' + id + ':checked')].map(x => x.value);
   const companies = [...document.querySelectorAll('.eu-comp-' + id + ':checked')].map(x => x.value);
-  const designMode = !!document.getElementById('eu-design-' + id)?.checked;
   const pass = document.getElementById('eu-pass-' + id).value;
   const st = document.getElementById('eu-st-' + id);
   if (!tabs.length || !companies.length) { st.textContent = 'בחר לפחות לשונית ועסק אחד.'; return; }
-  const body = { tabs, companies, designMode }; if (pass) { if (pass.length < 6) { st.textContent = 'סיסמה קצרה מדי.'; return; } body.password = pass; }
+  const body = { tabs, companies }; if (pass) { if (pass.length < 6) { st.textContent = 'סיסמה קצרה מדי.'; return; } body.password = pass; }
   if (btn) btn.disabled = true;
   const r = await fetch('/api/users/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
@@ -205,79 +200,11 @@ function render() {
      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, devrequests: renderDevRequests, connections: renderConnections }[state.tab])(c);
 }
 
-// ---- בקשות פיתוח ----
-const DEV_STATUS_META = {
-  new:         { label: 'חדש',   style: 'background:rgba(245,158,11,.16);color:var(--warn)' },
-  in_progress: { label: 'מטופל', style: 'background:rgba(99,102,241,.16);color:#4f46e5' },
-  done:        { label: 'טופל',  style: 'background:rgba(14,164,114,.14);color:var(--accent2)' },
-};
+// ---- בקשות פיתוח (לשונית ייעודית — מציגה את הבקשות שנוצרות מסיכום שיחות עם איריס/הצוות) ----
 async function renderDevRequests(c) {
-  c.innerHTML = `<div class="panel"><div class="empty">טוען בקשות…</div></div>`;
-  const r = await api('/api/dev-requests').catch(() => ({ requests: [] }));
-  const reqs = r.requests || [];
-  const groups = { new: [], in_progress: [], done: [] };
-  reqs.forEach(x => (groups[x.status] || groups.new).push(x));
-  const section = (key) => {
-    const meta = DEV_STATUS_META[key];
-    const items = groups[key];
-    return `<div style="margin-top:16px">
-      <h3 style="display:flex;align-items:center;gap:8px"><span class="tag" style="${meta.style}">${meta.label}</span> <span class="muted" style="font-size:13px">(${items.length})</span></h3>
-      <div style="display:grid;gap:10px;margin-top:8px">
-        ${items.map(devCard).join('') || '<div class="muted" style="font-size:13px">אין בקשות בסטטוס זה.</div>'}
-      </div></div>`;
-  };
-  c.innerHTML = `<div class="panel">
-    <h2>🛠️ בקשות פיתוח</h2>
-    <p class="muted">מקום מרוכז לבקשות פיתוח ועיצוב. כל משתמש יכול להגיש בקשה; ההנהלה מעדכנת סטטוס: חדש → מטופל → טופל.</p>
-    <div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:10px">
-      <b style="font-size:13px">➕ הגשת בקשה חדשה</b>
-      <input id="drTitle" placeholder="כותרת הבקשה (למשל: לשנות צבע כפתור בחשבוניות)" style="width:100%;padding:8px 10px;margin-top:6px">
-      <textarea id="drDesc" placeholder="תיאור מפורט (לא חובה)" rows="3" style="width:100%;padding:8px 10px;margin-top:6px"></textarea>
-      <div id="drStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
-      <button class="btn primary dev-allow" onclick="submitDevRequest(this)">שלח בקשה</button>
-    </div>
-    ${section('new')}
-    ${section('in_progress')}
-    ${section('done')}
-  </div>`;
+  c.innerHTML = `<div class="panel" id="requestsBody"><div class="empty">טוען…</div></div>`;
+  renderRequestsBody($('#requestsBody'));
 }
-function devCard(x) {
-  const isAdmin = (state.user || {}).role === 'admin';
-  const meta = DEV_STATUS_META[x.status] || DEV_STATUS_META.new;
-  const when = x.createdAt ? new Date(x.createdAt).toLocaleDateString('he-IL') : '';
-  const adminBtns = isAdmin ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-    ${x.status !== 'in_progress' ? `<button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="setDevStatus('${x.id}','in_progress')">סמן כמטופל</button>` : ''}
-    ${x.status !== 'done' ? `<button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="setDevStatus('${x.id}','done')">סמן כטופל ✓</button>` : ''}
-    ${x.status !== 'new' ? `<button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="setDevStatus('${x.id}','new')">החזר לחדש</button>` : ''}
-    <button class="btn ghost" style="padding:2px 10px;font-size:12px;color:var(--danger)" onclick="deleteDevRequest('${x.id}')">מחק ✕</button>
-  </div>` : '';
-  return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px">
-    <div class="row-between"><b>${escapeHtml(x.title)}</b><span class="tag" style="${meta.style}">${meta.label}</span></div>
-    ${x.description ? `<div style="font-size:13px;margin-top:4px;white-space:pre-wrap">${escapeHtml(x.description)}</div>` : ''}
-    <div class="muted" style="font-size:11.5px;margin-top:6px">מאת ${escapeHtml(x.author || '')}${when ? ' · ' + when : ''}</div>
-    ${adminBtns}
-  </div>`;
-}
-window.submitDevRequest = async (btn) => {
-  const title = (document.getElementById('drTitle').value || '').trim();
-  const description = (document.getElementById('drDesc').value || '').trim();
-  const st = document.getElementById('drStatus');
-  if (!title) { st.style.color = 'var(--danger)'; st.textContent = 'יש להזין כותרת לבקשה.'; return; }
-  if (btn) btn.disabled = true; st.style.color = 'var(--muted)'; st.textContent = 'שולח…';
-  const r = await fetch('/api/dev-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, description }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (btn) btn.disabled = false;
-  if (r.ok) { renderDevRequests($('#content')); }
-  else { st.style.color = 'var(--danger)'; st.textContent = r.error || 'שגיאה בשליחה.'; }
-};
-window.setDevStatus = async (id, status) => {
-  const r = await fetch('/api/dev-requests/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (r.ok) renderDevRequests($('#content')); else alert(r.error || 'שגיאה');
-};
-window.deleteDevRequest = async (id) => {
-  if (!confirm('למחוק את הבקשה?')) return;
-  const r = await fetch('/api/dev-requests/' + id, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (r.ok) renderDevRequests($('#content')); else alert(r.error || 'שגיאה');
-};
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
 const MONTHS_FULL = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
@@ -3375,7 +3302,7 @@ window.summarizeRequest = async (btn) => {
   renderTeam($('#content'));
 };
 
-const REQ_STATUS = { open: { t: 'פתוח', cls: 'pending' }, 'in-progress': { t: 'בעבודה', cls: 'invoiced' }, done: { t: 'הושלם', cls: 'match' } };
+const REQ_STATUS = { open: { t: 'חדש', cls: 'pending' }, 'in-progress': { t: 'מטופל', cls: 'invoiced' }, done: { t: 'טופל', cls: 'match' } };
 const REQ_PRIORITY = { low: 'נמוכה', medium: 'בינונית', high: 'גבוהה' };
 
 async function renderRequestsBody(box) {
@@ -3398,7 +3325,7 @@ function reqCard(r) {
     ${r.summary ? `<div style="margin-top:8px;line-height:1.5">${escapeHtml(r.summary)}</div>` : ''}
     ${(r.details && r.details.length) ? `<ul style="margin:8px 0 0;padding-inline-start:18px;line-height:1.6">${r.details.map(d => `<li>${escapeHtml(d)}</li>`).join('')}</ul>` : ''}
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      ${sbtn('open', 'פתוח')}${sbtn('in-progress', 'בעבודה')}${sbtn('done', 'הושלם')}
+      ${sbtn('open', 'חדש')}${sbtn('in-progress', 'מטופל')}${sbtn('done', 'טופל')}
       <button class="btn ghost" style="padding:5px 11px;font-size:13px;margin-inline-start:auto;color:var(--danger)" onclick="deleteReq('${r.id}')">מחק</button>
     </div>
   </div>`;
