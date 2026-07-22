@@ -38,6 +38,8 @@ const api = (p) => {
 const TAB_LABELS = { home: '🏠 בית', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
 // התאמת שם לפי כל המילים בשאילתה (בכל מיקום) — עמיד לשמות עם תיאור באמצע, למשל "אורן מושייב" מול "אורן אירועים - אורן מושייב"
 const nameHas = (name, q) => { const toks = String(q || '').trim().split(/\s+/).filter(Boolean); const nm = String(name || ''); return !toks.length || toks.every(t => nm.includes(t)); };
+// קידוד אובייקט ל-onclick בצורה בטוחה: encodeURIComponent לא מקודד גרש ' — נחליף ל-%27 כדי שגרש בתיאור (למשל "מס' הקצאה") לא ישבור את מחרוזת ה-onclick. פענוח ב-decodeURIComponent מחזיר את הגרש.
+const jenc = (o) => encodeURIComponent(JSON.stringify(o)).replace(/'/g, '%27');
 
 async function boot() {
   const st = await api('/api/auth/status').catch(() => ({ error: 'net' }));
@@ -1470,7 +1472,7 @@ function rowEvent(e) {
 let _evEditing = null, _evCtr = [], _evClients = null, _evEmp = [], _evEmployees = null, _evSuppliers = null;
 const EV_FACTORS = [['0.5', 'חצי יומית'], ['1', 'יומית'], ['1.5', 'יומית וחצי'], ['2', 'כפולה']];
 function evClickAttr(e) {
-  const p = encodeURIComponent(JSON.stringify({ eventId: e.eventId || null, gcalId: e.gcalId || null, date: e.date, title: e.title, location: e.location }));
+  const p = jenc({ eventId: e.eventId || null, gcalId: e.gcalId || null, date: e.date, title: e.title, location: e.location });
   return `onclick="openEventFromCal('${p}')"`;
 }
 async function fetchEventById(id) {
@@ -4053,7 +4055,7 @@ function bankTr(t) {
   } else if (t.matchStatus === 'unmatched' || (t.suggestions || []).length) {
     // לא מותאם — זכות (חשבוניות הכנסה) או חובה (חשבוניות ספקים). מציג הצעות ללחיצה.
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
-    const sugg = (t.suggestions || []).map(s => { const j = encodeURIComponent(JSON.stringify(s)); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
+    const sugg = (t.suggestions || []).map(s => { const j = jenc(s); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
     invNo = `<span class="tag miss" style="font-size:10px">לא מותאם</span>${sugg ? `<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;max-width:280px">${sugg}</div>` : ''}`;
     action = `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',true)">התעלם</button>`;
   } else {
@@ -4249,7 +4251,7 @@ async function linkNumberSearch(term) {
   const avail = _linkNumResults.filter(d => !ids.has(d.id));
   if (!avail.length) { nb.innerHTML = ''; return; }
   const rows = avail.map(d => {
-    const j = encodeURIComponent(JSON.stringify(d));
+    const j = jenc(d);
     const kindTag = d.kind === 'expense' ? '<span class="tag" style="background:#fde7ef;color:var(--danger);font-size:10px">הוצאה</span>' : '<span class="tag" style="background:#e7f7ee;color:var(--accent2);font-size:10px">הכנסה</span>';
     const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">👁</button>` : '';
     return `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
@@ -4303,7 +4305,7 @@ window.renderLinkDocs = () => {
   }
   const rows = avail.map(d => {
     const cn = isExp ? (d.supplierName || _linkClientName) : d.clientName;
-    const j = encodeURIComponent(JSON.stringify({ id: d.id, number: d.number, type: d.type, clientName: cn, amount: amountOf(d), date: d.date, url: d.url, kind: isExp ? 'expense' : 'income' }));
+    const j = jenc({ id: d.id, number: d.number, type: d.type, clientName: cn, amount: amountOf(d), date: d.date, url: d.url, kind: isExp ? 'expense' : 'income' });
     const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
     const dl = d.url ? `<a href="${d.url}" target="_blank" class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none;white-space:nowrap">להורדה ↓</a>` : '';
     return `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
