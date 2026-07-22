@@ -1746,7 +1746,7 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   // טווח תאריכים לשליפת חשבוניות (הכנסה) + הוצאות (ספקים) להתאמה אוטומטית בשני הצדדים
   let invoices = [], receipts = [], expenses = [];
   const iso = parsed.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
-  if (greenInvoice.haveCredentials() && iso.length) {
+  if (greenInvoice.haveCredentials() && iso.length && companyId === giCompanyId()) {
     const from = shiftISODays(iso[0], -75), to = shiftISODays(iso[iso.length - 1], 5);
     try { const inc = await greenInvoice.incomeForRange(from, to); invoices = inc.docs || []; } catch (e) { /* נמשיך בלי התאמה */ }
     try { receipts = await greenInvoice.receiptsForRange(from, to); } catch (e) { /* קבלות אופציונליות */ }
@@ -1802,7 +1802,7 @@ add('POST', /^\/api\/bank\/rematch$/, async (req, res, _p, _q, body) => {
   if (!txns.length) return json(res, { ok: true, updated: 0, message: 'אין תנועות' });
   const iso = txns.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
   let expenses = [];
-  if (greenInvoice.haveCredentials() && iso.length) {
+  if (greenInvoice.haveCredentials() && iso.length && companyId === giCompanyId()) {
     const from = shiftISODays(iso[0], -75), to = shiftISODays(iso[iso.length - 1], 5);
     try { expenses = await greenInvoice.expensesInRange(from, to); } catch { /* בלי התאמה */ }
   }
@@ -1999,12 +1999,31 @@ function serveStatic(req, res) {
 function seedIfEmpty() {
   const db = load();
   if (db.companies && db.companies.length) return;
-  db.companies = [
-    { id: 'co_bpm', name: 'בי פי אם הגברה ותאורה בע"מ', active: true, greenInvoiceId: null },
-    { id: 'co_ofek', name: 'אופק ידעי הגברה ותאורה', active: false, greenInvoiceId: null },
-  ];
+  db.companies = COMPANY_SEED.map(c => ({ ...c }));
   save(db);
   console.log('נזרעו החברות (בלי אירוע דוגמה)');
+}
+
+// שלוש החברות + ספק חשבונאי לכל אחת. חשבונית ירוקה מחוברת ל-BPM בלבד; אופק=פייפרלס (טרם מחובר); משה=טרם.
+const COMPANY_SEED = [
+  { id: 'co_bpm', name: 'בי פי אם הגברה ותאורה בע"מ', active: true, accounting: 'greenInvoice' },
+  { id: 'co_ofek', name: 'אופק ידעי הגברה ותאורה', active: false, accounting: 'paperless' },
+  { id: 'co_moshe', name: 'משה כורסיה בע"מ', active: false, accounting: null },
+];
+// מזהה החברה שאליה מחוברת חשבונית ירוקה (ברירת מחדל BPM) — לשם בידוד נתונים
+function giCompanyId() { const c = (load().companies || []).find(x => x.accounting === 'greenInvoice'); return c ? c.id : 'co_bpm'; }
+// תשובה ריקה לכל endpoint שנשען על חשבונית ירוקה — עבור חברות שאינן חברת ה-GI (אופק/משה)
+function giEmptyFor(pathname) {
+  if (pathname === '/api/dashboard') return { income: 0, vat: 0, openInvoices: 0, openInvoicesSum: 0, monthDocs: 0, docs: [], clients: [], errors: {} };
+  if (pathname === '/api/clients' || pathname === '/api/suppliers') return [];
+  if (pathname === '/api/open-invoices' || pathname === '/api/open-quotes') return { docs: [] };
+  if (pathname === '/api/expense-drafts') return { drafts: [] };
+  if (pathname === '/api/expenses/quick-search' || pathname === '/api/documents/quick-search') return { items: [] };
+  if (/^\/api\/(clients|suppliers)\/[^/]+\/documents$/.test(pathname)) return [];
+  // יומן גוגל (המחובר ל-BPM) — לחברות אחרות ריק עד שיחוברו יומנים משלהן
+  if (pathname === '/api/calendar/match') return { matched: [], missingInCalendar: [], missingInWhatsappCount: 0 };
+  if (pathname === '/api/calendar/events') return { whatsapp: [], calendar: [] };
+  return undefined;
 }
 
 // מיגרציות חד-פעמיות בעליית השרת
@@ -2021,6 +2040,13 @@ function runMigrations() {
     }
     changed = true;
     console.log('מיגרציה: הוסר חשבון ההתחברות iris (מיותר — איריס היא סוכנת)');
+  }
+  // ודא ששלוש החברות קיימות ושלכל אחת מוגדר ספק חשבונאי (accounting)
+  db.companies = db.companies || [];
+  for (const seed of COMPANY_SEED) {
+    let c = db.companies.find(x => x.id === seed.id);
+    if (!c) { c = { id: seed.id, name: seed.name, active: seed.active }; db.companies.push(c); changed = true; console.log('מיגרציה: נוספה חברה ' + seed.name); }
+    if (c.accounting !== seed.accounting) { c.accounting = seed.accounting; changed = true; }
   }
   if (changed) save(db);
 }
@@ -2072,6 +2098,11 @@ const server = http.createServer((req, res) => {
       }
     }
     req.user = authUser;
+    // בידוד חברות: נתוני חשבונית ירוקה שייכים לחברת ה-GI בלבד (BPM). לחברות אחרות מחזירים ריק.
+    if (req.method === 'GET' && q.companyId && q.companyId !== giCompanyId()) {
+      const empty = giEmptyFor(url.pathname);
+      if (empty !== undefined) return json(res, empty);
+    }
     const route = routes.find(r => r.method === req.method && r.pattern.test(url.pathname));
     if (!route) return json(res, { error: 'route not found' }, 404);
     const params = (url.pathname.match(route.pattern) || []).slice(1);

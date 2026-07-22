@@ -8,6 +8,10 @@ const _apiCache = new Map(); // url -> { t, txt }
 const API_TTL = 60000;       // תוקף 60 שניות
 function clearApiCache() { _apiCache.clear(); }
 const api = (p) => {
+  // בידוד חברות: צירוף companyId אוטומטי לכל קריאת GET (למעט auth), אם לא צוין כבר
+  if (state.company && p.indexOf('/api/') === 0 && p.indexOf('/api/auth/') !== 0 && p.indexOf('companyId=') === -1) {
+    p += (p.indexOf('?') === -1 ? '?' : '&') + 'companyId=' + encodeURIComponent(state.company);
+  }
   const noCache = p.indexOf('fresh=1') !== -1; // כפתורי "רענן" תמיד מהשרת
   const hit = noCache ? null : _apiCache.get(p);
   if (hit && Date.now() - hit.t < API_TTL) {
@@ -88,8 +92,9 @@ async function startApp() {
   const sel = $('#companySelect');
   sel.innerHTML = state.companies.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   state.company = state.companies[0]?.id;
-  sel.onchange = () => { state.company = sel.value; render(); };
+  sel.onchange = () => { state.company = sel.value; clearApiCache(); applyCompanyTabs(); render(); };
   applyPermissions();
+  applyCompanyTabs();
 
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
@@ -134,6 +139,15 @@ function applyPermissions() {
   box.innerHTML = `<span class="muted" style="font-size:12.5px">👤 ${escapeHtml(u.username || '')}${isAdmin ? ' · הנהלה' : ' · צפייה'}</span>
     ${isAdmin ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openUsersModal()">👥 משתמשים</button>` : ''}
     <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="logout()">התנתק</button>`;
+}
+
+// ---- לשוניות לפי חברה: "הצוות" (איריס) קיים רק ב-BPM; אצל אופק/משה מוסתר ----
+function applyCompanyTabs() {
+  const isBpm = state.company === 'co_bpm';
+  const u = state.user || {};
+  const teamAllowed = u.role === 'admin' || u.tabs === 'all' || (Array.isArray(u.tabs) && u.tabs.includes('team'));
+  document.querySelectorAll('.tab[data-tab="team"]').forEach(t => { t.style.display = (isBpm && teamAllowed) ? '' : 'none'; });
+  if (!isBpm && state.tab === 'team') { const home = document.querySelector('.tab[data-tab="home"]'); if (home) home.click(); }
 }
 
 // ---- ניהול משתמשים (מנהל בלבד) ----
@@ -916,7 +930,7 @@ async function renderClients(c) {
     // חיפוש מסמכים לפי מספר/תיאור — מוצג מעל רשימת הלקוחות (רק בחיפוש)
     const tok = ++_cliSearchTok;
     _cliSearchTimer = setTimeout(() => {
-      fetch('/api/documents/quick-search?q=' + encodeURIComponent(v)).then(r => r.json()).then(r => {
+      fetch('/api/documents/quick-search?q=' + encodeURIComponent(v) + '&companyId=' + encodeURIComponent(state.company)).then(r => r.json()).then(r => {
         if (tok !== _cliSearchTok || inp.value.trim() !== v) return; // תוצאה מיושנת
         const items = (r && r.items) || [];
         if (items.length) listEl.innerHTML = docSearchRows(items) + clientRows(clients);
