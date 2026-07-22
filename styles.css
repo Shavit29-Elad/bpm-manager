@@ -233,6 +233,53 @@ tbody tr:last-child td{border-bottom:none}
 .biz-file-name{font-size:13px;font-weight:600;margin-inline-end:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px}
 @media (max-width:760px){.biz-grid,.biz-mgrs{grid-template-columns:1fr}.biz-row{flex-direction:column;align-items:stretch}.biz-row-label{flex-basis:auto}}
 
+/* ===================== התאמה לפלאפון (Responsive) ===================== */
+/* טאבלט וגלישה בינונית */
+@media (max-width:900px){
+  main{padding:18px}
+  .panel{padding:20px}
+}
+/* פלאפון */
+@media (max-width:640px){
+  /* מונע זום אוטומטי ב-iOS בעת מיקוד שדה (חייב >=16px) — קריטי לנוחות ההתחברות */
+  input,select,textarea{font-size:16px;padding:11px 12px}
+
+  /* סרגל עליון — נערם, בורר החברה ופרטי המשתמש ברוחב מלא ונוחים למגע */
+  .topbar{padding:10px 14px;gap:10px}
+  .brand{font-size:16px;flex:1 1 100%;order:-1}
+  .company-switch{width:100%}
+  .company-switch label{white-space:nowrap}
+  .company-switch select{flex:1;width:100%}
+  .pills{width:100%;margin-inline-start:0;gap:6px}
+  #userBox{margin-inline-start:0 !important;width:100%;flex-wrap:wrap;justify-content:flex-start}
+
+  /* טאבים — גלילה אופקית במקום גלישה לשורות רבות */
+  .tabs{padding:10px 12px 0;gap:5px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{padding:8px 13px;font-size:13.5px;white-space:nowrap;flex:0 0 auto}
+
+  /* תוכן ופאנלים — פחות ריווח, יותר מקום */
+  main{padding:12px}
+  .panel{padding:15px;border-radius:16px;margin-bottom:14px}
+  .panel h2{font-size:17px}
+  .big{font-size:24px}
+  .btn{padding:10px 14px;font-size:14px}
+  .row-between{gap:8px}
+
+  /* טבלאות — גלילה אופקית במקום חיתוך */
+  .panel table{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  th,td{padding:10px 9px;font-size:13px}
+
+  /* כרטיסים בעמודה אחת */
+  .cards{grid-template-columns:1fr}
+
+  /* מודלים כ"מגירה" תחתונה ברוחב מלא — נוח למגע */
+  .modal{align-items:flex-end}
+  .modal-card{width:100vw !important;max-width:100vw !important;max-height:94vh;overflow:auto;border-radius:18px 18px 0 0;padding:18px}
+  .modal-actions{flex-wrap:wrap}
+  .modal-actions .btn{flex:1 1 auto}
+}
+
 /* העדפת תנועה מופחתת */
 @media (prefers-reduced-motion: reduce){
   *{transition:none !important; animation:none !important}
