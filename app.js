@@ -873,7 +873,8 @@ async function linkDocToBankTx(txId, entry) {
   const matched = [...(tx.matchedInvoices || [])];
   if (!matched.find(x => x.id === entry.id)) matched.push(entry);
   const r = await fetch(`/api/bank/${txId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual', matchedInvoices: matched }) }).then(x => x.json()).catch(() => null);
-  if (r && r.tx) { const i = _bankList.findIndex(t => t.id === txId); if (i >= 0) _bankList[i] = r.tx; if (typeof updateBankRow === 'function') updateBankRow(r.tx); }
+  if (r && r.error) { alert(r.error); return; }
+  if (r && r.tx) { const i = _bankList.findIndex(t => t.id === txId); if (i >= 0) _bankList[i] = r.tx; renderBankBody(); }
 }
 
 // ============ סימון טופל (סגירה) / פתיחה מחדש ============
@@ -4056,6 +4057,17 @@ function bankSummaryHtml(rows) {
 }
 function updateBankSummary() { const el = document.getElementById('bankSummary'); if (el) el.innerHTML = bankSummaryHtml(bankVisibleRows()); }
 function updateBankRow(tx) { const el = document.getElementById('btr-' + tx.id); if (el) el.outerHTML = bankTr(tx); updateBankSummary(); }
+// כל מזהי החשבוניות שמשויכות כרגע לתנועת בנק כלשהי (למעט תנועה נתונה) — לסינון חי של אופציות שיוך בכל השורות
+function bankMatchedIds(exceptTxId) {
+  const s = new Set();
+  for (const t of (_bankList || [])) {
+    if (t.id === exceptTxId) continue;
+    if (t.matchStatus === 'manual' || t.matchStatus === 'auto') for (const inv of (t.matchedInvoices || [])) s.add(String(inv.id));
+  }
+  return s;
+}
+// רינדור מחדש של כל שורות הטבלה — כדי שסינון האופציות (הצעות שיוך) יתעדכן חי בכל השורות מיד אחרי שיוך/ביטול
+function renderBankBody() { const tb = document.getElementById('bankBody'); if (tb) { tb.innerHTML = bankVisibleRows().map(bankTr).join(''); updateBankSummary(); } }
 function bankConfidence(t) {
   const mis = t.matchedInvoices || []; if (!mis.length) return null;
   const reasons = mis.flatMap(i => i.reasons || []);
@@ -4065,8 +4077,9 @@ function bankConfidence(t) {
 }
 async function bankAction(id, body) {
   const r = await fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => null);
+  if (r && r.error) { alert(r.error); return; }
   const tx = r && r.tx;
-  if (tx) { const i = _bankList.findIndex(t => t.id === id); if (i >= 0) _bankList[i] = tx; updateBankRow(tx); }
+  if (tx) { const i = _bankList.findIndex(t => t.id === id); if (i >= 0) _bankList[i] = tx; renderBankBody(); }
 }
 window.rematchBank = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'מרענן…'; }
@@ -4105,7 +4118,7 @@ async function renderBank(c, soft) {
     <thead><tr>
       ${th('date', 'תאריך')}${th('amount', 'סכום בבנק')}${p('סכום חשבונית')}${p('ניכוי במקור')}${th('name', 'שם עסק')}
       ${p('חשבונית מס / מס-קבלה')}${p(dir === 'debit' ? 'תיאור החשבונית' : 'קבלה')}${p('הערות')}${p('אישור')}
-    </tr></thead><tbody>${rows.map(bankTr).join('')}</tbody></table></div>`
+    </tr></thead><tbody id="bankBody">${rows.map(bankTr).join('')}</tbody></table></div>`
     : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
   c.innerHTML = `<div class="panel">
     <div class="row-between">
@@ -4167,7 +4180,9 @@ function bankTr(t) {
   } else if (t.matchStatus === 'unmatched' || (t.suggestions || []).length) {
     // לא מותאם — זכות (חשבוניות הכנסה) או חובה (חשבוניות ספקים). מציג הצעות ללחיצה.
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
-    const sugg = (t.suggestions || []).map(s => { const j = jenc(s); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
+    // סינון חי: לא מציגים כהצעה חשבונית שכבר משויכת לתנועה אחרת (מתעדכן מיד בכל השורות אחרי שיוך/ביטול)
+    const _usedIds = bankMatchedIds(t.id);
+    const sugg = (t.suggestions || []).filter(s => !_usedIds.has(String(s.id))).map(s => { const j = jenc(s); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
     invNo = `<span class="tag miss" style="font-size:10px">לא מותאם</span>${sugg ? `<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;max-width:280px">${sugg}</div>` : ''}`;
     action = `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',true)">התעלם</button>`;
   } else {
@@ -4223,7 +4238,7 @@ window.saveBankNotes = (id, val) => fetch(`/api/bank/${id}`, { method: 'PUT', he
 
 // ---- שיוך ידני של חשבונית/קבלה לתנועת בנק ----
 let _linkTxId = null, _linkSel = [], _linkClients = null, _linkSuppliers = null, _linkClientDocs = [], _linkClientName = '';
-let _linkMode = 'clients', _linkDocsKind = 'income', _linkQuery = '', _linkNumTimer = null, _linkNumResults = [], _linkIncludeCredits = false;
+let _linkMode = 'clients', _linkDocsKind = 'income', _linkQuery = '', _linkNumTimer = null, _linkNumResults = [], _linkIncludeCredits = false, _linkInclUsed = false;
 // התאמת סכום בין קבלה לחשבונית (מלא או פחות 5% ניכוי)
 const _amtClose = (a, b) => { const t = Math.max(3, (a || 0) * 0.004); return Math.min(Math.abs(a - b), Math.abs(a - b * 0.95)) <= t; };
 function linkSelHtml() {
@@ -4240,7 +4255,7 @@ window.openLinkModal = async (txId) => {
   const tx = (_bankList || []).find(t => t.id === txId);
   _linkTxId = txId;
   _linkSel = tx ? JSON.parse(JSON.stringify(tx.matchedInvoices || [])) : [];
-  _linkClientDocs = []; _linkClientName = ''; _linkQuery = ''; _linkNumResults = []; _linkIncludeCredits = false;
+  _linkClientDocs = []; _linkClientName = ''; _linkQuery = ''; _linkNumResults = []; _linkIncludeCredits = false; _linkInclUsed = false;
   // תנועת זכות → ברירת מחדל לקוחות (הכנסה) · תנועת חובה → ספקים (הוצאה)
   _linkMode = (tx && tx.direction === 'debit') ? 'suppliers' : 'clients';
   let m = document.getElementById('linkModal');
@@ -4261,6 +4276,7 @@ window.openLinkModal = async (txId) => {
       <div id="bankExpStatus" style="font-size:12.5px;margin-top:6px"></div>
     </div>` : ''}
     <label id="linkCreditsWrap" style="display:${_linkMode === 'clients' ? 'flex' : 'none'};gap:6px;align-items:center;font-size:12px;margin:2px 0 4px;cursor:pointer"><input type="checkbox" id="linkCreditsChk" ${_linkIncludeCredits ? 'checked' : ''} onchange="toggleLinkCredits(this.checked)"> כלול גם חשבוניות זיכוי וקבלות שליליות</label>
+    <label style="display:flex;gap:6px;align-items:center;font-size:12px;margin:2px 0 4px;cursor:pointer"><input type="checkbox" id="linkInclUsedChk" ${_linkInclUsed ? 'checked' : ''} onchange="toggleLinkInclUsed(this.checked)"> אפשר לבחור גם חשבוניות שכבר משויכות לתנועה אחרת</label>
     <input id="linkClientSearch" placeholder="חפש שם, או מספר מסמך…" style="width:100%;margin:6px 0" oninput="onLinkSearch(this.value)"/>
     <div id="linkNumResults"></div>
     <div id="linkClients" style="max-height:170px;overflow:auto"></div>
@@ -4329,6 +4345,7 @@ window.setLinkMode = async (mode) => {
   renderLinkContacts(_linkQuery);
 };
 window.toggleLinkCredits = (v) => { _linkIncludeCredits = !!v; if (_linkClientDocs.length) renderLinkDocs(); };
+window.toggleLinkInclUsed = (v) => { _linkInclUsed = !!v; renderLinkContacts(_linkQuery); if (_linkClientDocs.length) renderLinkDocs(); const term = (_linkQuery || '').trim(); if (term.length >= 2) linkNumberSearch(term); };
 // חיפוש: מסנן את רשימת הלקוחות/ספקים לפי שם, ובמקביל מחפש מסמכים לפי מספר/תיאור
 window.onLinkSearch = (q) => {
   _linkQuery = q || '';
@@ -4359,15 +4376,16 @@ async function linkNumberSearch(term) {
   const incItems = (inc.items || []).map(d => ({ id: d.id, number: d.number, type: d.type, clientName: d.clientName, amount: d.amount, date: d.date, url: d.url, kind: 'income' }));
   const expItems = (exp.items || []).map(d => ({ id: d.id, number: d.number, type: d.type, clientName: d.supplierName || '—', amount: d.amountIncVat ?? d.amount, date: d.date, url: d.url, kind: 'expense' }));
   _linkNumResults = [...incItems, ...expItems];
-  const { ids } = linkedDocIds();
+  const { ids, used } = linkedDocIds();
   const avail = _linkNumResults.filter(d => !ids.has(d.id));
   if (!avail.length) { nb.innerHTML = ''; return; }
   const rows = avail.map(d => {
     const j = jenc(d);
     const kindTag = d.kind === 'expense' ? '<span class="tag" style="background:#fde7ef;color:var(--danger);font-size:10px">הוצאה</span>' : '<span class="tag" style="background:#e7f7ee;color:var(--accent2);font-size:10px">הכנסה</span>';
+    const usedTag = used.has(String(d.id)) ? ' <span class="tag" style="background:#fde7ef;color:var(--danger);font-size:10px">כבר משויך לתנועה אחרת</span>' : '';
     const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">👁</button>` : '';
     return `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
-      <span style="flex:1">${kindTag} ${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${fmtDate(d.date)} · ${money(d.amount)}</span>
+      <span style="flex:1">${kindTag}${usedTag} ${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${fmtDate(d.date)} · ${money(d.amount)}</span>
       ${pv}<button class="btn primary" style="padding:2px 12px;font-size:11px" onclick="linkAddFromNum('${j}')">הוסף</button></div>`;
   }).join('');
   nb.innerHTML = `<div style="margin:6px 0;padding:8px 10px;border:1px solid var(--accent);border-radius:10px;background:var(--panel2)">
@@ -4390,20 +4408,20 @@ window.linkPickContact = async (id, name) => {
 };
 // מסמכים שכבר משויכים לתנועות אחרות (כדי לא להציע אותם שוב)
 function linkedDocIds() {
-  const ids = new Set(), recs = new Set();
+  const ids = new Set(), recs = new Set(), used = new Set();
   for (const t of (_bankList || [])) {
     for (const inv of (t.matchedInvoices || [])) {
-      if (t.id !== _linkTxId) ids.add(inv.id);                 // תנועות אחרות חוסמות את המסמך
+      if (t.id !== _linkTxId) { used.add(String(inv.id)); if (!_linkInclUsed) ids.add(inv.id); } // תנועות אחרות חוסמות את המסמך — אלא אם סומן "אפשר גם משויכות"
       if (inv.receipt && inv.receipt.number) recs.add(String(inv.receipt.number));
     }
   }
   for (const d of _linkSel) ids.add(d.id);                      // מה שכבר נבחר כאן
-  return { ids, recs };
+  return { ids, recs, used };
 }
 // מציג את מסמכי הלקוח (הכנסה) או הספק (הוצאה) שלא שויכו עדיין — מסונן גם לפי מספר/תיאור בחיפוש
 window.renderLinkDocs = () => {
   const box = document.getElementById('linkDocs'); if (!box) return;
-  const { ids, recs } = linkedDocIds();
+  const { ids, recs, used } = linkedDocIds();
   const isExp = _linkDocsKind === 'expense';
   const q = (_linkQuery || '').trim();
   const qMatch = (d) => !q || String(d.number || '').includes(q) || (d.category || d.description || '').includes(q);
@@ -4418,10 +4436,11 @@ window.renderLinkDocs = () => {
   const rows = avail.map(d => {
     const cn = isExp ? (d.supplierName || _linkClientName) : d.clientName;
     const j = jenc({ id: d.id, number: d.number, type: d.type, clientName: cn, amount: amountOf(d), date: d.date, url: d.url, kind: isExp ? 'expense' : 'income' });
+    const usedTag = used.has(String(d.id)) ? ' <span class="tag" style="background:#fde7ef;color:var(--danger);font-size:10px">כבר משויך לתנועה אחרת</span>' : '';
     const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
     const dl = d.url ? `<a href="${d.url}" target="_blank" class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none;white-space:nowrap">להורדה ↓</a>` : '';
     return `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
-      <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${fmtDate(d.date)} · ${money(amountOf(d))}</span>
+      <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${fmtDate(d.date)} · ${money(amountOf(d))}${usedTag}</span>
       ${pv}${dl}<button class="btn primary" style="padding:2px 12px;font-size:11px" onclick="linkAdd('${j}')">הוסף</button></div>`;
   }).join('');
   const title = isExp ? `מסמכי הוצאה של ${escapeHtml(_linkClientName)}` : `מסמכים פנויים של ${escapeHtml(_linkClientName)} (חשבונית מס / מס-קבלה / קבלה)`;
@@ -4451,9 +4470,10 @@ window.linkAdd = (j) => {
 window.linkRemove = (i) => { _linkSel.splice(i, 1); _refreshLink(); };
 window.linkDetachRec = (i) => { if (_linkSel[i]) delete _linkSel[i].receipt; _refreshLink(); };
 window.linkSave = async () => {
-  const r = await fetch(`/api/bank/${_linkTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: _linkSel.length ? 'manual' : 'unmatched', matchedInvoices: _linkSel }) }).then(x => x.json()).catch(() => null);
+  const r = await fetch(`/api/bank/${_linkTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: _linkSel.length ? 'manual' : 'unmatched', matchedInvoices: _linkSel, allowDup: _linkInclUsed }) }).then(x => x.json()).catch(() => null);
+  if (r && r.error) { alert(r.error); return; }
   const m = document.getElementById('linkModal'); if (m) m.classList.add('hidden');
-  if (r && r.tx) { const i = _bankList.findIndex(t => t.id === _linkTxId); if (i >= 0) _bankList[i] = r.tx; updateBankRow(r.tx); }
+  if (r && r.tx) { const i = _bankList.findIndex(t => t.id === _linkTxId); if (i >= 0) _bankList[i] = r.tx; renderBankBody(); }
 };
 
 // ============ צור הכנסה מתנועת בנק (זכות) ============

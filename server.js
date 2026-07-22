@@ -2077,6 +2077,20 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
   const db = load();
   const t = (db.bankTx || []).find(x => x.id === params[0]);
   if (!t) return json(res, { error: 'לא נמצא' }, 404);
+  // חסימת שיוך כפול: חשבונית שכבר משויכת לתנועת בנק אחרת לא ניתנת לשיוך שוב — אלא אם נשלח allowDup (סימון מפורש)
+  if (!body.allowDup && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
+    const usedBy = new Map();
+    for (const o of (db.bankTx || [])) {
+      if (o.id === t.id) continue;
+      if (o.matchStatus !== 'manual' && o.matchStatus !== 'auto') continue;
+      for (const inv of (o.matchedInvoices || [])) usedBy.set(String(inv.id), o);
+    }
+    const clash = body.matchedInvoices.find(inv => inv && usedBy.has(String(inv.id)));
+    if (clash) {
+      const o = usedBy.get(String(clash.id));
+      return json(res, { error: `החשבונית #${clash.number || ''} כבר משויכת לתנועת בנק אחרת (${o.date} · ${o.absAmount}). כדי לשייך בכל זאת, סמן "אפשר לבחור גם חשבוניות שכבר משויכות".` }, 409);
+    }
+  }
   if (body.matchStatus) t.matchStatus = body.matchStatus;
   if (body.matchedInvoices !== undefined) t.matchedInvoices = body.matchedInvoices;
   if (body.notes !== undefined) t.notes = body.notes;
