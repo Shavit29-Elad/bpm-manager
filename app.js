@@ -3009,7 +3009,7 @@ function supDocRow(d) {
   const isAdmin = state.user && state.user.role === 'admin';
   const viewDl = d.url ? `<a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">תצוגה 👁</a>
     <a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" download target="_blank" rel="noopener">הורדה ↓</a>` : '';
-  const editBtn = (d.id && isAdmin) ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="editExpenseNote('${d.id}')">✏️ ערוך תיאור</button>` : '';
+  const editBtn = (d.id && isAdmin) ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="openExpenseEdit('${d.id}')">✏️ עריכה</button>` : '';
   const acts = (viewDl || editBtn) ? `<div style="display:flex;gap:6px;flex-wrap:wrap">${viewDl}${editBtn}</div>` : '<span class="muted">—</span>';
   return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>${escapeHtml(String(d.number || '—'))}</td>
     <td>${escapeHtml(desc)}</td><td style="white-space:nowrap">${money(d.amount)}</td><td>${acts}</td></tr>`;
@@ -3027,6 +3027,71 @@ window.editExpenseNote = async (id) => {
   if (r.greenInvoiceUpdated === false) alert('התיאור עודכן במערכת ובהתאמות הבנק. העדכון בחשבונית ירוקה עצמה לא הצליח' + (r.giError ? ': ' + r.giError : '') + '.');
   if (state.tab === 'contractors') renderSupplierDetail();
   else if (state.tab === 'bank') renderBank($('#content'), true);
+};
+// ---- עריכה מלאה של הוצאת ספק (תיאור/מספר/תאריך/סכום/שולם) + מחיקה ----
+window.openExpenseEdit = async (id) => {
+  let m = document.getElementById('expEditModal');
+  if (!m) { m = document.createElement('div'); m.id = 'expEditModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(520px,95vw)"><div class="empty">טוען את פרטי ההוצאה…</div></div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  const d = await api(`/api/expenses/${id}/details?fresh=1`).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!d || d.error) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת ההוצאה: ${escapeHtml(String((d && d.error) || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('expEditModal').classList.add('hidden')">סגור</button></div></div>`; return; }
+  const F = (l, i, v, extra = '') => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">${l}<input id="${i}" value="${escAttr(v == null ? '' : String(v))}" ${extra}></label>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(520px,95vw);max-height:92vh;overflow:auto">
+    <div class="row-between" style="margin:0"><h3 style="margin:0">✏️ עריכת הוצאה #${escapeHtml(String(d.number || ''))}</h3>
+      <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('expEditModal').classList.add('hidden')">✕</button></div>
+    <p class="muted" style="font-size:12px;margin:6px 0 12px">${escapeHtml(d.supplierName || '')} · השינויים נשמרים בחשבונית ירוקה.${d.reported ? ' ⚠ ההוצאה כבר דווחה — ייתכן שלא ניתן לעדכן/למחוק אותה.' : ''}</p>
+    <div style="display:flex;flex-direction:column;gap:11px">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">תיאור (כולל מספר הקצאה)<textarea id="exeDesc" rows="3" style="font-family:inherit;resize:vertical">${escapeHtml(d.description || '')}</textarea></label>
+      <div class="biz-grid">
+        ${F('מספר מסמך', 'exeNum', d.number, 'dir="ltr"')}
+        ${F('תאריך', 'exeDate', d.date, 'type="date"')}
+        ${F('סכום כולל מע"מ ₪', 'exeAmt', d.amount, 'type="number" inputmode="decimal" dir="ltr"')}
+        ${F('סכום ללא מע"מ ₪ (ריק=18% אוטומטי)', 'exeNet', d.amountExcludeVat, 'type="number" inputmode="decimal" dir="ltr" placeholder="חישוב אוטומטי"')}
+      </div>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">סטטוס תשלום<select id="exePaid"><option value="unpaid" ${!d.paid ? 'selected' : ''}>עדיין לא שולם</option><option value="paid" ${d.paid ? 'selected' : ''}>שולם</option></select></label>
+    </div>
+    <div id="exeStatus" style="font-size:13px;min-height:16px;margin-top:10px"></div>
+    <div class="modal-actions" style="justify-content:space-between">
+      <button class="btn danger" onclick="deleteExpenseDoc('${id}')">🗑 מחק הוצאה</button>
+      <div style="display:flex;gap:10px"><button class="btn ghost" onclick="document.getElementById('expEditModal').classList.add('hidden')">ביטול</button>
+        <button class="btn primary" id="exeSaveBtn" onclick="saveExpenseEdit('${id}')">💾 שמור</button></div>
+    </div>
+  </div>`;
+};
+window.saveExpenseEdit = async (id) => {
+  const g = (x) => document.getElementById(x);
+  const st = g('exeStatus'), btn = g('exeSaveBtn');
+  const amount = g('exeAmt').value !== '' ? Number(g('exeAmt').value) : null;
+  if (amount != null && !(amount > 0)) { st.innerHTML = '<span style="color:var(--danger)">סכום לא תקין.</span>'; return; }
+  const body = {
+    description: g('exeDesc').value,
+    number: g('exeNum').value.trim(),
+    date: g('exeDate').value || undefined,
+    paid: g('exePaid').value === 'paid',
+  };
+  if (amount != null) body.amount = amount;
+  if (g('exeNet').value !== '') body.amountExcludeVat = Number(g('exeNet').value);
+  if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
+  st.innerHTML = '<span class="muted">מעדכן בחשבונית ירוקה…</span>';
+  const r = await fetch(`/api/expenses/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r && r.ok) {
+    _expenseNotes[id] = body.description.trim();
+    for (const d of (_supDocs || [])) if (d.id === id) { d.category = body.description.trim(); if (amount != null) { d.amount = amount; d.amountIncVat = amount; } if (body.date) d.date = body.date; if (body.number) d.number = body.number; }
+    st.innerHTML = '<span style="color:var(--accent2)">נשמר ✓</span>';
+    setTimeout(() => { const mm = document.getElementById('expEditModal'); if (mm) mm.classList.add('hidden'); if (state.tab === 'contractors') renderSupplierDetail(); }, 900);
+  } else { if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; } st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String((r && r.error) || ''))}</span>`; }
+};
+window.deleteExpenseDoc = async (id) => {
+  if (!confirm('למחוק את ההוצאה לצמיתות מחשבונית ירוקה?\nלא ניתן לשחזר. אם ההוצאה כבר דווחה — ייתכן שהמחיקה תיכשל.')) return;
+  const st = document.getElementById('exeStatus'); if (st) st.innerHTML = '<span class="muted">מוחק…</span>';
+  const r = await fetch(`/api/expenses/${id}`, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r && r.ok) {
+    _supDocs = (_supDocs || []).filter(d => d.id !== id);
+    const mm = document.getElementById('expEditModal'); if (mm) mm.classList.add('hidden');
+    if (state.tab === 'contractors') renderSupplierDetail();
+  } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה במחיקה: ${escapeHtml(String((r && r.error) || ''))}</span>`;
 };
 // העלאת קובץ חשבונית של קבלן → נכנס לחשבונית ירוקה כטיוטת הוצאה (OCR), ממתין לאישור
 window.pickExpenseFile = () => {

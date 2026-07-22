@@ -495,6 +495,34 @@ export async function updateExpenseDescription(id, description) {
   clearDataCache();
   return r;
 }
+// עדכון מלא של הוצאה קיימת (תיאור, מספר, תאריך, סכום, סטטוס תשלום, ספק, סיווג)
+export async function updateExpense(id, fields = {}) {
+  const cur = await getExpense(id);
+  const body = { ...cur };
+  delete body.url; delete body.creationDate; delete body.updated; delete body.status;
+  if (fields.description != null) body.description = String(fields.description);
+  if (fields.number != null) body.number = String(fields.number).trim();
+  if (fields.date) { const d = String(fields.date).slice(0, 10); body.date = d; body.reportingDate = d; }
+  if (fields.amount != null) {
+    const amount = +Number(fields.amount).toFixed(2);
+    body.amount = amount;
+    if (fields.amountExcludeVat != null && Number(fields.amountExcludeVat) > 0) {
+      body.amountExcludeVat = +Number(fields.amountExcludeVat).toFixed(2);
+    } else {
+      body.amountExcludeVat = +(amount / 1.18).toFixed(2);
+    }
+    body.vat = +(amount - body.amountExcludeVat).toFixed(2);
+  } else if (fields.amountExcludeVat != null) {
+    body.amountExcludeVat = +Number(fields.amountExcludeVat).toFixed(2);
+    body.vat = +((Number(body.amount) || 0) - body.amountExcludeVat).toFixed(2);
+  }
+  if (fields.paid != null) body.paymentType = fields.paid ? 4 : -1; // 4=העברה בנקאית (שולם), -1=לא שולם
+  if (fields.supplierId) body.supplier = { id: fields.supplierId };
+  if (fields.accountingClassificationId) body.accountingClassification = { id: fields.accountingClassificationId };
+  const r = await api(`/expenses/${encodeURIComponent(id)}`, { method: 'PUT', body });
+  clearDataCache();
+  return r;
+}
 
 // ===== טיוטות הוצאה (מה שהעלינו וממתין ל-OCR/אישור) =====
 const DRAFT_STATUS = { 10: 'ממתין לאישור', 50: 'נכשל', 200: 'נדחה' };
@@ -677,5 +705,5 @@ export async function updateSupplierDetails(id, data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;

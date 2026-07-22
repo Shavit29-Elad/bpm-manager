@@ -1855,6 +1855,62 @@ add('POST', /^\/api\/expenses\/([^/]+)\/note$/, async (req, res, params, _q, bod
   json(res, { ok: true, id, description: desc, greenInvoiceUpdated, giError });
 });
 
+// GET /api/expenses/:id/details — ערכי ההוצאה הנוכחיים לפתיחת טופס עריכה
+add('GET', /^\/api\/expenses\/([^/]+)\/details$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const e = await greenInvoice.getExpense(params[0]);
+    const amount = Number(e.amount ?? e.total ?? e.sum ?? 0);
+    const pay = e.paymentType;
+    json(res, {
+      ok: true, id: params[0],
+      number: String(e.number ?? e.documentNumber ?? ''),
+      date: String(e.documentDate || e.date || '').slice(0, 10),
+      description: e.description || '',
+      amount,
+      amountExcludeVat: e.amountExcludeVat != null ? Number(e.amountExcludeVat) : null,
+      supplierName: e.supplier?.name || '',
+      paid: pay != null && pay !== -1,
+      reported: Number(e.status) === 20,
+    });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+// PUT /api/expenses/:id — עדכון מלא של הוצאה (תיאור/מספר/תאריך/סכום/שולם) + סנכרון מקומי
+add('PUT', /^\/api\/expenses\/([^/]+)$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const id = params[0], b = body || {};
+  try { await greenInvoice.updateExpense(id, b); }
+  catch (e) { return json(res, { error: e.message }, 500); }
+  const db = load();
+  if (b.description != null) {
+    db.expenseNotes = db.expenseNotes || {};
+    const d = String(b.description).trim();
+    if (d) db.expenseNotes[id] = d; else delete db.expenseNotes[id];
+    for (const t of (db.bankTx || [])) for (const inv of (t.matchedInvoices || [])) if (inv.id === id) inv.description = d;
+  }
+  if (b.paid != null) for (const p of (db.supplierPayables || [])) if (p.giExpenseId === id) { p.paid = !!b.paid; p.paidAt = b.paid ? (p.paidAt || new Date().toISOString()) : null; }
+  save(db);
+  json(res, { ok: true, id });
+});
+// DELETE /api/expenses/:id — מחיקת הוצאה מחשבונית ירוקה + ניקוי מקומי
+add('DELETE', /^\/api\/expenses\/([^/]+)$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const id = params[0];
+  try { await greenInvoice.deleteExpense(id); }
+  catch (e) { return json(res, { error: e.message }, 500); }
+  const db = load();
+  if (db.expenseNotes) delete db.expenseNotes[id];
+  db.supplierPayables = (db.supplierPayables || []).filter(p => p.giExpenseId !== id);
+  for (const t of (db.bankTx || [])) {
+    if (Array.isArray(t.matchedInvoices) && t.matchedInvoices.some(inv => inv.id === id)) {
+      t.matchedInvoices = t.matchedInvoices.filter(inv => inv.id !== id);
+      if (!t.matchedInvoices.length && t.matchStatus === 'manual') t.matchStatus = 'unmatched';
+    }
+  }
+  save(db);
+  json(res, { ok: true, id });
+});
+
 // GET /api/expenses/quick-search?q= — חיפוש מסמכי הוצאה לפי מספר/תיאור
 add('GET', /^\/api\/expenses\/quick-search$/, async (req, res, _p, q) => {
   if (!greenInvoice.haveCredentials()) return json(res, { items: [] });
