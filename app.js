@@ -4138,11 +4138,16 @@ function bankTr(t) {
 
   if (isMatched) {
     biz = stack(mis.map(i => `<b>${escapeHtml(i.clientName || '')}</b>`));
-    // מסמך מסוג קבלה (400) תמיד בעמודת "קבלה". שאר הסוגים (מס/מס-קבלה/זיכוי) בעמודת החשבונית.
-    invNo = stack(mis.map(i => Number(i.type) === 400
-      ? '<span class="muted">—</span>'
-      : `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url)}</span>`));
+    // הוצאות (חובה): המסמך של הספק תמיד מוצג בעמודת החשבונית עם צפייה/הורדה — גם אם type=400.
+    // הכנסות: מסמך מסוג קבלה (400) תמיד בעמודת "קבלה". שאר הסוגים (מס/מס-קבלה/זיכוי) בעמודת החשבונית.
+    invNo = stack(mis.map(i => {
+      if (i.kind === 'expense') return `<span style="white-space:nowrap">חשבונית #${i.number}${act(i.url)}</span>`;
+      return Number(i.type) === 400
+        ? '<span class="muted">—</span>'
+        : `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url)}</span>`;
+    }));
     recNo = stack(mis.map(i => {
+      if (i.kind === 'expense') return '—';
       if (Number(i.type) === 400) return `<span style="white-space:nowrap">קבלה #${i.number}${act(i.url)}</span>`;
       if (i.receipt) return `<span style="white-space:nowrap">קבלה #${i.receipt.number}${act(i.receipt.url)}</span>`;
       if (Number(i.type) === 320) return '<span class="muted" style="font-size:11px">כלול בחשבונית</span>';
@@ -4196,7 +4201,7 @@ function bankTr(t) {
 // כרטיס חשבונית בודדת בתא ההתאמה — שם עסק, סוג+מספר, סכום, קבלה נפרדת, תצוגה+הורדה
 function invChip(inv) {
   const esc = (u) => String(u).replace(/'/g, '%27');
-  const typeLabel = DOC_TYPE_NAMES[inv.type] || 'מסמך';
+  const typeLabel = inv.kind === 'expense' ? 'חשבונית ספק' : (DOC_TYPE_NAMES[inv.type] || 'מסמך');
   const pv = inv.url ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="previewDoc('${esc(inv.url)}')">תצוגה 👁</button>` : '';
   const dl = inv.url ? `<a href="${inv.url}" target="_blank" class="muted" style="font-size:11px;white-space:nowrap">הורדה ↓</a>` : '';
   let receipt = '';
