@@ -1923,7 +1923,14 @@ add('GET', /^\/api\/expenses\/quick-search$/, async (req, res, _p, q) => {
 // ---- בנק: ייבוא תנועות + התאמה לחשבוניות הכנסה ----
 function ddmmyyyyToISO(d) { const m = String(d || '').match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; }
 function shiftISODays(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
-function bankSig(t) { return `${t.date}|${t.absAmount}|${t.reference || ''}|${(t.description || '').slice(0, 20)}`; }
+// ניקוי תיאור לצורך חתימה: מסיר תווי קידוד שבורים (U+FFFD �) ורווחים כפולים, כדי שקידוד עברית פגום לא ישנה את החתימה
+function normDesc(s) { return String(s || '').replace(/�/g, '').replace(/\s+/g, ' ').trim().slice(0, 20); }
+// חתימת תנועה למניעת כפילויות בייבוא חוזר. כשיש אסמכתא — מתבססים עליה (מזהה ייחודי לתנועה בבנק) ומתעלמים מהתיאור,
+// כי קידוד העברית עלול להישבר בייבוא חוזר ולשנות את התיאור — מה שיצר בעבר תנועות כפולות. ללא אסמכתא: תיאור מנוקה.
+function bankSig(t) {
+  const base = `${t.date}|${t.absAmount}|${t.direction || ''}`;
+  return t.reference ? `${base}|R${t.reference}` : `${base}|${normDesc(t.description)}`;
+}
 
 // POST /api/bank/import  { text, companyId }
 add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
@@ -1960,7 +1967,8 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   } catch { /* לא חוסם ייבוא */ }
   const db = load();
   db.bankTx = db.bankTx || [];
-  const bySig = new Map(db.bankTx.filter(t => !companyId || t.companyId === companyId).map(t => [t.sig, t]));
+  // מחשבים את החתימה מחדש מכל תנועה קיימת (ולא סומכים על t.sig השמור), כדי שהתיקון יחול גם על תנועות ישנות ולא ייווצרו כפילויות
+  const bySig = new Map(db.bankTx.filter(t => !companyId || t.companyId === companyId).map(t => [bankSig(t), t]));
   let added = 0, backfilled = 0;
   for (const t of matched) {
     const sig = bankSig(t);
