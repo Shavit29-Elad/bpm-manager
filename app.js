@@ -3350,6 +3350,18 @@ async function renderBusiness(c) {
     else if (days <= 14) taxTag = `<span class="tag pending">בתוקף עוד ${days} ימים — מומלץ לחדש</span>`;
     else taxTag = `<span class="tag match">בתוקף עד ${tc.expiry}</span>`;
   }
+  // חיבור לרשות המיסים (מספרי הקצאה)
+  const ta = p.taxAuthority || {};
+  let taTag = '';
+  if (ta.renewedAt) {
+    const vd = Number(ta.validDays) || 90;
+    const exp = new Date(ta.renewedAt + 'T00:00:00'); exp.setDate(exp.getDate() + vd);
+    const expStr = exp.toISOString().slice(0, 10);
+    const days = Math.round((exp - new Date(new Date().toDateString())) / 86400000);
+    if (days < 0) taTag = `<span class="tag miss">פג לפני ${-days} ימים — לחדש במורנינג</span>`;
+    else if (days <= 14) taTag = `<span class="tag pending">בתוקף עוד ${days} ימים — מומלץ לחדש</span>`;
+    else taTag = `<span class="tag match">בתוקף עד ${expStr} (${days} ימים)</span>`;
+  }
   const mgrCard = (i) => `<div class="card" style="margin:0">
     <div style="font-weight:700;margin-bottom:8px">👤 מנהל ${i + 1}</div>
     <div class="biz-grid">
@@ -3412,8 +3424,31 @@ async function renderBusiness(c) {
       </div>`).join('') || '<div class="muted" style="font-size:13px">אין עדיין מסמכים נוספים.</div>'}
       ${addDocs.length < 6 ? `<div style="margin-top:8px">${bizSlotHtml('add', null)}</div>` : ''}
     </div>
+  </div>
+
+  <div class="panel">
+    <div class="row-between" style="margin:0"><h3 style="margin:0">🧾 חיבור לרשות המיסים — מספרי הקצאה ${taTag}</h3></div>
+    <p class="muted" style="font-size:12.5px;margin:8px 0 4px">החיבור עצמו והחידוש מתבצעים בתוך מורנינג (חשבונית ירוקה) מול שירותי הדיגיטל של רשות המיסים — בערך כל 90 יום, בכניסה לאתר הממשלתי. כאן עוקבים אחרי התוקף ומקבלים התראה יומית לפני שהוא פג, כדי שהפקת מספרי הקצאה לחשבוניות מס לא תיחסם.</p>
+    <div class="biz-grid">
+      <label>תאריך חיבור/חידוש אחרון<input type="date" id="ta_renewed" value="${escAttr(ta.renewedAt || '')}"></label>
+      <label>תוקף (ימים)<input type="number" id="ta_days" dir="ltr" value="${ta.validDays || 90}"></label>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn primary" onclick="bizSaveTaxAuthority()">💾 שמור</button>
+      <button class="btn ghost" onclick="bizRenewTaxAuthorityToday()">✓ חידשתי היום במורנינג</button>
+    </div>
   </div>`;
 }
+window.bizSaveTaxAuthority = async () => {
+  const renewed = (document.getElementById('ta_renewed')?.value || '').trim();
+  const days = Number(document.getElementById('ta_days')?.value) || 90;
+  await bizWrite('/api/business-profile', 'PUT', { taxAuthorityRenewedAt: renewed, taxAuthorityValidDays: days });
+  renderBusiness($('#content')); checkBizAlerts();
+};
+window.bizRenewTaxAuthorityToday = async () => {
+  await bizWrite('/api/business-profile', 'PUT', { taxAuthorityRenewedAt: new Date().toISOString().slice(0, 10) });
+  renderBusiness($('#content')); checkBizAlerts();
+};
 
 window.bizSave = async () => {
   const g = (id) => (document.getElementById(id)?.value || '').trim();
@@ -3476,11 +3511,15 @@ async function checkBizAlerts() {
   if (!alerts.length) { if (bar) bar.remove(); return; }
   if (!bar) { bar = document.createElement('div'); bar.id = 'bizAlertBar'; const tabs = document.querySelector('.tabs'); if (tabs) tabs.insertAdjacentElement('beforebegin', bar); else document.body.prepend(bar); }
   bar.innerHTML = alerts.map(a => {
+    const nm = escapeHtml(a.companyName);
+    const isTa = a.kind === 'taxAuthority';
+    const subject = isTa ? 'החיבור לרשות המיסים (מספרי הקצאה)' : 'אישור ניכוי מס במקור';
+    const action = isTa ? 'יש לחדש במורנינג ולעדכן את התאריך בלשונית «פרטי העסק».' : 'יש לחדש ולעדכן בלשונית «פרטי העסק».';
     const txt = a.expired
-      ? `אישור ניכוי מס במקור של «${escapeHtml(a.companyName)}» פג תוקף בתאריך ${a.expiry}`
-      : `אישור ניכוי מס במקור של «${escapeHtml(a.companyName)}» יפוג בעוד ${a.daysLeft} ימים (${a.expiry})`;
+      ? `${subject} של «${nm}» פג תוקף בתאריך ${a.expiry}`
+      : `${subject} של «${nm}» יפוג בעוד ${a.daysLeft} ימים (${a.expiry})`;
     return `<div class="warn-banner" style="margin:8px 16px;border-radius:12px;display:flex;justify-content:space-between;align-items:center;gap:10px">
-      <span>⚠️ ${txt} — יש לחדש ולעדכן בלשונית «פרטי העסק».</span>
+      <span>⚠️ ${txt} — ${action}</span>
       <button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="this.closest('div').remove()">✕</button></div>`;
   }).join('');
 }

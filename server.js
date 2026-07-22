@@ -1428,10 +1428,19 @@ add('GET', /^\/api\/business-profile\/alerts$/, (req, res) => {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const out = [];
   for (const c of (db.companies || [])) {
-    const tc = profs[c.id] && profs[c.id].taxConfirmation;
+    const prof = profs[c.id] || {};
+    const tc = prof.taxConfirmation;
     if (tc && tc.expiry) {
       const days = Math.round((new Date(tc.expiry + 'T00:00:00') - today) / 86400000);
-      if (days <= 14) out.push({ companyId: c.id, companyName: c.name, expiry: tc.expiry, daysLeft: days, expired: days < 0 });
+      if (days <= 14) out.push({ companyId: c.id, companyName: c.name, kind: 'taxCert', expiry: tc.expiry, daysLeft: days, expired: days < 0 });
+    }
+    // חיבור לרשות המיסים (מספרי הקצאה) — תוקף = תאריך חידוש + מספר ימים (ברירת מחדל 90)
+    const ta = prof.taxAuthority;
+    if (ta && ta.renewedAt) {
+      const vd = Number(ta.validDays) || 90;
+      const exp = new Date(ta.renewedAt + 'T00:00:00'); exp.setDate(exp.getDate() + vd);
+      const days = Math.round((exp - today) / 86400000);
+      if (days <= 14) out.push({ companyId: c.id, companyName: c.name, kind: 'taxAuthority', expiry: exp.toISOString().slice(0, 10), daysLeft: days, expired: days < 0 });
     }
   }
   json(res, { alerts: out });
@@ -1447,6 +1456,8 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
     ['name', 'idNumber', 'phone', 'email'].forEach(k => { if (k in m) p.managers[i][k] = String(m[k] || ''); });
   });
   if ('taxExpiry' in b) { p.taxConfirmation = p.taxConfirmation || {}; p.taxConfirmation.expiry = b.taxExpiry ? String(b.taxExpiry).slice(0, 10) : ''; }
+  if ('taxAuthorityRenewedAt' in b) { p.taxAuthority = p.taxAuthority || {}; p.taxAuthority.renewedAt = b.taxAuthorityRenewedAt ? String(b.taxAuthorityRenewedAt).slice(0, 10) : ''; }
+  if ('taxAuthorityValidDays' in b) { p.taxAuthority = p.taxAuthority || {}; p.taxAuthority.validDays = Number(b.taxAuthorityValidDays) || 90; }
   save(db); json(res, p);
 });
 // POST /api/business-profile/file?companyId=&slot= { filename, mime, data(base64), expiry?, label? }
