@@ -435,6 +435,7 @@ function docsTable(docs, opts = {}) {
     const id = d.id, num = escAttr(String(d.number ?? '')), tp = Number(d.type), stt = Number(d.status);
     const bs = 'padding:3px 8px;font-size:11.5px;white-space:nowrap';
     const b = [];
+    b.push(`<button class="btn ghost" style="${bs};color:var(--accent)" onclick="openSendDoc('${id}','${num}','${escAttr(DOC_TYPE_NAMES[tp] || 'מסמך')}','${encodeURIComponent(d.clientName || '')}')">✉️ שלח</button>`);
     if (FOLLOWUP_FOR[tp]?.length) b.push(`<button class="btn ghost" style="${bs}" onclick="openDerive('${id}','${num}',${tp},'followup',true)">מסמך המשך ↪</button>`);
     b.push(`<button class="btn ghost" style="${bs}" onclick="openDerive('${id}','${num}',${tp},'duplicate',true)">שכפול ⧉</button>`);
     if (tp === 305 || tp === 320) b.push(`<button class="btn ghost" style="${bs};color:var(--danger)" onclick="openCreditModal('${id}','${num}',${tp})">זיכוי ⊖</button>`);
@@ -463,6 +464,45 @@ function docsTable(docs, opts = {}) {
     <tr style="background:var(--panel2)"><td colspan="${cc ? 5 : 4}"><b>סה"כ</b></td><td><b>${money(totalEx)}</b></td><td><b>${money(totalInc)}</b></td><td></td></tr>
     </tbody></table>`;
 }
+
+// ---- שליחת מסמך שהופק במייל ללקוח (למייל השמור, או הזנת כתובת) ----
+window.openSendDoc = (id, number, typeName, clientNameEnc) => {
+  let clientName = decodeURIComponent(clientNameEnc || '');
+  let email = '';
+  const list = state.clientsList || [];
+  let c = clientName ? (list.find(x => (x.name || '') === clientName) || list.find(x => nameHas(x.name, clientName))) : null;
+  // הקשר כרטיס לקוח פתוח — אם לא זוהה שם/מייל, נשתמש בלקוח הנוכחי
+  if (!c && _clientId) { c = list.find(x => String(x.id) === String(_clientId)); if (!clientName) clientName = _clientName || ''; }
+  if (c) email = c.email || '';
+  let m = document.getElementById('sendDocModal');
+  if (!m) { m = document.createElement('div'); m.id = 'sendDocModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(440px,94vw)">
+    <div class="row-between" style="margin:0"><h3 style="margin:0">✉️ שליחת ${escapeHtml(typeName || 'מסמך')} #${escapeHtml(String(number))}</h3>
+      <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('sendDocModal').classList.add('hidden')">✕</button></div>
+    <p class="muted" style="font-size:12.5px;margin:6px 0 10px">${clientName ? 'ללקוח: ' + escapeHtml(clientName) + ' · ' : ''}המסמך יישלח במייל דרך חשבונית ירוקה.${email ? '' : ' אין מייל שמור ללקוח — הזן כתובת.'}</p>
+    <label style="font-size:13px;display:block;margin-bottom:4px">כתובת מייל</label>
+    <input id="sendDocEmail" dir="ltr" value="${escAttr(email)}" placeholder="name@example.com" style="width:100%" onkeydown="if(event.key==='Enter')doSendDoc('${id}')">
+    <div id="sendDocStatus" style="font-size:13px;min-height:16px;margin:10px 0"></div>
+    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('sendDocModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" id="sendDocBtn" onclick="doSendDoc('${id}')">✉️ שלח</button></div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  setTimeout(() => { const i = document.getElementById('sendDocEmail'); if (i && !email) i.focus(); }, 40);
+};
+window.doSendDoc = async (id) => {
+  const email = (document.getElementById('sendDocEmail')?.value || '').trim();
+  const st = document.getElementById('sendDocStatus');
+  const btn = document.getElementById('sendDocBtn');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש להזין כתובת מייל תקינה.</span>'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'שולח…'; }
+  if (st) st.innerHTML = '<span class="muted">שולח מייל…</span>';
+  const r = await fetch(`/api/documents/${id}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r && r.ok) {
+    if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml(email)}</span>`;
+    setTimeout(() => { const mm = document.getElementById('sendDocModal'); if (mm) mm.classList.add('hidden'); }, 1300);
+  } else { if (btn) { btn.disabled = false; btn.textContent = '✉️ שלח'; } if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String((r && r.error) || ''))}</span>`; }
+};
 
 async function renderHome(c) {
   initPeriod();
@@ -552,6 +592,7 @@ function openInvClientHtml(cl) {
     <span style="font-weight:600;white-space:nowrap">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>
     ${d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
     <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : ''}
+    <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number))}','${escAttr(DOC_TYPE_NAMES[d.type] || 'מסמך')}','${encodeURIComponent(cl.name || '')}')">✉️ שלח</button>
     ${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'followup')">מסמך המשך ↪</button>` : ''}
     <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'duplicate')">שכפול ⧉</button>
   </div>`).join('');
@@ -2136,13 +2177,14 @@ function quoteRow(d) {
   const follow = `<button class="btn primary" style="padding:2px 9px;font-size:12px" onclick="quoteFollowup('${d.id}','${encodeURIComponent(d.clientName || '')}','${d.number}')">הפק מסמך המשך</button>`;
   const dup = `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="openDuplicateQuote('${d.id}')">שכפול ⧉</button>`;
   const close = `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="quoteClose('${d.id}','${d.number}')">סגור הצעה</button>`;
+  const send = `<button class="btn ghost" style="padding:2px 9px;font-size:12px;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number))}','הצעת מחיר','${encodeURIComponent(d.clientName || '')}')">✉️ שלח</button>`;
   return `<tr>
     <td style="text-align:center"><input type="checkbox" class="qchk" value="${d.id}" onchange="quoteSelChanged()"/></td>
     <td style="white-space:nowrap">${fmtDate(d.date)}</td><td>#${d.number}</td>
     <td>${escapeHtml(d.clientName || '')}</td><td>${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</td>
     <td style="white-space:nowrap">${money(d.amountExVat ?? d.amount)}</td>
     <td style="white-space:nowrap;font-weight:600">${money(d.amountIncVat ?? d.amount)}</td>
-    <td style="text-align:left"><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">${pv}${dup}${follow}${close}</div></td></tr>`;
+    <td style="text-align:left"><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">${pv}${send}${dup}${follow}${close}</div></td></tr>`;
 }
 window.quoteToggleAll = (on) => { document.querySelectorAll('.qchk').forEach(x => { x.checked = on; }); quoteSelChanged(); };
 window.quoteSelChanged = () => {

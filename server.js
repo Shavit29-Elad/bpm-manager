@@ -1154,6 +1154,22 @@ add('GET', /^\/api\/documents\/([^/]+)\/url$/, async (req, res, params) => {
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// POST /api/documents/:id/send { email? } — שליחת מסמך קיים במייל דרך חשבונית ירוקה
+add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const email = String((body && body.email) || '').trim();
+    let emails = email ? [email] : [];
+    if (!emails.length) {
+      // ברירת מחדל — כתובות המייל השמורות ללקוח במסמך
+      try { const doc = await greenInvoice.getDocument(params[0]); const ce = (doc && doc.client && doc.client.emails) || []; emails = (Array.isArray(ce) ? ce : []).map(String).filter(Boolean); } catch { }
+    }
+    if (!emails.length) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
+    const r = await greenInvoice.sendDocument(params[0], emails);
+    json(res, { ok: true, sentTo: emails, result: r });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // POST /api/documents/:id/derive { type, linked, items?, date?, payment?, description?, remarks? }
 // מסמך המשך (מקושר) או שכפול (חופשי). אם נשלחות שורות/תאריך/תקבולים ערוכים — משתמשים בהם.
 add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, body) => {
