@@ -2342,6 +2342,7 @@ let _mailStatus = null; // סטטוס שליחת מייל לרו"ח
 const _aiByDraft = {};      // מטמון תוצאות ה-AI לכל טיוטה (id -> fields)
 const _aiInFlight = {};     // מונע קריאות כפולות במקביל
 let _openApproveId = null;  // איזו טיוטה פתוחה כרגע במסך הקליטה
+let _apLinkToBankTxId = null; // אם הקליטה נפתחה מתוך שיוך בנק — לשייך את ההוצאה שנוצרה לתנועה זו
 // מריץ קריאת AI ברקע לכל הטיוטות שעדיין לא נקראו, ואז מרענן את הכרטיסים
 window.kickDraftsAi = async () => {
   const list = (_drafts || []).slice();
@@ -2534,7 +2535,8 @@ window.checkAllocWarn = () => {
   else if (needs && alloc) w.innerHTML = '<span style="color:var(--accent2)">✓ מספר הקצאה קיים</span>';
   else w.innerHTML = '';
 };
-window.openApproveDraft = (id) => {
+window.openApproveDraft = (id, fromBankTxId) => {
+  _apLinkToBankTxId = fromBankTxId || null; // אם נפתח משיוך בנק — נשייך את ההוצאה שתיווצר לתנועה
   const d = (_drafts || []).find(x => x.id === id); if (!d) return;
   let m = document.getElementById('apprModal');
   if (!m) { m = document.createElement('div'); m.id = 'apprModal'; m.className = 'modal'; document.body.appendChild(m); }
@@ -2841,6 +2843,23 @@ window.approveDraft = async (id, btn) => {
     }
     st.innerHTML = `<span style="color:var(--accent2)">${msg}</span>`;
     _drafts = _drafts.filter(x => x.id !== id);
+    // אם הקליטה נפתחה מתוך שיוך בנק — לשייך את ההוצאה שנוצרה לתנועת החובה
+    if (_apLinkToBankTxId) {
+      const bankTxId = _apLinkToBankTxId; _apLinkToBankTxId = null;
+      if (r.duplicate) {
+        st.innerHTML = `<span style="color:var(--warn)">${msg} · לא ניתן לשייך אוטומטית (המסמך כבר קיים) — שייך אותו דרך החיפוש.</span>`;
+        setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); if (state.tab === 'bank') renderBank($('#content'), true); }, 2400);
+        return;
+      }
+      const newExp = { id: (r.expense && r.expense.id) || r.payableId || ('exp_' + number), number, type: docType, clientName: supplierName || 'ספק', amount, date: g('apDate').value || todayIso(), url: null, kind: 'expense', description: g('apDesc').value.trim() };
+      try {
+        await fetch(`/api/bank/${bankTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual', matchedInvoices: [newExp] }) });
+        const bt = (_bankList || []).find(t => t.id === bankTxId); if (bt) { bt.matchStatus = 'manual'; bt.matchedInvoices = [newExp]; }
+      } catch { }
+      st.innerHTML = `<span style="color:var(--accent2)">${msg} · 🔗 שויך לתנועת הבנק</span>`;
+      setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); if (state.tab === 'bank') renderBank($('#content'), true); }, 1600);
+      return;
+    }
     setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); if (state.tab === 'contractors') renderContractors($('#content')); }, 1700);
   } else st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
@@ -3965,6 +3984,15 @@ window.openLinkModal = async (txId) => {
     <h3>שיוך ידני של מסמך${tx ? ` — ${tx.date} · ${money(tx.absAmount)}${tx.direction === 'debit' ? ' (חובה)' : ' (זכות)'}` : ''}</h3>
     <div style="margin:8px 0;padding:8px 10px;background:var(--panel2);border-radius:10px"><b style="font-size:13px">מקושר כרגע:</b><div id="linkSelBox" style="margin-top:4px">${linkSelHtml()}</div></div>
     <div style="display:flex;gap:6px;margin:6px 0">${seg('clients', '🏢 לקוחות')}${seg('suppliers', '🏭 ספקים')}</div>
+    ${(tx && tx.direction === 'debit') ? `<div style="margin:8px 0;padding:10px 12px;border:1.5px dashed var(--accent);border-radius:12px;background:var(--panel2)">
+      <div style="font-size:13px;font-weight:700;margin-bottom:5px">➕ אין חשבונית במערכת? העלה אותה כאן</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">גרור או בחר את קובץ החשבונית — המערכת תזהה אוטומטית (OCR) את הספק והסכום, תפתח את טופס אישור ההוצאה, וברגע שתאשר — ההוצאה תיווצר בחשבונית ירוקה ותשויך אוטומטית לתנועה זו.</div>
+      <label class="biz-drop" ondragover="event.preventDefault();this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="bankExpenseDrop(event,'${txId}')">
+        📎 גרור לכאן או בחר קובץ (PDF/תמונה)
+        <input type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/*" style="display:none" onchange="bankExpensePick(this,'${txId}')">
+      </label>
+      <div id="bankExpStatus" style="font-size:12.5px;margin-top:6px"></div>
+    </div>` : ''}
     <label id="linkCreditsWrap" style="display:${_linkMode === 'clients' ? 'flex' : 'none'};gap:6px;align-items:center;font-size:12px;margin:2px 0 4px;cursor:pointer"><input type="checkbox" id="linkCreditsChk" ${_linkIncludeCredits ? 'checked' : ''} onchange="toggleLinkCredits(this.checked)"> כלול גם חשבוניות זיכוי וקבלות שליליות</label>
     <input id="linkClientSearch" placeholder="חפש שם, או מספר מסמך…" style="width:100%;margin:6px 0" oninput="onLinkSearch(this.value)"/>
     <div id="linkNumResults"></div>
@@ -3979,6 +4007,42 @@ window.openLinkModal = async (txId) => {
   await ensureLinkPool();
   renderLinkContacts('');
 };
+// ---- העלאת חשבונית ספק ישירות מתוך שיוך בנק → קליטת הוצאה מלאה + שיוך אוטומטי לתנועה ----
+window.bankExpensePick = (input, txId) => { const f = input.files && input.files[0]; if (f) bankExpenseUpload(f, txId); input.value = ''; };
+window.bankExpenseDrop = (e, txId) => { e.preventDefault(); e.currentTarget.classList.remove('drag'); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) bankExpenseUpload(f, txId); };
+async function bankExpenseUpload(file, txId) {
+  const setSt = (h) => { const s = document.getElementById('bankExpStatus'); if (s) s.innerHTML = h; };
+  if (!(/\.(pdf|png|jpe?g)$/i.test(file.name) || /(pdf|image)/i.test(file.type || '')) || file.size > 10 * 1024 * 1024) {
+    setSt('<span style="color:var(--danger)">יש להעלות קובץ PDF או תמונה עד 10MB.</span>'); return;
+  }
+  const tx = (_bankList || []).find(t => t.id === txId);
+  setSt('<span class="muted">מעלה קובץ…</span>');
+  if (!_suppliers || !_suppliers.length) { _suppliers = await api('/api/suppliers').catch(() => []); }
+  // רשימת טיוטות בסיס — כדי לזהות את החדשה שנוצרה
+  const base = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
+  const baseIds = new Set((base.drafts || []).map(d => d.id));
+  try {
+    const data = await fileToB64(file);
+    const up = await fetch('/api/expenses/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileBase64: data, fileName: file.name, mime: file.type || 'application/pdf' }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (up.error) { setSt('<span style="color:var(--danger)">שגיאה בהעלאה: ' + escapeHtml(String(up.error)) + '</span>'); return; }
+  } catch { setSt('<span style="color:var(--danger)">שגיאה בהעלאה.</span>'); return; }
+  setSt('<span class="muted">מזהה את החשבונית אוטומטית (OCR)… זה עשוי לקחת עד דקה.</span>');
+  let tries = 0, newDraft = null;
+  while (tries < 20 && !newDraft) {
+    await new Promise(r => setTimeout(r, 3000)); tries++;
+    const dr = await api('/api/expense-drafts?fresh=1').catch(() => null);
+    const list = Array.isArray(dr && dr.drafts) ? dr.drafts : [];
+    _drafts = list;
+    newDraft = list.find(d => !baseIds.has(d.id));
+  }
+  if (!newDraft) { setSt('<span style="color:var(--danger)">הקובץ עלה אך הזיהוי מתעכב. אפשר לאשר אותו מלשונית קבלנים ואז לשייך.</span>'); return; }
+  // ברירת מחדל לסכום — סכום החובה בבנק (אם ה-OCR לא זיהה סכום)
+  if (newDraft.amount == null || newDraft.amount === '') newDraft.amount = tx ? tx.absAmount : newDraft.amount;
+  setSt('<span style="color:var(--accent2)">זוהתה חשבונית — נפתח טופס אישור…</span>');
+  const lm = document.getElementById('linkModal'); if (lm) lm.classList.add('hidden');
+  openApproveDraft(newDraft.id, txId);
+}
 // טוען את מאגר הלקוחות/ספקים לפי המצב הנוכחי (פעם אחת כל אחד)
 async function ensureLinkPool() {
   const box = document.getElementById('linkClients');
