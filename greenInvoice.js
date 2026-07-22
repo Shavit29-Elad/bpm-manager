@@ -118,7 +118,8 @@ function documentBody({ client, items, type, remarks, description, dueDate, date
   if (sendEmail && email) body.emails = [String(email).trim()];
   if (description) body.description = description;   // כותרת/נושא המסמך
   if (remarks) body.remarks = remarks;              // הערה בתחתית
-  if (dueDate) body.dueDate = dueDate;
+  // "תשלום עד" — תמיד מוגדר לתאריך המסמך שהמשתמש בחר (אלא אם נשלח dueDate מפורש אחר)
+  body.dueDate = dueDate || body.date;
   // מסמכים מסוג קבלה/מס-קבלה מחייבים תיעוד תשלום
   if (PAYMENT_REQUIRED.has(type)) {
     body.payment = payment && payment.length ? payment
