@@ -3974,6 +3974,33 @@ function bankPeriodControls() {
   else if (p.mode === 'range') { const [fy, fm] = (p.from || '').split('-').map(Number); const [ty, tm] = (p.to || '').split('-').map(Number); extra = `<span class="muted">מ־</span><select onchange="setBankPerPart('from','m',this.value)" style="padding:7px 8px">${monthOptions(fm)}</select><select onchange="setBankPerPart('from','y',this.value)" style="padding:7px 8px">${yearOptions(fy)}</select><span class="muted">עד</span><select onchange="setBankPerPart('to','m',this.value)" style="padding:7px 8px">${monthOptions(tm)}</select><select onchange="setBankPerPart('to','y',this.value)" style="padding:7px 8px">${yearOptions(ty)}</select>`; }
   return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('all', 'הכל')}${seg('month', 'חודשי')}${seg('year', 'שנתי')}${seg('range', 'טווח')}</div>${extra}</div>`;
 }
+// חיפוש חופשי בבנק על כל השורות: לפי מספר מסמך (חשבונית מס / מס-קבלה / קבלה) / שם / תיאור, ולפי טווח סכומים
+function bankRowMatchesQuery(t, q) {
+  const ql = q.toLowerCase();
+  const nums = [];
+  for (const inv of (t.matchedInvoices || [])) {
+    if (inv.number != null) nums.push(String(inv.number));
+    if (inv.receipt && inv.receipt.number != null) nums.push(String(inv.receipt.number));
+  }
+  if (t.invoiceNumber != null) nums.push(String(t.invoiceNumber));
+  if (nums.some(n => n.toLowerCase().includes(ql))) return true;
+  const text = [t.nameHint, t.description, ...(t.matchedInvoices || []).map(i => i.clientName)].filter(Boolean).join(' ').toLowerCase();
+  return text.includes(ql);
+}
+window.setBankSearch = (field, val) => { const s = state.bankSearch || (state.bankSearch = {}); s[field] = val; renderBankBody(); };
+window.clearBankSearch = () => { state.bankSearch = {}; renderBank($('#content')); };
+function bankSearchControls() {
+  const s = state.bankSearch || {};
+  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:7px 9px;margin-top:10px">
+    <span class="muted" style="font-size:12px;font-weight:600">🔎 חיפוש בכל השורות:</span>
+    <input value="${(s.q || '').replace(/"/g, '&quot;')}" oninput="setBankSearch('q',this.value)" placeholder="מס׳ מסמך / שם / תיאור" style="padding:6px 9px;font-size:13px;width:190px"/>
+    <span class="muted" style="font-size:12px">סכום מ־</span>
+    <input type="number" inputmode="decimal" value="${s.min != null ? s.min : ''}" oninput="setBankSearch('min',this.value)" placeholder="0" style="padding:6px 9px;font-size:13px;width:95px"/>
+    <span class="muted" style="font-size:12px">עד</span>
+    <input type="number" inputmode="decimal" value="${s.max != null ? s.max : ''}" oninput="setBankSearch('max',this.value)" placeholder="ללא הגבלה" style="padding:6px 9px;font-size:13px;width:110px"/>
+    <button class="btn ghost" style="padding:5px 11px;font-size:12px" onclick="clearBankSearch()">נקה ✕</button>
+  </div>`;
+}
 
 // מצב חשבון: עו"ש עדכני. מעדיפים את היתרה הרשמית מכותרת הקובץ (_bankBalance);
 // אם אין — נופלים ליתרה מהתנועה האחרונה שיש בה יתרה.
@@ -4032,14 +4059,22 @@ function bankMonthlyHtml() {
 }
 function bankVisibleRows() {
   const dir = state.bankFilter || 'credit';
+  const s = state.bankSearch || {};
+  const q = (s.q || '').trim();
+  const min = parseFloat(s.min), max = parseFloat(s.max);
+  const hasSearch = !!q || !isNaN(min) || !isNaN(max);
   let rows = (_bankList || []).filter(t => {
+    if (hasSearch) return true; // חיפוש חל על כל השורות — מתעלם מבורר זכות/חובה/תקופה
     if (dir === 'all') return true;
     if (dir === 'unmatched') return t.matchStatus === 'unmatched'; // כל הלא-מותאמות — גם חובה וגם זכות
     if (dir === 'credit') return t.direction === 'credit';
     if (dir === 'debit') return t.direction === 'debit';
     return true;
   });
-  rows = rows.filter(bankPeriodMatch);
+  if (!hasSearch) rows = rows.filter(bankPeriodMatch);
+  if (!isNaN(min)) rows = rows.filter(t => (t.absAmount || 0) >= min);
+  if (!isNaN(max)) rows = rows.filter(t => (t.absAmount || 0) <= max);
+  if (q) rows = rows.filter(t => bankRowMatchesQuery(t, q));
   return sortBankRows(rows);
 }
 function bankSummaryHtml(rows) {
@@ -4132,6 +4167,7 @@ async function renderBank(c, soft) {
     ${bankHeaderHtml()}
     ${bankMonthlyHtml()}
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px">${bankDirControls()}${bankPeriodControls()}</div>
+    ${bankSearchControls()}
     ${summary}
     <p class="muted" style="font-size:12.5px;margin-top:10px">תגית ירוקה <b>"מדויק"</b> = סכום זהה או מספר חשבונית (בטוח לאישור) · צהובה <b>"לבדיקה"</b> = ניכוי 5% / צירוף / שם בלבד (כדאי לוודא בתצוגה) · שורות אדומות = לא מותאמות · 🔗 שייך לשיוך ידני.</p>
     ${table}
