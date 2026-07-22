@@ -2285,7 +2285,7 @@ async function renderContractors(c) {
       <button class="btn ghost" onclick="refreshSuppliers(this)">↻ רענן מחשבונית ירוקה</button></div>
     <div style="display:flex;gap:16px;align-items:stretch;min-height:56vh;margin-top:12px">
       <div style="flex:0 0 300px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden">
-        <input id="supSearch" placeholder="חיפוש קבלן…" style="border:none;border-bottom:1px solid var(--line);border-radius:0"/>
+        <input id="supSearch" placeholder="חיפוש לפי שם קבלן / מספר מסמך / תיאור…" style="border:none;border-bottom:1px solid var(--line);border-radius:0"/>
         <div id="supList" style="overflow-y:auto;flex:1;max-height:62vh">${supplierRows(_suppliers)}</div>
       </div>
       <div id="supDetail" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;max-height:66vh">
@@ -2294,7 +2294,27 @@ async function renderContractors(c) {
     </div>
   </div>`;
   const inp = $('#supSearch');
-  if (inp) inp.oninput = () => { $('#supList').innerHTML = supplierRows((_suppliers || []).filter(s => nameHas(s.name, inp.value))); };
+  if (inp) {
+    let _supSearchTok = 0, _supSearchTimer = null;
+    inp.oninput = () => {
+      const v = inp.value.trim();
+      const filtered = (_suppliers || []).filter(s => nameHas(s.name, v));
+      const listEl = $('#supList');
+      listEl.innerHTML = supplierRows(filtered);
+      clearTimeout(_supSearchTimer);
+      if (v.length < 2) return;
+      // חיפוש הוצאות לפי מספר מסמך / תיאור — מוצג מעל רשימת הקבלנים
+      const tok = ++_supSearchTok;
+      _supSearchTimer = setTimeout(() => {
+        api('/api/expenses/quick-search?q=' + encodeURIComponent(v)).then(r => {
+          if (tok !== _supSearchTok || inp.value.trim() !== v) return; // תוצאה מיושנת
+          const items = (r && r.items) || [];
+          if (items.length) listEl.innerHTML = supExpRows(items) + supplierRows(filtered);
+        }).catch(() => {});
+      }, 300);
+    };
+    inp.focus();
+  }
   kickDraftsAi(); // AI קורא את הטיוטות ברקע כדי שהכרטיסים יציגו ספק/סכום/תיאור והמסך יהיה מוכן מראש
 }
 function contractorCard(x) {
@@ -2452,6 +2472,22 @@ function supplierRows(list) {
     <span style="font-size:15px">🎛️</span><div style="font-weight:600;font-size:14px">${escapeHtml(s.name)}</div>
     <span class="muted" style="margin-inline-start:auto;font-size:14px">‹</span></div>`).join('');
 }
+// תוצאות חיפוש הוצאות (מספר/תיאור) — קליק פותח את הקבלן של אותה הוצאה
+function supExpRows(items) {
+  return `<div style="border-bottom:2px solid var(--accent)">
+    <div class="muted" style="font-size:11.5px;padding:7px 12px 3px;background:var(--panel2)">📄 הוצאות תואמות (${items.length})</div>
+    ${items.map(d => `<div class="chat-item" style="margin:0;border-radius:0;border-bottom:1px solid var(--line);cursor:pointer;background:var(--panel2)" onclick="openSupExpFromSearch('${d.supplierId || ''}','${encodeURIComponent(d.supplierName || '')}')">
+      <div style="min-width:0;flex:1">
+        <div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">#${escapeHtml(String(d.number || ''))} · ${escapeHtml(d.supplierName || '—')} · ${money(d.amountIncVat != null ? d.amountIncVat : d.amount)}</div>
+        <div class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fmtDate(d.date)}${d.description ? ' · ' + escapeHtml(d.description) : ''}</div>
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+window.openSupExpFromSearch = (supplierId, nameEnc) => {
+  if (!supplierId) { alert('להוצאה זו אין ספק משויך בחשבונית ירוקה.'); return; }
+  selectSupplier(supplierId, nameEnc);
+};
 let _supDocs = [], _supName = '', _supYear = 'all', _supId = '';
 let _drafts = [];
 let _mailStatus = null; // סטטוס שליחת מייל לרו"ח
