@@ -1968,14 +1968,24 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   const db = load();
   db.bankTx = db.bankTx || [];
   // מחשבים את החתימה מחדש מכל תנועה קיימת (ולא סומכים על t.sig השמור), כדי שהתיקון יחול גם על תנועות ישנות ולא ייווצרו כפילויות
-  const bySig = new Map(db.bankTx.filter(t => !companyId || t.companyId === companyId).map(t => [bankSig(t), t]));
+  const companyRows = db.bankTx.filter(t => !companyId || t.companyId === companyId);
+  const bySig = new Map(companyRows.map(t => [bankSig(t), t]));
+  // זיהוי כפילות בין-פורמט: אותה תנועה (תאריך+סכום+כיוון) שיובאה שוב בפורמט אחר — כשהתיאור/האסמכתא שונים,
+  // או כשלאחד הצדדים אין מספר אסמכתא. מונע כפילויות בייבוא חוזר של טווח תאריכים חופף (למשל פורמט ישן מול חדש).
+  const crossDup = (t) => {
+    const same = companyRows.filter(e => e.date === t.date && e.absAmount === t.absAmount && e.direction === t.direction);
+    if (!same.length) return null;
+    if (t.reference) { const r = same.find(e => String(e.reference) === String(t.reference)); if (r) return r; }
+    return same.find(e => !e.reference || !t.reference) || null; // אם לאחד הצדדים אין אסמכתא — אותה תנועה
+  };
   let added = 0, backfilled = 0;
   for (const t of matched) {
     const sig = bankSig(t);
-    const ex = bySig.get(sig);
+    const ex = bySig.get(sig) || crossDup(t);
     if (ex) {
-      // תנועה קיימת — נשלים יתרה רצה (balance) אם חסרה, כדי שעו"ש יתעדכן גם בלי כותרת
+      // תנועה קיימת — נשלים יתרה רצה (balance) ואסמכתא אם חסרות, כדי שעו"ש יתעדכן ולמניעת כפילויות בעתיד
       if (t.balance != null && ex.balance !== t.balance) { ex.balance = t.balance; backfilled++; }
+      if (!ex.reference && t.reference) ex.reference = t.reference;
       // רענון הצעות החובה על תנועות קיימות שלא אושרו/סומנו ידנית (בלי התאמה אוטומטית — רק הצעות)
       if (ex.direction === 'debit' && ex.matchStatus !== 'manual' && ex.matchStatus !== 'ignored') {
         ex.matchStatus = t.matchStatus; ex.matchedInvoices = t.matchedInvoices || []; ex.suggestions = t.suggestions || [];
@@ -1990,7 +2000,7 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
       matchStatus: t.matchStatus, matchedInvoices: t.matchedInvoices || [], suggestions: t.suggestions || [],
       importedAt: new Date().toISOString(),
     };
-    db.bankTx.push(rec); bySig.set(sig, rec); added++;
+    db.bankTx.push(rec); bySig.set(sig, rec); companyRows.push(rec); added++;
   }
   save(db);
   const credits = matched.filter(t => t.direction === 'credit');
