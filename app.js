@@ -3962,7 +3962,7 @@ window.setBankPerPart = (field, part, val) => {
 function bankDirControls() {
   const d = state.bankFilter || 'credit';
   const seg = (v, l) => `<button class="btn ${d === v ? 'primary' : 'ghost'}" style="padding:6px 12px" onclick="setBankFilter('${v}')">${l}</button>`;
-  return `<div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('credit', 'רק זכות')}${seg('all', 'הכל')}${seg('debit', 'רק חובה')}</div>`;
+  return `<div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('credit', 'רק זכות')}${seg('all', 'הכל')}${seg('debit', 'רק חובה')}${seg('unmatched', 'לא מותאמות')}</div>`;
 }
 function bankPeriodControls() {
   const p = state.bankPer || { mode: 'all' };
@@ -4031,7 +4031,13 @@ function bankMonthlyHtml() {
 }
 function bankVisibleRows() {
   const dir = state.bankFilter || 'credit';
-  let rows = (_bankList || []).filter(t => dir === 'all' ? true : dir === 'credit' ? t.direction === 'credit' : t.direction === 'debit');
+  let rows = (_bankList || []).filter(t => {
+    if (dir === 'all') return true;
+    if (dir === 'unmatched') return t.matchStatus === 'unmatched'; // כל הלא-מותאמות — גם חובה וגם זכות
+    if (dir === 'credit') return t.direction === 'credit';
+    if (dir === 'debit') return t.direction === 'debit';
+    return true;
+  });
   rows = rows.filter(bankPeriodMatch);
   return sortBankRows(rows);
 }
@@ -4044,7 +4050,7 @@ function bankSummaryHtml(rows) {
   const invSum = (t) => (t.matchedInvoices || []).reduce((a, i) => a + (Number(i.amount) || 0), 0);
   const sumInv = matchedCr.reduce((s, t) => s + invSum(t), 0);
   const sumWh = matchedCr.reduce((s, t) => { const si = invSum(t), w = si - t.absAmount; return s + ((w > 1 && w < si * 0.08) ? w : 0); }, 0);
-  const unmatched = cr.filter(t => t.matchStatus === 'unmatched').length;
+  const unmatched = rows.filter(t => t.matchStatus === 'unmatched').length;
   const stat = (label, val, color) => `<div class="card" style="padding:11px 14px"><div class="label" style="font-size:12px">${label}</div><div style="font-size:18px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
   return `${stat('שורות מוצגות', rows.length)}${stat('סה"כ זכות', money(sumCredit), 'var(--accent2)')}${dir !== 'credit' ? stat('סה"כ חובה', money(sumDebit), 'var(--danger)') : ''}${stat('סה"כ סכום חשבוניות', money(sumInv))}${stat('סה"כ ניכוי במקור', money(sumWh), 'var(--warn)')}${stat('שורות לא מותאמות', unmatched, unmatched ? 'var(--danger)' : 'var(--accent2)')}`;
 }

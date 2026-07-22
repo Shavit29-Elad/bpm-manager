@@ -2023,23 +2023,57 @@ add('GET', /^\/api\/bank\/balance$/, (req, res, _p, q) => {
   json(res, b);
 });
 
+// חילוץ קישור צפייה/הורדה מאובייקט חשבונית ירוקה (מסמך או הוצאה)
+function extractGiUrl(obj) {
+  const u = obj && obj.url;
+  if (!u) return null;
+  if (typeof u === 'string') return u;
+  return u.he || u.origin || u.pdf || null;
+}
+// השלמת url לחשבונית מותאמת שאין לה קישור (למשל כזו שהועלתה ידנית בבנק) — כדי שתהיה צפייה/הורדה
+async function enrichMatchedUrl(inv) {
+  if (!inv || inv.url || !inv.id) return false;
+  if (/^(exp_|pay_)/.test(String(inv.id))) return false; // מזהה מקומי — אין קובץ בחשבונית ירוקה
+  try {
+    const obj = inv.kind === 'expense' ? await greenInvoice.getExpense(inv.id) : await greenInvoice.getDocument(inv.id);
+    const url = extractGiUrl(obj);
+    if (url) { inv.url = url; return true; }
+  } catch { }
+  return false;
+}
+
 // GET /api/bank?companyId=
-add('GET', /^\/api\/bank$/, (req, res, _p, q) => {
+add('GET', /^\/api\/bank$/, async (req, res, _p, q) => {
   const db = load();
   let list = (db.bankTx || []).filter(t => !q.companyId || t.companyId === q.companyId);
+  // השלמה חד-פעמית של קישורי צפייה/הורדה לחשבוניות מותאמות שאין להן url (נשמר, כך שלא נטען שוב)
+  if (greenInvoice.haveCredentials() && (!q.companyId || q.companyId === giCompanyId())) {
+    let changed = false, budget = 25;
+    for (const t of list) {
+      if (budget <= 0) break;
+      if (t.matchStatus !== 'manual' && t.matchStatus !== 'auto') continue;
+      for (const inv of (t.matchedInvoices || [])) {
+        if (budget <= 0) break;
+        if (inv && !inv.url && inv.id && !/^(exp_|pay_)/.test(String(inv.id))) { budget--; if (await enrichMatchedUrl(inv)) changed = true; }
+      }
+    }
+    if (changed) save(db);
+  }
   const key = (d) => (d || '').split('/').reverse().join('');
   list = [...list].sort((a, b) => key(b.date).localeCompare(key(a.date)));
   json(res, list);
 });
 
 // PUT /api/bank/:id  { matchStatus?, matchedInvoice? }
-add('PUT', /^\/api\/bank\/([^/]+)$/, (req, res, params, _q, body) => {
+add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
   const db = load();
   const t = (db.bankTx || []).find(x => x.id === params[0]);
   if (!t) return json(res, { error: 'לא נמצא' }, 404);
   if (body.matchStatus) t.matchStatus = body.matchStatus;
   if (body.matchedInvoices !== undefined) t.matchedInvoices = body.matchedInvoices;
   if (body.notes !== undefined) t.notes = body.notes;
+  // השלמת קישור צפייה/הורדה לחשבוניות שהותאמו עכשיו (למשל שהועלו ידנית) שאין להן url
+  if (greenInvoice.haveCredentials()) { for (const inv of (t.matchedInvoices || [])) await enrichMatchedUrl(inv); }
   save(db);
   json(res, { ok: true, tx: t });
 });
