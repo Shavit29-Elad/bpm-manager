@@ -2187,7 +2187,8 @@ function serveStatic(req, res) {
   if (!STATIC_ALLOW.has(name)) { res.writeHead(404); return res.end('לא נמצא'); }
   const file = path.join(PUBLIC, name);
   if (!fs.existsSync(file)) { res.writeHead(404); return res.end('לא נמצא'); }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+  // no-cache: הדפדפן חייב לאמת מול השרת בכל טעינה — כך שכל עדכון של האתר נטען מיד בלי צורך בריענון קשיח
+  res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache, must-revalidate' });
   fs.createReadStream(file).pipe(res);
 }
 
