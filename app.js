@@ -567,6 +567,14 @@ function openInvClientHtml(cl) {
 const FOLLOWUP_FOR = { 10: [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 300: [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 305: [[400, 'קבלה']] };
 // שכפול — אפשר לבחור כל סוג (כולל הצעת מחיר)
 const DUPLICATE_TYPES = [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה'], [10, 'הצעת מחיר']];
+// פרטי חשבון להעברה בנקאית — מופיעים בהערות של כל מסמך המשך
+const PAYMENT_BENEFICIARY = `שם מוטב: בי פי אם הגברה ותאורה בע"מ\nמספר חשבון: 347346\nמס' סניף: 521 (מודיעין)\nמזרחי טפחות (20)`;
+// הערות למסמך המשך: שורת התייחסות למסמך המקור + פרטי החשבון
+function followupRemarks(srcType, srcNumber) {
+  const nm = DOC_TYPE_NAMES[Number(srcType)] || 'מסמך';
+  const ref = `מסמך המשך ל${nm}${srcNumber ? ` מס' ${srcNumber}` : ''}`;
+  return `${ref}\n\n${PAYMENT_BENEFICIARY}`;
+}
 window._docActionRefresh = null; // פונקציית רענון אחרי פעולת מסמך (לפי המסך שממנו נפתח)
 window.openDerive = (id, number, srcType, mode, fromClient) => {
   window._docActionRefresh = fromClient ? window.reloadClientDocs : null;
@@ -626,11 +634,14 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
   const needsPay = DER_PAYMENT_DOCS.has(Number(type));
   const items = (r.items || []).map(it => ({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }));
   const date = opts.date || todayIso();
+  const isLinked = linked === true || linked === 'true';
+  // מסמך המשך: הערות = שורת התייחסות למקור + פרטי חשבון בנק. שכפול: משאירים את הערות המקור.
+  const remarks = isLinked ? followupRemarks(r.srcType, r.srcNumber) : (r.remarks || '');
   _derEdit = {
-    id, type: Number(type), linked: linked === true || linked === 'true',
+    id, type: Number(type), linked: isLinked,
     clientName: r.client?.name || '', date,
     lastDocDate: (ld && ld.lastDocDate) || null, lastDocTypeName: DOC_TYPE_NAMES[Number(type)] || 'מסוג זה', allowBackdate: false,
-    description: r.description || '', remarks: r.remarks || '',
+    description: r.description || '', remarks,
     items,
     payments: [], needsPay,
   };
@@ -758,7 +769,7 @@ function renderDeriveEditor() {
       <div id="derPaySum" style="margin-top:8px;font-size:13px"></div>
     </div>` : ''}
 
-    <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית (לא חובה) <input class="der-rem" value="${escAttr(e.remarks)}" style="width:100%;padding:6px 8px;margin-top:3px"></label>
+    <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית${e.linked ? ' (כולל התייחסות למקור ופרטי חשבון להעברה — ניתן לעריכה)' : ' (לא חובה)'}<textarea class="der-rem" rows="${e.linked ? 6 : 2}" style="width:100%;padding:6px 8px;margin-top:3px;font-family:inherit;resize:vertical">${escapeHtml(e.remarks)}</textarea></label>
 
     <div id="derEditStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
     <div class="modal-actions">

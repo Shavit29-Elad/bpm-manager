@@ -1017,6 +1017,14 @@ add('POST', /^\/api\/quotes\/([^/]+)\/close$/, async (req, res, params) => {
   catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// פרטי חשבון להעברה בנקאית + שורת התייחסות למקור — נכנסים להערות של כל מסמך המשך
+const DOC_NAMES_HE = { 10: 'הצעת מחיר', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 330: 'חשבונית זיכוי' };
+const PAYMENT_BENEFICIARY = `שם מוטב: בי פי אם הגברה ותאורה בע"מ\nמספר חשבון: 347346\nמס' סניף: 521 (מודיעין)\nמזרחי טפחות (20)`;
+function followupRemarks(srcType, srcNumber) {
+  const nm = DOC_NAMES_HE[Number(srcType)] || 'מסמך';
+  return `מסמך המשך ל${nm}${srcNumber ? ` מס' ${srcNumber}` : ''}\n\n${PAYMENT_BENEFICIARY}`;
+}
+
 // POST /api/quotes/:id/followup { type } — יצירת מסמך המשך מהצעת מחיר (אותן שורות, מקושר)
 add('POST', /^\/api\/quotes\/([^/]+)\/followup$/, async (req, res, params, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
@@ -1030,7 +1038,7 @@ add('POST', /^\/api\/quotes\/([^/]+)\/followup$/, async (req, res, params, _q, b
     if (!items.length) return json(res, { error: 'אין שורות בהצעה' }, 400);
     const doc = await greenInvoice.createDocument({
       type, client: src.client?.id ? { id: src.client.id } : { name: src.client?.name || 'לקוח' },
-      items, description: src.description || '', remarks: src.remarks || null,
+      items, description: src.description || '', remarks: followupRemarks(src.type, src.number),
       linkedDocumentIds: [params[0]],
     });
     json(res, { ok: true, doc });
