@@ -1542,6 +1542,19 @@ add('POST', /^\/api\/suppliers$/, async (req, res, _p, _q, body) => {
   catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// PUT /api/clients/:id/details — עריכת פרטי לקוח (שם, מייל, טלפון, ח.פ) בחשבונית ירוקה
+add('PUT', /^\/api\/clients\/([^/]+)\/details$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try { json(res, { ok: true, client: await greenInvoice.updateClientDetails(params[0], body || {}) }); }
+  catch (e) { json(res, { error: e.message }, 500); }
+});
+// PUT /api/suppliers/:id/details — עריכת פרטי ספק (שם, מייל, טלפון, ח.פ) בחשבונית ירוקה
+add('PUT', /^\/api\/suppliers\/([^/]+)\/details$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try { json(res, { ok: true, supplier: await greenInvoice.updateSupplierDetails(params[0], body || {}) }); }
+  catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // GET /api/whatsapp/status
 add('GET', /^\/api\/whatsapp\/status$/, (req, res) => json(res, getBridgeStatus()));
 

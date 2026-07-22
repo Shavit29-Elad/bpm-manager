@@ -1024,8 +1024,69 @@ function renderClientDetail() {
   if (_clientYear !== 'all') docs = docs.filter(d => (d.date || '').slice(0, 4) === _clientYear);
   docs = sortClientDocs(docs, _clientSort);
   const yearSel = `<select onchange="setClientYear(this.value)" style="padding:6px 10px"><option value="all" ${_clientYear === 'all' ? 'selected' : ''}>כל השנים</option>${years.map(y => `<option value="${y}" ${_clientYear === y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
-  detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${_clientName}</h2><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים</span></div></div><div class="muted" style="font-size:12.5px;margin:8px 0 2px">לחיצה על כותרת מיינת לפיה (▲ עולה / ▼ יורד)</div>${docsTable(docs, { showClient: false, sort: _clientSort, onSort: 'setClientSort', actions: true })}`;
+  const cliEdit = (state.user && state.user.role === 'admin') ? `<button class="btn ghost" style="padding:4px 10px;font-size:12.5px" onclick="openContactEdit('client','${_clientId}')">✏️ עריכת לקוח</button>` : '';
+  detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${_clientName}</h2><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${cliEdit}<span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים</span></div></div><div class="muted" style="font-size:12.5px;margin:8px 0 2px">לחיצה על כותרת מיינת לפיה (▲ עולה / ▼ יורד)</div>${docsTable(docs, { showClient: false, sort: _clientSort, onSort: 'setClientSort', actions: true })}`;
 }
+
+// ---- עריכת פרטי לקוח/ספק (שם, מייל, טלפון, ח.פ) — שמירה ישירה בחשבונית ירוקה ----
+window.openContactEdit = (kind, id) => {
+  let pre = { name: '', email: '', phone: '', taxId: '' };
+  if (kind === 'client') {
+    const c = (state.clientsList || []).find(x => x.id === id) || {};
+    pre = { name: c.name || _clientName || '', email: c.email || '', phone: c.phone || '', taxId: c.taxId || '' };
+  } else {
+    const s = (_suppliers || []).find(x => x.id === id) || (_linkSuppliers || []).find(x => x.id === id) || {};
+    pre = { name: s.name || _supName || '', email: (Array.isArray(s.emails) && s.emails[0]) || s.email || '', phone: s.phone || '', taxId: s.taxId || '' };
+  }
+  let m = document.getElementById('contactEditModal');
+  if (!m) { m = document.createElement('div'); m.id = 'contactEditModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  const F = (l, i, v, extra = '') => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">${l}<input id="${i}" value="${escAttr(v || '')}" ${extra}></label>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)">
+    <div class="row-between" style="margin:0"><h3 style="margin:0">${kind === 'client' ? 'עריכת פרטי לקוח' : 'עריכת פרטי ספק'}</h3>
+      <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('contactEditModal').classList.add('hidden')">✕</button></div>
+    <p class="muted" style="font-size:12px;margin:6px 0 12px">השינויים נשמרים ישירות בחשבונית ירוקה. שדה שיישאר ריק — לא ישתנה.</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${F('שם', 'ceName', pre.name)}
+      ${F('מייל', 'ceEmail', pre.email, 'dir="ltr" placeholder="name@example.com"')}
+      ${F('טלפון', 'cePhone', pre.phone, 'dir="ltr"')}
+      ${F('ח.פ / ע.מ / ת״ז', 'ceTax', pre.taxId, 'dir="ltr"')}
+    </div>
+    <div id="ceStatus" style="font-size:13px;min-height:16px;margin-top:10px"></div>
+    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('contactEditModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="saveContactEdit('${kind}','${id}')">💾 שמור</button></div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+};
+window.saveContactEdit = async (kind, id) => {
+  const g = (x) => (document.getElementById(x)?.value || '').trim();
+  const st = document.getElementById('ceStatus');
+  const name = g('ceName'), email = g('ceEmail'), phone = g('cePhone'), tax = g('ceTax');
+  const body = {};
+  if (name) body.name = name;
+  if (email) body.emails = [email];
+  if (phone) body.phone = phone;
+  if (tax) body.taxId = tax;
+  if (!Object.keys(body).length) { if (st) st.innerHTML = '<span class="muted">אין מה לשמור.</span>'; return; }
+  if (st) st.innerHTML = '<span class="muted">שומר בחשבונית ירוקה…</span>';
+  const url = kind === 'client' ? `/api/clients/${id}/details` : `/api/suppliers/${id}/details`;
+  const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r && r.ok) {
+    if (st) st.innerHTML = '<span style="color:var(--accent2)">נשמר ✓</span>';
+    if (kind === 'client') {
+      const c = (state.clientsList || []).find(x => x.id === id); if (c) { if (name) c.name = name; if (email) c.email = email; }
+      if (name) _clientName = name;
+    } else {
+      const s = (_suppliers || []).find(x => x.id === id); if (s) { if (name) s.name = name; if (email) s.emails = [email]; if (phone) s.phone = phone; if (tax) s.taxId = tax; }
+      if (name) _supName = name;
+    }
+    setTimeout(() => {
+      const mm = document.getElementById('contactEditModal'); if (mm) mm.classList.add('hidden');
+      if (kind === 'client') { if (typeof renderClientDetail === 'function') renderClientDetail(); const li = document.getElementById('clientsList'); if (li) li.innerHTML = clientRows(state.clientsList); }
+      else if (typeof renderSupplierDetail === 'function') renderSupplierDetail();
+    }, 900);
+  } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String((r && r.error) || ''))}</span>`;
+};
 
 // ---- אירועים + אי-התאמות + יומן (לשונית אחת מאוחדת) ----
 async function renderCombined(c) {
@@ -2883,7 +2944,7 @@ function renderSupplierDetail() {
   const total = docs.reduce((s, d) => s + (Number(d.amount) || 0), 0);
   const yearSel = `<select onchange="setSupYear(this.value)" style="padding:6px 10px"><option value="all" ${_supYear === 'all' ? 'selected' : ''}>כל השנים</option>${years.map(y => `<option value="${y}" ${_supYear === y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
   detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${escapeHtml(_supName)}</h2>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn primary" style="padding:5px 12px;font-size:13px" onclick="openExpenseForm()">+ רשום הוצאה</button><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים · ${money(total)}</span></div></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${(state.user && state.user.role === 'admin') ? `<button class="btn ghost" style="padding:5px 11px;font-size:12.5px" onclick="openContactEdit('supplier','${_supId}')">✏️ עריכת ספק</button>` : ''}<button class="btn primary" style="padding:5px 12px;font-size:13px" onclick="openExpenseForm()">+ רשום הוצאה</button><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים · ${money(total)}</span></div></div>
     ${docs.length ? `<div style="overflow-x:auto;margin-top:10px"><table style="min-width:520px"><thead><tr><th>תאריך</th><th>מספר</th><th>קטגוריה</th><th>סכום</th><th></th></tr></thead>
       <tbody>${docs.map(supDocRow).join('')}</tbody></table></div>`
       : `<div class="empty">לא נמצאו מסמכי הוצאה לקבלן זה בחשבונית ירוקה.</div>`}`;

@@ -643,5 +643,29 @@ export async function createSupplier(data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+// ===== עריכת לקוח/ספק קיים (שם, מייל, טלפון, ח.פ) — שליפת האובייקט המלא ומיזוג בטוח לפני PUT =====
+export async function getClient(id) { return api(`/clients/${encodeURIComponent(id)}`); }
+function mergeContactUpdate(cur, data) {
+  const body = { ...cur };
+  ['creationDate', 'updated', 'lastDocDate', 'documentsCount', 'url'].forEach(k => delete body[k]);
+  if (data.name != null && String(data.name).trim()) body.name = String(data.name).trim();
+  if (data.taxId != null) body.taxId = String(data.taxId).trim();
+  if (data.phone != null) body.phone = String(data.phone).trim();
+  if (data.emails != null) body.emails = (Array.isArray(data.emails) ? data.emails : [data.emails]).filter(Boolean);
+  return body;
+}
+export async function updateClientDetails(id, data) {
+  const cur = await getClient(id);
+  const r = await api(`/clients/${encodeURIComponent(id)}`, { method: 'PUT', body: mergeContactUpdate(cur, data) });
+  clearDataCache();
+  return r;
+}
+export async function updateSupplierDetails(id, data) {
+  const cur = await getSupplier(id);
+  const r = await api(`/suppliers/${encodeURIComponent(id)}`, { method: 'PUT', body: mergeContactUpdate(cur, data) });
+  clearDataCache();
+  return r;
+}
+
+export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;
