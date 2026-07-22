@@ -35,7 +35,7 @@ const api = (p) => {
   };
 })();
 
-const TAB_LABELS = { home: '🏠 בית', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים' };
+const TAB_LABELS = { home: '🏠 בית', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
 // התאמת שם לפי כל המילים בשאילתה (בכל מיקום) — עמיד לשמות עם תיאור באמצע, למשל "אורן מושייב" מול "אורן אירועים - אורן מושייב"
 const nameHas = (name, q) => { const toks = String(q || '').trim().split(/\s+/).filter(Boolean); const nm = String(name || ''); return !toks.length || toks.every(t => nm.includes(t)); };
 
@@ -114,6 +114,7 @@ async function startApp() {
   setupModal();
   await renderStatus();
   render();
+  checkBizAlerts();
 }
 
 // ---- החלת הרשאות: הסתרת לשוניות, מצב צפייה, פרטי משתמש בכותרת ----
@@ -148,6 +149,10 @@ function applyCompanyTabs() {
   const teamAllowed = u.role === 'admin' || u.tabs === 'all' || (Array.isArray(u.tabs) && u.tabs.includes('team'));
   document.querySelectorAll('.tab[data-tab="team"]').forEach(t => { t.style.display = (isBpm && teamAllowed) ? '' : 'none'; });
   if (!isBpm && state.tab === 'team') { const home = document.querySelector('.tab[data-tab="home"]'); if (home) home.click(); }
+  // פרטי העסק — פר-חברה, אך להנהלה בלבד (מכיל ת״ז/רישיונות/מסמכים רגישים)
+  const bizAllowed = u.role === 'admin';
+  document.querySelectorAll('.tab[data-tab="business"]').forEach(t => { t.style.display = bizAllowed ? '' : 'none'; });
+  if (!bizAllowed && state.tab === 'business') { const home = document.querySelector('.tab[data-tab="home"]'); if (home) home.click(); }
 }
 
 // ---- ניהול משתמשים (מנהל בלבד) ----
@@ -254,7 +259,7 @@ const pill = (label, ok, text) =>
 function render() {
   const c = $('#content');
   ({ home: renderHome, events: renderCombined, clients: renderClients, invoicing: renderInvoicing, quotes: renderQuotes, team: renderTeam,
-     bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections }[state.tab])(c);
+     bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections, business: renderBusiness }[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
@@ -3218,6 +3223,187 @@ const STATUS_META = {
   disconnected: { txt: 'לא מחובר', cls: 'pending', dot: 'var(--muted)' },
   soon: { txt: 'בקרוב', cls: 'pending', dot: 'var(--warn)' },
 };
+
+// ================= פרטי העסק (Business Profile) =================
+let _biz = null;
+
+// כתיבה ל-API עם צירוף companyId
+async function bizWrite(path, method, body) {
+  let url = path;
+  if (url.indexOf('companyId=') === -1) url += (url.indexOf('?') === -1 ? '?' : '&') + 'companyId=' + encodeURIComponent(state.company);
+  const r = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  return r.json().catch(() => ({}));
+}
+
+// רכיב משבצת קובץ: או אזור גרירה/בחירה, או קובץ קיים עם תצוגה/הורדה/החלפה/הסרה
+function bizSlotHtml(slot, meta) {
+  if (meta && meta.fileId) {
+    return `<div class="biz-file">
+      <span class="biz-file-name">📄 ${escapeHtml(meta.filename || 'קובץ')}</span>
+      <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="bizView('${meta.fileId}','${escapeHtml(meta.mime || '')}','${escapeHtml(meta.filename || '')}')">👁 תצוגה</button>
+      <a class="btn ghost" style="padding:3px 9px;font-size:12px" href="/api/files/${meta.fileId}?download=1">⬇ הורדה</a>
+      <label class="btn ghost" style="padding:3px 9px;font-size:12px;cursor:pointer">↻ החלף<input type="file" style="display:none" onchange="bizPick(this,'${slot}')"></label>
+      <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="bizRemove('${slot}','${meta.fileId}')">🗑</button>
+    </div>`;
+  }
+  return `<label class="biz-drop" ondragover="event.preventDefault();this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="bizDrop(event,'${slot}')">
+    📎 גרור לכאן או בחר קובץ
+    <input type="file" style="display:none" onchange="bizPick(this,'${slot}')">
+  </label>`;
+}
+function bizDocRow(label, slot, meta) {
+  return `<div class="biz-row"><div class="biz-row-label">${label}</div><div class="biz-row-slot">${bizSlotHtml(slot, meta)}</div></div>`;
+}
+
+async function renderBusiness(c) {
+  const p = await api('/api/business-profile');
+  _biz = p;
+  const comp = (state.companies || []).find(x => x.id === state.company) || {};
+  const mgr = (i, f) => ((p.managers && p.managers[i]) || {})[f] || '';
+  const mgrFile = (i, k) => (((p.managers && p.managers[i]) || {}).files || {})[k] || null;
+  // סטטוס תוקף אישור ניכוי מס
+  const tc = p.taxConfirmation || {};
+  let taxTag = '';
+  if (tc.expiry) {
+    const days = Math.round((new Date(tc.expiry + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000);
+    if (days < 0) taxTag = `<span class="tag miss">פג תוקף לפני ${-days} ימים</span>`;
+    else if (days <= 14) taxTag = `<span class="tag pending">בתוקף עוד ${days} ימים — מומלץ לחדש</span>`;
+    else taxTag = `<span class="tag match">בתוקף עד ${tc.expiry}</span>`;
+  }
+  const mgrCard = (i) => `<div class="card" style="margin:0">
+    <div style="font-weight:700;margin-bottom:8px">👤 מנהל ${i + 1}</div>
+    <div class="biz-grid">
+      <label>שם מלא<input id="mgr${i}_name" value="${escapeHtml(mgr(i, 'name'))}"></label>
+      <label>ת״ז<input id="mgr${i}_id" value="${escapeHtml(mgr(i, 'idNumber'))}"></label>
+      <label>טלפון<input id="mgr${i}_phone" value="${escapeHtml(mgr(i, 'phone'))}"></label>
+      <label>מייל<input id="mgr${i}_email" value="${escapeHtml(mgr(i, 'email'))}"></label>
+    </div>
+    <div class="biz-docs-title">תעודת זהות</div>
+    ${bizDocRow('צילום קדמי', 'mgr' + i + '_idFront', mgrFile(i, 'idFront'))}
+    ${bizDocRow('צילום אחורי', 'mgr' + i + '_idBack', mgrFile(i, 'idBack'))}
+    ${bizDocRow('ספח', 'mgr' + i + '_idAppendix', mgrFile(i, 'idAppendix'))}
+    <div class="biz-docs-title">רישיון נהיגה</div>
+    ${bizDocRow('צילום קדמי', 'mgr' + i + '_licenseFront', mgrFile(i, 'licenseFront'))}
+    ${bizDocRow('צילום אחורי', 'mgr' + i + '_licenseBack', mgrFile(i, 'licenseBack'))}
+  </div>`;
+  const addDocs = (p.additionalDocs || []);
+  c.innerHTML = `
+  <div class="panel">
+    <div class="row-between" style="margin:0"><h2 style="margin:0">🏢 פרטי העסק — ${escapeHtml(comp.name || '')}</h2>
+      <span class="muted" id="bizMsg" style="font-size:13px"></span></div>
+    <div class="biz-grid" style="margin-top:14px">
+      <label>שם עסק<input id="biz_name" value="${escapeHtml(p.name || '')}"></label>
+      <label>מס׳ עסק / ח.פ<input id="biz_number" value="${escapeHtml(p.businessNumber || '')}"></label>
+      <label>מייל<input id="biz_email" value="${escapeHtml(p.email || '')}"></label>
+      <label>כתובת עסק<input id="biz_address" value="${escapeHtml(p.address || '')}"></label>
+    </div>
+    <div style="margin-top:14px"><button class="btn primary" onclick="bizSave()">💾 שמור פרטים</button></div>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0">מנהלים</h3>
+    <div class="biz-mgrs">${mgrCard(0)}${mgrCard(1)}</div>
+    <div class="muted" style="font-size:12px;margin-top:8px">שינויים בפרטי המנהלים נשמרים בלחיצה על «שמור פרטים» למעלה. קבצים נשמרים מיד עם ההעלאה.</div>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0">מסמכי העסק</h3>
+    ${bizDocRow('אישור ניהול חשבון', 'bank', p.bankConfirmation)}
+    <div class="biz-row" style="align-items:flex-start">
+      <div class="biz-row-label">אישור ניכוי מס במקור וניהול ספרים ${taxTag}</div>
+      <div class="biz-row-slot">
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">בתוקף עד:
+          <input type="date" id="tax_expiry" value="${escapeHtml(tc.expiry || '')}" onchange="bizSaveTaxExpiry()" style="margin-inline-start:6px">
+        </label>
+        ${bizSlotHtml('tax', tc.fileId ? tc : null)}
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row-between" style="margin:0"><h3 style="margin:0">מסמכים נוספים</h3>
+      <span class="muted" style="font-size:12px">${addDocs.length}/6</span></div>
+    <div style="margin-top:10px">
+      ${addDocs.map(d => `<div class="biz-file" style="margin-bottom:8px">
+        <span class="biz-file-name">📄 ${escapeHtml(d.filename || 'מסמך')}</span>
+        <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="bizView('${d.fileId}','${escapeHtml(d.mime || '')}','${escapeHtml(d.filename || '')}')">👁 תצוגה</button>
+        <a class="btn ghost" style="padding:3px 9px;font-size:12px" href="/api/files/${d.fileId}?download=1">⬇ הורדה</a>
+        <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="bizRemove('add','${d.fileId}')">🗑</button>
+      </div>`).join('') || '<div class="muted" style="font-size:13px">אין עדיין מסמכים נוספים.</div>'}
+      ${addDocs.length < 6 ? `<div style="margin-top:8px">${bizSlotHtml('add', null)}</div>` : ''}
+    </div>
+  </div>`;
+}
+
+window.bizSave = async () => {
+  const g = (id) => (document.getElementById(id)?.value || '').trim();
+  const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
+  await bizWrite('/api/business-profile', 'PUT', {
+    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'),
+    managers: [
+      { name: g('mgr0_name'), idNumber: g('mgr0_id'), phone: g('mgr0_phone'), email: g('mgr0_email') },
+      { name: g('mgr1_name'), idNumber: g('mgr1_id'), phone: g('mgr1_phone'), email: g('mgr1_email') },
+    ],
+  });
+  if (msg) { msg.textContent = 'נשמר ✓'; setTimeout(() => { if (msg) msg.textContent = ''; }, 2500); }
+};
+window.bizSaveTaxExpiry = async () => {
+  const v = (document.getElementById('tax_expiry')?.value || '').trim();
+  await bizWrite('/api/business-profile', 'PUT', { taxExpiry: v });
+  renderBusiness($('#content'));
+};
+window.bizPick = (input, slot) => { const f = input.files && input.files[0]; if (f) bizUpload(slot, f); input.value = ''; };
+window.bizDrop = (e, slot) => { e.preventDefault(); e.currentTarget.classList.remove('drag'); const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) bizUpload(slot, f); };
+async function bizUpload(slot, file) {
+  const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'מעלה קובץ…';
+  const data = await fileToB64(file);
+  const extra = {};
+  if (slot === 'tax') extra.expiry = (document.getElementById('tax_expiry')?.value || '');
+  const r = await bizWrite('/api/business-profile/file?slot=' + encodeURIComponent(slot), 'POST', { filename: file.name, mime: file.type || 'application/octet-stream', data, ...extra });
+  if (r && r.error) { if (msg) msg.textContent = ''; alert(r.error); return; }
+  renderBusiness($('#content'));
+}
+window.bizRemove = async (slot, fileId) => {
+  if (!confirm('להסיר את הקובץ?')) return;
+  await bizWrite('/api/business-profile/file?slot=' + encodeURIComponent(slot) + '&fileId=' + encodeURIComponent(fileId || ''), 'DELETE');
+  renderBusiness($('#content'));
+};
+window.bizView = (fileId, mime, filename) => {
+  const url = '/api/files/' + fileId;
+  const isImg = /^image\//.test(mime || '');
+  const isPdf = /pdf/.test(mime || '');
+  let m = document.getElementById('bizViewModal');
+  if (!m) { m = document.createElement('div'); m.id = 'bizViewModal'; m.className = 'modal hidden'; document.body.appendChild(m); }
+  const inner = isImg ? `<img src="${url}" style="max-width:100%;max-height:70vh;border-radius:10px">`
+    : isPdf ? `<iframe src="${url}" style="width:100%;height:70vh;border:0;border-radius:10px"></iframe>`
+      : `<p class="muted">אין תצוגה מקדימה לקובץ מסוג זה — ניתן להוריד אותו.</p>`;
+  m.innerHTML = `<div class="modal-card" style="max-width:860px;width:92%">
+    <div class="row-between" style="margin:0"><h3 style="margin:0">${escapeHtml(filename || 'מסמך')}</h3>
+      <button class="btn ghost" onclick="document.getElementById('bizViewModal').classList.add('hidden')">✕ סגור</button></div>
+    <div style="margin-top:12px;text-align:center">${inner}</div>
+    <div class="modal-actions"><a class="btn primary" href="${url}?download=1">⬇ הורדה</a></div>
+  </div>`;
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+};
+
+// התראה יומית על אישור ניכוי מס שפג/עומד לפוג (עד שבועיים) — למנהל בלבד
+async function checkBizAlerts() {
+  if (!state.user || state.user.role !== 'admin') return;
+  const r = await api('/api/business-profile/alerts').catch(() => ({ alerts: [] }));
+  const alerts = (r && r.alerts) || [];
+  let bar = document.getElementById('bizAlertBar');
+  if (!alerts.length) { if (bar) bar.remove(); return; }
+  if (!bar) { bar = document.createElement('div'); bar.id = 'bizAlertBar'; const tabs = document.querySelector('.tabs'); if (tabs) tabs.insertAdjacentElement('beforebegin', bar); else document.body.prepend(bar); }
+  bar.innerHTML = alerts.map(a => {
+    const txt = a.expired
+      ? `אישור ניכוי מס במקור של «${escapeHtml(a.companyName)}» פג תוקף בתאריך ${a.expiry}`
+      : `אישור ניכוי מס במקור של «${escapeHtml(a.companyName)}» יפוג בעוד ${a.daysLeft} ימים (${a.expiry})`;
+    return `<div class="warn-banner" style="margin:8px 16px;border-radius:12px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <span>⚠️ ${txt} — יש לחדש ולעדכן בלשונית «פרטי העסק».</span>
+      <button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="this.closest('div').remove()">✕</button></div>`;
+  }).join('');
+}
 
 async function renderConnections(c) {
   const conns = await api('/api/connections');

@@ -1384,12 +1384,13 @@ add('POST', /^\/api\/employees\/([^/]+)\/files$/, async (req, res, params, _q, b
   save(db);
   json(res, { fileId, kind: body.kind, filename: body.filename || 'file' });
 });
-// GET /api/files/:id — הגשת הקובץ (צפייה/הורדה)
-add('GET', /^\/api\/files\/([^/]+)$/, async (req, res, params) => {
+// GET /api/files/:id — הגשת הקובץ (צפייה=inline / הורדה=?download=1)
+add('GET', /^\/api\/files\/([^/]+)$/, async (req, res, params, q) => {
   const f = await getFile(params[0]);
   if (!f) return json(res, { error: 'קובץ לא נמצא' }, 404);
   const buf = Buffer.from(f.data || '', 'base64');
-  res.writeHead(200, { 'Content-Type': f.mime || 'application/octet-stream', 'Content-Disposition': `inline; filename="${encodeURIComponent(f.filename || 'file')}"`, 'Content-Length': buf.length });
+  const disp = (q && q.download) ? 'attachment' : 'inline';
+  res.writeHead(200, { 'Content-Type': f.mime || 'application/octet-stream', 'Content-Disposition': `${disp}; filename="${encodeURIComponent(f.filename || 'file')}"`, 'Content-Length': buf.length });
   res.end(buf);
 });
 // DELETE /api/files/:id — מחיקת קובץ + הסרת ההפניה מהעובד
@@ -1400,6 +1401,97 @@ add('DELETE', /^\/api\/files\/([^/]+)$/, async (req, res, params) => {
   }
   save(db);
   try { await deleteFile(params[0]); } catch { }
+  json(res, { ok: true });
+});
+
+// ===== פרטי העסק (Business Profile) — פר-חברה, עם מסמכים בטבלה נפרדת =====
+function bizProfile(db, cid) {
+  db.businessProfiles = db.businessProfiles || {};
+  if (!db.businessProfiles[cid]) {
+    db.businessProfiles[cid] = { name: '', businessNumber: '', email: '', address: '', managers: [{}, {}], bankConfirmation: null, taxConfirmation: null, additionalDocs: [] };
+  }
+  const p = db.businessProfiles[cid];
+  p.managers = Array.isArray(p.managers) ? p.managers : [{}, {}];
+  while (p.managers.length < 2) p.managers.push({});
+  p.additionalDocs = Array.isArray(p.additionalDocs) ? p.additionalDocs : [];
+  return p;
+}
+// GET /api/business-profile?companyId=
+add('GET', /^\/api\/business-profile$/, (req, res, _p, q) => {
+  const db = load();
+  json(res, bizProfile(db, q.companyId || giCompanyId()));
+});
+// GET /api/business-profile/alerts — אישורי ניכוי מס שפגים בתוך 14 יום (לכל החברות)
+add('GET', /^\/api\/business-profile\/alerts$/, (req, res) => {
+  const db = load();
+  const profs = db.businessProfiles || {};
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const out = [];
+  for (const c of (db.companies || [])) {
+    const tc = profs[c.id] && profs[c.id].taxConfirmation;
+    if (tc && tc.expiry) {
+      const days = Math.round((new Date(tc.expiry + 'T00:00:00') - today) / 86400000);
+      if (days <= 14) out.push({ companyId: c.id, companyName: c.name, expiry: tc.expiry, daysLeft: days, expired: days < 0 });
+    }
+  }
+  json(res, { alerts: out });
+});
+// PUT /api/business-profile?companyId= — שמירת שדות טקסט
+add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
+  const db = load();
+  const p = bizProfile(db, q.companyId || giCompanyId());
+  const b = body || {};
+  ['name', 'businessNumber', 'email', 'address'].forEach(k => { if (k in b) p[k] = String(b[k] || ''); });
+  if (Array.isArray(b.managers)) b.managers.slice(0, 2).forEach((m, i) => {
+    p.managers[i] = p.managers[i] || {};
+    ['name', 'idNumber', 'phone', 'email'].forEach(k => { if (k in m) p.managers[i][k] = String(m[k] || ''); });
+  });
+  if ('taxExpiry' in b) { p.taxConfirmation = p.taxConfirmation || {}; p.taxConfirmation.expiry = b.taxExpiry ? String(b.taxExpiry).slice(0, 10) : ''; }
+  save(db); json(res, p);
+});
+// POST /api/business-profile/file?companyId=&slot= { filename, mime, data(base64), expiry?, label? }
+add('POST', /^\/api\/business-profile\/file$/, async (req, res, _p, q, body) => {
+  const db = load();
+  const cid = q.companyId || giCompanyId();
+  const slot = String(q.slot || (body && body.slot) || '');
+  if (!body || !body.data || !slot) return json(res, { error: 'חסר קובץ או משבצת' }, 400);
+  const p = bizProfile(db, cid);
+  const fileId = id('file');
+  await saveFile({ id: fileId, employeeId: 'biz:' + cid, kind: slot, filename: body.filename || 'file', mime: body.mime || 'application/octet-stream', data: body.data });
+  const meta = { fileId, filename: body.filename || 'file', mime: body.mime || 'application/octet-stream' };
+  const mgr = slot.match(/^mgr(\d)_(.+)$/);
+  if (mgr) {
+    const i = +mgr[1], key = mgr[2];
+    p.managers[i] = p.managers[i] || {};
+    p.managers[i].files = p.managers[i].files || {};
+    const prev = p.managers[i].files[key];
+    if (prev && prev.fileId) { try { await deleteFile(prev.fileId); } catch { } }
+    p.managers[i].files[key] = meta;
+  } else if (slot === 'bank') {
+    if (p.bankConfirmation && p.bankConfirmation.fileId) { try { await deleteFile(p.bankConfirmation.fileId); } catch { } }
+    p.bankConfirmation = meta;
+  } else if (slot === 'tax') {
+    const oldExpiry = (p.taxConfirmation && p.taxConfirmation.expiry) || '';
+    if (p.taxConfirmation && p.taxConfirmation.fileId) { try { await deleteFile(p.taxConfirmation.fileId); } catch { } }
+    p.taxConfirmation = { ...meta, expiry: body.expiry ? String(body.expiry).slice(0, 10) : oldExpiry };
+  } else if (slot === 'add') {
+    if ((p.additionalDocs || []).length >= 6) return json(res, { error: 'ניתן עד 6 מסמכים נוספים' }, 400);
+    p.additionalDocs.push({ ...meta, label: body.label || body.filename || 'מסמך' });
+  } else return json(res, { error: 'משבצת לא מוכרת' }, 400);
+  save(db); json(res, { ok: true, fileId, slot });
+});
+// DELETE /api/business-profile/file?companyId=&slot=&fileId=
+add('DELETE', /^\/api\/business-profile\/file$/, async (req, res, _p, q) => {
+  const db = load();
+  const p = bizProfile(db, q.companyId || giCompanyId());
+  const slot = String(q.slot || ''), fid = String(q.fileId || '');
+  const mgr = slot.match(/^mgr(\d)_(.+)$/);
+  if (mgr) { const i = +mgr[1], key = mgr[2]; if (p.managers[i] && p.managers[i].files) delete p.managers[i].files[key]; }
+  else if (slot === 'bank') p.bankConfirmation = null;
+  else if (slot === 'tax') { const ex = p.taxConfirmation && p.taxConfirmation.expiry; p.taxConfirmation = ex ? { expiry: ex } : null; }
+  else if (slot === 'add') p.additionalDocs = (p.additionalDocs || []).filter(d => d.fileId !== fid);
+  save(db);
+  if (fid) { try { await deleteFile(fid); } catch { } }
   json(res, { ok: true });
 });
 
