@@ -254,8 +254,10 @@ async function renderStatus() {
   const el = $('#statusPills'); if (!el) return;
   let pills;
   if (co === 'co_ofek') {
-    // אופק: המערכת החשבונאית היא Paperless (ממלא את תפקיד חשבונית ירוקה). עד שנחבר — לא מחובר.
-    pills = [pill('Paperless', false), pill('יומן גוגל', false)];
+    // אופק: המערכת החשבונאית היא Paperless (ממלא את תפקיד חשבונית ירוקה). בדיקת חיבור אמיתית מול ה-API.
+    let plOk = false;
+    try { const s = await api('/api/paperless/status'); plOk = !!(s && s.connected); } catch { }
+    pills = [pill('Paperless', plOk), pill('יומן גוגל', false)];
   } else if (co === 'co_moshe') {
     // משה: חשבונית ירוקה (כמו BPM) אך עדיין לא חוברה; יומן גוגל לא חובר.
     pills = [pill('חשבונית ירוקה', false), pill('יומן גוגל', false)];

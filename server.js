@@ -13,6 +13,7 @@ import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
+import paperless from './paperless.js';
 import { parseBank, extractAccountBalance } from './bankParser.js';
 import { matchCredits, matchDebits, attachReceipts } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
@@ -2239,10 +2240,44 @@ add('DELETE', /^\/api\/users\/([^/]+)$/, (req, res, params) => {
 add('GET', /^\/api\/health$/, (req, res) => json(res, {
   ok: true,
   greenInvoiceConnected: greenInvoice.haveCredentials(),
+  paperlessConnected: paperless.haveCredentials(),
   calendarConnected: hasCalendar(),
   chatConnected: chatConfigured(),
   whatsapp: getBridgeStatus().status,
 }));
+
+// ================= פייפרלס (אופק) =================
+// מזהה החברה המחוברת לפייפרלס (אופק)
+function paperlessCompanyId() { const c = (load().companies || []).find(x => x.accounting === 'paperless'); return c ? c.id : 'co_ofek'; }
+// בדיקת חיבור אמיתית מקאשית (5 דק') — קוראת בפועל ל-API כדי לוודא שהטוקן תקין
+let _plStatus = { at: 0, ok: false, msg: null };
+async function paperlessStatus() {
+  if (!paperless.haveCredentials()) return { ok: false, msg: 'לא הוזן טוקן' };
+  if (Date.now() - _plStatus.at < 5 * 60 * 1000) return _plStatus;
+  const r = await paperless.verify();
+  _plStatus = { at: Date.now(), ok: r.ok, msg: r.error || null };
+  return _plStatus;
+}
+// GET /api/paperless/status — סטטוס חיבור אמיתי (למחוון "מחובר" של אופק)
+add('GET', /^\/api\/paperless\/status$/, async (req, res) => {
+  const s = await paperlessStatus();
+  json(res, { connected: !!s.ok, message: s.msg || null });
+});
+// GET /api/paperless/documents?docType=&status=&from=&to= — חיפוש מסמכים של אופק (הכנסה/הוצאה)
+add('GET', /^\/api\/paperless\/documents$/, async (req, res, _p, q) => {
+  if (!paperless.haveCredentials()) return json(res, { docs: [], error: 'פייפרלס לא מחובר' });
+  try {
+    const docs = await paperless.searchDocuments({
+      docType: q.docType != null ? Number(q.docType) : 0,
+      status: q.status != null ? Number(q.status) : 0,
+      from: q.from || null, to: q.to || null,
+      docNumber: q.docNumber || null,
+      amountMin: q.amountMin != null && q.amountMin !== '' ? Number(q.amountMin) : null,
+      amountMax: q.amountMax != null && q.amountMax !== '' ? Number(q.amountMax) : null,
+    });
+    json(res, { docs });
+  } catch (e) { json(res, { docs: [], error: e.message }); }
+});
 
 // ---- הגשת קבצים סטטיים ----
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -2320,12 +2355,15 @@ function runMigrations() {
 async function autoVerifyConnections() {
   const checks = [
     ['greenInvoice', greenInvoice.haveCredentials()],
+    ['paperless', paperless.haveCredentials()],
     ['googleCalendar', hasCalendar()],
   ];
   for (const [key, hasEnv] of checks) {
     if (!hasEnv) continue;
     try {
-      const r = key === 'greenInvoice' ? await greenInvoice.verify() : await calendarVerify();
+      const r = key === 'greenInvoice' ? await greenInvoice.verify()
+        : key === 'paperless' ? await paperless.verify()
+        : await calendarVerify();
       const now = new Date().toISOString();
       setRecord(key, r.ok ? { status: 'connected', lastCheckedAt: now, message: null }
         : { status: 'error', lastCheckedAt: now, message: r.error });
