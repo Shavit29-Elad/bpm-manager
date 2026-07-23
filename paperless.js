@@ -36,13 +36,15 @@ async function api(pathName, body, attempt = 0) {
   const text = await res.text();
   let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!res.ok) {
-    // שגיאת שרת זמנית (Azure מתעורר / עומס) — ננסה שוב עד 3 פעמים עם המתנה גוברת
-    if ([502, 503, 504, 429].includes(res.status) && attempt < 3) {
-      await sleep(800 * (attempt + 1));
+    const code = data && typeof data === 'object' ? data.iCode : null;
+    // שגיאה זמנית — ננסה שוב עד 4 פעמים עם המתנה גוברת:
+    //   502/503/504/429 = Azure מתעורר/עומס.  iCode 5 = "בקשות רבות מדי" (מגיע כ-400) — נחכה יותר.
+    const throttled = code === 5;
+    if (([502, 503, 504, 429].includes(res.status) || throttled) && attempt < 4) {
+      await sleep((throttled ? 1600 : 800) * (attempt + 1));
       return api(pathName, body, attempt + 1);
     }
     // גוף שגיאה: { iCode, message }
-    const code = data && typeof data === 'object' ? data.iCode : null;
     const msg = (data && data.message) || ERR[code] || `שגיאת פייפרלס ${res.status}`;
     const e = new Error(msg); e.code = code; e.status = res.status; throw e;
   }
@@ -73,7 +75,22 @@ async function searchDocuments(opts = {}) {
     iStatus: opts.status != null ? opts.status : 0,
   };
   const rows = await api('/api/documents/search', body);
-  return (Array.isArray(rows) ? rows : []).map(mapDoc);
+  const arr = Array.isArray(rows) ? rows : [];
+  return opts.raw ? arr : arr.map(mapDoc);   // raw=true → שורות גולמיות (לאבחון בלבד)
+}
+
+// גזירת תאריך מסמך — ה-API אינו מחזיר שדה תאריך.
+//   1) ממספר ההקצאה (sTaxConfirm) 8 הספרות הראשונות = YYYYMMDD (תאריך מדויק).
+//   2) אחרת מנתיב ה-URL "/documents/YYMM/" = שנה-חודש (מדויק לחודש).
+function deriveDate(d) {
+  const tc = String(d.sTaxConfirm || '');
+  if (/^\d{8}/.test(tc)) {
+    const y = tc.slice(0, 4), m = tc.slice(4, 6), day = tc.slice(6, 8);
+    if (+m >= 1 && +m <= 12 && +day >= 1 && +day <= 31) return `${y}-${m}-${day}`;
+  }
+  const seg = String(d.sURL || '').match(/\/documents\/(\d{2})(\d{2})\//);
+  if (seg && +seg[2] >= 1 && +seg[2] <= 12) return `20${seg[1]}-${seg[2]}-01`;
+  return null;
 }
 
 // נרמול מסמך מתוצאת החיפוש.
@@ -87,9 +104,10 @@ function mapDoc(d) {
     id: d.sDocumentID,
     number: d.sDocNumber,
     url: d.sURL || null,
-    amount,
+    date: deriveDate(d),                 // תאריך גזור (מספר הקצאה / נתיב URL) — ה-API לא מחזיר תאריך
+    amount,                              // כולל מע"מ
     vat,
-    amountExVat: +(amount - vat).toFixed(2),
+    amountExVat: +(amount - vat).toFixed(2),  // ללא מע"מ
     taxConfirm: d.sTaxConfirm || null,   // מספר הקצאה
     clientId: d.sClientID || null,
     clientName: d.sClientName || '',
@@ -97,12 +115,13 @@ function mapDoc(d) {
   };
 }
 
-// חשבוניות הכנסה פתוחות (לא שולמו). חובה טווח תאריכים — חיפוש ללא טווח מחזיר 500. ברירת מחדל: ~שנתיים אחורה.
+// חשבוניות הכנסה פתוחות (טרם שולמו) — חשבונית עסקה (0) + חשבונית מס (1) בלבד.
+// משתמשים בסינון הסטטוס של ה-API עצמו (iStatus=1) ולא בשדה bClosed, כדי להתאים למונה של פייפרלס.
+// טווח רחב (ברירת מחדל 3 שנים אחורה) כי מסמכים פתוחים עשויים להיות ישנים; חיפוש ללא טווח מחזיר 500.
 async function openInvoices(from, to) {
   const t = to || new Date().toISOString().slice(0, 10);
-  const f = from || ((Number(t.slice(0, 4)) - 2) + t.slice(4));
-  const docs = await searchDocuments({ docType: 2, from: f, to: t });
-  return docs.filter(d => !d.closed);
+  const f = from || ((Number(t.slice(0, 4)) - 3) + t.slice(4));
+  return searchDocuments({ docType: 2, from: f, to: t, status: 1, invoiceTypes: [0, 1] });
 }
 // הכנסות בטווח תאריכים
 async function incomeForRange(from, to) { return searchDocuments({ docType: 2, from, to }); }

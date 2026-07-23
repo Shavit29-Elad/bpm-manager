@@ -2291,13 +2291,16 @@ add('GET', /^\/api\/paperless\/status$/, async (req, res) => {
 add('GET', /^\/api\/paperless\/documents$/, async (req, res, _p, q) => {
   if (!paperless.haveCredentials()) return json(res, { docs: [], error: 'פייפרלס לא מחובר' });
   try {
+    const invoiceTypes = q.invoiceTypes ? String(q.invoiceTypes).split(',').map(Number).filter(n => !isNaN(n)) : null;
     const docs = await paperless.searchDocuments({
       docType: q.docType != null ? Number(q.docType) : 0,
       status: q.status != null ? Number(q.status) : 0,
       from: q.from || null, to: q.to || null,
       docNumber: q.docNumber || null,
+      invoiceTypes: invoiceTypes && invoiceTypes.length ? invoiceTypes : null,
       amountMin: q.amountMin != null && q.amountMin !== '' ? Number(q.amountMin) : null,
       amountMax: q.amountMax != null && q.amountMax !== '' ? Number(q.amountMax) : null,
+      raw: q.raw === '1',
     });
     json(res, { docs });
   } catch (e) { json(res, { docs: [], error: e.message }); }
@@ -2310,14 +2313,12 @@ add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
   const to = q.to || new Date().toISOString().slice(0, 10);
   const from = q.from || (to.slice(0, 4) + '-01-01');
   try {
-    // שתי קריאות מתוארכות (חיפוש ללא טווח תאריכים מחזיר 500 מפייפרלס). חשבוניות פתוחות מחושבות מההכנסה שלא נסגרה.
-    const settled = await Promise.allSettled([
-      paperless.incomeForRange(from, to),
-      paperless.expensesForRange(from, to),
-    ]);
-    const [income, expenses] = settled.map(r => r.status === 'fulfilled' ? r.value : []);
-    const partial = settled.some(r => r.status === 'rejected');
-    const open = income.filter(d => !d.closed); // חשבונית פתוחה = מסמך הכנסה שטרם נסגר (שולם)
+    // קריאות רציפות (לא במקביל) כדי לא לחטוף חסימת-קצב מפייפרלס ("בקשות רבות מדי").
+    // חשבוניות פתוחות = חיפוש ייעודי לפי סטטוס פתוח של ה-API (עסקה+מס, טווח רחב) — לא רק ההכנסה השנתית.
+    let income = [], expenses = [], open = [], partial = false;
+    try { income = await paperless.incomeForRange(from, to); } catch { partial = true; }
+    try { expenses = await paperless.expensesForRange(from, to); } catch { partial = true; }
+    try { open = await paperless.openInvoices(undefined, to); } catch { partial = true; }
     const sum = (arr) => arr.reduce((s, d) => s + (Number(d.amount) || 0), 0);
     // לקוחות — קיבוץ מסמכי ההכנסה לפי לקוח
     const byClient = {};
