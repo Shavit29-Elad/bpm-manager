@@ -15,6 +15,14 @@ export const DEFS = {
     ],
     help: 'בחשבונית ירוקה: הגדרות ← אזור מפתחים ← צור מפתח API',
   },
+  paperless: {
+    name: 'Paperless',
+    icon: '📄',
+    fields: [
+      { env: 'PAPERLESS_TOKEN', label: 'מפתח חיבור (API Token)', secret: true },
+    ],
+    help: 'ב-Paperless: הגדרות ← חיבורים והרשאות ← בתיבת "Paperless API" לחצו על צלמית המפתח והעתיקו את מפתח החיבור.',
+  },
   googleCalendar: {
     name: 'יומן גוגל',
     icon: '📅',

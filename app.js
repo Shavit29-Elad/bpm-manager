@@ -2294,7 +2294,7 @@ async function renderContractors(c) {
     api('/api/suppliers').catch(() => []),
     api('/api/expense-drafts').catch(() => ({ drafts: [] })),
     api('/api/mail/status').catch(() => null),
-    api('/api/supplier-payables').catch(() => ({ payables: [] })),
+    api('/api/supplier-payables?companyId=' + state.company).catch(() => ({ payables: [] })),
     api('/api/expenses/notes').catch(() => ({})),
   ]);
   _expenseNotes = (notes && typeof notes === 'object' && !notes.error) ? notes : {};
@@ -3717,7 +3717,7 @@ async function checkBizAlerts() {
 }
 
 async function renderConnections(c) {
-  const conns = await api('/api/connections');
+  const conns = await api('/api/connections?companyId=' + state.company);
   c.innerHTML = `<div class="panel">
     <div class="warn-banner">המפתחות נשמרים מקומית בלבד (קובץ .env אצלך) ולא נשלחים לשום מקום חיצוני. כל חיבור עובר אימות אמיתי מול השירות.</div>
     <h2>מרכז חיבורים</h2>
@@ -3731,7 +3731,7 @@ async function renderConnections(c) {
 
 function connCard(x) {
   const m = STATUS_META[x.status] || STATUS_META.disconnected;
-  const inputs = x.soon ? '' : (x.toggle
+  const inputs = (x.soon || x.readonly) ? '' : (x.toggle
     ? `<label style="display:flex;gap:8px;align-items:center;margin-top:10px">
          <input type="checkbox" id="tg_${x.key}" ${x.toggleOn ? 'checked' : ''}/> הפעל גשר (דורש התקנה וסריקת QR)
        </label>`
@@ -3741,7 +3741,8 @@ function connCard(x) {
           <input type="password" id="in_${x.key}_${f.env}" placeholder="${f.set ? 'השאר ריק כדי לא לשנות' : 'הדבק כאן'}" style="width:100%"/>
         </div>`).join(''));
 
-  const actions = x.soon ? `<span class="muted">בפיתוח — שלב הבא</span>` : `
+  const actions = x.readonly ? `<span class="muted">חיבור זה מוגדר לעסק אחר — כרגע לא מחובר עבור עסק זה. הגדר חיבור משלו כשיהיה מוכן.</span>`
+    : x.soon ? `<span class="muted">בפיתוח — שלב הבא</span>` : `
     <button class="btn primary" data-connect="${x.key}">${x.status === 'connected' ? 'עדכן וחבר מחדש' : 'חבר'}</button>
     ${x.status !== 'disconnected' ? `<button class="btn ghost" data-test="${x.key}">בדוק חיבור</button>` : ''}
     ${x.status === 'connected' || x.status === 'error' ? `<button class="btn ghost" data-disc="${x.key}">נתק</button>` : ''}
@@ -3763,7 +3764,7 @@ function connCard(x) {
 }
 
 function wireCard(x) {
-  if (x.soon) return;
+  if (x.soon || x.readonly) return;
   const msg = (t) => { const el = $(`#msg_${x.key}`); if (el) el.textContent = t; };
   const collect = () => {
     const values = {};

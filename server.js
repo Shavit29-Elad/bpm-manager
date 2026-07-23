@@ -794,7 +794,9 @@ add('GET', /^\/api\/contractors\/open-events$/, (req, res, _p, q) => {
 // GET /api/supplier-payables?all= — הוצאות ספקים לתשלום (ברירת מחדל: רק שלא שולמו)
 add('GET', /^\/api\/supplier-payables$/, (req, res, _p, q) => {
   const db = load();
-  const list = db.supplierPayables || [];
+  // סינון לפי חברה — רשומות ישנות ללא companyId משויכות לחברת ה-GI (BPM); אופק/משה יקבלו רק את שלהם
+  const want = q.companyId || giCompanyId();
+  const list = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === want);
   const out = (q.all ? list : list.filter(p => !p.paid)).slice()
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
     .map(p => ({ ...p, hasFile: !!(p.giExpenseId || p.draftId) }));
@@ -1598,6 +1600,7 @@ add('GET', /^\/api\/whatsapp\/status$/, (req, res) => json(res, getBridgeStatus(
 // ---- מרכז חיבורים ----
 async function verifyConnection(key) {
   if (key === 'greenInvoice') return greenInvoice.verify();
+  if (key === 'paperless') return paperless.verify();
   if (key === 'googleCalendar') return calendarVerify();
   if (key === 'whatsapp') {
     const st = getBridgeStatus().status;
@@ -1606,32 +1609,50 @@ async function verifyConnection(key) {
   return { ok: false, error: 'לא נתמך' };
 }
 
-// בונה תצוגת חיבורים משולבת: הגדרה + סטטוס סודות מוסווה + רשומת מטא-דאטה
-function buildConnectionsView() {
+// כרטיס חיבור בודד. isOwner=האם החברה הנוכחית היא בעלת חיבור זה (הסודות גלובליים ושייכים לחברה אחת).
+// חברה שאינה בעלת החיבור רואה "לא מחובר" בתצוגה-בלבד (readonly) — בלי טופס חיבור, כדי לא לדרוס בטעות חיבור של חברה אחרת.
+function connCard(key, isOwner) {
   const masked = statusMasked();
-  const records = getRecords();
+  const rec = isOwner ? (getRecords()[key] || {}) : {};
   const bridge = getBridgeStatus();
-  return Object.entries(CONN_DEFS).map(([key, def]) => {
-    const rec = records[key] || {};
-    let status = rec.status || 'disconnected';
-    if (key === 'whatsapp') status = bridge.status === 'connected' ? 'connected' : (rec.status || bridge.status || 'disconnected');
-    if (def.soon) status = 'soon';
-    return {
-      key, name: def.name, icon: def.icon, help: def.help, soon: Boolean(def.soon),
-      toggle: def.toggle || null,
-      toggleOn: def.toggle ? masked[def.toggle]?.set : undefined,
-      fields: (def.fields || []).map(f => ({ ...f, set: masked[f.env]?.set, hint: masked[f.env]?.hint })),
-      status,
-      connectedAt: rec.connectedAt || null,
-      lastCheckedAt: rec.lastCheckedAt || null,
-      message: rec.message || null,
-      whatsappQr: key === 'whatsapp' ? bridge.hasQr : undefined,
-    };
-  });
+  const def = CONN_DEFS[key];
+  let status = def.soon ? 'soon' : (isOwner ? (rec.status || 'disconnected') : 'disconnected');
+  if (key === 'whatsapp' && isOwner) status = bridge.status === 'connected' ? 'connected' : (rec.status || bridge.status || 'disconnected');
+  return {
+    key, name: def.name, icon: def.icon, help: def.help, soon: Boolean(def.soon),
+    readonly: !isOwner && !def.soon, // תצוגה בלבד לחברה שאינה בעלת החיבור
+    toggle: def.toggle || null,
+    toggleOn: def.toggle ? (isOwner ? masked[def.toggle]?.set : false) : undefined,
+    fields: (def.fields || []).map(f => ({ ...f, set: isOwner ? masked[f.env]?.set : false, hint: isOwner ? masked[f.env]?.hint : undefined })),
+    status,
+    connectedAt: isOwner ? (rec.connectedAt || null) : null,
+    lastCheckedAt: isOwner ? (rec.lastCheckedAt || null) : null,
+    message: isOwner ? (rec.message || null) : null,
+    whatsappQr: key === 'whatsapp' ? (isOwner ? bridge.hasQr : false) : undefined,
+  };
 }
 
-// GET /api/connections
-add('GET', /^\/api\/connections$/, (req, res) => json(res, buildConnectionsView()));
+// בונה תצוגת חיבורים לפי חברה: כל חברה רואה רק את החיבורים שלה. חיבור "מחובר" מוצג רק לחברה שאליה הוא שייך
+// (BPM=חשבונית ירוקה+יומן, אופק=Paperless); לשאר החברות "לא מחובר" בתצוגה-בלבד.
+function buildConnectionsView(companyId) {
+  const db = load();
+  const comp = companyId ? (db.companies || []).find(c => c.id === companyId) : null;
+  const acct = comp ? (comp.accounting || 'greenInvoice') : 'greenInvoice';
+  const isGiOwner = !companyId || companyId === giCompanyId();
+  const isPlOwner = !!companyId && companyId === paperlessCompanyId();
+  const cards = [];
+  // מערכת חשבונאית — לפי סוג החברה
+  if (acct === 'paperless') cards.push(connCard('paperless', isPlOwner));
+  else cards.push(connCard('greenInvoice', isGiOwner));
+  // יומן גוגל — כרגע גלובלי ושייך לחברת ה-GI. לשאר החברות: תצוגה בלבד, לא מחובר.
+  cards.push(connCard('googleCalendar', isGiOwner));
+  // בנק — בפיתוח (גלובלי)
+  cards.push(connCard('bank', false));
+  return cards;
+}
+
+// GET /api/connections?companyId=
+add('GET', /^\/api\/connections$/, (req, res, _p, q) => json(res, buildConnectionsView(q.companyId)));
 
 // POST /api/connections/connect  { key, values:{ENV:VAL,...} }
 add('POST', /^\/api\/connections\/connect$/, async (req, res, _p, _q, body) => {
@@ -1646,6 +1667,7 @@ add('POST', /^\/api\/connections\/connect$/, async (req, res, _p, _q, body) => {
   for (const k of allowed) if (values[k] !== undefined) updates[k] = values[k];
   saveSettings(updates);
   if (key === 'greenInvoice') greenInvoice.resetToken();
+  if (key === 'paperless') _plStatus = { at: 0, ok: false, msg: null };
 
   const now = new Date().toISOString();
   const r = await verifyConnection(key);
@@ -2039,7 +2061,9 @@ add('POST', /^\/api\/bank\/rematch$/, async (req, res, _p, _q, body) => {
 // GET /api/bank/balance?companyId= — יתרת עו"ש הרשמית האחרונה שנקלטה
 add('GET', /^\/api\/bank\/balance$/, (req, res, _p, q) => {
   const db = load();
-  const b = (db.bankBalance || []).find(x => x.companyId === (q.companyId || null)) || (db.bankBalance || [])[0] || null;
+  // יתרה של החברה המבוקשת בלבד — בלי נפילה חזרה ליתרה של חברה אחרת (למשל אופק לא יראה את היתרה של BPM)
+  const cid = q.companyId || null;
+  const b = (db.bankBalance || []).find(x => x.companyId === cid) || null;
   json(res, b);
 });
 
@@ -2307,7 +2331,7 @@ function seedIfEmpty() {
 const COMPANY_SEED = [
   { id: 'co_bpm', name: 'בי פי אם הגברה ותאורה בע"מ', active: true, accounting: 'greenInvoice' },
   { id: 'co_ofek', name: 'אופק ידעי הגברה ותאורה', active: false, accounting: 'paperless' },
-  { id: 'co_moshe', name: 'משה כורסיה בע"מ', active: false, accounting: null },
+  { id: 'co_moshe', name: 'משה כורסיה בע"מ', active: false, accounting: 'greenInvoice' },
 ];
 // מזהה החברה שאליה מחוברת חשבונית ירוקה (ברירת מחדל BPM) — לשם בידוד נתונים
 function giCompanyId() { const c = (load().companies || []).find(x => x.accounting === 'greenInvoice'); return c ? c.id : 'co_bpm'; }
