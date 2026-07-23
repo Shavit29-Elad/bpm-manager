@@ -94,8 +94,13 @@ function mapDoc(d) {
   };
 }
 
-// חשבוniות הכנסה פתוחות (לתצוגת "חשבוניות פתוחות" / דף הבית)
-async function openInvoices() { return searchDocuments({ docType: 2, status: 1 }); }
+// חשבוניות הכנסה פתוחות (לא שולמו). חובה טווח תאריכים — חיפוש ללא טווח מחזיר 500. ברירת מחדל: ~שנתיים אחורה.
+async function openInvoices(from, to) {
+  const t = to || new Date().toISOString().slice(0, 10);
+  const f = from || ((Number(t.slice(0, 4)) - 2) + t.slice(4));
+  const docs = await searchDocuments({ docType: 2, from: f, to: t });
+  return docs.filter(d => !d.closed);
+}
 // הכנסות בטווח תאריכים
 async function incomeForRange(from, to) { return searchDocuments({ docType: 2, from, to }); }
 // הוצאות בטווח תאריכים

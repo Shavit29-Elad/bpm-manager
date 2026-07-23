@@ -2310,14 +2310,14 @@ add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
   const to = q.to || new Date().toISOString().slice(0, 10);
   const from = q.from || (to.slice(0, 4) + '-01-01');
   try {
-    // כל קריאה בנפרד (allSettled) — אם אחת נכשלת (למשל 503 זמני מפייפרלס) עדיין מציגים את השאר
+    // שתי קריאות מתוארכות (חיפוש ללא טווח תאריכים מחזיר 500 מפייפרלס). חשבוניות פתוחות מחושבות מההכנסה שלא נסגרה.
     const settled = await Promise.allSettled([
       paperless.incomeForRange(from, to),
       paperless.expensesForRange(from, to),
-      paperless.openInvoices(),
     ]);
-    const [income, expenses, open] = settled.map(r => r.status === 'fulfilled' ? r.value : []);
+    const [income, expenses] = settled.map(r => r.status === 'fulfilled' ? r.value : []);
     const partial = settled.some(r => r.status === 'rejected');
+    const open = income.filter(d => !d.closed); // חשבונית פתוחה = מסמך הכנסה שטרם נסגר (שולם)
     const sum = (arr) => arr.reduce((s, d) => s + (Number(d.amount) || 0), 0);
     // לקוחות — קיבוץ מסמכי ההכנסה לפי לקוח
     const byClient = {};
