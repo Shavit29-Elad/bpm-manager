@@ -14,7 +14,7 @@ import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByC
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
 import paperless from './paperless.js';
-import { extractDescription } from './pdfDesc.js';
+import { extractDescription, EXTRACT_VERSION } from './pdfDesc.js';
 import { parseBank, extractAccountBalance } from './bankParser.js';
 import { matchCredits, matchDebits, attachReceipts } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
@@ -2337,9 +2337,10 @@ async function fillDescriptionsBg(deals) {
     for (const d of deals) {
       if (!d.id) continue;
       const cur = have[d.id];
-      if (cur && cur.status !== 'error' && cur.status !== 'pending') continue;   // כבר יש תוצאה יציבה
+      // כבר יש תוצאה יציבה *בגרסת החילוץ הנוכחית* — לא נחלץ שוב
+      if (cur && cur.status !== 'error' && cur.status !== 'pending' && cur.v === EXTRACT_VERSION) continue;
       const r = await extractDescription(d.url, d.clientName);
-      results[d.id] = { desc: r.desc || null, status: r.status, at: Date.now() };
+      results[d.id] = { desc: r.desc || null, status: r.status, raw: r.raw || null, v: EXTRACT_VERSION, at: Date.now() };
       await new Promise(s => setTimeout(s, 400));   // עדינות מול S3
     }
     if (Object.keys(results).length) {
@@ -2356,7 +2357,7 @@ function attachDescriptions(deals) {
   const map = (load().paperlessDesc) || {};
   return deals.map(d => {
     const e = map[d.id];
-    return { ...d, desc: (e && e.desc) || null, descStatus: (e && e.status) || 'pending' };
+    return { ...d, desc: (e && e.desc) || null, descStatus: (e && e.status) || 'pending', descRaw: (e && e.raw) || null };
   });
 }
 
