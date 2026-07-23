@@ -140,7 +140,7 @@ function mapDoc(d) {
 function dayDiff(a, b) { return Math.round((new Date(b) - new Date(a)) / 86400000); }
 function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); }
 
-// מושך את כל מסמכי "הכל" בטווח, עם פיצול אדפטיבי כשחלון נכשל (503/עומס).
+// מושך את כל מסמכי "הכל" בטווח, עם פיצול אדפטיבי כשחלון נכשל (503/עומס). זורק רק אם החלון נכשל סופית.
 async function fetchAllDocsWindow(from, to, acc, depth = 0) {
   try {
     const docs = await searchDocuments({ docType: 0, from, to });
@@ -150,34 +150,39 @@ async function fetchAllDocsWindow(from, to, acc, depth = 0) {
     const transient = e.status >= 500 || e.code === 5;
     if (span > 3 && transient && depth < 8) {
       const mid = addDays(from, Math.floor(span / 2));
-      await sleep(400);
+      await sleep(2000);
       await fetchAllDocsWindow(from, mid, acc, depth + 1);
-      await sleep(400);
+      await sleep(2000);
       await fetchAllDocsWindow(addDays(mid, 1), to, acc, depth + 1);
     } else { throw e; }
   }
 }
 
 // עסקאות פתוחות = עסקה(10)+מס(20) שאינן סגורות (bClosed=false). ברירת מחדל: ~13 חודשים אחורה.
-// מושכים בחלונות חודשיים (כל חלון קטן דיו כדי לא ליפול ב-503); חלון שנכשל מתפצל אוטומטית.
+// פייפרלס מגביל-קצב בחוזקה, לכן: חלונות של 45 יום + השהיה של 2.5 שנ' בין קריאות (קצב בטוח שנמדד).
+// כשל בחלון בודד אינו מפיל את כל העבודה — נמשיך, ורק אם *כל* החלונות נכשלו נזרוק (כדי לנסות שוב).
 async function openDeals(from, to) {
   const t = to || new Date().toISOString().slice(0, 10);
   const f = from || addDays(t, -400);
   const acc = [];
-  let cursor = f;
+  let cursor = f, ok = 0, failed = 0;
   while (cursor <= t) {
-    const end = addDays(cursor, 30) < t ? addDays(cursor, 30) : t;
-    await fetchAllDocsWindow(cursor, end, acc);
-    await sleep(300);
+    const end = addDays(cursor, 45) < t ? addDays(cursor, 45) : t;
+    try { await fetchAllDocsWindow(cursor, end, acc); ok++; }
+    catch { failed++; }
+    await sleep(2500);
     cursor = addDays(end, 1);
   }
+  if (ok === 0) throw new Error('פייפרלס עמוס כרגע — ננסה שוב עוד רגע');
   // הסרת כפילויות (חלונות עלולים לחפוף בקצוות) לפי מזהה מסמך
   const seen = new Set();
   const uniq = [];
   for (const d of acc) { const id = d.sDocumentID; if (id && !seen.has(id)) { seen.add(id); uniq.push(d); } }
-  return uniq.map(mapDoc)
+  const deals = uniq.map(mapDoc)
     .filter(d => !d.closed && (d.kind === 'עסקה' || d.kind === 'מס'))
     .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+  deals.partial = failed > 0;   // חלק מהחלונות נכשלו — ייתכן שחסרות עסקאות
+  return deals;
 }
 
 // תאימות לאחור
