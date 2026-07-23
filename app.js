@@ -1495,7 +1495,7 @@ window.openEventFromCal = async (enc) => {
 async function openEventEditor(ev) {
   _evEditing = ev;
   _evCtr = (ev.contractorDetails && ev.contractorDetails.length ? ev.contractorDetails
-    : (ev.contractors || []).map(n => ({ name: n, amount: null }))).map(c => ({ name: c.name || '', amount: c.amount ?? '' }));
+    : (ev.contractors || []).map(n => ({ name: n, amount: null }))).map(c => ({ name: c.name || '', amount: c.amount ?? '', paid: !!c.paid, paidInvoice: c.paidInvoice || null, paidExpenseUrl: c.paidExpenseUrl || null, handled: !!c.handled }));
   _evEmp = (ev.employeeDetails && ev.employeeDetails.length ? ev.employeeDetails
     : (ev.employees || []).map(n => ({ name: n }))).map(w => ({ name: w.name || '', factor: w.factor ?? '1', bonus: w.bonus ?? '', food: w.food ?? '', note: w.note ?? '', bonusFactor: w.bonusFactor ?? null }));
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
@@ -1560,13 +1560,29 @@ window.deleteEvent = async () => {
 };
 function evCtrHtml() {
   if (!_evCtr.length) return '<span class="muted" style="font-size:13px">אין קבלנים. הוסף אם רלוונטי לתשלום. אפשר לבחור ספק מחשבונית ירוקה.</span>';
-  return _evCtr.map((c, i) => `<div style="display:flex;gap:8px;margin-bottom:6px">
-    <input list="evSupList" value="${(c.name || '').replace(/"/g, '&quot;')}" placeholder="שם קבלן / ספק" oninput="_evCtr[${i}].name=this.value" style="flex:1"/>
-    <input type="number" inputmode="decimal" value="${c.amount ?? ''}" placeholder="סכום לתשלום ₪" oninput="_evCtr[${i}].amount=this.value" style="width:150px"/>
-    <button class="btn ghost" style="padding:4px 11px" onclick="evRemoveCtr(${i})" title="הסר">×</button></div>`).join('');
+  return _evCtr.map((c, i) => {
+    // קבלן ששולם (קושרה חשבונית) — מוצג עם תג "שולם" וכפתור "בטל תשלום" שמחזיר אותו לרשימת הקבלנים לתשלום
+    const paidUi = c.paid
+      ? `<span class="tag invoiced" style="white-space:nowrap;align-self:center">שולם ✓${c.paidInvoice ? ` · חשבונית ${escapeHtml(String(c.paidInvoice))}` : ''}</span>
+         <button type="button" class="btn ghost" style="padding:4px 10px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="evUnpayCtr(${i})">בטל תשלום</button>`
+      : '';
+    return `<div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+      <input list="evSupList" value="${(c.name || '').replace(/"/g, '&quot;')}" placeholder="שם קבלן / ספק" oninput="_evCtr[${i}].name=this.value" style="flex:1" ${c.paid ? 'readonly' : ''}/>
+      <input type="number" inputmode="decimal" value="${c.amount ?? ''}" placeholder="סכום לתשלום ₪" oninput="_evCtr[${i}].amount=this.value" style="width:130px" ${c.paid ? 'readonly' : ''}/>
+      ${paidUi}
+      <button class="btn ghost" style="padding:4px 11px" onclick="evRemoveCtr(${i})" title="הסר">×</button></div>`;
+  }).join('');
 }
 window.evAddCtr = () => { _evCtr.push({ name: '', amount: '' }); document.getElementById('evCtrBox').innerHTML = evCtrHtml(); };
-window.evRemoveCtr = (i) => { _evCtr.splice(i, 1); document.getElementById('evCtrBox').innerHTML = evCtrHtml(); };
+window.evRemoveCtr = (i) => { _evCtr.splice(i, 1); document.getElementById('evCtrBox').innerHTML = evCtrHtml(); autoSaveEvent(); };
+// ביטול תשלום של קבלן מתוך עורך האירוע — מחזיר את השורה לרשימת "קבלנים לתשלום"
+window.evUnpayCtr = async (i) => {
+  const c = _evCtr[i]; if (!c || !_evEditing) return;
+  if (!confirm('לבטל את סימון התשלום? האירוע יחזור לרשימת הקבלנים לתשלום.\n\nשים לב: אם הופקה בטעות חשבונית/הוצאה בחשבונית ירוקה — צריך לבטל אותה בזיכוי בנפרד (הביטול כאן רק מחזיר את הסימון).')) return;
+  await fetch('/api/contractors/toggle-paid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId: _evEditing.id, index: i, paid: false }) }).catch(() => {});
+  c.paid = false; c.paidInvoice = null; c.paidExpenseUrl = null;
+  document.getElementById('evCtrBox').innerHTML = evCtrHtml();
+};
 // שורות עובדים: שם (מרשימת עובדים) + פקטור (חצי/יומית/כפולה) + בונוס
 function evEmpHtml() {
   if (!_evEmp.length) return '<span class="muted" style="font-size:13px">אין עובדים. הוסף עובדים למשמרת.</span>';
@@ -1607,7 +1623,13 @@ function collectEventBody() {
   const num = (x) => { const s = String(x ?? '').trim(); return s === '' || isNaN(+s) ? null : +s; };
   const clientName = (g('evClient')?.value || '').trim() || null;
   const clientId = (_evClients || []).find(c => c.name === clientName)?.id || _evEditing.clientId || null;
-  const ctr = _evCtr.filter(c => (c.name || '').trim()).map(c => ({ name: c.name.trim(), amount: num(c.amount) }));
+  // שמירה תוך שימור סטטוס התשלום (paid/paidInvoice/handled) — אחרת עריכת אירוע הייתה מוחקת סימון "שולם" של קבלן
+  const ctr = _evCtr.filter(c => (c.name || '').trim()).map(c => {
+    const o = { name: c.name.trim(), amount: num(c.amount) };
+    if (c.paid) { o.paid = true; if (c.paidInvoice) o.paidInvoice = c.paidInvoice; if (c.paidExpenseUrl) o.paidExpenseUrl = c.paidExpenseUrl; }
+    if (c.handled) o.handled = true;
+    return o;
+  });
   const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus), bonusFactor: (w.bonusFactor == null || w.bonusFactor === '') ? null : +w.bonusFactor, food: num(w.food), note: (w.note || '').trim() || null }));
   return {
     date: g('evDate').value || null, dateRaw: g('evDate').value || _evEditing.dateRaw || null,
@@ -2335,7 +2357,7 @@ function contractorCard(x) {
   return `<div class="card" style="padding:0;overflow:hidden">
     <div class="row-between" style="margin:0;padding:11px 13px;cursor:pointer" onclick="document.getElementById('${safe}').classList.toggle('hidden')">
       <div><b>${escapeHtml(x.name)}</b> <span class="muted">· ${x.events.length} אירועים</span></div>
-      <div style="font-size:13px;text-align:left">שולם ${money(x.paidTotal)} · <span style="color:var(--danger)">נותר ${money(x.unpaidTotal)}</span> <span class="muted" style="font-size:11px">ללא מע״מ</span><div class="muted" style="font-size:11px">נותר כולל מע״מ ${money(x.unpaidTotal * (1 + VAT_RATE))}</div></div>
+      <div style="font-size:13px;text-align:left"><span style="color:var(--danger);font-weight:600">לתשלום ${money(x.unpaidTotal)}</span> <span class="muted" style="font-size:11px">ללא מע״מ</span><div class="muted" style="font-size:11px">כולל מע״מ ${money(x.unpaidTotal * (1 + VAT_RATE))}</div></div>
     </div>
     <div id="${safe}" class="${x.events.length > 3 ? 'hidden' : ''}">
       <div style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-top:1px solid var(--line);background:var(--panel2)">

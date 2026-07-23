@@ -1224,8 +1224,9 @@ add('POST', /^\/api\/contractors\/toggle-paid$/, (req, res, _p, _q, body) => {
   const db = load();
   const ev = db.events.find(e => e.id === body.eventId);
   if (!ev || !ev.contractorDetails || !ev.contractorDetails[body.index]) return json(res, { error: 'לא נמצא' }, 404);
-  ev.contractorDetails[body.index].paid = Boolean(body.paid);
-  if (!body.paid) ev.contractorDetails[body.index].paidInvoice = null;
+  const cd = ev.contractorDetails[body.index];
+  cd.paid = Boolean(body.paid);
+  if (!body.paid) { cd.paidInvoice = null; cd.paidExpenseUrl = null; cd.paidExpenseId = null; cd.paidPayableId = null; } // ביטול תשלום — מנקה את כל סימוני התשלום ומחזיר לרשימת הפתוחים
   save(db); json(res, { ok: true });
 });
 

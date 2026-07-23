@@ -118,6 +118,7 @@ export function contractorPayables(events) {
       const name = (c.name || '').trim();
       if (!name) continue;
       if (c.handled) continue; // סומן "טופל" — יורד מרשימת הפתוחים
+      if (c.paid) continue;    // שולם (קושרה חשבונית) — יורד מרשימת התשלומים לגמרי; זו רשימת מה שעוד פתוח לתשלום בלבד. ביטול תשלום נעשה מעורך האירוע.
       if (!byContractor[name]) byContractor[name] = { name, total: 0, paidTotal: 0, unpaidTotal: 0, events: [] };
       const amt = Number(c.amount) || 0;
       const paid = Boolean(c.paid);
