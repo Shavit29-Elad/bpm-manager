@@ -94,7 +94,7 @@ async function startApp() {
   const sel = $('#companySelect');
   sel.innerHTML = state.companies.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   state.company = state.companies[0]?.id;
-  sel.onchange = () => { state.company = sel.value; clearApiCache(); applyCompanyTabs(); render(); };
+  sel.onchange = () => { state.company = sel.value; clearApiCache(); applyCompanyTabs(); renderStatus(); render(); };
   applyPermissions();
   applyCompanyTabs();
 
@@ -249,11 +249,22 @@ window.deleteUser = async (id) => {
 };
 
 async function renderStatus() {
-  const h = await api('/api/health');
-  $('#statusPills').innerHTML = [
-    pill('חשבונית ירוקה', h.greenInvoiceConnected),
-    pill('יומן גוגל', h.calendarConnected),
-  ].join('');
+  // מחווני החיבור הם לפי חברה — חיבורים נפרדים לכל עסק
+  const co = state.company;
+  const el = $('#statusPills'); if (!el) return;
+  let pills;
+  if (co === 'co_ofek') {
+    // אופק: המערכת החשבונאית היא Paperless (ממלא את תפקיד חשבונית ירוקה). עד שנחבר — לא מחובר.
+    pills = [pill('Paperless', false), pill('יומן גוגל', false)];
+  } else if (co === 'co_moshe') {
+    // משה: חשבונית ירוקה (כמו BPM) אך עדיין לא חוברה; יומן גוגל לא חובר.
+    pills = [pill('חשבונית ירוקה', false), pill('יומן גוגל', false)];
+  } else {
+    // BPM: מצב חיבור אמיתי מהשרת
+    const h = await api('/api/health');
+    pills = [pill('חשבונית ירוקה', h.greenInvoiceConnected), pill('יומן גוגל', h.calendarConnected)];
+  }
+  el.innerHTML = pills.join('');
 }
 const pill = (label, ok, text) =>
   `<span class="pill ${ok ? 'ok' : 'off'}">${label}: ${ok ? 'מחובר' : (text || 'לא מחובר')}</span>`;
