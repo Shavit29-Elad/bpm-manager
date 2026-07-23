@@ -40,8 +40,11 @@ async function api(pathName, body, attempt = 0) {
     // שגיאה זמנית — ננסה שוב עד 4 פעמים עם המתנה גוברת:
     //   502/503/504/429 = Azure מתעורר/עומס.  iCode 5 = "בקשות רבות מדי" (מגיע כ-400) — נחכה יותר.
     const throttled = code === 5;
-    if (([502, 503, 504, 429].includes(res.status) || throttled) && attempt < 4) {
-      await sleep((throttled ? 1600 : 800) * (attempt + 1));
+    // חסימת-קצב (iCode 5): ניסיון קצר בלבד — עדיף להיכשל מהר ולדלג על חלון מאשר לחסום 16 שנ'.
+    // 502/503/504/429 (Azure מתעורר): ניסיון חוזר מעט ארוך יותר.
+    const maxAttempts = throttled ? 1 : 3;
+    if (([502, 503, 504, 429].includes(res.status) || throttled) && attempt < maxAttempts) {
+      await sleep((throttled ? 3500 : 900) * (attempt + 1));
       return api(pathName, body, attempt + 1);
     }
     // גוף שגיאה: { iCode, message }
@@ -159,18 +162,19 @@ async function fetchAllDocsWindow(from, to, acc, depth = 0) {
 }
 
 // עסקאות פתוחות = עסקה(10)+מס(20) שאינן סגורות (bClosed=false). ברירת מחדל: ~13 חודשים אחורה.
-// פייפרלס מגביל-קצב בחוזקה, לכן: חלונות של 45 יום + השהיה של 2.5 שנ' בין קריאות (קצב בטוח שנמדד).
-// כשל בחלון בודד אינו מפיל את כל העבודה — נמשיך, ורק אם *כל* החלונות נכשלו נזרוק (כדי לנסות שוב).
+// פייפרלס מגביל-קצב בחוזקה מאוד, לכן: חלונות של 60 יום, קריאה אחת לכל חלון (בלי פיצול שמכפיל קריאות),
+// והשהיה של 5 שנ' בין קריאות. כשל בחלון בודד אינו מפיל את הכל — מדלגים; רק אם *כל* החלונות נכשלו נזרוק.
 async function openDeals(from, to) {
   const t = to || new Date().toISOString().slice(0, 10);
   const f = from || addDays(t, -400);
   const acc = [];
-  let cursor = f, ok = 0, failed = 0;
+  let cursor = f, ok = 0, failed = 0, first = true;
   while (cursor <= t) {
-    const end = addDays(cursor, 45) < t ? addDays(cursor, 45) : t;
-    try { await fetchAllDocsWindow(cursor, end, acc); ok++; }
+    const end = addDays(cursor, 60) < t ? addDays(cursor, 60) : t;
+    if (!first) await sleep(5000);
+    first = false;
+    try { const docs = await searchDocuments({ docType: 0, from: cursor, to: end, raw: true }); for (const d of docs) acc.push(d); ok++; }
     catch { failed++; }
-    await sleep(2500);
     cursor = addDays(end, 1);
   }
   if (ok === 0) throw new Error('פייפרלס עמוס כרגע — ננסה שוב עוד רגע');

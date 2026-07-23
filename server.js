@@ -2310,16 +2310,18 @@ add('GET', /^\/api\/paperless\/documents$/, async (req, res, _p, q) => {
 // לכן: הכנסות/הוצאות נשמרות במטמון קצר, ועסקאות פתוחות מחושבות ברקע (עבודה יחידה, בלי כפילויות).
 let _plIncExp = {};                    // key `${from}|${to}` → { at, income, expenses }
 const PL_INCEXP_TTL = 3 * 60 * 1000;
-let _plDeals = { at: 0, data: null, running: false };   // עסקאות פתוחות — מטמון + דגל "רץ עכשיו"
+let _plDeals = { at: 0, data: null, running: false, lastFail: 0 };   // עסקאות פתוחות — מטמון + דגלים
 const PL_DEALS_TTL = 4 * 60 * 1000;
+const PL_DEALS_COOLDOWN = 90 * 1000;   // אחרי כישלון — לא לנסות שוב מיד (למנוע הצפת בקשות לפייפרלס)
 
-// מפעיל חישוב עסקאות פתוחות ברקע (רק אם לא רץ כבר) — לא חוסם את טעינת הדף.
+// מפעיל חישוב עסקאות פתוחות ברקע (עבודה יחידה, עם צינון אחרי כישלון) — לא חוסם את טעינת הדף.
 function refreshOpenDealsBg(to) {
   if (_plDeals.running) return;
+  if (_plDeals.lastFail && (Date.now() - _plDeals.lastFail) < PL_DEALS_COOLDOWN) return;
   _plDeals.running = true;
   paperless.openDeals(undefined, to)
-    .then(d => { _plDeals = { at: Date.now(), data: d, running: false }; })
-    .catch(() => { _plDeals.running = false; });   // בכישלון — נאפשר ניסיון חוזר בפעם הבאה
+    .then(d => { _plDeals = { at: Date.now(), data: d, running: false, lastFail: 0 }; })
+    .catch(() => { _plDeals.running = false; _plDeals.lastFail = Date.now(); });
 }
 
 // GET /api/paperless/summary?from=&to= — סיכום לדף הבית של אופק: הכנסות/הוצאות + עסקאות פתוחות (רקע)
