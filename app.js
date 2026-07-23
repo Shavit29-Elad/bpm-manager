@@ -585,7 +585,7 @@ async function renderPaperlessHome(c) {
       </div>
     </div>
     <div class="panel">
-      <div class="row-between"><h3 style="margin:0">עסקאות פתוחות ${open.length ? `(${open.length})` : ''}</h3><span class="muted" style="font-size:12px">חשבון עסקה + חשבונית מס שטרם נסגרו</span></div>
+      <div class="row-between"><h3 style="margin:0">עסקאות פתוחות ${open.length ? `(${open.length})` : ''}</h3><span class="muted" style="font-size:12px">${s.openPartial ? 'משלים נתונים מ‑Paperless…' : 'חשבון עסקה + חשבונית מס שטרם נסגרו'}</span></div>
       ${open.length ? `<div style="overflow-x:auto"><table class="grid" style="margin-top:10px;font-size:13px">
         <thead><tr><th>תאריך</th><th>שם לקוח</th><th>מס׳</th><th>סוג</th><th>ללא מע"מ</th><th>כולל מע"מ</th><th>פעולות</th></tr></thead>
         <tbody>${open.map(dealRow).join('')}</tbody>
@@ -603,9 +603,9 @@ async function renderPaperlessHome(c) {
       ${(s.recentExpenses || []).length ? (s.recentExpenses || []).slice(0, 15).map(docRow).join('') : '<div class="empty">אין מסמכים.</div>'}
     </div>`;
 
-  // עסקאות פתוחות נטענות ברקע (מגבלת קצב של Paperless) — נרענן אוטומטית עד שיגיעו
-  if (s.openPending && companyAccounting() === 'paperless' && (location.hash || '#home').startsWith('#home')) {
-    _plHomeTimer = setTimeout(() => { if (document.body.contains(c)) renderPaperlessHome(c); }, 12000);
+  // עסקאות פתוחות נטענות/מושלמות ברקע (מגבלת קצב של Paperless) — נרענן אוטומטית עד שיגיעו כולן
+  if ((s.openPending || s.openPartial) && companyAccounting() === 'paperless' && (location.hash || '#home').startsWith('#home')) {
+    _plHomeTimer = setTimeout(() => { if (document.body.contains(c)) renderPaperlessHome(c); }, s.openPending ? 12000 : 50000);
   }
 }
 

@@ -2346,9 +2346,13 @@ add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
     const sum = (arr) => arr.reduce((s, d) => s + (Number(d.amount) || 0), 0);
 
     // עסקאות פתוחות — ממטמון אם טרי, אחרת מפעילים רקע ומחזירים "נטען".
-    const dealsFresh = _plDeals.data && (Date.now() - _plDeals.at) < PL_DEALS_TTL && q.refresh !== '1';
-    let open = [], openPending = false;
-    if (dealsFresh) open = _plDeals.data;
+    // תוצאה חלקית (חלון שנחסם בקצב) — מוצגת מיד אבל עם TTL קצר + ריצה חוזרת ברקע כדי להשלים.
+    const dealsData = _plDeals.data;
+    const dealsPartial = !!(dealsData && dealsData.partial);
+    const ttl = dealsPartial ? 45 * 1000 : PL_DEALS_TTL;
+    const dealsFresh = dealsData && (Date.now() - _plDeals.at) < ttl && q.refresh !== '1';
+    let open = [], openPending = false, openPartial = false;
+    if (dealsFresh) { open = dealsData; if (dealsPartial) { openPartial = true; refreshOpenDealsBg(to); } }
     else { openPending = true; refreshOpenDealsBg(to); }
     const openByKind = { 'עסקה': 0, 'מס': 0 };
     for (const d of open) if (openByKind[d.kind] != null) openByKind[d.kind]++;
@@ -2357,7 +2361,7 @@ add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
       from, to,
       income: sum(income), incomeCount: income.length,
       expenses: sum(expenses), expenseCount: expenses.length,
-      openTotal: sum(open), openCount: open.length, openByKind, openInvoices: open, openPending,
+      openTotal: sum(open), openCount: open.length, openByKind, openInvoices: open, openPending, openPartial,
       recentIncome: income.slice(0, 30),
       recentExpenses: expenses.slice(0, 30),
       error: partial ? 'חלק מהנתונים לא נטענו כרגע מפייפרלס (נסה שוב עוד רגע)' : null,
