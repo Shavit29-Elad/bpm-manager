@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "pg": "^8.11.5",
-    "nodemailer": "^6.9.14"
+    "nodemailer": "^6.9.14",
+    "pdf-parse": "^1.1.1"
   },
   "optionalDependencies": {
     "whatsapp-web.js": "^1.23.0",

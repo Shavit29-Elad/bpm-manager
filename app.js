@@ -552,12 +552,20 @@ async function renderPaperlessHome(c) {
     ? '<span class="tag" style="font-size:10px;background:#e8f0ff;color:#2952cc">חשבונית מס</span>'
     : '<span class="tag" style="font-size:10px;background:#fff2e0;color:#b26a00">חשבון עסקה</span>';
 
-  // שורת עסקה פתוחה — תאריך · לקוח · מס' · סוג · ללא מע"מ · כולל מע"מ · פעולות
+  // תא פירוט — טקסט מחולץ מהמסמך, או סטטוס טעינה/חוסר-זמינות
+  const descCell = (d) => {
+    if (d.desc) return `<span title="${escapeHtml(d.desc)}">${escapeHtml(d.desc)}</span>`;
+    if (d.descStatus === 'image') return '<span class="muted" style="font-size:11px">מסמך סרוק — פתח בתצוגה</span>';
+    if (d.descStatus === 'empty' || d.descStatus === 'unavailable') return '<span class="muted">—</span>';
+    return '<span class="muted" style="font-size:11px">טוען פירוט…</span>';
+  };
+  // שורת עסקה פתוחה — תאריך · לקוח · מס' · סוג · פירוט · ללא מע"מ · כולל מע"מ · פעולות
   const dealRow = (d) => `<tr>
       <td style="white-space:nowrap">${plDate(d.date)}</td>
       <td>${escapeHtml(d.clientName || '—')}</td>
       <td style="white-space:nowrap">${escapeHtml(String(d.number || ''))}</td>
       <td>${kindTag(d.kind)}</td>
+      <td style="max-width:240px;font-size:12px">${descCell(d)}</td>
       <td style="text-align:left;white-space:nowrap">${money(d.amountExVat)}</td>
       <td style="text-align:left;white-space:nowrap;font-weight:600">${money(d.amount)}</td>
       <td style="white-space:nowrap">${plLinks(d)}
@@ -587,11 +595,11 @@ async function renderPaperlessHome(c) {
     <div class="panel">
       <div class="row-between"><h3 style="margin:0">עסקאות פתוחות ${open.length ? `(${open.length})` : ''}</h3><span class="muted" style="font-size:12px">${s.openPartial ? 'משלים נתונים מ‑Paperless…' : 'חשבון עסקה + חשבונית מס שטרם נסגרו'}</span></div>
       ${open.length ? `<div style="overflow-x:auto"><table class="grid" style="margin-top:10px;font-size:13px">
-        <thead><tr><th>תאריך</th><th>שם לקוח</th><th>מס׳</th><th>סוג</th><th>ללא מע"מ</th><th>כולל מע"מ</th><th>פעולות</th></tr></thead>
+        <thead><tr><th>תאריך</th><th>שם לקוח</th><th>מס׳</th><th>סוג</th><th>פירוט</th><th>ללא מע"מ</th><th>כולל מע"מ</th><th>פעולות</th></tr></thead>
         <tbody>${open.map(dealRow).join('')}</tbody>
-        <tfoot><tr style="background:var(--panel2);font-weight:600"><td colspan="4">סה"כ ${open.length} עסקאות פתוחות</td><td style="text-align:left">${money(open.reduce((t, d) => t + (d.amountExVat || 0), 0))}</td><td style="text-align:left">${money(s.openTotal || 0)}</td><td></td></tr></tfoot>
+        <tfoot><tr style="background:var(--panel2);font-weight:600"><td colspan="5">סה"כ ${open.length} עסקאות פתוחות</td><td style="text-align:left">${money(open.reduce((t, d) => t + (d.amountExVat || 0), 0))}</td><td style="text-align:left">${money(s.openTotal || 0)}</td><td></td></tr></tfoot>
       </table></div>
-      <p class="muted" style="font-size:11px;margin-top:8px">התאריך של חשבון עסקה מדויק-לחודש (Paperless אינו מספק יום מדויק ב-API). אין עמודת "פירוט" כי ה-API אינו מחזיר את שורות המסמך — לחץ "תצוגה" לצפייה במסמך המלא.</p>`
+      <p class="muted" style="font-size:11px;margin-top:8px">התאריך של חשבון עסקה מדויק-לחודש (Paperless אינו מספק יום מדויק ב-API). הפירוט מחולץ אוטומטית מהמסמך ונשמר; מסמכים סרוקים (תמונה) מסומנים — לחץ "תצוגה" לצפייה במקור.</p>`
         : (s.openPending ? '<div class="empty">טוען עסקאות פתוחות מ‑Paperless… (עד כדקה, בגלל מגבלת קצב) — יתעדכן אוטומטית.</div>' : '<div class="empty">אין עסקאות פתוחות.</div>')}
     </div>
     <div class="panel">
@@ -603,9 +611,9 @@ async function renderPaperlessHome(c) {
       ${(s.recentExpenses || []).length ? (s.recentExpenses || []).slice(0, 15).map(docRow).join('') : '<div class="empty">אין מסמכים.</div>'}
     </div>`;
 
-  // עסקאות פתוחות נטענות/מושלמות ברקע (מגבלת קצב של Paperless) — נרענן אוטומטית עד שיגיעו כולן
-  if ((s.openPending || s.openPartial) && companyAccounting() === 'paperless' && (location.hash || '#home').startsWith('#home')) {
-    _plHomeTimer = setTimeout(() => { if (document.body.contains(c)) renderPaperlessHome(c); }, s.openPending ? 12000 : 50000);
+  // עסקאות פתוחות + פירוטים נטענים/מושלמים ברקע — נרענן אוטומטית עד שיגיעו כולם
+  if ((s.openPending || s.openPartial || s.openDescPending) && companyAccounting() === 'paperless' && (location.hash || '#home').startsWith('#home')) {
+    _plHomeTimer = setTimeout(() => { if (document.body.contains(c)) renderPaperlessHome(c); }, s.openPending ? 12000 : 20000);
   }
 }
 

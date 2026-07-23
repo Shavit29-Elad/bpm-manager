@@ -161,23 +161,38 @@ async function fetchAllDocsWindow(from, to, acc, depth = 0) {
   }
 }
 
+// מושך רשימת חלונות [from,to] — קריאה אחת לכל חלון, בהשהיה. מחזיר {docs, failed:[[from,to]...]}.
+async function fetchWindows(windows) {
+  const docs = [], failed = [];
+  let first = true;
+  for (const [wf, wt] of windows) {
+    if (!first) await sleep(5000);
+    first = false;
+    try { const r = await searchDocuments({ docType: 0, from: wf, to: wt, raw: true }); for (const d of r) docs.push(d); }
+    catch { failed.push([wf, wt]); }
+  }
+  return { docs, failed };
+}
+
 // עסקאות פתוחות = עסקה(10)+מס(20) שאינן סגורות (bClosed=false). ברירת מחדל: ~13 חודשים אחורה.
-// פייפרלס מגביל-קצב בחוזקה מאוד, לכן: חלונות של 60 יום, קריאה אחת לכל חלון (בלי פיצול שמכפיל קריאות),
-// והשהיה של 5 שנ' בין קריאות. כשל בחלון בודד אינו מפיל את הכל — מדלגים; רק אם *כל* החלונות נכשלו נזרוק.
+// פייפרלס מגביל-קצב בחוזקה, לכן: חלונות של 60 יום. חלון שנחסם — *מנסים אותו שוב* (עד 4 סבבים, בהמתנה גוברת),
+// כך שבסוף מגיעים לכל העסקאות. רק אם נותרו חלונות שנכשלו אחרי כל הסבבים — מסמנים partial.
 async function openDeals(from, to) {
   const t = to || new Date().toISOString().slice(0, 10);
   const f = from || addDays(t, -400);
+  const windows = [];
+  let cursor = f;
+  while (cursor <= t) { const end = addDays(cursor, 60) < t ? addDays(cursor, 60) : t; windows.push([cursor, end]); cursor = addDays(end, 1); }
   const acc = [];
-  let cursor = f, ok = 0, failed = 0, first = true;
-  while (cursor <= t) {
-    const end = addDays(cursor, 60) < t ? addDays(cursor, 60) : t;
-    if (!first) await sleep(5000);
-    first = false;
-    try { const docs = await searchDocuments({ docType: 0, from: cursor, to: end, raw: true }); for (const d of docs) acc.push(d); ok++; }
-    catch { failed++; }
-    cursor = addDays(end, 1);
+  let pending = windows, round = 0;
+  while (pending.length && round < 4) {
+    if (round > 0) await sleep(12000 * round);   // לפני ניסיון חוזר של חלונות שנחסמו — להמתין שהקצב יתאושש
+    const { docs, failed } = await fetchWindows(pending);
+    for (const d of docs) acc.push(d);
+    pending = failed;
+    round++;
   }
-  if (ok === 0) throw new Error('פייפרלס עמוס כרגע — ננסה שוב עוד רגע');
+  if (acc.length === 0) throw new Error('פייפרלס עמוס כרגע — ננסה שוב עוד רגע');
   // הסרת כפילויות (חלונות עלולים לחפוף בקצוות) לפי מזהה מסמך
   const seen = new Set();
   const uniq = [];
@@ -185,7 +200,7 @@ async function openDeals(from, to) {
   const deals = uniq.map(mapDoc)
     .filter(d => !d.closed && (d.kind === 'עסקה' || d.kind === 'מס'))
     .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
-  deals.partial = failed > 0;   // חלק מהחלונות נכשלו — ייתכן שחסרות עסקאות
+  deals.partial = pending.length > 0;   // נותרו חלונות חסומים אחרי כל הסבבים
   return deals;
 }
 

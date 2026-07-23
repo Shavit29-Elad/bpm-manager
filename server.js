@@ -14,6 +14,7 @@ import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByC
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
 import paperless from './paperless.js';
+import { extractDescription } from './pdfDesc.js';
 import { parseBank, extractAccountBalance } from './bankParser.js';
 import { matchCredits, matchDebits, attachReceipts } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
@@ -2320,8 +2321,43 @@ function refreshOpenDealsBg(to) {
   if (_plDeals.lastFail && (Date.now() - _plDeals.lastFail) < PL_DEALS_COOLDOWN) return;
   _plDeals.running = true;
   paperless.openDeals(undefined, to)
-    .then(d => { _plDeals = { at: Date.now(), data: d, running: false, lastFail: 0 }; })
+    .then(d => { _plDeals = { at: Date.now(), data: d, running: false, lastFail: 0 }; fillDescriptionsBg(d); })
     .catch(() => { _plDeals.running = false; _plDeals.lastFail = Date.now(); });
+}
+
+// ---- פירוט (תיאור) המסמכים — חילוץ מה-PDF (S3, ללא מגבלת-קצב) ושמירה קבועה לפי מזהה מסמך ----
+// רץ פעם אחת לכל מסמך חדש; מסמך שכבר חולץ (או תמונה/לא-זמין) לא נמשך שוב.
+let _descRunning = false;
+async function fillDescriptionsBg(deals) {
+  if (_descRunning || !Array.isArray(deals) || !deals.length) return;
+  _descRunning = true;
+  try {
+    const have = (load().paperlessDesc) || {};
+    const results = {};
+    for (const d of deals) {
+      if (!d.id) continue;
+      const cur = have[d.id];
+      if (cur && cur.status !== 'error' && cur.status !== 'pending') continue;   // כבר יש תוצאה יציבה
+      const r = await extractDescription(d.url, d.clientName);
+      results[d.id] = { desc: r.desc || null, status: r.status, at: Date.now() };
+      await new Promise(s => setTimeout(s, 400));   // עדינות מול S3
+    }
+    if (Object.keys(results).length) {
+      const db = load();
+      db.paperlessDesc = { ...(db.paperlessDesc || {}), ...results };
+      save(db);
+    }
+  } catch { /* מתעלמים — יינסה שוב בפעם הבאה */ }
+  finally { _descRunning = false; }
+}
+
+// מצרף פירוט שמור לכל עסקה. descStatus: 'ok' | 'image' | 'empty' | 'unavailable' | 'error' | 'pending'
+function attachDescriptions(deals) {
+  const map = (load().paperlessDesc) || {};
+  return deals.map(d => {
+    const e = map[d.id];
+    return { ...d, desc: (e && e.desc) || null, descStatus: (e && e.status) || 'pending' };
+  });
 }
 
 // GET /api/paperless/summary?from=&to= — סיכום לדף הבית של אופק: הכנסות/הוצאות + עסקאות פתוחות (רקע)
@@ -2351,9 +2387,14 @@ add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
     const dealsPartial = !!(dealsData && dealsData.partial);
     const ttl = dealsPartial ? 45 * 1000 : PL_DEALS_TTL;
     const dealsFresh = dealsData && (Date.now() - _plDeals.at) < ttl && q.refresh !== '1';
-    let open = [], openPending = false, openPartial = false;
-    if (dealsFresh) { open = dealsData; if (dealsPartial) { openPartial = true; refreshOpenDealsBg(to); } }
-    else { openPending = true; refreshOpenDealsBg(to); }
+    let open = [], openPending = false, openPartial = false, openDescPending = false;
+    if (dealsFresh) {
+      open = attachDescriptions(dealsData);
+      if (dealsPartial) { openPartial = true; refreshOpenDealsBg(to); }
+      // עדיין חסרים פירוטים? נפעיל השלמה ברקע ונסמן שנטען
+      openDescPending = open.some(d => d.descStatus === 'pending' || d.descStatus === 'error');
+      if (openDescPending) fillDescriptionsBg(dealsData);
+    } else { openPending = true; refreshOpenDealsBg(to); }
     const openByKind = { 'עסקה': 0, 'מס': 0 };
     for (const d of open) if (openByKind[d.kind] != null) openByKind[d.kind]++;
 
@@ -2361,7 +2402,7 @@ add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
       from, to,
       income: sum(income), incomeCount: income.length,
       expenses: sum(expenses), expenseCount: expenses.length,
-      openTotal: sum(open), openCount: open.length, openByKind, openInvoices: open, openPending, openPartial,
+      openTotal: sum(open), openCount: open.length, openByKind, openInvoices: open, openPending, openPartial, openDescPending,
       recentIncome: income.slice(0, 30),
       recentExpenses: expenses.slice(0, 30),
       error: partial ? 'חלק מהנתונים לא נטענו כרגע מפייפרלס (נסה שוב עוד רגע)' : null,
