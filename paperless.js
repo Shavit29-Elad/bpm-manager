@@ -158,12 +158,19 @@ async function fetchAllDocsWindow(from, to, acc, depth = 0) {
   }
 }
 
-// עסקאות פתוחות = עסקה(10)+מס(20) שאינן סגורות (bClosed=false). ברירת מחדל: ~18 חודשים אחורה.
+// עסקאות פתוחות = עסקה(10)+מס(20) שאינן סגורות (bClosed=false). ברירת מחדל: ~13 חודשים אחורה.
+// מושכים בחלונות חודשיים (כל חלון קטן דיו כדי לא ליפול ב-503); חלון שנכשל מתפצל אוטומטית.
 async function openDeals(from, to) {
   const t = to || new Date().toISOString().slice(0, 10);
-  const f = from || addDays(t, -550);
+  const f = from || addDays(t, -400);
   const acc = [];
-  await fetchAllDocsWindow(f, t, acc);
+  let cursor = f;
+  while (cursor <= t) {
+    const end = addDays(cursor, 30) < t ? addDays(cursor, 30) : t;
+    await fetchAllDocsWindow(cursor, end, acc);
+    await sleep(300);
+    cursor = addDays(end, 1);
+  }
   // הסרת כפילויות (חלונות עלולים לחפוף בקצוות) לפי מזהה מסמך
   const seen = new Set();
   const uniq = [];
