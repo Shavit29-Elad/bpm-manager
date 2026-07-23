@@ -2306,41 +2306,60 @@ add('GET', /^\/api\/paperless\/documents$/, async (req, res, _p, q) => {
   } catch (e) { json(res, { docs: [], error: e.message }); }
 });
 
-// מטמון קצר לסיכום אופק — openDeals מבצע כמה קריאות ל-API (מפה אדפטיבית), לא כדאי להריץ בכל טעינת דף.
-let _plSummaryCache = {};   // key: `${from}|${to}` → { at, data }
-const PL_SUMMARY_TTL = 3 * 60 * 1000;
+// מטמונים קצרים לאופק. פייפרלס מגביל-קצב בחוזקה, ו-openDeals מבצע ~13 קריאות (חלונות חודשיים),
+// לכן: הכנסות/הוצאות נשמרות במטמון קצר, ועסקאות פתוחות מחושבות ברקע (עבודה יחידה, בלי כפילויות).
+let _plIncExp = {};                    // key `${from}|${to}` → { at, income, expenses }
+const PL_INCEXP_TTL = 3 * 60 * 1000;
+let _plDeals = { at: 0, data: null, running: false };   // עסקאות פתוחות — מטמון + דגל "רץ עכשיו"
+const PL_DEALS_TTL = 4 * 60 * 1000;
 
-// GET /api/paperless/summary?from=&to= — סיכום לדף הבית של אופק: הכנסות/הוצאות/עסקאות פתוחות
+// מפעיל חישוב עסקאות פתוחות ברקע (רק אם לא רץ כבר) — לא חוסם את טעינת הדף.
+function refreshOpenDealsBg(to) {
+  if (_plDeals.running) return;
+  _plDeals.running = true;
+  paperless.openDeals(undefined, to)
+    .then(d => { _plDeals = { at: Date.now(), data: d, running: false }; })
+    .catch(() => { _plDeals.running = false; });   // בכישלון — נאפשר ניסיון חוזר בפעם הבאה
+}
+
+// GET /api/paperless/summary?from=&to= — סיכום לדף הבית של אופק: הכנסות/הוצאות + עסקאות פתוחות (רקע)
 add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
-  const empty = { income: 0, incomeCount: 0, expenses: 0, expenseCount: 0, openTotal: 0, openInvoices: [], clients: [], recentIncome: [], recentExpenses: [] };
+  const empty = { income: 0, incomeCount: 0, expenses: 0, expenseCount: 0, openTotal: 0, openInvoices: [], recentIncome: [], recentExpenses: [] };
   if (!paperless.haveCredentials()) return json(res, { ...empty, error: 'פייפרלס לא מחובר' });
   const to = q.to || new Date().toISOString().slice(0, 10);
   const from = q.from || (to.slice(0, 4) + '-01-01');
-  const cacheKey = `${from}|${to}`;
-  const cached = _plSummaryCache[cacheKey];
-  if (cached && (Date.now() - cached.at) < PL_SUMMARY_TTL && q.refresh !== '1') return json(res, cached.data);
   try {
-    // קריאות רציפות (לא במקביל) כדי לא לחטוף חסימת-קצב מפייפרלס ("בקשות רבות מדי").
-    // עסקאות פתוחות = openDeals (חשבון עסקה + חשבונית מס שאינן סגורות, מסך "עסקאות פתוחות").
-    let income = [], expenses = [], open = [], partial = false;
-    try { income = await paperless.incomeForRange(from, to); } catch { partial = true; }
-    try { expenses = await paperless.expensesForRange(from, to); } catch { partial = true; }
-    try { open = await paperless.openDeals(undefined, to); } catch { partial = true; }
+    // הכנסות/הוצאות — מטמון קצר; אם אין, שתי קריאות רציפות.
+    const ieKey = `${from}|${to}`;
+    let ie = _plIncExp[ieKey];
+    let partial = false;
+    if (!ie || (Date.now() - ie.at) >= PL_INCEXP_TTL || q.refresh === '1') {
+      let income = [], expenses = [];
+      try { income = await paperless.incomeForRange(from, to); } catch { partial = true; }
+      try { expenses = await paperless.expensesForRange(from, to); } catch { partial = true; }
+      ie = { at: Date.now(), income, expenses };
+      if (!partial) _plIncExp[ieKey] = ie;
+    }
+    const income = ie.income, expenses = ie.expenses;
     const sum = (arr) => arr.reduce((s, d) => s + (Number(d.amount) || 0), 0);
-    // סיכום עסקאות פתוחות לפי סוג (עסקה/מס) — כמו הלשוניות בפייפרלס
+
+    // עסקאות פתוחות — ממטמון אם טרי, אחרת מפעילים רקע ומחזירים "נטען".
+    const dealsFresh = _plDeals.data && (Date.now() - _plDeals.at) < PL_DEALS_TTL && q.refresh !== '1';
+    let open = [], openPending = false;
+    if (dealsFresh) open = _plDeals.data;
+    else { openPending = true; refreshOpenDealsBg(to); }
     const openByKind = { 'עסקה': 0, 'מס': 0 };
     for (const d of open) if (openByKind[d.kind] != null) openByKind[d.kind]++;
-    const data = {
+
+    json(res, {
       from, to,
       income: sum(income), incomeCount: income.length,
       expenses: sum(expenses), expenseCount: expenses.length,
-      openTotal: sum(open), openCount: open.length, openByKind, openInvoices: open,
+      openTotal: sum(open), openCount: open.length, openByKind, openInvoices: open, openPending,
       recentIncome: income.slice(0, 30),
       recentExpenses: expenses.slice(0, 30),
       error: partial ? 'חלק מהנתונים לא נטענו כרגע מפייפרלס (נסה שוב עוד רגע)' : null,
-    };
-    if (!partial) _plSummaryCache[cacheKey] = { at: Date.now(), data };
-    json(res, data);
+    });
   } catch (e) { json(res, { ...empty, from, to, error: e.message }); }
 });
 

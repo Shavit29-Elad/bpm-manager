@@ -536,11 +536,14 @@ function plLinks(d) {
 }
 
 // ---- דף הבית של אופק (נתונים חיים מ‑Paperless) ----
+let _plHomeTimer = null;
 async function renderPaperlessHome(c) {
   const curYear = new Date().getFullYear();
   const compName = ((state.companies || []).find(x => x.id === state.company) || {}).name || 'אופק';
+  if (_plHomeTimer) { clearTimeout(_plHomeTimer); _plHomeTimer = null; }
   c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מ‑Paperless…</div></div>`;
-  const s = await api(`/api/paperless/summary?companyId=${state.company}&from=${curYear}-01-01&to=${curYear}-12-31`).catch(() => ({ error: 'שגיאת טעינה' }));
+  // עוקפים את מטמון ה-GET של הצד-לקוח כדי שנוכל לרענן את "עסקאות פתוחות" בזמן שהן נטענות ברקע
+  const s = await api(`/api/paperless/summary?companyId=${state.company}&from=${curYear}-01-01&to=${curYear}-12-31&_=${Date.now()}`).catch(() => ({ error: 'שגיאת טעינה' }));
   const kpi = (lbl, val, sub, color) => `<div class="card"><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
   const open = s.openInvoices || [];
   const bk = s.openByKind || {};
@@ -582,14 +585,14 @@ async function renderPaperlessHome(c) {
       </div>
     </div>
     <div class="panel">
-      <div class="row-between"><h3 style="margin:0">עסקאות פתוחות (${open.length})</h3><span class="muted" style="font-size:12px">חשבון עסקה + חשבונית מס שטרם נסגרו</span></div>
+      <div class="row-between"><h3 style="margin:0">עסקאות פתוחות ${open.length ? `(${open.length})` : ''}</h3><span class="muted" style="font-size:12px">חשבון עסקה + חשבונית מס שטרם נסגרו</span></div>
       ${open.length ? `<div style="overflow-x:auto"><table class="grid" style="margin-top:10px;font-size:13px">
         <thead><tr><th>תאריך</th><th>שם לקוח</th><th>מס׳</th><th>סוג</th><th>ללא מע"מ</th><th>כולל מע"מ</th><th>פעולות</th></tr></thead>
         <tbody>${open.map(dealRow).join('')}</tbody>
         <tfoot><tr style="background:var(--panel2);font-weight:600"><td colspan="4">סה"כ ${open.length} עסקאות פתוחות</td><td style="text-align:left">${money(open.reduce((t, d) => t + (d.amountExVat || 0), 0))}</td><td style="text-align:left">${money(s.openTotal || 0)}</td><td></td></tr></tfoot>
       </table></div>
       <p class="muted" style="font-size:11px;margin-top:8px">התאריך של חשבון עסקה מדויק-לחודש (Paperless אינו מספק יום מדויק ב-API). אין עמודת "פירוט" כי ה-API אינו מחזיר את שורות המסמך — לחץ "תצוגה" לצפייה במסמך המלא.</p>`
-        : '<div class="empty">אין עסקאות פתוחות.</div>'}
+        : (s.openPending ? '<div class="empty">טוען עסקאות פתוחות מ‑Paperless… (עד כדקה, בגלל מגבלת קצב) — יתעדכן אוטומטית.</div>' : '<div class="empty">אין עסקאות פתוחות.</div>')}
     </div>
     <div class="panel">
       <h3>מסמכי הכנסה אחרונים</h3>
@@ -599,6 +602,11 @@ async function renderPaperlessHome(c) {
       <h3>מסמכי הוצאה אחרונים</h3>
       ${(s.recentExpenses || []).length ? (s.recentExpenses || []).slice(0, 15).map(docRow).join('') : '<div class="empty">אין מסמכים.</div>'}
     </div>`;
+
+  // עסקאות פתוחות נטענות ברקע (מגבלת קצב של Paperless) — נרענן אוטומטית עד שיגיעו
+  if (s.openPending && companyAccounting() === 'paperless' && (location.hash || '#home').startsWith('#home')) {
+    _plHomeTimer = setTimeout(() => { if (document.body.contains(c)) renderPaperlessHome(c); }, 12000);
+  }
 }
 
 // מסמך המשך / מסמך דומה — יפותח בשלב הבא (יצירת מסמך דרך Paperless invoices/create)
