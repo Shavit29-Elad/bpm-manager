@@ -2303,6 +2303,43 @@ add('GET', /^\/api\/paperless\/documents$/, async (req, res, _p, q) => {
   } catch (e) { json(res, { docs: [], error: e.message }); }
 });
 
+// GET /api/paperless/summary?from=&to= — סיכום לדף הבית של אופק: הכנסות/הוצאות/חשבוניות פתוחות + לקוחות (נגזר ממסמכי הכנסה)
+add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
+  const empty = { income: 0, incomeCount: 0, expenses: 0, expenseCount: 0, openTotal: 0, openInvoices: [], clients: [], recentIncome: [], recentExpenses: [] };
+  if (!paperless.haveCredentials()) return json(res, { ...empty, error: 'פייפרלס לא מחובר' });
+  const to = q.to || new Date().toISOString().slice(0, 10);
+  const from = q.from || (to.slice(0, 4) + '-01-01');
+  try {
+    // כל קריאה בנפרד (allSettled) — אם אחת נכשלת (למשל 503 זמני מפייפרלס) עדיין מציגים את השאר
+    const settled = await Promise.allSettled([
+      paperless.incomeForRange(from, to),
+      paperless.expensesForRange(from, to),
+      paperless.openInvoices(),
+    ]);
+    const [income, expenses, open] = settled.map(r => r.status === 'fulfilled' ? r.value : []);
+    const partial = settled.some(r => r.status === 'rejected');
+    const sum = (arr) => arr.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+    // לקוחות — קיבוץ מסמכי ההכנסה לפי לקוח
+    const byClient = {};
+    for (const d of income) {
+      const key = d.clientId || d.clientName || '—';
+      if (!byClient[key]) byClient[key] = { id: d.clientId || null, name: d.clientName || 'ללא שם', total: 0, count: 0 };
+      byClient[key].total += Number(d.amount) || 0; byClient[key].count++;
+    }
+    const clients = Object.values(byClient).sort((a, b) => b.total - a.total);
+    json(res, {
+      from, to,
+      income: sum(income), incomeCount: income.length,
+      expenses: sum(expenses), expenseCount: expenses.length,
+      openTotal: sum(open), openInvoices: open,
+      clients,
+      recentIncome: income.slice(0, 30),
+      recentExpenses: expenses.slice(0, 30),
+      error: partial ? 'חלק מהנתונים לא נטענו כרגע מפייפרלס (נסה שוב עוד רגע)' : null,
+    });
+  } catch (e) { json(res, { ...empty, from, to, error: e.message }); }
+});
+
 // ---- הגשת קבצים סטטיים ----
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8' };

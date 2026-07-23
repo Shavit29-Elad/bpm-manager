@@ -519,7 +519,55 @@ window.doSendDoc = async (id) => {
   } else { if (btn) { btn.disabled = false; btn.textContent = '✉️ שלח'; } if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String((r && r.error) || ''))}</span>`; }
 };
 
+// סוג המערכת החשבונאית של החברה הנוכחית (greenInvoice / paperless / null)
+function companyAccounting() { return ((state.companies || []).find(x => x.id === state.company) || {}).accounting || null; }
+
+// ---- דף הבית של אופק (נתונים חיים מ‑Paperless) ----
+async function renderPaperlessHome(c) {
+  const curYear = new Date().getFullYear();
+  const compName = ((state.companies || []).find(x => x.id === state.company) || {}).name || 'אופק';
+  c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מ‑Paperless…</div></div>`;
+  const s = await api(`/api/paperless/summary?companyId=${state.company}&from=${curYear}-01-01&to=${curYear}-12-31`).catch(() => ({ error: 'שגיאת טעינה' }));
+  const kpi = (lbl, val, sub, color) => `<div class="card"><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
+  const links = (d) => d.url ? ` <button class="btn ghost" style="padding:1px 8px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button> <a href="${d.url}" target="_blank" class="btn ghost" style="padding:1px 8px;font-size:11px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : '';
+  const docRow = (d) => `<div style="display:flex;gap:10px;align-items:center;padding:6px 10px;border-top:1px solid var(--line);font-size:13px">
+      <span style="width:80px;white-space:nowrap">#${escapeHtml(String(d.number || ''))}</span>
+      <span style="flex:1">${escapeHtml(d.clientName || '—')}${d.taxConfirm ? ` <span class="muted" style="font-size:11px">· הקצאה ${escapeHtml(String(d.taxConfirm))}</span>` : ''}</span>
+      <span style="white-space:nowrap;font-weight:600">${money(d.amount)}</span>
+      ${d.closed ? '<span class="tag invoiced" style="font-size:10px">שולם</span>' : '<span class="tag miss" style="font-size:10px">פתוח</span>'}
+      ${links(d)}</div>`;
+  c.innerHTML = `
+    <div class="panel">
+      <div class="row-between"><div><h2>דף הבית — ${escapeHtml(compName)}</h2><span class="muted">נתונים חיים מ‑Paperless · שנת ${curYear}</span></div></div>
+      ${s.error ? `<div class="warn-banner">${escapeHtml(s.error)}</div>` : ''}
+      <div class="cards" style="margin-top:14px">
+        ${kpi('הכנסה השנה', money(s.income || 0), `${s.incomeCount || 0} מסמכים`, 'var(--accent2)')}
+        ${kpi('הוצאות השנה', money(s.expenses || 0), `${s.expenseCount || 0} מסמכים`, 'var(--danger)')}
+        ${kpi('חשבוניות פתוחות', (s.openInvoices || []).length, 'ממתינות לתשלום', 'var(--warn)')}
+        ${kpi('סכום פתוח', money(s.openTotal || 0), 'סה"כ פתוח', 'var(--warn)')}
+      </div>
+      <p class="muted" style="font-size:12px;margin-top:8px">הסכומים מגיעים ישירות מ‑Paperless. אם סכום נראה לא נכון — לחץ "תצוגה" על מסמך כדי לוודא מול המקור, ואכוונן.</p>
+    </div>
+    <div class="panel">
+      <h3>חשבוניות פתוחות (${(s.openInvoices || []).length})</h3>
+      ${(s.openInvoices || []).length ? (s.openInvoices || []).map(docRow).join('') : '<div class="empty">אין חשבוניות פתוחות.</div>'}
+    </div>
+    <div class="panel">
+      <h3>לקוחות (${(s.clients || []).length})</h3>
+      ${(s.clients || []).length ? (s.clients || []).slice(0, 20).map(cl => `<div style="display:flex;gap:10px;align-items:center;padding:6px 10px;border-top:1px solid var(--line);font-size:13px"><span style="flex:1">${escapeHtml(cl.name)}</span><span class="muted">${cl.count} מסמכים</span><span style="font-weight:600;white-space:nowrap">${money(cl.total)}</span></div>`).join('') : '<div class="empty">אין לקוחות עדיין.</div>'}
+    </div>
+    <div class="panel">
+      <h3>מסמכי הכנסה אחרונים</h3>
+      ${(s.recentIncome || []).length ? (s.recentIncome || []).slice(0, 15).map(docRow).join('') : '<div class="empty">אין מסמכים.</div>'}
+    </div>
+    <div class="panel">
+      <h3>מסמכי הוצאה אחרונים</h3>
+      ${(s.recentExpenses || []).length ? (s.recentExpenses || []).slice(0, 15).map(docRow).join('') : '<div class="empty">אין מסמכים.</div>'}
+    </div>`;
+}
+
 async function renderHome(c) {
+  if (companyAccounting() === 'paperless') return renderPaperlessHome(c);
   initPeriod();
   const curYear = new Date().getFullYear();
   c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מחשבונית ירוקה…</div></div>`;
