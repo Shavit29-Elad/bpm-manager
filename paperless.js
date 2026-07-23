@@ -70,10 +70,10 @@ async function searchDocuments(opts = {}) {
   return (Array.isArray(rows) ? rows : []).map(mapDoc);
 }
 
-// נרמול מסמך מתוצאת החיפוש. סכומים מגיעים ×100 (אגורות).
+// נרמול מסמך מתוצאת החיפוש. הערכים iAmount100/iVAT100 כבר בשקלים (אומת מול מסמך אמיתי — לא אגורות).
 function mapDoc(d) {
-  const amount = (Number(d.iAmount100) || 0) / 100;
-  const vat = (Number(d.iVAT100) || 0) / 100;
+  const amount = Number(d.iAmount100) || 0;
+  const vat = Number(d.iVAT100) || 0;
   return {
     id: d.sDocumentID,
     number: d.sDocNumber,
