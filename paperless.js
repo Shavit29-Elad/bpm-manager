@@ -76,10 +76,13 @@ async function searchDocuments(opts = {}) {
   return (Array.isArray(rows) ? rows : []).map(mapDoc);
 }
 
-// נרמול מסמך מתוצאת החיפוש. הערכים iAmount100/iVAT100 כבר בשקלים (אומת מול מסמך אמיתי — לא אגורות).
+// נרמול מסמך מתוצאת החיפוש.
+// שים לב לחוסר עקביות ב-API (אומת מול מסמכים אמיתיים):
+//   iAmount100 — כבר בשקלים (למשל 4720 = ₪4,720, אומת מול חשבונית #30231).
+//   iVAT100    — באגורות! חייב חלוקה ב-100 (למשל 144000 = ₪1,440 מע"מ על חשבונית ₪9,440).
 function mapDoc(d) {
   const amount = Number(d.iAmount100) || 0;
-  const vat = Number(d.iVAT100) || 0;
+  const vat = +(((Number(d.iVAT100) || 0) / 100).toFixed(2));
   return {
     id: d.sDocumentID,
     number: d.sDocNumber,
