@@ -24,8 +24,9 @@ const PAY_TYPE = { CHECK: 1, TRANSFER: 2, CREDIT: 3, CASH: 4, APP: 5, WITHHOLDIN
 // קודי שגיאה מה-API
 const ERR = { 1: 'מפתח לא תקין', 2: 'סוג מפתח לא תקין', 3: 'עוסק לא קיים', 4: 'מפתח לא קיים', 5: 'בקשות רבות מדי', 6: 'לקוח לא קיים', 7: 'הלקוח אינו יכול להיות השולח', 8: 'מזהה מוצר לא קיים', 9: 'בקבלה יש לציין תשלומים', 10: 'סכום תשלום לא תקין' };
 
-// קריאה גנרית ל-API (כל הפעולות הן PUT עם גוף JSON)
-async function api(pathName, body) {
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// קריאה גנרית ל-API (כל הפעולות הן PUT עם גוף JSON). ניסיון חוזר אוטומטי על שגיאות שרת זמניות (503/502/504/429).
+async function api(pathName, body, attempt = 0) {
   if (!haveCredentials()) throw new Error('פייפרלס לא מחובר (חסר PAPERLESS_TOKEN)');
   const res = await fetch(`${BASE}${pathName}`, {
     method: 'PUT',
@@ -35,6 +36,11 @@ async function api(pathName, body) {
   const text = await res.text();
   let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!res.ok) {
+    // שגיאת שרת זמנית (Azure מתעורר / עומס) — ננסה שוב עד 3 פעמים עם המתנה גוברת
+    if ([502, 503, 504, 429].includes(res.status) && attempt < 3) {
+      await sleep(800 * (attempt + 1));
+      return api(pathName, body, attempt + 1);
+    }
     // גוף שגיאה: { iCode, message }
     const code = data && typeof data === 'object' ? data.iCode : null;
     const msg = (data && data.message) || ERR[code] || `שגיאת פייפרלס ${res.status}`;
