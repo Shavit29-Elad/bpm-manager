@@ -2306,38 +2306,41 @@ add('GET', /^\/api\/paperless\/documents$/, async (req, res, _p, q) => {
   } catch (e) { json(res, { docs: [], error: e.message }); }
 });
 
-// GET /api/paperless/summary?from=&to= — סיכום לדף הבית של אופק: הכנסות/הוצאות/חשבוניות פתוחות + לקוחות (נגזר ממסמכי הכנסה)
+// מטמון קצר לסיכום אופק — openDeals מבצע כמה קריאות ל-API (מפה אדפטיבית), לא כדאי להריץ בכל טעינת דף.
+let _plSummaryCache = {};   // key: `${from}|${to}` → { at, data }
+const PL_SUMMARY_TTL = 3 * 60 * 1000;
+
+// GET /api/paperless/summary?from=&to= — סיכום לדף הבית של אופק: הכנסות/הוצאות/עסקאות פתוחות
 add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
   const empty = { income: 0, incomeCount: 0, expenses: 0, expenseCount: 0, openTotal: 0, openInvoices: [], clients: [], recentIncome: [], recentExpenses: [] };
   if (!paperless.haveCredentials()) return json(res, { ...empty, error: 'פייפרלס לא מחובר' });
   const to = q.to || new Date().toISOString().slice(0, 10);
   const from = q.from || (to.slice(0, 4) + '-01-01');
+  const cacheKey = `${from}|${to}`;
+  const cached = _plSummaryCache[cacheKey];
+  if (cached && (Date.now() - cached.at) < PL_SUMMARY_TTL && q.refresh !== '1') return json(res, cached.data);
   try {
     // קריאות רציפות (לא במקביל) כדי לא לחטוף חסימת-קצב מפייפרלס ("בקשות רבות מדי").
-    // חשבוניות פתוחות = חיפוש ייעודי לפי סטטוס פתוח של ה-API (עסקה+מס, טווח רחב) — לא רק ההכנסה השנתית.
+    // עסקאות פתוחות = openDeals (חשבון עסקה + חשבונית מס שאינן סגורות, מסך "עסקאות פתוחות").
     let income = [], expenses = [], open = [], partial = false;
     try { income = await paperless.incomeForRange(from, to); } catch { partial = true; }
     try { expenses = await paperless.expensesForRange(from, to); } catch { partial = true; }
-    try { open = await paperless.openInvoices(undefined, to); } catch { partial = true; }
+    try { open = await paperless.openDeals(undefined, to); } catch { partial = true; }
     const sum = (arr) => arr.reduce((s, d) => s + (Number(d.amount) || 0), 0);
-    // לקוחות — קיבוץ מסמכי ההכנסה לפי לקוח
-    const byClient = {};
-    for (const d of income) {
-      const key = d.clientId || d.clientName || '—';
-      if (!byClient[key]) byClient[key] = { id: d.clientId || null, name: d.clientName || 'ללא שם', total: 0, count: 0 };
-      byClient[key].total += Number(d.amount) || 0; byClient[key].count++;
-    }
-    const clients = Object.values(byClient).sort((a, b) => b.total - a.total);
-    json(res, {
+    // סיכום עסקאות פתוחות לפי סוג (עסקה/מס) — כמו הלשוניות בפייפרלס
+    const openByKind = { 'עסקה': 0, 'מס': 0 };
+    for (const d of open) if (openByKind[d.kind] != null) openByKind[d.kind]++;
+    const data = {
       from, to,
       income: sum(income), incomeCount: income.length,
       expenses: sum(expenses), expenseCount: expenses.length,
-      openTotal: sum(open), openInvoices: open,
-      clients,
+      openTotal: sum(open), openCount: open.length, openByKind, openInvoices: open,
       recentIncome: income.slice(0, 30),
       recentExpenses: expenses.slice(0, 30),
       error: partial ? 'חלק מהנתונים לא נטענו כרגע מפייפרלס (נסה שוב עוד רגע)' : null,
-    });
+    };
+    if (!partial) _plSummaryCache[cacheKey] = { at: Date.now(), data };
+    json(res, data);
   } catch (e) { json(res, { ...empty, from, to, error: e.message }); }
 });
 

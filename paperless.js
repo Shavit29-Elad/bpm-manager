@@ -93,6 +93,19 @@ function deriveDate(d) {
   return null;
 }
 
+// זיהוי סוג מסמך לפי תחילית מספר המסמך (ה-API לא מחזיר שדה סוג).
+// אומת מול מסך "עסקאות פתוחות" של אופק: 10xxxx=חשבון עסקה, 20xxxx=חשבונית מס,
+// 30xxx=מס-קבלה, 40xxx=קבלה, 50xxx=זיכוי. שאר התחיליות = מסמכי הוצאה/ספקים (לא רלוונטי כאן).
+function docKind(number) {
+  const n = String(number || '');
+  if (/^10\d{3,}$/.test(n)) return 'עסקה';   // חשבון עסקה
+  if (/^20\d{3,}$/.test(n)) return 'מס';     // חשבונית מס
+  if (/^30\d{3,}$/.test(n)) return 'מס-קבלה';
+  if (/^40\d{3,}$/.test(n)) return 'קבלה';
+  if (/^50\d{3,}$/.test(n)) return 'זיכוי';
+  return null;
+}
+
 // נרמול מסמך מתוצאת החיפוש.
 // שים לב לחוסר עקביות ב-API (אומת מול מסמכים אמיתיים):
 //   iAmount100 — כבר בשקלים (למשל 4720 = ₪4,720, אומת מול חשבונית #30231).
@@ -103,6 +116,7 @@ function mapDoc(d) {
   return {
     id: d.sDocumentID,
     number: d.sDocNumber,
+    kind: docKind(d.sDocNumber),         // עסקה / מס / מס-קבלה / קבלה / זיכוי (לפי תחילית המספר)
     url: d.sURL || null,
     date: deriveDate(d),                 // תאריך גזור (מספר הקצאה / נתיב URL) — ה-API לא מחזיר תאריך
     amount,                              // כולל מע"מ
@@ -115,14 +129,52 @@ function mapDoc(d) {
   };
 }
 
-// חשבוניות הכנסה פתוחות (טרם שולמו) — חשבונית עסקה (0) + חשבונית מס (1) בלבד.
-// משתמשים בסינון הסטטוס של ה-API עצמו (iStatus=1) ולא בשדה bClosed, כדי להתאים למונה של פייפרלס.
-// טווח רחב (ברירת מחדל 3 שנים אחורה) כי מסמכים פתוחים עשויים להיות ישנים; חיפוש ללא טווח מחזיר 500.
-async function openInvoices(from, to) {
-  const t = to || new Date().toISOString().slice(0, 10);
-  const f = from || ((Number(t.slice(0, 4)) - 3) + t.slice(4));
-  return searchDocuments({ docType: 2, from: f, to: t, status: 1, invoiceTypes: [0, 1] });
+// ---- עסקאות פתוחות (מסך "עסקאות פתוחות" של פייפרלס) ----
+// מה שנלמד מול הנתונים האמיתיים של אופק:
+//   • סינון הסטטוס של ה-API (iStatus) *לא עובד* — מחזיר את אותה תוצאה ל-פתוח/סגור/הכל.
+//     האות היחיד לפתוח/סגור הוא שדה bClosed בכל שורה.
+//   • חשבון עסקה (10xxxx) אינו מוחזר כלל בחיפוש הכנסה (iDocType=2) — רק בחיפוש "הכל" (iDocType=0).
+//   • לכן: מושכים iDocType=0, מסננים !closed, ומשאירים רק עסקה (10) + חשבונית מס (20).
+//     זה משחזר בדיוק את מסך "עסקאות פתוחות" (אומת: 16 עסקה + 4 מס = 20).
+//   • חיפוש iDocType=0 בטווח ארוך נכשל (503/timeout) — מפצלים את הטווח אדפטיבית.
+function dayDiff(a, b) { return Math.round((new Date(b) - new Date(a)) / 86400000); }
+function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); }
+
+// מושך את כל מסמכי "הכל" בטווח, עם פיצול אדפטיבי כשחלון נכשל (503/עומס).
+async function fetchAllDocsWindow(from, to, acc, depth = 0) {
+  try {
+    const docs = await searchDocuments({ docType: 0, from, to });
+    for (const d of docs) acc.push(d);
+  } catch (e) {
+    const span = dayDiff(from, to);
+    const transient = e.status >= 500 || e.code === 5;
+    if (span > 3 && transient && depth < 8) {
+      const mid = addDays(from, Math.floor(span / 2));
+      await sleep(400);
+      await fetchAllDocsWindow(from, mid, acc, depth + 1);
+      await sleep(400);
+      await fetchAllDocsWindow(addDays(mid, 1), to, acc, depth + 1);
+    } else { throw e; }
+  }
 }
+
+// עסקאות פתוחות = עסקה(10)+מס(20) שאינן סגורות (bClosed=false). ברירת מחדל: ~18 חודשים אחורה.
+async function openDeals(from, to) {
+  const t = to || new Date().toISOString().slice(0, 10);
+  const f = from || addDays(t, -550);
+  const acc = [];
+  await fetchAllDocsWindow(f, t, acc);
+  // הסרת כפילויות (חלונות עלולים לחפוף בקצוות) לפי מזהה מסמך
+  const seen = new Set();
+  const uniq = [];
+  for (const d of acc) { const id = d.sDocumentID; if (id && !seen.has(id)) { seen.add(id); uniq.push(d); } }
+  return uniq.map(mapDoc)
+    .filter(d => !d.closed && (d.kind === 'עסקה' || d.kind === 'מס'))
+    .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+}
+
+// תאימות לאחור
+async function openInvoices(from, to) { return openDeals(from, to); }
 // הכנסות בטווח תאריכים
 async function incomeForRange(from, to) { return searchDocuments({ docType: 2, from, to }); }
 // הוצאות בטווח תאריכים
@@ -193,7 +245,7 @@ async function verify() {
 
 export default {
   haveCredentials, verify,
-  searchDocuments, openInvoices, incomeForRange, expensesForRange,
+  searchDocuments, openInvoices, openDeals, incomeForRange, expensesForRange,
   createDocument,
   DOC_TYPE, DOC_TYPE_HE, PAY_TYPE, BASE,
 };

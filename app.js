@@ -522,6 +522,19 @@ window.doSendDoc = async (id) => {
 // סוג המערכת החשבונאית של החברה הנוכחית (greenInvoice / paperless / null)
 function companyAccounting() { return ((state.companies || []).find(x => x.id === state.company) || {}).accounting || null; }
 
+// תאריך מסמך פייפרלס לתצוגה (YYYY-MM-DD → DD/MM/YY). לחשבון עסקה התאריך מדויק-לחודש בלבד (ה-API לא מחזיר יום).
+function plDate(iso) {
+  if (!iso) return '—';
+  const [y, m, d] = String(iso).slice(0, 10).split('-');
+  return `${d}/${m}/${(y || '').slice(2)}`;
+}
+// כפתורי תצוגה/הורדה למסמך פייפרלס
+function plLinks(d) {
+  if (!d.url) return '';
+  const u = String(d.url).replace(/'/g, '%27');
+  return `<button class="btn ghost" style="padding:1px 7px;font-size:11px" onclick="previewDoc('${u}')">תצוגה 👁</button> <a href="${d.url}" target="_blank" class="btn ghost" style="padding:1px 7px;font-size:11px;text-decoration:none;white-space:nowrap">הורדה ↓</a>`;
+}
+
 // ---- דף הבית של אופק (נתונים חיים מ‑Paperless) ----
 async function renderPaperlessHome(c) {
   const curYear = new Date().getFullYear();
@@ -529,13 +542,34 @@ async function renderPaperlessHome(c) {
   c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מ‑Paperless…</div></div>`;
   const s = await api(`/api/paperless/summary?companyId=${state.company}&from=${curYear}-01-01&to=${curYear}-12-31`).catch(() => ({ error: 'שגיאת טעינה' }));
   const kpi = (lbl, val, sub, color) => `<div class="card"><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
-  const links = (d) => d.url ? ` <button class="btn ghost" style="padding:1px 8px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button> <a href="${d.url}" target="_blank" class="btn ghost" style="padding:1px 8px;font-size:11px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : '';
+  const open = s.openInvoices || [];
+  const bk = s.openByKind || {};
+  const openSub = `${bk['עסקה'] || 0} עסקה · ${bk['מס'] || 0} מס`;
+  const kindTag = (k) => k === 'מס'
+    ? '<span class="tag" style="font-size:10px;background:#e8f0ff;color:#2952cc">חשבונית מס</span>'
+    : '<span class="tag" style="font-size:10px;background:#fff2e0;color:#b26a00">חשבון עסקה</span>';
+
+  // שורת עסקה פתוחה — תאריך · לקוח · מס' · סוג · ללא מע"מ · כולל מע"מ · פעולות
+  const dealRow = (d) => `<tr>
+      <td style="white-space:nowrap">${plDate(d.date)}</td>
+      <td>${escapeHtml(d.clientName || '—')}</td>
+      <td style="white-space:nowrap">${escapeHtml(String(d.number || ''))}</td>
+      <td>${kindTag(d.kind)}</td>
+      <td style="text-align:left;white-space:nowrap">${money(d.amountExVat)}</td>
+      <td style="text-align:left;white-space:nowrap;font-weight:600">${money(d.amount)}</td>
+      <td style="white-space:nowrap">${plLinks(d)}
+        <button class="btn ghost" style="padding:1px 7px;font-size:11px" onclick='plIssueDoc("continue", ${JSON.stringify({ number: d.number, clientName: d.clientName, clientId: d.clientId, amount: d.amount, amountExVat: d.amountExVat, kind: d.kind }).replace(/'/g, "&#39;")})'>מסמך המשך</button>
+        <button class="btn ghost" style="padding:1px 7px;font-size:11px" onclick='plIssueDoc("similar", ${JSON.stringify({ number: d.number, clientName: d.clientName, clientId: d.clientId, amount: d.amount, amountExVat: d.amountExVat, kind: d.kind }).replace(/'/g, "&#39;")})'>מסמך דומה</button>
+      </td></tr>`;
+
   const docRow = (d) => `<div style="display:flex;gap:10px;align-items:center;padding:6px 10px;border-top:1px solid var(--line);font-size:13px">
-      <span style="width:80px;white-space:nowrap">#${escapeHtml(String(d.number || ''))}</span>
-      <span style="flex:1">${escapeHtml(d.clientName || '—')}${d.taxConfirm ? ` <span class="muted" style="font-size:11px">· הקצאה ${escapeHtml(String(d.taxConfirm))}</span>` : ''}</span>
+      <span style="width:70px;white-space:nowrap">#${escapeHtml(String(d.number || ''))}</span>
+      <span style="width:70px;white-space:nowrap" class="muted">${plDate(d.date)}</span>
+      <span style="flex:1">${escapeHtml(d.clientName || '—')}</span>
       <span style="white-space:nowrap;font-weight:600">${money(d.amount)}</span>
       ${d.closed ? '<span class="tag invoiced" style="font-size:10px">שולם</span>' : '<span class="tag miss" style="font-size:10px">פתוח</span>'}
-      ${links(d)}</div>`;
+      ${plLinks(d)}</div>`;
+
   c.innerHTML = `
     <div class="panel">
       <div class="row-between"><div><h2>דף הבית — ${escapeHtml(compName)}</h2><span class="muted">נתונים חיים מ‑Paperless · שנת ${curYear}</span></div></div>
@@ -543,18 +577,19 @@ async function renderPaperlessHome(c) {
       <div class="cards" style="margin-top:14px">
         ${kpi('הכנסה השנה', money(s.income || 0), `${s.incomeCount || 0} מסמכים`, 'var(--accent2)')}
         ${kpi('הוצאות השנה', money(s.expenses || 0), `${s.expenseCount || 0} מסמכים`, 'var(--danger)')}
-        ${kpi('חשבוניות פתוחות', (s.openInvoices || []).length, 'ממתינות לתשלום', 'var(--warn)')}
-        ${kpi('סכום פתוח', money(s.openTotal || 0), 'סה"כ פתוח', 'var(--warn)')}
+        ${kpi('עסקאות פתוחות', open.length, openSub, 'var(--warn)')}
+        ${kpi('סכום פתוח', money(s.openTotal || 0), 'כולל מע"מ', 'var(--warn)')}
       </div>
-      <p class="muted" style="font-size:12px;margin-top:8px">הסכומים מגיעים ישירות מ‑Paperless. אם סכום נראה לא נכון — לחץ "תצוגה" על מסמך כדי לוודא מול המקור, ואכוונן.</p>
     </div>
     <div class="panel">
-      <h3>חשבוניות פתוחות (${(s.openInvoices || []).length})</h3>
-      ${(s.openInvoices || []).length ? (s.openInvoices || []).map(docRow).join('') : '<div class="empty">אין חשבוניות פתוחות.</div>'}
-    </div>
-    <div class="panel">
-      <h3>לקוחות (${(s.clients || []).length})</h3>
-      ${(s.clients || []).length ? (s.clients || []).slice(0, 20).map(cl => `<div style="display:flex;gap:10px;align-items:center;padding:6px 10px;border-top:1px solid var(--line);font-size:13px"><span style="flex:1">${escapeHtml(cl.name)}</span><span class="muted">${cl.count} מסמכים</span><span style="font-weight:600;white-space:nowrap">${money(cl.total)}</span></div>`).join('') : '<div class="empty">אין לקוחות עדיין.</div>'}
+      <div class="row-between"><h3 style="margin:0">עסקאות פתוחות (${open.length})</h3><span class="muted" style="font-size:12px">חשבון עסקה + חשבונית מס שטרם נסגרו</span></div>
+      ${open.length ? `<div style="overflow-x:auto"><table class="grid" style="margin-top:10px;font-size:13px">
+        <thead><tr><th>תאריך</th><th>שם לקוח</th><th>מס׳</th><th>סוג</th><th>ללא מע"מ</th><th>כולל מע"מ</th><th>פעולות</th></tr></thead>
+        <tbody>${open.map(dealRow).join('')}</tbody>
+        <tfoot><tr style="background:var(--panel2);font-weight:600"><td colspan="4">סה"כ ${open.length} עסקאות פתוחות</td><td style="text-align:left">${money(open.reduce((t, d) => t + (d.amountExVat || 0), 0))}</td><td style="text-align:left">${money(s.openTotal || 0)}</td><td></td></tr></tfoot>
+      </table></div>
+      <p class="muted" style="font-size:11px;margin-top:8px">התאריך של חשבון עסקה מדויק-לחודש (Paperless אינו מספק יום מדויק ב-API). אין עמודת "פירוט" כי ה-API אינו מחזיר את שורות המסמך — לחץ "תצוגה" לצפייה במסמך המלא.</p>`
+        : '<div class="empty">אין עסקאות פתוחות.</div>'}
     </div>
     <div class="panel">
       <h3>מסמכי הכנסה אחרונים</h3>
@@ -564,6 +599,12 @@ async function renderPaperlessHome(c) {
       <h3>מסמכי הוצאה אחרונים</h3>
       ${(s.recentExpenses || []).length ? (s.recentExpenses || []).slice(0, 15).map(docRow).join('') : '<div class="empty">אין מסמכים.</div>'}
     </div>`;
+}
+
+// מסמך המשך / מסמך דומה — יפותח בשלב הבא (יצירת מסמך דרך Paperless invoices/create)
+function plIssueDoc(mode, d) {
+  const label = mode === 'continue' ? 'מסמך המשך' : 'מסמך דומה';
+  alert(`${label} עבור ${d.clientName || ''} (מסמך ${d.number || ''}) — יופעל בשלב הבא. Paperless אינו מחזיר את שורות המסמך המקורי, כך שתצטרך להזין את שורות המסמך ידנית.`);
 }
 
 async function renderHome(c) {
