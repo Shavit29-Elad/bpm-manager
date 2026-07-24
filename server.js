@@ -16,7 +16,7 @@ import greenInvoice from './greenInvoice.js';
 import paperless from './paperless.js';
 import { extractDescription, EXTRACT_VERSION } from './pdfDesc.js';
 import { parseBank, extractAccountBalance } from './bankParser.js';
-import { matchCredits, matchDebits, attachReceipts } from './bankMatch.js';
+import { matchCredits, matchDebits, attachReceipts, nameMatch } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
@@ -1998,6 +1998,7 @@ async function runBankMatchBg(companyId) {
       }
       if (row.matchStatus === 'auto') matchedCount++;
     });
+    applyGroupRules(db2, companyId);   // שיוך-אוטומטי לפי שם (למשל גלי בראון → דיגיטל)
     db2.bankMatchDone = db2.bankMatchDone || {};
     db2.bankMatchDone[companyId] = new Date().toISOString();
     save(db2);
@@ -2072,6 +2073,7 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
     };
     db.bankTx.push(rec); bySig.set(sig, rec); companyRows.push(rec); added++;
   }
+  applyGroupRules(db, companyId);   // שיוך-אוטומטי לפי שם (מיידית, מתוך nameHint)
   save(db);
   // התאמה מול חשבונית ירוקה (הכנסות/קבלות/הוצאות) רצה ברקע — לא חוסמת את התגובה
   const matchBg = giEnabled(companyId);
@@ -2244,6 +2246,40 @@ add('DELETE', /^\/api\/tx-groups\/([^/]+)$/, (req, res, params) => {
   for (const t of (db.bankTx || [])) if (t.group === params[0]) t.group = null;
   save(db);
   json(res, { ok: true });
+});
+
+// ===== כללי שיוך-אוטומטי לפי שם לקוח =====
+// GET /api/tx-group-rules?companyId=
+add('GET', /^\/api\/tx-group-rules$/, (req, res, _p, q) => {
+  const db = load();
+  if (ensureRulesSeeded(db)) save(db);
+  json(res, { ok: true, rules: (db.txGroupRules || []).filter(r => r.companyId === (q.companyId || null)) });
+});
+// POST /api/tx-group-rules { companyId, name, groupId } — מוסיף כלל ומחיל מיד על תנועות קיימות
+add('POST', /^\/api\/tx-group-rules$/, (req, res, _p, _q, body) => {
+  const cid = body?.companyId || null, name = String(body?.name || '').trim(), groupId = body?.groupId || null;
+  if (!cid || !name || !groupId) return json(res, { error: 'חסר שם לקוח או קבוצה' }, 400);
+  const db = load();
+  db.txGroupRules = db.txGroupRules || [];
+  const rule = { id: id('txr'), companyId: cid, name, groupId };
+  db.txGroupRules.push(rule);
+  const applied = applyGroupRules(db, cid);
+  save(db);
+  json(res, { ok: true, rule, applied });
+});
+// DELETE /api/tx-group-rules/:id
+add('DELETE', /^\/api\/tx-group-rules\/([^/]+)$/, (req, res, params) => {
+  const db = load();
+  db.txGroupRules = (db.txGroupRules || []).filter(x => x.id !== params[0]);
+  save(db);
+  json(res, { ok: true });
+});
+// POST /api/tx-group-rules/apply { companyId } — החלה רטרואקטיבית על תנועות קיימות
+add('POST', /^\/api\/tx-group-rules\/apply$/, (req, res, _p, _q, body) => {
+  const db = load();
+  const applied = applyGroupRules(db, body?.companyId || null);
+  save(db);
+  json(res, { ok: true, applied });
 });
 
 // GET /api/group-summary?companyId=&year=YYYY
@@ -2619,11 +2655,34 @@ function ensureGroupsSeeded(db) {
   for (const g of MOSHE_DEFAULT_GROUPS) db.txGroups.push({ id: 'txg_' + g.key, companyId: 'co_moshe', name: g.name, key: g.key, builtin: true });
   return true;
 }
+// כלל התחלתי: תנועות של "גלי בראון" משויכות אוטומטית ל"דיגיטל"
+function ensureRulesSeeded(db) {
+  db.txGroupRules = db.txGroupRules || [];
+  if (db.txGroupRules.some(r => r.companyId === 'co_moshe')) return false;
+  db.txGroupRules.push({ id: 'txr_gali', companyId: 'co_moshe', name: 'גלי בראון ייצוג וניהול סושיאל בע״מ', groupId: 'txg_digital' });
+  return true;
+}
+// החלת כללי שיוך-אוטומטי: מציב קבוצה על תנועות שאין להן קבוצה ותואמות שם לקוח בכלל. לא נוגע בשיוך קיים.
+function applyGroupRules(db, companyId) {
+  const rules = (db.txGroupRules || []).filter(r => r.companyId === companyId);
+  if (!rules.length) return 0;
+  const valid = new Set((db.txGroups || []).filter(g => g.companyId === companyId).map(g => g.id));
+  let changed = 0;
+  for (const t of (db.bankTx || [])) {
+    if (companyId && t.companyId !== companyId) continue;
+    if (t.group) continue;                       // לא דורסים שיוך קיים
+    const names = [t.nameHint, t.description, ...((t.matchedInvoices || []).map(i => i && i.clientName))].filter(Boolean);
+    const rule = rules.find(r => valid.has(r.groupId) && names.some(n => nameMatch(n, r.name)));
+    if (rule) { t.group = rule.groupId; changed++; }
+  }
+  return changed;
+}
 
 function runMigrations() {
   const db = load();
   let changed = false;
   if (ensureGroupsSeeded(db)) { changed = true; console.log('מיגרציה: נזרעו קבוצות שיוך ברירת-מחדל למשה כורסיה'); }
+  if (ensureRulesSeeded(db)) { changed = true; console.log('מיגרציה: נזרע כלל שיוך-אוטומטי (גלי בראון → דיגיטל)'); }
   // הסרת חשבון ההתחברות 'iris' שנוצר בטעות (איריס היא סוכנת בצוות, לא משתמשת אנושית)
   const before = (db.users || []).length;
   db.users = (db.users || []).filter(u => !(u.username === 'iris' && u.role === 'viewer'));

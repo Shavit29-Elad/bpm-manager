@@ -10,7 +10,7 @@ function normName(s) {
     .replace(/בע["'׳]?מ/g, '').replace(/\(.*?\)/g, '')
     .replace(/[.,"'׳\-]/g, ' ').replace(/\s+/g, ' ').trim();
 }
-function nameMatch(a, b) {
+export function nameMatch(a, b) {
   const x = normName(a), y = normName(b);
   if (!x || !y || x.length < 2 || y.length < 2) return false;
   if (x === y || x.includes(y) || y.includes(x)) return true;

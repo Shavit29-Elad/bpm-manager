@@ -3708,7 +3708,7 @@ function bizDocRow(label, slot, meta) {
 async function renderBusiness(c) {
   const p = await api('/api/business-profile');
   _biz = p;
-  if (mosheBank()) await loadTxGroups();
+  if (mosheBank()) { await loadTxGroups(); try { _txGroupRules = (await api('/api/tx-group-rules')).rules || []; } catch { _txGroupRules = []; } }
   const comp = (state.companies || []).find(x => x.id === state.company) || {};
   const mgr = (i, f) => ((p.managers && p.managers[i]) || {})[f] || '';
   const mgrFile = (i, k) => (((p.managers && p.managers[i]) || {}).files || {})[k] || null;
@@ -3809,8 +3809,46 @@ async function renderBusiness(c) {
       <button class="btn ghost" onclick="bizRenewTaxAuthorityToday()">✓ חידשתי היום במורנינג</button>
     </div>
   </div>
-  ${mosheBank() ? groupsMgmtPanelHtml() : ''}`;
+  ${mosheBank() ? groupsMgmtPanelHtml() : ''}
+  ${mosheBank() ? rulesMgmtPanelHtml() : ''}`;
 }
+// ---- ניהול קבוצות שיוך + כללי שיוך-אוטומטי (רק אצל משה) ----
+let _txGroupRules = [];
+function rulesMgmtPanelHtml() {
+  const gname = (gid) => { const g = (_txGroups || []).find(x => x.id === gid); return g ? g.name : '—'; };
+  const rows = (_txGroupRules || []).map(r => `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+    <span style="flex:1;min-width:150px;font-size:13px">${escapeHtml(r.name)}</span>
+    <span style="font-size:12px">→</span><span class="tag match" style="font-size:11px">${escapeHtml(gname(r.groupId))}</span>
+    <button class="btn ghost" style="padding:3px 10px;font-size:12px;color:var(--danger)" onclick="deleteRule('${r.id}')">מחק</button>
+  </div>`).join('');
+  const groupOpts = (_txGroups || []).map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  return `<div class="panel">
+    <div class="row-between" style="margin:0"><h3 style="margin:0">🎯 שיוך אוטומטי לפי שם לקוח</h3></div>
+    <p class="muted" style="font-size:12.5px;margin:8px 0">כל תנועת בנק של הלקוח תשויך אוטומטית לקבוצה שנבחרה — עדיין צריך לאשר אותה ידנית. לדוגמה: «גלי בראון» → דיגיטל.</p>
+    <div style="margin-top:6px">${rows || '<div class="muted">אין כללים.</div>'}</div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="newRuleName" placeholder="שם הלקוח…" style="flex:1;min-width:170px;max-width:260px;padding:6px 9px;font-size:13px">
+      <span style="font-size:13px">→</span>
+      <select id="newRuleGroup" style="padding:6px 9px;font-size:13px">${groupOpts}</select>
+      <button class="btn primary" style="padding:5px 14px" onclick="addRule()">＋ הוסף כלל</button>
+    </div>
+  </div>`;
+}
+window.addRule = async () => {
+  const name = (document.getElementById('newRuleName')?.value || '').trim();
+  const groupId = document.getElementById('newRuleGroup')?.value;
+  if (!name || !groupId) return;
+  const r = await fetch('/api/tx-group-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, name, groupId }) }).then(x => x.json()).catch(() => null);
+  if (r && r.error) { alert(r.error); return; }
+  if (r && r.applied != null) { const el = document.getElementById('bizMsg'); if (el) { el.textContent = `הכלל נוסף · שויכו ${r.applied} תנועות קיימות`; setTimeout(() => { el.textContent = ''; }, 3500); } }
+  renderBusiness($('#content'));
+};
+window.deleteRule = async (rid) => {
+  if (!confirm('למחוק את כלל השיוך האוטומטי? (השיוכים שכבר בוצעו יישארו)')) return;
+  const r = await fetch('/api/tx-group-rules/' + rid, { method: 'DELETE' }).then(x => x.json()).catch(() => null);
+  if (r && r.error) { alert(r.error); return; }
+  renderBusiness($('#content'));
+};
 // ---- ניהול קבוצות שיוך (רק אצל משה) ----
 function groupsMgmtPanelHtml() {
   const rows = (_txGroups || []).map(g => {

@@ -22,6 +22,7 @@ const EMPTY = {
   invoices: [],    // חשבוניות/קבלות שהופקו
   bankTx: [],      // תנועות בנק להתאמה
   txGroups: [],    // קבוצות שיוך לתנועות בנק (מוזיקה/דיגיטל/שוטפות/אחר): { id, companyId, name, key?, builtin? }
+  txGroupRules: [],// כללי שיוך-אוטומטי לפי שם לקוח: { id, companyId, name, groupId } — מציב קבוצה על תנועה תואמת שאין לה קבוצה
   fixedExpenses: [],// הוצאות קבועות
   assets: [],      // רכבים/הלוואות/ביטוחים - תוקף והתראות
   chats: {},       // שיחות עם דמויות הצוות: { memberId: [ {role, content, at} ] }
