@@ -661,9 +661,57 @@ async function renderHome(c) {
       </div>
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
     </div>
+    ${mosheBank() ? '<div class="panel" id="grpSummaryWrap"><div class="empty">טוען סיכום מוזיקה / דיגיטל…</div></div>' : ''}
     <div class="panel" id="openInvWrap"><div class="empty">טוען חשבוניות פתוחות…</div></div>`;
   loadOpenInvoices();
+  if (mosheBank()) loadGroupSummary();
   // חלק "מסמכים" עבר ללשונית "מסמכים ולקוחות" (renderClients)
+}
+
+// ---- סיכום מוזיקה/דיגיטל בדף הבית (רק אצל משה) — רווח נטו שנתי + חודשי לפי שיוך תנועות הבנק ----
+let _grpYear = null;
+window.setGrpYear = (y) => { _grpYear = y; loadGroupSummary(); };
+async function loadGroupSummary() {
+  const wrap = document.getElementById('grpSummaryWrap'); if (!wrap) return;
+  const year = _grpYear || new Date().getFullYear();
+  const r = await api(`/api/group-summary?companyId=${state.company}&year=${year}`).catch(() => null);
+  if (!r || !r.ok) { wrap.innerHTML = '<div class="empty">שגיאה בטעינת הסיכום</div>'; return; }
+  wrap.innerHTML = groupSummaryHtml(r);
+}
+function groupSummaryHtml(r) {
+  const year = r.year;
+  const byKey = {}; (r.groups || []).forEach(g => { if (g.key) byKey[g.key] = g; });
+  const music = byKey.music, digital = byKey.digital;
+  const curY = new Date().getFullYear();
+  const years = []; for (let y = curY + 1; y >= curY - 4; y--) years.push(y);
+  const yearSel = `<select onchange="setGrpYear(this.value)" style="padding:5px 9px;font-size:13px">${years.map(y => `<option value="${y}" ${String(y) === String(year) ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
+  const card = (lbl, val, color) => `<div class="card" style="padding:11px 14px"><div class="label" style="font-size:12px">${lbl}</div><div style="font-size:19px;font-weight:700;color:${color || 'var(--text)'}">${money(val)}</div></div>`;
+  const kpis = `<div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-top:12px">
+    ${card('הכנסות מוזיקה', music ? music.totalIncome : 0, 'var(--accent2)')}
+    ${card('הוצאות מוזיקה', music ? music.totalExpense : 0, 'var(--danger)')}
+    ${card('הכנסות דיגיטל', digital ? digital.totalIncome : 0, 'var(--accent2)')}
+    ${card('הוצאות דיגיטל', digital ? digital.totalExpense : 0, 'var(--danger)')}
+  </div>`;
+  const section = (g, emoji) => {
+    if (!g) return '';
+    const rows = g.months.map((m, i) => (!m.income && !m.expense) ? '' : `<tr>
+      <td style="white-space:nowrap">${MONTHS_HE[i]} ${year}</td>
+      <td style="color:var(--accent2);font-weight:600">${money(m.income)}</td>
+      <td style="color:var(--danger);font-weight:600">${money(m.expense)}</td>
+      <td style="font-weight:700;color:${m.profit >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(m.profit)}</td></tr>`).join('');
+    const totalRow = `<tr style="border-top:2px solid var(--line);font-weight:800">
+      <td>סה"כ ${year}</td>
+      <td style="color:var(--accent2)">${money(g.totalIncome)}</td>
+      <td style="color:var(--danger)">${money(g.totalExpense)}</td>
+      <td style="color:${g.totalProfit >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(g.totalProfit)}</td></tr>`;
+    const unlinked = (g.unlinkedIncome || g.unlinkedExpense) ? `<div class="muted" style="font-size:11.5px;margin-top:6px">⚠️ תנועות ששויכו לקבוצה אך בלי מסמך (לא נכללות בנטו): הכנסות ${money(g.unlinkedIncome)} · הוצאות ${money(g.unlinkedExpense)}</div>` : '';
+    return `<details open style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;font-size:15px">${emoji} ${escapeHtml(g.name)} — ${year} · רווח ${money(g.totalProfit)}</summary>
+      <div style="overflow-x:auto;margin-top:8px"><table style="min-width:440px;font-size:13px"><thead><tr><th>חודש</th><th>הכנסות</th><th>הוצאות</th><th>רווח</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="muted">אין נתונים משויכים לשנה זו.</td></tr>'}${totalRow}</tbody></table></div>${unlinked}</details>`;
+  };
+  return `<div class="row-between"><div><h2>סיכום מוזיקה / דיגיטל — ${year}</h2><span class="muted">רווח נטו (ללא מע"מ) לפי שיוך תנועות הבנק למסמכים</span></div><div style="white-space:nowrap">שנה: ${yearSel}</div></div>
+    ${kpis}
+    ${section(music, '🎵')}
+    ${section(digital, '💻')}`;
 }
 
 // ---- חשבוניות פתוחות בדף הבית (כמו "חיובים קרובים" בחשבונית ירוקה) ----
@@ -3660,6 +3708,7 @@ function bizDocRow(label, slot, meta) {
 async function renderBusiness(c) {
   const p = await api('/api/business-profile');
   _biz = p;
+  if (mosheBank()) await loadTxGroups();
   const comp = (state.companies || []).find(x => x.id === state.company) || {};
   const mgr = (i, f) => ((p.managers && p.managers[i]) || {})[f] || '';
   const mgrFile = (i, k) => (((p.managers && p.managers[i]) || {}).files || {})[k] || null;
@@ -3759,8 +3808,49 @@ async function renderBusiness(c) {
       <button class="btn primary" onclick="bizSaveTaxAuthority()">💾 שמור</button>
       <button class="btn ghost" onclick="bizRenewTaxAuthorityToday()">✓ חידשתי היום במורנינג</button>
     </div>
+  </div>
+  ${mosheBank() ? groupsMgmtPanelHtml() : ''}`;
+}
+// ---- ניהול קבוצות שיוך (רק אצל משה) ----
+function groupsMgmtPanelHtml() {
+  const rows = (_txGroups || []).map(g => {
+    const locked = g.key === 'music' || g.key === 'digital';
+    return `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
+      <input value="${escapeHtml(g.name)}" id="grpname_${g.id}" style="flex:1;max-width:240px;padding:5px 8px;font-size:13px">
+      <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="saveGroupName('${g.id}')">שמור שם</button>
+      ${locked ? '<span class="muted" style="font-size:11.5px">קבועה</span>' : `<button class="btn ghost" style="padding:3px 10px;font-size:12px;color:var(--danger)" onclick="deleteGroup('${g.id}','${escapeHtml(g.name).replace(/'/g, '')}')">מחק</button>`}
+    </div>`;
+  }).join('');
+  return `<div class="panel">
+    <div class="row-between" style="margin:0"><h3 style="margin:0">🗂️ קבוצות שיוך (בנק)</h3></div>
+    <p class="muted" style="font-size:12.5px;margin:8px 0">קבוצות לשיוך תנועות בנק בהתאמת הבנק. «מוזיקה» ו«דיגיטל» קבועות (דף הבית מסתמך עליהן). אפשר להוסיף/לערוך/למחוק קבוצות נוספות.</p>
+    <div style="margin-top:6px">${rows || '<div class="muted">אין קבוצות.</div>'}</div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <input id="newGroupName" placeholder="שם קבוצה חדשה…" style="flex:1;max-width:240px;padding:6px 9px;font-size:13px">
+      <button class="btn primary" style="padding:5px 14px" onclick="addGroup()">＋ הוסף קבוצה</button>
+    </div>
   </div>`;
 }
+window.addGroup = async () => {
+  const name = (document.getElementById('newGroupName')?.value || '').trim();
+  if (!name) return;
+  const r = await fetch('/api/tx-groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, name }) }).then(x => x.json()).catch(() => null);
+  if (r && r.error) { alert(r.error); return; }
+  renderBusiness($('#content'));
+};
+window.saveGroupName = async (gid) => {
+  const name = (document.getElementById('grpname_' + gid)?.value || '').trim();
+  if (!name) return;
+  const r = await fetch(`/api/tx-groups/${gid}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }).then(x => x.json()).catch(() => null);
+  if (r && r.error) { alert(r.error); return; }
+  const el = document.getElementById('bizMsg'); if (el) { el.textContent = 'שם הקבוצה נשמר ✓'; setTimeout(() => { el.textContent = ''; }, 2000); }
+};
+window.deleteGroup = async (gid, name) => {
+  if (!confirm(`למחוק את הקבוצה "${name}"? השיוך יוסר מהתנועות שסומנו בה.`)) return;
+  const r = await fetch(`/api/tx-groups/${gid}`, { method: 'DELETE' }).then(x => x.json()).catch(() => null);
+  if (r && r.error) { alert(r.error); return; }
+  renderBusiness($('#content'));
+};
 window.bizSaveTaxAuthority = async () => {
   const renewed = (document.getElementById('ta_renewed')?.value || '').trim();
   const days = Number(document.getElementById('ta_days')?.value) || 90;
@@ -4282,6 +4372,26 @@ async function bankAction(id, body) {
   const tx = r && r.tx;
   if (tx) { const i = _bankList.findIndex(t => t.id === id); if (i >= 0) _bankList[i] = tx; renderBankBody(); }
 }
+// ---- קבוצות שיוך (מוזיקה/דיגיטל/…) — אך ורק אצל משה כורסיה ----
+let _txGroups = [];
+const mosheBank = () => state.company === 'co_moshe';
+async function loadTxGroups() {
+  if (!mosheBank()) { _txGroups = []; return; }
+  try { const r = await api('/api/tx-groups'); _txGroups = (r && r.groups) || []; } catch { _txGroups = []; }
+}
+function groupSelect(t) {
+  const opts = (_txGroups || []).map(g => `<option value="${g.id}" ${t.group === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('');
+  const need = !t.group;
+  return `<select onchange="setBankGroup('${t.id}', this.value)" title="קבוצת שיוך" style="padding:4px 6px;font-size:12px;max-width:132px;${need ? 'border:1px solid var(--danger)' : ''}"><option value="">— קבוצה —</option>${opts}</select>`;
+}
+// חסימת אישור בלי שיוך לקבוצה (רק אצל משה) — בדיקה בצד הלקוח לפני שליחה לשרת
+function bankGroupOk(id) {
+  if (!mosheBank()) return true;
+  const t = (_bankList || []).find(x => x.id === id);
+  if (t && !t.group) { alert('יש לבחור קבוצה (מוזיקה / דיגיטל / הוצאות שוטפות / אחר) לפני אישור התנועה.'); return false; }
+  return true;
+}
+window.setBankGroup = (id, val) => bankAction(id, { group: val });
 window.rematchBank = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'מרענן…'; }
   const r = await fetch(`/api/bank/rematch?companyId=${state.company}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
@@ -4292,9 +4402,16 @@ window.rematchBank = async (btn) => {
   alert(`רועננו ${r.updated ?? 0} תנועות חובה — במצב "לא מותאם" עם הצעות לאישור ידני (ללא התאמה אוטומטית, לפי סכום זהה + תאריך).`);
 };
 window.approveAllStrong = async (btn) => {
-  const strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
+  let strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
   if (!strong.length) { alert('אין התאמות מדויקות שממתינות לאישור בתצוגה הנוכחית.'); return; }
-  if (!confirm(`לאשר ${strong.length} התאמות מדויקות (סכום זהה או מספר חשבונית)?`)) return;
+  // אצל משה — אי אפשר לאשר בלי שיוך לקבוצה; מדלגים על שורות ללא קבוצה ומתריעים
+  if (mosheBank()) {
+    const missing = strong.filter(t => !t.group).length;
+    strong = strong.filter(t => t.group);
+    if (!strong.length) { alert(`יש ${missing} התאמות מדויקות ללא שיוך לקבוצה — שייך קבוצה (מוזיקה/דיגיטל/…) לפני אישור.`); return; }
+    if (missing && !confirm(`${missing} התאמות ללא קבוצה ידלגו (יש לשייך אותן ידנית). לאשר ${strong.length} שכבר משויכות?`)) return;
+    else if (!missing && !confirm(`לאשר ${strong.length} התאמות מדויקות?`)) return;
+  } else if (!confirm(`לאשר ${strong.length} התאמות מדויקות (סכום זהה או מספר חשבונית)?`)) return;
   if (btn) { btn.disabled = true; btn.textContent = 'מאשר…'; }
   for (const t of strong) {
     const r = await fetch(`/api/bank/${t.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual' }) }).then(x => x.json()).catch(() => null);
@@ -4308,6 +4425,7 @@ async function renderBank(c, soft) {
   const all = await api(`/api/bank?companyId=${state.company}`);
   _bankList = all;
   _bankBalance = await api(`/api/bank/balance?companyId=${state.company}`).catch(() => null);
+  await loadTxGroups();
   const dir = state.bankFilter || 'credit';
   const rows = bankVisibleRows();
   const summary = `<div id="bankSummary" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(125px,1fr));margin-top:12px;gap:12px">${bankSummaryHtml(rows)}</div>`;
@@ -4315,10 +4433,10 @@ async function renderBank(c, soft) {
   const bs = state.bankSort || { key: 'date', dir: 'desc' };
   const th = (key, label) => { const on = bs.key === key; const arw = on ? (bs.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'; return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="setBankSort('${key}')">${label}<span class="muted" style="font-size:11px">${arw}</span></th>`; };
   const p = (label) => `<th style="white-space:nowrap">${label}</th>`;
-  const table = rows.length ? `<div style="overflow-x:auto;margin-top:14px"><table style="min-width:1120px;font-size:13px">
+  const table = rows.length ? `<div style="overflow-x:auto;margin-top:14px"><table style="min-width:${mosheBank() ? 1270 : 1120}px;font-size:13px">
     <thead><tr>
       ${th('date', 'תאריך')}${th('amount', 'סכום בבנק')}${p('סכום חשבונית')}${p('ניכוי במקור')}${th('name', 'שם עסק')}
-      ${p('חשבונית מס / מס-קבלה')}${p(dir === 'debit' ? 'תיאור החשבונית' : 'קבלה')}${p('הערות')}${p('אישור')}
+      ${p('חשבונית מס / מס-קבלה')}${p(dir === 'debit' ? 'תיאור החשבונית' : 'קבלה')}${mosheBank() ? p('קבוצה') : ''}${p('הערות')}${p('אישור')}
     </tr></thead><tbody id="bankBody">${rows.map(bankTr).join('')}</tbody></table></div>`
     : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
   c.innerHTML = `<div class="panel">
@@ -4411,6 +4529,7 @@ function bankTr(t) {
     <td>${biz}</td>
     <td>${invNo}</td>
     <td>${recNo}</td>
+    ${mosheBank() ? `<td>${groupSelect(t)}</td>` : ''}
     <td>${notesInput}</td>
     <td style="white-space:nowrap"><div style="display:flex;gap:5px;flex-wrap:wrap">${action}${incomeBtn}${linkBtn}</div></td>
   </tr>`;
@@ -4432,8 +4551,8 @@ function invChip(inv) {
     ${receipt}</div>`;
 }
 // פעולות מתעדכנות במקום (בלי לרנדר מחדש את כל הטבלה ובלי לקפוץ למעלה)
-window.matchBank = (id, j) => bankAction(id, { matchStatus: 'manual', matchedInvoices: [JSON.parse(decodeURIComponent(j))] });
-window.confirmBank = (id) => bankAction(id, { matchStatus: 'manual' });
+window.matchBank = (id, j) => { if (!bankGroupOk(id)) return; bankAction(id, { matchStatus: 'manual', matchedInvoices: [JSON.parse(decodeURIComponent(j))] }); };
+window.confirmBank = (id) => { if (!bankGroupOk(id)) return; bankAction(id, { matchStatus: 'manual' }); };
 window.unmatchBank = (id) => bankAction(id, { matchStatus: 'unmatched', matchedInvoices: [] });
 window.setBankIgnore = (id, ig) => bankAction(id, { matchStatus: ig ? 'ignored' : 'unmatched' });
 window.saveBankNotes = (id, val) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: val }) });

@@ -21,6 +21,7 @@ const EMPTY = {
   contractors: [], // קבלנים
   invoices: [],    // חשבוניות/קבלות שהופקו
   bankTx: [],      // תנועות בנק להתאמה
+  txGroups: [],    // קבוצות שיוך לתנועות בנק (מוזיקה/דיגיטל/שוטפות/אחר): { id, companyId, name, key?, builtin? }
   fixedExpenses: [],// הוצאות קבועות
   assets: [],      // רכבים/הלוואות/ביטוחים - תוקף והתראות
   chats: {},       // שיחות עם דמויות הצוות: { memberId: [ {role, content, at} ] }

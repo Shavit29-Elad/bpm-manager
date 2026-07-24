@@ -2166,6 +2166,11 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
       return json(res, { error: `החשבונית #${clash.number || ''} כבר משויכת לתנועת בנק אחרת (${o.date} · ${o.absAmount}). כדי לשייך בכל זאת, סמן "אפשר לבחור גם חשבוניות שכבר משויכות".` }, 409);
     }
   }
+  if (body.group !== undefined) t.group = body.group || null;
+  // חובת שיוך לקבוצה לפני אישור תנועה — אך ורק אצל משה כורסיה
+  if (body.matchStatus === 'manual' && t.companyId === 'co_moshe' && !t.group) {
+    return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה (מוזיקה / דיגיטל / הוצאות שוטפות / אחר).' }, 400);
+  }
   if (body.matchStatus) t.matchStatus = body.matchStatus;
   if (body.matchedInvoices !== undefined) t.matchedInvoices = body.matchedInvoices;
   if (body.notes !== undefined) t.notes = body.notes;
@@ -2189,6 +2194,92 @@ add('DELETE', /^\/api\/bank$/, (req, res, _p, q) => {
   db.bankTx = (db.bankTx || []).filter(t => q.companyId && t.companyId !== q.companyId);
   save(db);
   json(res, { ok: true });
+});
+
+// ================= קבוצות שיוך לתנועות בנק (מוזיקה/דיגיטל/שוטפות/אחר) =================
+// GET /api/tx-groups?companyId=
+add('GET', /^\/api\/tx-groups$/, (req, res, _p, q) => {
+  const db = load();
+  if (ensureGroupsSeeded(db)) save(db);
+  const cid = q.companyId || null;
+  json(res, { ok: true, groups: (db.txGroups || []).filter(g => g.companyId === cid) });
+});
+// POST /api/tx-groups { companyId, name }
+add('POST', /^\/api\/tx-groups$/, (req, res, _p, _q, body) => {
+  const cid = body?.companyId || null;
+  const name = String(body?.name || '').trim();
+  if (!cid || !name) return json(res, { error: 'חסר שם קבוצה' }, 400);
+  const db = load();
+  db.txGroups = db.txGroups || [];
+  const g = { id: id('txg'), companyId: cid, name };
+  db.txGroups.push(g);
+  save(db);
+  json(res, { ok: true, group: g });
+});
+// PUT /api/tx-groups/:id { name }
+add('PUT', /^\/api\/tx-groups\/([^/]+)$/, (req, res, params, _q, body) => {
+  const db = load();
+  const g = (db.txGroups || []).find(x => x.id === params[0]);
+  if (!g) return json(res, { error: 'לא נמצא' }, 404);
+  const name = String(body?.name || '').trim();
+  if (name) g.name = name;
+  save(db);
+  json(res, { ok: true, group: g });
+});
+// DELETE /api/tx-groups/:id  — לא מוחקים את מוזיקה/דיגיטל (הבית תלוי בהן); מנקים את השיוך מהתנועות
+add('DELETE', /^\/api\/tx-groups\/([^/]+)$/, (req, res, params) => {
+  const db = load();
+  const g = (db.txGroups || []).find(x => x.id === params[0]);
+  if (!g) return json(res, { ok: true });
+  if (g.key === 'music' || g.key === 'digital') return json(res, { error: 'לא ניתן למחוק את קבוצת מוזיקה/דיגיטל' }, 400);
+  db.txGroups = (db.txGroups || []).filter(x => x.id !== params[0]);
+  for (const t of (db.bankTx || [])) if (t.group === params[0]) t.group = null;
+  save(db);
+  json(res, { ok: true });
+});
+
+// GET /api/group-summary?companyId=&year=YYYY
+// סיכום נטו (ללא מע"מ) לפי קבוצה וחודש: לתנועות משויכות-לקבוצה, לוקחים את הסכום ללא מע"מ של המסמך המשויך.
+// תנועה משויכת לקבוצה אך בלי מסמך — נספרת בנפרד (unlinked) ולא נכנסת לנטו.
+add('GET', /^\/api\/group-summary$/, (req, res, _p, q) => {
+  const db = load();
+  if (ensureGroupsSeeded(db)) save(db);
+  const cid = q.companyId || null;
+  const year = String(q.year || new Date().getFullYear());
+  const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const netOf = (inv) => {
+    if (!inv) return 0;
+    if (inv.amountExVat != null && !isNaN(+inv.amountExVat)) return +inv.amountExVat;
+    if (inv.amount != null && !isNaN(+inv.amount)) return +inv.amount / 1.18; // גיבוי: חילוץ מע"מ 18%
+    return 0;
+  };
+  const groups = (db.txGroups || []).filter(g => g.companyId === cid);
+  const gmap = {};
+  for (const g of groups) gmap[g.id] = { income: Array(12).fill(0), expense: Array(12).fill(0), unlinkedIncome: 0, unlinkedExpense: 0 };
+  for (const t of (db.bankTx || [])) {
+    if (cid && t.companyId !== cid) continue;
+    if (!t.group || !gmap[t.group]) continue;
+    const m = String(t.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!m || m[3] !== year) continue;
+    const mi = (+m[2]) - 1;
+    const invs = Array.isArray(t.matchedInvoices) ? t.matchedInvoices : [];
+    const net = invs.reduce((s, inv) => s + netOf(inv), 0);
+    const b = gmap[t.group];
+    if (t.direction === 'credit') { if (invs.length) b.income[mi] += net; else b.unlinkedIncome += (t.absAmount || 0); }
+    else { if (invs.length) b.expense[mi] += net; else b.unlinkedExpense += (t.absAmount || 0); }
+  }
+  const out = groups.map(g => {
+    const b = gmap[g.id];
+    const totalIncome = b.income.reduce((a, x) => a + x, 0);
+    const totalExpense = b.expense.reduce((a, x) => a + x, 0);
+    return {
+      id: g.id, name: g.name, key: g.key || null,
+      months: b.income.map((inc, i) => ({ m: i + 1, income: r2(inc), expense: r2(b.expense[i]), profit: r2(inc - b.expense[i]) })),
+      totalIncome: r2(totalIncome), totalExpense: r2(totalExpense), totalProfit: r2(totalIncome - totalExpense),
+      unlinkedIncome: r2(b.unlinkedIncome), unlinkedExpense: r2(b.unlinkedExpense),
+    };
+  });
+  json(res, { ok: true, year, groups: out });
 });
 
 // ================= התחברות והרשאות =================
@@ -2507,9 +2598,24 @@ function giEmptyFor(pathname) {
 }
 
 // מיגרציות חד-פעמיות בעליית השרת
+// קבוצות שיוך ברירת-מחדל למשה כורסיה. ids קבועים כדי ששיוכי תנועות ישרדו.
+const MOSHE_DEFAULT_GROUPS = [
+  { key: 'music', name: 'מוזיקה' },
+  { key: 'digital', name: 'דיגיטל' },
+  { key: 'operating', name: 'הוצאות שוטפות' },
+  { key: 'other', name: 'אחר' },
+];
+function ensureGroupsSeeded(db) {
+  db.txGroups = db.txGroups || [];
+  if (db.txGroups.some(g => g.companyId === 'co_moshe')) return false;
+  for (const g of MOSHE_DEFAULT_GROUPS) db.txGroups.push({ id: 'txg_' + g.key, companyId: 'co_moshe', name: g.name, key: g.key, builtin: true });
+  return true;
+}
+
 function runMigrations() {
   const db = load();
   let changed = false;
+  if (ensureGroupsSeeded(db)) { changed = true; console.log('מיגרציה: נזרעו קבוצות שיוך ברירת-מחדל למשה כורסיה'); }
   // הסרת חשבון ההתחברות 'iris' שנוצר בטעות (איריס היא סוכנת בצוות, לא משתמשת אנושית)
   const before = (db.users || []).length;
   db.users = (db.users || []).filter(u => !(u.username === 'iris' && u.role === 'viewer'));

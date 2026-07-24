@@ -47,7 +47,7 @@ export function scoreMatch(tx, inv) {
   return { score, reasons, amountKind: ak };
 }
 
-const toInv = (inv, extra = {}) => ({ id: inv.id, number: inv.number, type: inv.type, clientName: inv.clientName, amount: inv.amountIncVat, date: inv.date, url: inv.url || null, ...extra });
+const toInv = (inv, extra = {}) => ({ id: inv.id, number: inv.number, type: inv.type, clientName: inv.clientName, amount: inv.amountIncVat, amountExVat: inv.amountExVat, date: inv.date, url: inv.url || null, ...extra });
 
 // מציאת צירוף חשבוניות (2..4) שסכומן ≈ target
 function findCombo(target, invs) {
@@ -126,7 +126,7 @@ function scoreExpense(tx, exp) {
   if (dd <= 7) score += 12; else if (dd <= 30) score += 6;
   return { score, reasons, amountKind: exact ? 'exact' : null };
 }
-const toExp = (e, extra = {}) => ({ id: e.id, number: e.number, type: e.type, clientName: e.supplierName || '—', amount: e.amountIncVat ?? e.amount, date: e.date, url: e.url || null, kind: 'expense', description: e.description || e.category || '', ...extra });
+const toExp = (e, extra = {}) => ({ id: e.id, number: e.number, type: e.type, clientName: e.supplierName || '—', amount: e.amountIncVat ?? e.amount, amountExVat: e.amountExVat, date: e.date, url: e.url || null, kind: 'expense', description: e.description || e.category || '', ...extra });
 
 // מחזיר מערך של { i, matchStatus, matchedInvoices, suggestions } עבור אינדקסי תנועות החובה בלבד.
 // אין התאמה אוטומטית להוצאות (לפי בקשת המנהל) — כל תנועת חובה נשארת "לא מותאמת" לשיוך ידני,
