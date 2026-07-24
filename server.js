@@ -1957,6 +1957,65 @@ function bankSig(t) {
   return t.reference ? `${base}|R${t.reference}` : `${base}|${normDesc(t.description)}`;
 }
 
+// ---- התאמת בנק ↔ חשבונית ירוקה ברקע (הכנסות/קבלות + הוצאות) ----
+// רץ אחרי שהתגובה כבר נשלחה, כדי שקבצים גדולים לא יגרמו ל-timeout. מעדכן matchStatus על התנועות השמורות.
+const _bankMatchBg = {};        // companyId -> true בזמן ריצה
+const _bankMatchState = {};     // companyId -> { running, at, matched }
+async function runBankMatchBg(companyId) {
+  if (_bankMatchBg[companyId]) return;
+  _bankMatchBg[companyId] = true;
+  _bankMatchState[companyId] = { running: true, at: new Date().toISOString(), matched: (_bankMatchState[companyId] || {}).matched || 0 };
+  try {
+    const snap = load();
+    const txns = (snap.bankTx || []).filter(t => !companyId || t.companyId === companyId);
+    if (!txns.length || !giEnabled(companyId)) return;
+    const iso = txns.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
+    if (!iso.length) return;
+    const from = shiftISODays(iso[0], -75), to = shiftISODays(iso[iso.length - 1], 5);
+    let invoices = [], receipts = [], expenses = [];
+    await greenInvoice.withCompany(companyId, async () => {
+      try { const inc = await greenInvoice.incomeForRange(from, to); invoices = inc.docs || []; } catch { }
+      try { receipts = await greenInvoice.receiptsForRange(from, to); } catch { }
+      try { expenses = await greenInvoice.expensesInRange(from, to); } catch { }
+    });
+    try { const _notes = snap.expenseNotes || {}; if (Object.keys(_notes).length) expenses.forEach(e => { if (_notes[e.id]) e.description = _notes[e.id]; }); } catch { }
+    const cmatched = attachReceipts(matchCredits(txns, invoices), receipts);  // תנועות זכות מסומנות במקום
+    const dmap = new Map();
+    try { for (const dm of matchDebits(txns, expenses)) dmap.set(dm.i, dm); } catch { }
+    // כותבים על ה-DB העדכני לפי id (למניעת דריסת שינויים מקבילים)
+    const db2 = load();
+    const byId = new Map((db2.bankTx || []).map(r => [r.id, r]));
+    let matchedCount = 0;
+    txns.forEach((t, i) => {
+      const row = byId.get(t.id);
+      if (!row || row.matchStatus === 'manual' || row.matchStatus === 'ignored') return;
+      if (row.direction === 'credit') {
+        const cm = cmatched[i];
+        if (cm) { row.matchStatus = cm.matchStatus; row.matchedInvoices = cm.matchedInvoices || []; row.suggestions = cm.suggestions || []; }
+      } else {
+        const dm = dmap.get(i);
+        if (dm) { row.matchStatus = dm.matchStatus; row.matchedInvoices = dm.matchedInvoices || []; row.suggestions = dm.suggestions || []; }
+      }
+      if (row.matchStatus === 'auto') matchedCount++;
+    });
+    db2.bankMatchDone = db2.bankMatchDone || {};
+    db2.bankMatchDone[companyId] = new Date().toISOString();
+    save(db2);
+    _bankMatchState[companyId] = { running: false, at: new Date().toISOString(), matched: matchedCount };
+  } catch (e) {
+    _bankMatchState[companyId] = { running: false, at: new Date().toISOString(), error: e.message, matched: (_bankMatchState[companyId] || {}).matched || 0 };
+  } finally {
+    _bankMatchBg[companyId] = false;
+  }
+}
+
+// GET /api/bank/match-status?companyId= — האם ההתאמה ברקע עדיין רצה + כמה הותאמו
+add('GET', /^\/api\/bank\/match-status$/, (req, res, _p, q) => {
+  const cid = q.companyId || null;
+  const st = _bankMatchState[cid] || { running: false, matched: 0 };
+  json(res, { running: !!st.running, at: st.at || null, matched: st.matched || 0, error: st.error || null });
+});
+
 // POST /api/bank/import  { text, companyId }
 add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   const text = body?.text || '';
@@ -1971,25 +2030,7 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   }
   const parsed = parseBank(text);
   if (!parsed.length) return json(res, { ok: true, added: 0, total: 0, accountBalance: acctBal || null, message: acctBal ? `עודכנה יתרת עו"ש: ${acctBal.balance}` : 'לא זוהו תנועות בטקסט' });
-  // טווח תאריכים לשליפת חשבוניות (הכנסה) + הוצאות (ספקים) להתאמה אוטומטית בשני הצדדים
-  let invoices = [], receipts = [], expenses = [];
-  const iso = parsed.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
-  if (iso.length && giEnabled(companyId)) {
-    const from = shiftISODays(iso[0], -75), to = shiftISODays(iso[iso.length - 1], 5);
-    try { const inc = await greenInvoice.incomeForRange(from, to); invoices = inc.docs || []; } catch (e) { /* נמשיך בלי התאמה */ }
-    try { receipts = await greenInvoice.receiptsForRange(from, to); } catch (e) { /* קבלות אופציונליות */ }
-    try { expenses = await greenInvoice.expensesInRange(from, to); } catch (e) { /* הוצאות אופציונליות */ }
-  }
-  const matched = attachReceipts(matchCredits(parsed, invoices), receipts);
-  // החלת תיאורים מותאמים (override) על ההוצאות לפני ההתאמה
-  try { const _notes = load().expenseNotes || {}; if (Object.keys(_notes).length) expenses.forEach(e => { if (_notes[e.id]) e.description = _notes[e.id]; }); } catch { }
-  // התאמת צד ההוצאות: חשבוניות ספקים ↔ תנועות חובה (אוטומטי כמו בהכנסות)
-  try {
-    for (const dm of matchDebits(parsed, expenses)) {
-      const t = matched[dm.i];
-      if (t) { t.matchStatus = dm.matchStatus; t.matchedInvoices = dm.matchedInvoices; t.suggestions = dm.suggestions; }
-    }
-  } catch { /* לא חוסם ייבוא */ }
+  // שמירה מהירה של התנועות (בלי לחכות לחשבונית ירוקה) — ההתאמה רצה ברקע כדי לא לגרום ל-timeout בקבצים גדולים.
   const db = load();
   db.bankTx = db.bankTx || [];
   // מחשבים את החתימה מחדש מכל תנועה קיימת (ולא סומכים על t.sig השמור), כדי שהתיקון יחול גם על תנועות ישנות ולא ייווצרו כפילויות
@@ -2004,17 +2045,13 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
     return same.find(e => !e.reference || !t.reference) || null; // אם לאחד הצדדים אין אסמכתא — אותה תנועה
   };
   let added = 0, backfilled = 0;
-  for (const t of matched) {
+  for (const t of parsed) {
     const sig = bankSig(t);
     const ex = bySig.get(sig) || crossDup(t);
     if (ex) {
       // תנועה קיימת — נשלים יתרה רצה (balance) ואסמכתא אם חסרות, כדי שעו"ש יתעדכן ולמניעת כפילויות בעתיד
       if (t.balance != null && ex.balance !== t.balance) { ex.balance = t.balance; backfilled++; }
       if (!ex.reference && t.reference) ex.reference = t.reference;
-      // רענון הצעות החובה על תנועות קיימות שלא אושרו/סומנו ידנית (בלי התאמה אוטומטית — רק הצעות)
-      if (ex.direction === 'debit' && ex.matchStatus !== 'manual' && ex.matchStatus !== 'ignored') {
-        ex.matchStatus = t.matchStatus; ex.matchedInvoices = t.matchedInvoices || []; ex.suggestions = t.suggestions || [];
-      }
       continue;
     }
     const rec = {
@@ -2022,15 +2059,16 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
       date: t.date, description: t.description, amount: t.amount, absAmount: t.absAmount,
       direction: t.direction, reference: t.reference, invoiceNumber: t.invoiceNumber,
       nameHint: t.nameHint, memo: t.memo, balance: t.balance ?? null,
-      matchStatus: t.matchStatus, matchedInvoices: t.matchedInvoices || [], suggestions: t.suggestions || [],
+      matchStatus: 'unmatched', matchedInvoices: [], suggestions: [],
       importedAt: new Date().toISOString(),
     };
     db.bankTx.push(rec); bySig.set(sig, rec); companyRows.push(rec); added++;
   }
   save(db);
-  const credits = matched.filter(t => t.direction === 'credit');
-  const debits = matched.filter(t => t.direction === 'debit');
-  json(res, { ok: true, added, backfilled, total: parsed.length, credits: credits.length, autoMatched: credits.filter(t => t.matchStatus === 'auto').length, debits: debits.length, debitMatched: debits.filter(t => t.matchStatus === 'auto').length, invoicesLoaded: invoices.length, expensesLoaded: expenses.length, accountBalance: acctBal || null });
+  // התאמה מול חשבונית ירוקה (הכנסות/קבלות/הוצאות) רצה ברקע — לא חוסמת את התגובה
+  const matchBg = giEnabled(companyId);
+  if (matchBg) runBankMatchBg(companyId).catch(() => { });
+  json(res, { ok: true, added, backfilled, total: parsed.length, matching: matchBg ? 'background' : 'none', accountBalance: acctBal || null });
 });
 
 // POST /api/bank/rematch { companyId } — הרצת התאמה אוטומטית מחדש של תנועות חובה על התנועות הקיימות (בלי העלאה חוזרת)

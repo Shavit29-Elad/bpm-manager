@@ -4819,6 +4819,21 @@ async function bankFileToText(f) {
     .map(r => (r || []).map(c => (c == null ? '' : String(c))));
   return '#BANKGRID#' + JSON.stringify(rows);
 }
+// מרענן את מסך הבנק כשהתאמת-הרקע מול חשבונית ירוקה מסתיימת (בודק כל ~4 שניות, עד דקה).
+async function pollBankMatch(status) {
+  for (let i = 0; i < 15; i++) {
+    await new Promise(r => setTimeout(r, 4000));
+    let st = null;
+    try { st = await fetch(`/api/bank/match-status?companyId=${state.company}`).then(x => x.json()); } catch { }
+    if (st && !st.running) {
+      if (state.tab === 'bank') { try { await renderBank($('#content')); } catch { } }
+      const s2 = document.getElementById('bankStatus');
+      if (s2) s2.innerHTML = `<span style="color:var(--accent2)">✓ ההתאמה הסתיימה · ${st.matched || 0} תנועות הותאמו אוטומטית מול חשבונית ירוקה.</span>`;
+      setTimeout(() => { const mm = document.getElementById('bankModal'); if (mm) mm.classList.add('hidden'); }, 2500);
+      return;
+    }
+  }
+}
 window.doBankImport = async (btn) => {
   const fileInput = document.getElementById('bankFile');
   const ta = document.getElementById('bankText');
@@ -4837,10 +4852,15 @@ window.doBankImport = async (btn) => {
     btn.disabled = false; btn.textContent = 'ייבא והתאם';
     if (r.error) { if (status) status.innerHTML = `<span style="color:var(--danger)">${r.error}</span>`; return; }
     const balMsg = r.accountBalance ? ` · יתרת עו"ש עודכנה ל-${money(r.accountBalance.balance)}${r.accountBalance.date ? ' (' + r.accountBalance.date + ')' : ''}` : '';
-    const debitMsg = r.debitMatched ? ` · חובה: ${r.debitMatched} הותאמו לחשבוניות ספקים` : '';
-    if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות · זכות: ${r.autoMatched} הותאמו אוטומטית${debitMsg}.${balMsg}</span>`;
-    await renderBank($('#content'));
-    setTimeout(() => { const mm = document.getElementById('bankModal'); if (mm) mm.classList.add('hidden'); }, 1400);
+    if (r.matching === 'background') {
+      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${balMsg}. מתאים מול חשבונית ירוקה ברקע…</span>`;
+      await renderBank($('#content'));
+      pollBankMatch(status);   // מרענן כשההתאמה ברקע מסתיימת
+    } else {
+      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${balMsg}.</span>`;
+      await renderBank($('#content'));
+      setTimeout(() => { const mm = document.getElementById('bankModal'); if (mm) mm.classList.add('hidden'); }, 1400);
+    }
   } catch (e) {
     btn.disabled = false; btn.textContent = 'ייבא והתאם';
     if (status) status.innerHTML = `<span style="color:var(--danger)">שגיאה: ${e.message}</span>`;
