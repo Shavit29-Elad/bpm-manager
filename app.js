@@ -144,17 +144,29 @@ function applyPermissions() {
     <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="logout()">התנתק</button>`;
 }
 
-// ---- לשוניות לפי חברה: "הצוות" (איריס) קיים רק ב-BPM; אצל אופק/משה מוסתר ----
+// ---- לשוניות לפי חברה ----
+// "הצוות" (איריס) — BPM בלבד. משה: אין עובדים/אירועים-ויומן, ולשונית החיבורים מוסתרת.
+// כך שאצל משה נשארות: בית · מסמכים ולקוחות · הצעות מחיר · חשבוניות · קבלנים · בנק · פרטי העסק.
+const MOSHE_HIDDEN_TABS = ['events', 'payroll', 'connections'];
 function applyCompanyTabs() {
   const isBpm = state.company === 'co_bpm';
+  const isMoshe = state.company === 'co_moshe';
   const u = state.user || {};
-  const teamAllowed = u.role === 'admin' || u.tabs === 'all' || (Array.isArray(u.tabs) && u.tabs.includes('team'));
-  document.querySelectorAll('.tab[data-tab="team"]').forEach(t => { t.style.display = (isBpm && teamAllowed) ? '' : 'none'; });
-  if (!isBpm && state.tab === 'team') { const home = document.querySelector('.tab[data-tab="home"]'); if (home) home.click(); }
+  const isAdmin = u.role === 'admin';
+  const allowedSet = (isAdmin || u.tabs === 'all') ? null : new Set(u.tabs || []);
+  const userAllows = (t) => !allowedSet || allowedSet.has(t);
+  const goHome = () => { const home = document.querySelector('.tab[data-tab="home"]'); if (home) home.click(); };
+  // הצוות — BPM בלבד
+  document.querySelectorAll('.tab[data-tab="team"]').forEach(t => { t.style.display = (isBpm && userAllows('team')) ? '' : 'none'; });
+  if (!isBpm && state.tab === 'team') goHome();
   // פרטי העסק — פר-חברה, אך להנהלה בלבד (מכיל ת״ז/רישיונות/מסמכים רגישים)
-  const bizAllowed = u.role === 'admin';
-  document.querySelectorAll('.tab[data-tab="business"]').forEach(t => { t.style.display = bizAllowed ? '' : 'none'; });
-  if (!bizAllowed && state.tab === 'business') { const home = document.querySelector('.tab[data-tab="home"]'); if (home) home.click(); }
+  document.querySelectorAll('.tab[data-tab="business"]').forEach(t => { t.style.display = isAdmin ? '' : 'none'; });
+  if (!isAdmin && state.tab === 'business') goHome();
+  // משה: הסתרת עובדים / אירועים ויומן / חיבורים. שאר החברות — לפי הרשאות המשתמש.
+  MOSHE_HIDDEN_TABS.forEach(tab => {
+    document.querySelectorAll(`.tab[data-tab="${tab}"]`).forEach(t => { t.style.display = (!isMoshe && userAllows(tab)) ? '' : 'none'; });
+  });
+  if (isMoshe && MOSHE_HIDDEN_TABS.includes(state.tab)) goHome();
 }
 
 // ---- ניהול משתמשים (מנהל בלבד) ----
