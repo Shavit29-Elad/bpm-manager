@@ -4819,7 +4819,8 @@ async function bankFileToText(f) {
   const p2 = (n) => String(n).padStart(2, '0');
   const cell = (c) => {
     if (c == null || c === '') return '';
-    if (c instanceof Date) return `${p2(c.getDate())}/${p2(c.getMonth() + 1)}/${c.getFullYear()}`; // תמיד dd/mm/yyyy
+    // SheetJS בונה תאריכים בחצות UTC — קוראים ב-UTC כדי למנוע הזזה של יום אחד בדפדפנים באזור-זמן שונה.
+    if (c instanceof Date) return `${p2(c.getUTCDate())}/${p2(c.getUTCMonth() + 1)}/${c.getUTCFullYear()}`; // תמיד dd/mm/yyyy
     return String(c);
   };
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, blankrows: false, defval: '' })
