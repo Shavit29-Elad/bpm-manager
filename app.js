@@ -4815,8 +4815,15 @@ async function bankFileToText(f) {
   const XLSX = await ensureSheetJS();
   const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'dd/mm/yyyy', blankrows: false, defval: '' })
-    .map(r => (r || []).map(c => (c == null ? '' : String(c))));
+  // raw:true — תאריכים חוזרים כאובייקטי Date (בלי פורמט-לוקאל שגוי כמו m/d/yyyy), מספרים כמספרים.
+  const p2 = (n) => String(n).padStart(2, '0');
+  const cell = (c) => {
+    if (c == null || c === '') return '';
+    if (c instanceof Date) return `${p2(c.getDate())}/${p2(c.getMonth() + 1)}/${c.getFullYear()}`; // תמיד dd/mm/yyyy
+    return String(c);
+  };
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, blankrows: false, defval: '' })
+    .map(r => (r || []).map(cell));
   return '#BANKGRID#' + JSON.stringify(rows);
 }
 // מרענן את מסך הבנק כשהתאמת-הרקע מול חשבונית ירוקה מסתיימת (בודק כל ~4 שניות, עד דקה).

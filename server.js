@@ -1946,7 +1946,7 @@ add('GET', /^\/api\/expenses\/quick-search$/, async (req, res, _p, q) => {
 });
 
 // ---- בנק: ייבוא תנועות + התאמה לחשבוניות הכנסה ----
-function ddmmyyyyToISO(d) { const m = String(d || '').match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; }
+function ddmmyyyyToISO(d) { const m = String(d || '').match(/(\d{2})\/(\d{2})\/(\d{4})/); if (!m) return null; const dd = +m[1], mm = +m[2]; if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null; return `${m[3]}-${m[2]}-${m[1]}`; }
 function shiftISODays(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 // ניקוי תיאור לצורך חתימה: מסיר תווי קידוד שבורים (U+FFFD �) ורווחים כפולים, כדי שקידוד עברית פגום לא ישנה את החתימה
 function normDesc(s) { return String(s || '').replace(/�/g, '').replace(/\s+/g, ' ').trim().slice(0, 20); }
