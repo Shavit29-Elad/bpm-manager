@@ -172,11 +172,27 @@ function parseSignedAmt(s) {
 }
 
 const p2 = (x) => String(x).padStart(2, '0');
-function normDateLoose(raw) {
-  const m = String(raw || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+// זיהוי סדר התאריכים בקובץ (dd/mm מול mm/dd) לפי שורות חד-משמעיות (יום>12 או חודש>12).
+// כך מטפלים גם בקבצים שבהם הדפדפן החזיר תאריך בפורמט אמריקאי, וגם בתאריכים דו-משמעיים כמו 03/01.
+function detectDateOrder(rawDates) {
+  let dmy = 0, mdy = 0;
+  for (const s of rawDates) {
+    const m = String(s || '').match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/);
+    if (!m) continue;
+    const a = +m[1], b = +m[2];
+    if (a > 12 && b <= 12) dmy++;
+    else if (b > 12 && a <= 12) mdy++;
+  }
+  return mdy > dmy ? 'mdy' : 'dmy';   // ברירת מחדל: dd/mm
+}
+function normDateOrdered(raw, order) {
+  const m = String(raw || '').match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/);
   if (!m) return null;
+  let dd, mm;
+  if (order === 'mdy') { mm = +m[1]; dd = +m[2]; } else { dd = +m[1]; mm = +m[2]; }
+  if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
   const y = m[3].length === 2 ? '20' + m[3] : m[3];
-  return `${p2(m[1])}/${p2(m[2])}/${y}`;
+  return `${p2(dd)}/${p2(mm)}/${y}`;
 }
 const toSortISO = (ddmmyyyy) => { const m = String(ddmmyyyy || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m ? `${m[3]}-${m[2]}-${m[1]}` : ''; };
 
@@ -228,10 +244,11 @@ export function parseGridStatement(rows) {
   if (hi < 0) return [];
   const col = mapColumns(rows, hi);
   if (col.dateCol < 0 || col.descCol < 0) return [];
+  const order = detectDateOrder(rows.slice(hi + 1).map(r => (r || [])[col.dateCol]));
   const txns = [];
   for (let i = hi + 1; i < rows.length; i++) {
     const cells = (rows[i] || []).map(c => String(c == null ? '' : c));
-    const date = normDateLoose(cells[col.dateCol]);
+    const date = normDateOrdered(cells[col.dateCol], order);
     if (!date) continue;                                   // רק שורות נתונים
     let amount = null;
     if (col.signedCol >= 0) amount = parseSignedAmt(cells[col.signedCol]);
@@ -264,10 +281,11 @@ function gridAccountBalance(rows) {
   if (hi < 0) return null;
   const col = mapColumns(rows, hi);
   if (col.dateCol < 0 || col.balCol < 0) return null;
+  const order = detectDateOrder(rows.slice(hi + 1).map(r => (r || [])[col.dateCol]));
   let best = null;
   for (let i = hi + 1; i < rows.length; i++) {
     const cells = (rows[i] || []).map(c => String(c == null ? '' : c));
-    const date = normDateLoose(cells[col.dateCol]);
+    const date = normDateOrdered(cells[col.dateCol], order);
     if (!date) continue;
     const bal = parseSignedAmt(cells[col.balCol]);
     if (bal == null) continue;

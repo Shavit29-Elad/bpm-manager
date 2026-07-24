@@ -4813,18 +4813,12 @@ async function bankFileToText(f) {
   } catch { /* אם נכשל — ננסה כטקסט */ }
   if (!isBinary) return await f.text();
   const XLSX = await ensureSheetJS();
-  const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true });
+  const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
   const ws = wb.Sheets[wb.SheetNames[0]];
-  // raw:true — תאריכים חוזרים כאובייקטי Date (בלי פורמט-לוקאל שגוי כמו m/d/yyyy), מספרים כמספרים.
-  const p2 = (n) => String(n).padStart(2, '0');
-  const cell = (c) => {
-    if (c == null || c === '') return '';
-    // SheetJS בונה תאריכים בחצות UTC — קוראים ב-UTC כדי למנוע הזזה של יום אחד בדפדפנים באזור-זמן שונה.
-    if (c instanceof Date) return `${p2(c.getUTCDate())}/${p2(c.getUTCMonth() + 1)}/${c.getUTCFullYear()}`; // תמיד dd/mm/yyyy
-    return String(c);
-  };
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, blankrows: false, defval: '' })
-    .map(r => (r || []).map(cell));
+  // raw:false → כל תא מגיע כטקסט שאקסל מציג (`.w`): תאריכים בפורמט המקורי של הקובץ, מספרים עם מפרידים.
+  // אין המרת Date/serial (שגרמה להזזת יום), והשרת מזהה לבד אם הסדר dd/mm או mm/dd.
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, blankrows: false, defval: '' })
+    .map(r => (r || []).map(c => (c == null ? '' : String(c))));
   return '#BANKGRID#' + JSON.stringify(rows);
 }
 // מרענן את מסך הבנק כשהתאמת-הרקע מול חשבונית ירוקה מסתיימת (בודק כל ~4 שניות, עד דקה).
