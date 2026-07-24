@@ -4493,6 +4493,11 @@ function bankTr(t) {
     const conf = bankConfidence(t);
     const confBadge = t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'מדויק' : 'לבדיקה'}</span>` : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '');
     action = `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
+  } else if (t.matchStatus === 'approved') {
+    // אושר ידנית ללא מסמך (למשל עמלות) — מסומן מאושר, לא אדום
+    biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
+    invNo = '<span class="tag match" style="font-size:10px">מאושר · ללא מסמך</span>';
+    action = `<span class="tag match" style="font-size:10px;margin-inline-end:4px">מאושר</span><button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
   } else if (t.matchStatus === 'ignored') {
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
     invNo = '<span class="muted">ללא התאמה</span>';
@@ -4504,7 +4509,10 @@ function bankTr(t) {
     const _usedIds = bankMatchedIds(t.id);
     const sugg = (t.suggestions || []).filter(s => !_usedIds.has(String(s.id))).map(s => { const j = jenc(s); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
     invNo = `<span class="tag miss" style="font-size:10px">לא מותאם</span>${sugg ? `<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;max-width:280px">${sugg}</div>` : ''}`;
-    action = `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',true)">התעלם</button>`;
+    // אצל משה: "אשר" (מסמן מאושר ללא מסמך) במקום "התעלם"
+    action = mosheBank()
+      ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="approveBank('${t.id}')">אשר</button>`
+      : `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',true)">התעלם</button>`;
   } else {
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
   }
@@ -4519,6 +4527,7 @@ function bankTr(t) {
   const incomeBtn = credit ? `<button class="btn ghost" style="padding:3px 9px;font-size:12px;color:var(--accent2)" onclick="openCreateIncome('${t.id}')">➕ צור הכנסה</button>` : '';
   // חובה: כל שורה שאינה מותאמת אדומה — עד שמסמנים "התעלם". זכות: אדום רק ב"ממתין לאישור".
   const rowStyle = (t.matchStatus === 'ignored') ? 'opacity:.55'
+    : (t.matchStatus === 'approved') ? ''
     : (!isMatched && (t.direction === 'debit' || t.matchStatus === 'unmatched')) ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)'
     : '';
   return `<tr id="btr-${t.id}" style="${rowStyle}">
@@ -4553,6 +4562,8 @@ function invChip(inv) {
 // פעולות מתעדכנות במקום (בלי לרנדר מחדש את כל הטבלה ובלי לקפוץ למעלה)
 window.matchBank = (id, j) => { if (!bankGroupOk(id)) return; bankAction(id, { matchStatus: 'manual', matchedInvoices: [JSON.parse(decodeURIComponent(j))] }); };
 window.confirmBank = (id) => { if (!bankGroupOk(id)) return; bankAction(id, { matchStatus: 'manual' }); };
+// אישור תנועה ללא מסמך (למשל עמלה) — דורש שיוך לקבוצה אצל משה
+window.approveBank = (id) => { if (!bankGroupOk(id)) return; bankAction(id, { matchStatus: 'approved' }); };
 window.unmatchBank = (id) => bankAction(id, { matchStatus: 'unmatched', matchedInvoices: [] });
 window.setBankIgnore = (id, ig) => bankAction(id, { matchStatus: ig ? 'ignored' : 'unmatched' });
 window.saveBankNotes = (id, val) => fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: val }) });

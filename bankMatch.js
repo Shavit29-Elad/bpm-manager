@@ -144,14 +144,19 @@ export function matchDebits(txns, expenses) {
   return out;
 }
 
-// קישור קבלה (סוג 400) לכל חשבונית מס (סוג 305) לפי לקוח+סכום
+// קישור קבלה (סוג 400) לכל חשבונית מס (סוג 305) לפי לקוח+סכום.
+// מבין כל הקבלות התואמות (סכום זהה + אותו לקוח) בוחרים את הקרובה ביותר בזמן לתאריך החשבונית —
+// כדי לא לתפוס קבלה מחודש אחר שבמקרה זהה בסכום. הסכום הוא תנאי סף; התאריך מכריע בין המועמדות.
 export function attachReceipts(matched, receipts) {
   if (!receipts || !receipts.length) return matched;
   for (const t of matched) {
     for (const inv of (t.matchedInvoices || [])) {
       if (inv.type === 320 || inv.type === '320') continue;    // מס-קבלה — כולל קבלה
-      const rec = receipts.find(r => nameMatch(inv.clientName, r.clientName) && Math.abs((r.amountIncVat ?? r.amount) - inv.amount) <= tol(inv.amount));
-      if (rec) inv.receipt = { number: rec.number, url: rec.url || null, amount: rec.amountIncVat ?? rec.amount };
+      const cands = receipts.filter(r => nameMatch(inv.clientName, r.clientName) && Math.abs((r.amountIncVat ?? r.amount) - inv.amount) <= tol(inv.amount));
+      if (!cands.length) continue;
+      cands.sort((a, b) => daysBetween(inv.date, a.date) - daysBetween(inv.date, b.date)); // הקרובה ביותר לתאריך החשבונית
+      const rec = cands[0];
+      inv.receipt = { number: rec.number, url: rec.url || null, amount: rec.amountIncVat ?? rec.amount };
     }
   }
   return matched;

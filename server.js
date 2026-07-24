@@ -1988,7 +1988,7 @@ async function runBankMatchBg(companyId) {
     let matchedCount = 0;
     txns.forEach((t, i) => {
       const row = byId.get(t.id);
-      if (!row || row.matchStatus === 'manual' || row.matchStatus === 'ignored') return;
+      if (!row || row.matchStatus === 'manual' || row.matchStatus === 'ignored' || row.matchStatus === 'approved') return;
       if (row.direction === 'credit') {
         const cm = cmatched[i];
         if (cm) { row.matchStatus = cm.matchStatus; row.matchedInvoices = cm.matchedInvoices || []; row.suggestions = cm.suggestions || []; }
@@ -2008,6 +2008,14 @@ async function runBankMatchBg(companyId) {
     _bankMatchBg[companyId] = false;
   }
 }
+
+// POST /api/bank/rematch-all { companyId } — הרצה מחדש של כל ההתאמה ברקע (זכות+חובה+קבלות),
+// לרענון תנועות שלא אושרו ידנית. משמש בין השאר לתיקון שיוך קבלות אחרי שיפור הלוגיקה.
+add('POST', /^\/api\/bank\/rematch-all$/, (req, res, _p, _q, body) => {
+  const companyId = body?.companyId || null;
+  if (giEnabled(companyId)) runBankMatchBg(companyId).catch(() => { });
+  json(res, { ok: true, matching: giEnabled(companyId) ? 'background' : 'none' });
+});
 
 // GET /api/bank/match-status?companyId= — האם ההתאמה ברקע עדיין רצה + כמה הותאמו
 add('GET', /^\/api\/bank\/match-status$/, (req, res, _p, q) => {
@@ -2167,8 +2175,8 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
     }
   }
   if (body.group !== undefined) t.group = body.group || null;
-  // חובת שיוך לקבוצה לפני אישור תנועה — אך ורק אצל משה כורסיה
-  if (body.matchStatus === 'manual' && t.companyId === 'co_moshe' && !t.group) {
+  // חובת שיוך לקבוצה לפני אישור תנועה (התאמה למסמך או אישור-ללא-מסמך) — אך ורק אצל משה כורסיה
+  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && t.companyId === 'co_moshe' && !t.group) {
     return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה (מוזיקה / דיגיטל / הוצאות שוטפות / אחר).' }, 400);
   }
   if (body.matchStatus) t.matchStatus = body.matchStatus;
