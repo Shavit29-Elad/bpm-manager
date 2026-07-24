@@ -842,7 +842,16 @@ function derSyncFromDom() {
 }
 window.derAddItem = () => { derSyncFromDom(); _derEdit.items.push({ description: '', quantity: 1, price: 0 }); renderDeriveEditor(); };
 window.derDelItem = (i) => { derSyncFromDom(); _derEdit.items.splice(i, 1); if (!_derEdit.items.length) _derEdit.items.push({ description: '', quantity: 1, price: 0 }); renderDeriveEditor(); };
-window.derAddPay = () => { derSyncFromDom(); _derEdit.payments.push({ type: 4, price: 0, date: _derEdit.date, chequeNum: '', bankName: '' }); renderDeriveEditor(); };
+window.derAddPay = () => {
+  derSyncFromDom();
+  // שורת תקבול חדשה נפתחת אוטומטית על *היתרה שנותרה* (סה"כ המסמך פחות סכום התקבולים עד כה),
+  // כדי שאם יש הפרש (למשל ניכוי מס במקור) הוא ייכנס לתקבול הבא — ואז בוחרים לו את הסוג.
+  const t = derTotals();
+  const paid = _derEdit.payments.reduce((s, p) => s + (Number(p.price) || 0), 0);
+  const remaining = Math.max(0, +(t.total - paid).toFixed(2));
+  _derEdit.payments.push({ type: 4, price: remaining, date: _derEdit.date, chequeNum: '', bankName: '' });
+  renderDeriveEditor();
+};
 window.derDelPay = (i) => { derSyncFromDom(); _derEdit.payments.splice(i, 1); renderDeriveEditor(); };
 window.derPayTypeChanged = () => { derSyncFromDom(); renderDeriveEditor(); }; // מציג שדה צ'ק/בנק לפי הסוג
 window.derToggleBackdate = (checked) => { derSyncFromDom(); _derEdit.allowBackdate = !!checked; renderDeriveEditor(); }; // אישור תאריך מוקדם

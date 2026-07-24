@@ -2441,10 +2441,10 @@ function seedIfEmpty() {
   console.log('נזרעו החברות (בלי אירוע דוגמה)');
 }
 
-// שלוש החברות + ספק חשבונאי לכל אחת. חשבונית ירוקה מחוברת ל-BPM בלבד; אופק=פייפרלס (טרם מחובר); משה=טרם.
+// החברות + ספק חשבונאי לכל אחת. שתיהן חשבונית ירוקה (BPM + משה), כל אחת עם מפתחות משלה.
+// אופק (פייפרלס) הוסר זמנית — חיבור פייפרלס בעייתי; ייתכן שיחזור בהמשך (הקוד של פייפרלס נשאר רדום).
 const COMPANY_SEED = [
   { id: 'co_bpm', name: 'בי פי אם הגברה ותאורה בע"מ', active: true, accounting: 'greenInvoice' },
-  { id: 'co_ofek', name: 'אופק ידעי הגברה ותאורה', active: false, accounting: 'paperless' },
   { id: 'co_moshe', name: 'משה כורסיה בע"מ', active: false, accounting: 'greenInvoice' },
 ];
 // מזהה חברת ה-GI הראשית (ברירת מחדל BPM) — לשם תאימות לאחור בלבד
@@ -2483,8 +2483,14 @@ function runMigrations() {
     changed = true;
     console.log('מיגרציה: הוסר חשבון ההתחברות iris (מיותר — איריס היא סוכנת)');
   }
-  // ודא ששלוש החברות קיימות ושלכל אחת מוגדר ספק חשבונאי (accounting)
+  // הסרה זמנית של חברת אופק (פייפרלס בעייתי) — לפי בקשת המשתמש. אפשר להחזיר בהמשך ע"י הוספה חזרה ל-COMPANY_SEED.
   db.companies = db.companies || [];
+  if (db.companies.some(c => c.id === 'co_ofek')) {
+    db.companies = db.companies.filter(c => c.id !== 'co_ofek');
+    changed = true;
+    console.log('מיגרציה: הוסרה זמנית חברת אופק (co_ofek)');
+  }
+  // ודא שהחברות הנותרות קיימות ושלכל אחת מוגדר ספק חשבונאי (accounting)
   for (const seed of COMPANY_SEED) {
     let c = db.companies.find(x => x.id === seed.id);
     if (!c) { c = { id: seed.id, name: seed.name, active: seed.active }; db.companies.push(c); changed = true; console.log('מיגרציה: נוספה חברה ' + seed.name); }
