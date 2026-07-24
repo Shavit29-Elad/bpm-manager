@@ -2255,13 +2255,15 @@ add('GET', /^\/api\/tx-group-rules$/, (req, res, _p, q) => {
   if (ensureRulesSeeded(db)) save(db);
   json(res, { ok: true, rules: (db.txGroupRules || []).filter(r => r.companyId === (q.companyId || null)) });
 });
-// POST /api/tx-group-rules { companyId, name, groupId } — מוסיף כלל ומחיל מיד על תנועות קיימות
+// POST /api/tx-group-rules { companyId, groupId, name? | keyword? } — מוסיף כלל (לפי שם לקוח או לפי תיאור) ומחיל מיד
 add('POST', /^\/api\/tx-group-rules$/, (req, res, _p, _q, body) => {
-  const cid = body?.companyId || null, name = String(body?.name || '').trim(), groupId = body?.groupId || null;
-  if (!cid || !name || !groupId) return json(res, { error: 'חסר שם לקוח או קבוצה' }, 400);
+  const cid = body?.companyId || null, groupId = body?.groupId || null;
+  const name = String(body?.name || '').trim(), keyword = String(body?.keyword || '').trim();
+  if (!cid || !groupId || (!name && !keyword)) return json(res, { error: 'חסר שם לקוח / מילת-מפתח או קבוצה' }, 400);
   const db = load();
   db.txGroupRules = db.txGroupRules || [];
-  const rule = { id: id('txr'), companyId: cid, name, groupId };
+  const rule = { id: id('txr'), companyId: cid, groupId };
+  if (keyword) rule.keyword = keyword; else rule.name = name;
   db.txGroupRules.push(rule);
   const applied = applyGroupRules(db, cid);
   save(db);
@@ -2662,17 +2664,26 @@ function ensureRulesSeeded(db) {
   db.txGroupRules.push({ id: 'txr_gali', companyId: 'co_moshe', name: 'גלי בראון ייצוג וניהול סושיאל בע״מ', groupId: 'txg_digital' });
   return true;
 }
-// החלת כללי שיוך-אוטומטי: מציב קבוצה על תנועות שאין להן קבוצה ותואמות שם לקוח בכלל. לא נוגע בשיוך קיים.
+// החלת כללי שיוך-אוטומטי: מציב קבוצה על תנועות שאין להן קבוצה. לא נוגע בשיוך קיים.
+// שני סוגי כללים: לפי שם לקוח (rule.name, התאמה מטושטשת) או לפי תיאור (rule.keyword, מילה שמתחילה במילת-המפתח).
 function applyGroupRules(db, companyId) {
   const rules = (db.txGroupRules || []).filter(r => r.companyId === companyId);
   if (!rules.length) return 0;
   const valid = new Set((db.txGroups || []).filter(g => g.companyId === companyId).map(g => g.id));
+  const hit = (rule, t, names) => {
+    if (!valid.has(rule.groupId)) return false;
+    if (rule.keyword) {
+      const kw = String(rule.keyword).trim();
+      return !!kw && String(t.description || '').split(/[\s/.,\-]+/).some(w => w.startsWith(kw));
+    }
+    return names.some(n => nameMatch(n, rule.name));
+  };
   let changed = 0;
   for (const t of (db.bankTx || [])) {
     if (companyId && t.companyId !== companyId) continue;
     if (t.group) continue;                       // לא דורסים שיוך קיים
     const names = [t.nameHint, t.description, ...((t.matchedInvoices || []).map(i => i && i.clientName))].filter(Boolean);
-    const rule = rules.find(r => valid.has(r.groupId) && names.some(n => nameMatch(n, r.name)));
+    const rule = rules.find(r => hit(r, t, names));
     if (rule) { t.group = rule.groupId; changed++; }
   }
   return changed;

@@ -3816,18 +3816,21 @@ async function renderBusiness(c) {
 let _txGroupRules = [];
 function rulesMgmtPanelHtml() {
   const gname = (gid) => { const g = (_txGroups || []).find(x => x.id === gid); return g ? g.name : '—'; };
-  const rows = (_txGroupRules || []).map(r => `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
-    <span style="flex:1;min-width:150px;font-size:13px">${escapeHtml(r.name)}</span>
+  const rows = (_txGroupRules || []).map(r => {
+    const label = r.keyword ? `<span class="muted">תיאור מכיל</span> «${escapeHtml(r.keyword)}»` : escapeHtml(r.name);
+    return `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+    <span style="flex:1;min-width:150px;font-size:13px">${label}</span>
     <span style="font-size:12px">→</span><span class="tag match" style="font-size:11px">${escapeHtml(gname(r.groupId))}</span>
     <button class="btn ghost" style="padding:3px 10px;font-size:12px;color:var(--danger)" onclick="deleteRule('${r.id}')">מחק</button>
-  </div>`).join('');
+  </div>`; }).join('');
   const groupOpts = (_txGroups || []).map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
   return `<div class="panel">
-    <div class="row-between" style="margin:0"><h3 style="margin:0">🎯 שיוך אוטומטי לפי שם לקוח</h3></div>
-    <p class="muted" style="font-size:12.5px;margin:8px 0">כל תנועת בנק של הלקוח תשויך אוטומטית לקבוצה שנבחרה — עדיין צריך לאשר אותה ידנית. לדוגמה: «גלי בראון» → דיגיטל.</p>
+    <div class="row-between" style="margin:0"><h3 style="margin:0">🎯 שיוך אוטומטי</h3></div>
+    <p class="muted" style="font-size:12.5px;margin:8px 0">כל תנועת בנק תשויך אוטומטית לקבוצה — לפי שם לקוח (למשל «גלי בראון» → דיגיטל) או לפי מילה בתיאור (למשל «עמלה» → עמלות בנק). עדיין צריך לאשר ידנית.</p>
     <div style="margin-top:6px">${rows || '<div class="muted">אין כללים.</div>'}</div>
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <input id="newRuleName" placeholder="שם הלקוח…" style="flex:1;min-width:170px;max-width:260px;padding:6px 9px;font-size:13px">
+      <select id="newRuleKind" style="padding:6px 9px;font-size:13px"><option value="name">שם לקוח</option><option value="keyword">מילה בתיאור</option></select>
+      <input id="newRuleName" placeholder="שם לקוח / מילה בתיאור…" style="flex:1;min-width:150px;max-width:230px;padding:6px 9px;font-size:13px">
       <span style="font-size:13px">→</span>
       <select id="newRuleGroup" style="padding:6px 9px;font-size:13px">${groupOpts}</select>
       <button class="btn primary" style="padding:5px 14px" onclick="addRule()">＋ הוסף כלל</button>
@@ -3835,10 +3838,13 @@ function rulesMgmtPanelHtml() {
   </div>`;
 }
 window.addRule = async () => {
-  const name = (document.getElementById('newRuleName')?.value || '').trim();
+  const val = (document.getElementById('newRuleName')?.value || '').trim();
+  const kind = document.getElementById('newRuleKind')?.value || 'name';
   const groupId = document.getElementById('newRuleGroup')?.value;
-  if (!name || !groupId) return;
-  const r = await fetch('/api/tx-group-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, name, groupId }) }).then(x => x.json()).catch(() => null);
+  if (!val || !groupId) return;
+  const body = { companyId: state.company, groupId };
+  if (kind === 'keyword') body.keyword = val; else body.name = val;
+  const r = await fetch('/api/tx-group-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => null);
   if (r && r.error) { alert(r.error); return; }
   if (r && r.applied != null) { const el = document.getElementById('bizMsg'); if (el) { el.textContent = `הכלל נוסף · שויכו ${r.applied} תנועות קיימות`; setTimeout(() => { el.textContent = ''; }, 3500); } }
   renderBusiness($('#content'));
@@ -4420,7 +4426,7 @@ async function loadTxGroups() {
 function groupSelect(t) {
   const opts = (_txGroups || []).map(g => `<option value="${g.id}" ${t.group === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('');
   const need = !t.group;
-  return `<select onchange="setBankGroup('${t.id}', this.value)" title="קבוצת שיוך" style="padding:4px 6px;font-size:12px;max-width:132px;${need ? 'border:1px solid var(--danger)' : ''}"><option value="">— קבוצה —</option>${opts}</select>`;
+  return `<select onchange="setBankGroup('${t.id}', this.value)" title="קבוצת שיוך" style="padding:4px 5px;font-size:12px;max-width:108px;${need ? 'border:1px solid var(--danger)' : ''}"><option value="">— קבוצה —</option>${opts}</select>`;
 }
 // חסימת אישור בלי שיוך לקבוצה (רק אצל משה) — בדיקה בצד הלקוח לפני שליחה לשרת
 function bankGroupOk(id) {
@@ -4471,7 +4477,7 @@ async function renderBank(c, soft) {
   const bs = state.bankSort || { key: 'date', dir: 'desc' };
   const th = (key, label) => { const on = bs.key === key; const arw = on ? (bs.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'; return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="setBankSort('${key}')">${label}<span class="muted" style="font-size:11px">${arw}</span></th>`; };
   const p = (label) => `<th style="white-space:nowrap">${label}</th>`;
-  const table = rows.length ? `<div style="overflow-x:auto;margin-top:14px"><table style="min-width:${mosheBank() ? 1270 : 1120}px;font-size:13px">
+  const table = rows.length ? `<div style="overflow-x:auto;margin-top:14px"><table style="width:100%;min-width:${mosheBank() ? 1040 : 960}px;font-size:13px">
     <thead><tr>
       ${th('date', 'תאריך')}${th('amount', 'סכום בבנק')}${p('סכום חשבונית')}${p('ניכוי במקור')}${th('name', 'שם עסק')}
       ${p('חשבונית מס / מס-קבלה')}${p(dir === 'debit' ? 'תיאור החשבונית' : 'קבלה')}${mosheBank() ? p('קבוצה') : ''}${p('הערות')}${p('אישור')}
@@ -4501,10 +4507,10 @@ function bankTr(t) {
   const esc = (u) => String(u).replace(/'/g, '%27');
   const mis = t.matchedInvoices || [];
   const isMatched = mis.length && (t.matchStatus === 'auto' || t.matchStatus === 'manual'); // זכות או חובה
-  const notesInput = `<input value="${(t.notes || '').replace(/"/g, '&quot;')}" placeholder="הערה…" onchange="saveBankNotes('${t.id}', this.value)" style="width:120px;padding:4px 7px;font-size:12px"/>`;
+  const notesInput = `<input value="${(t.notes || '').replace(/"/g, '&quot;')}" placeholder="הערה…" onchange="saveBankNotes('${t.id}', this.value)" style="width:90px;padding:4px 6px;font-size:12px"/>`;
   const stack = (arr) => arr.map(x => `<div style="padding:2px 0${arr.length > 1 ? ';border-bottom:1px dashed var(--line)' : ''}">${x}</div>`).join('');
   // תצוגה 👁 + הורדה ↓ צמודים לשם המסמך (במקום עמודות נפרדות)
-  const act = (url) => url ? ` <button class="btn ghost" style="padding:1px 7px;font-size:11px" onclick="previewDoc('${esc(url)}')">תצוגה 👁</button> <a href="${url}" target="_blank" class="btn ghost" style="padding:1px 7px;font-size:11px;text-decoration:none;white-space:nowrap">להורדה ↓</a>` : '';
+  const act = (url) => url ? ` <button class="btn ghost" title="תצוגה" style="padding:1px 6px;font-size:12px" onclick="previewDoc('${esc(url)}')">👁</button><a href="${url}" target="_blank" title="הורדה" class="btn ghost" style="padding:1px 6px;font-size:12px;text-decoration:none">⬇</a>` : '';
   let biz = '<span class="muted">—</span>', invNo = '—', recNo = '—', invAmt = '—', wh = '—', action = '';
 
   if (isMatched) {
