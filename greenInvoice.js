@@ -9,44 +9,63 @@
 //   GREENINVOICE_API_KEY_ID
 //   GREENINVOICE_API_SECRET
 
+import { AsyncLocalStorage } from 'async_hooks';
+
 const BASE = process.env.GREENINVOICE_BASE || 'https://api.greeninvoice.co.il/api/v1';
 
-let cachedToken = null;
-let tokenExpiry = 0;
+// ---- ריבוי חברות: כל חברת חשבונית-ירוקה עם מפתחות משלה (משתני סביבה נפרדים) ----
+// מיפוי חברה → שמות משתני הסביבה של המפתחות. חברה ללא מיפוי/מפתחות = לא מחוברת.
+const CRED_ENV = {
+  co_bpm:   ['GREENINVOICE_API_KEY_ID',       'GREENINVOICE_API_SECRET'],
+  co_moshe: ['GREENINVOICE_MOSHE_API_KEY_ID', 'GREENINVOICE_MOSHE_API_SECRET'],
+};
+const DEFAULT_CO = 'co_bpm';
 
-function haveCredentials() {
-  return Boolean(process.env.GREENINVOICE_API_KEY_ID && process.env.GREENINVOICE_API_SECRET);
+// הקשר החברה הפעילה לכל בקשה — כך שכל ~40 הפונקציות משתמשות במפתחות/טוקן/מטמון הנכונים
+// בלי לשנות את חתימתן. השרת עוטף כל בקשה ב-withCompany(companyId, ...).
+const als = new AsyncLocalStorage();
+export function withCompany(companyId, fn) { return als.run({ companyId: companyId || DEFAULT_CO }, fn); }
+function curCompany() { const s = als.getStore(); return (s && s.companyId) || DEFAULT_CO; }
+// רשימת מזהי החברות שיש להן מיפוי מפתחות (לאימות אוטומטי בעליית שרת)
+export function giCompanies() { return Object.keys(CRED_ENV); }
+
+function credsFor(companyId) {
+  const pair = CRED_ENV[companyId];
+  if (!pair) return null;
+  const id = process.env[pair[0]], secret = process.env[pair[1]];
+  return (id && secret) ? { id, secret } : null;
 }
+function haveCredentials(companyId = curCompany()) { return Boolean(credsFor(companyId)); }
 
-// איפוס טוקן מטמון (למשל אחרי שינוי מפתחות מהממשק)
-function resetToken() { cachedToken = null; tokenExpiry = 0; try { clearDataCache(); } catch {} }
+const _tokens = new Map();   // companyId -> { token, exp }
 
-// בדיקת חיבור אמיתית: מנסה להשיג טוקן מול חשבונית ירוקה
-async function verify() {
-  if (!haveCredentials()) return { ok: false, error: 'לא הוזנו מפתחות' };
-  try { resetToken(); await getToken(); return { ok: true }; }
-  catch (e) { return { ok: false, error: e.message }; }
+// איפוס טוקן מטמון (לחברה נתונה) + ניקוי מטמון הנתונים שלה
+function resetToken(companyId = curCompany()) { _tokens.delete(companyId); try { clearDataCache(companyId); } catch {} }
+
+// בדיקת חיבור אמיתית לחברה (ברירת מחדל: הנוכחית)
+async function verify(companyId = curCompany()) {
+  if (!haveCredentials(companyId)) return { ok: false, error: 'לא הוזנו מפתחות' };
+  return withCompany(companyId, async () => {
+    try { resetToken(companyId); await getToken(); return { ok: true }; }
+    catch (e) { return { ok: false, error: e.message }; }
+  });
 }
 
 async function getToken() {
-  if (!haveCredentials()) {
-    throw new Error('חסרים מפתחות חשבונית ירוקה (GREENINVOICE_API_KEY_ID / GREENINVOICE_API_SECRET)');
-  }
-  if (cachedToken && Date.now() < tokenExpiry - 60000) return cachedToken;
-
+  const co = curCompany();
+  const creds = credsFor(co);
+  if (!creds) throw new Error(`חסרים מפתחות חשבונית ירוקה לחברה ${co}`);
+  const hit = _tokens.get(co);
+  if (hit && Date.now() < hit.exp - 60000) return hit.token;
   const res = await fetch(`${BASE}/account/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      id: process.env.GREENINVOICE_API_KEY_ID,
-      secret: process.env.GREENINVOICE_API_SECRET,
-    }),
+    body: JSON.stringify({ id: creds.id, secret: creds.secret }),
   });
   if (!res.ok) throw new Error(`שגיאת אימות חשבונית ירוקה: ${res.status} ${await res.text()}`);
   const data = await res.json();
-  cachedToken = data.token;
-  tokenExpiry = Date.now() + 25 * 60 * 1000; // ~25 דקות שמרני
-  return cachedToken;
+  _tokens.set(co, { token: data.token, exp: Date.now() + 25 * 60 * 1000 });
+  return data.token;
 }
 
 async function api(pathName, { method = 'GET', body } = {}) {
@@ -67,17 +86,23 @@ async function api(pathName, { method = 'GET', body } = {}) {
 }
 
 // ===== מטמון קריאה (מונע דפדוף חוזר על אלפי מסמכים בכל לחיצה) =====
-const _dataCache = new Map();       // key -> { at, val (Promise) }
+const _dataCache = new Map();       // "companyId|key" -> { at, val (Promise) }
 const DATA_TTL = 3 * 60 * 1000;     // 3 דקות
 function cached(key, fn, ttl = DATA_TTL) {
-  const hit = _dataCache.get(key);
+  const k = curCompany() + '|' + key;   // בידוד מטמון לפי חברה — לעולם לא לערבב נתונים בין חברות
+  const hit = _dataCache.get(k);
   if (hit && Date.now() - hit.at < ttl) return hit.val;
   const p = Promise.resolve().then(fn);
-  _dataCache.set(key, { at: Date.now(), val: p });
-  p.catch(() => { if (_dataCache.get(key)?.val === p) _dataCache.delete(key); }); // בכשל — לא לשמור
+  _dataCache.set(k, { at: Date.now(), val: p });
+  p.catch(() => { if (_dataCache.get(k)?.val === p) _dataCache.delete(k); }); // בכשל — לא לשמור
   return p;
 }
-export function clearDataCache() { _dataCache.clear(); }
+// ניקוי מטמון: ללא ארגומנט — הכל; עם companyId — רק של אותה חברה
+export function clearDataCache(companyId) {
+  if (!companyId) return _dataCache.clear();
+  const pfx = companyId + '|';
+  for (const k of [..._dataCache.keys()]) if (k.startsWith(pfx)) _dataCache.delete(k);
+}
 
 // סוגי מסמכים בחשבונית ירוקה (type) — לפי דוקומנטציית מורנינג/חשבונית ירוקה:
 //   10=הצעת מחיר, 100=הזמנה, 300=חשבון עסקה (עסקה), 305=חשבונית מס,
@@ -706,5 +731,5 @@ export async function updateSupplierDetails(id, data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, withCompany, giCompanies, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;

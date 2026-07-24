@@ -258,12 +258,9 @@ async function renderStatus() {
     let plOk = false;
     try { const s = await api('/api/paperless/status'); plOk = !!(s && s.connected); } catch { }
     pills = [pill('Paperless', plOk), pill('יומן גוגל', false)];
-  } else if (co === 'co_moshe') {
-    // משה: חשבונית ירוקה (כמו BPM) אך עדיין לא חוברה; יומן גוגל לא חובר.
-    pills = [pill('חשבונית ירוקה', false), pill('יומן גוגל', false)];
   } else {
-    // BPM: מצב חיבור אמיתי מהשרת
-    const h = await api('/api/health');
+    // BPM/משה: חשבונית ירוקה + יומן — מצב חיבור אמיתי מהשרת, לפי החברה הנבחרת (בידוד מלא)
+    const h = await api('/api/health?companyId=' + encodeURIComponent(co || ''));
     pills = [pill('חשבונית ירוקה', h.greenInvoiceConnected), pill('יומן גוגל', h.calendarConnected)];
   }
   el.innerHTML = pills.join('');

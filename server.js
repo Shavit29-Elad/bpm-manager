@@ -1974,7 +1974,7 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   // טווח תאריכים לשליפת חשבוניות (הכנסה) + הוצאות (ספקים) להתאמה אוטומטית בשני הצדדים
   let invoices = [], receipts = [], expenses = [];
   const iso = parsed.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
-  if (greenInvoice.haveCredentials() && iso.length && companyId === giCompanyId()) {
+  if (iso.length && giEnabled(companyId)) {
     const from = shiftISODays(iso[0], -75), to = shiftISODays(iso[iso.length - 1], 5);
     try { const inc = await greenInvoice.incomeForRange(from, to); invoices = inc.docs || []; } catch (e) { /* נמשיך בלי התאמה */ }
     try { receipts = await greenInvoice.receiptsForRange(from, to); } catch (e) { /* קבלות אופציונליות */ }
@@ -2041,7 +2041,7 @@ add('POST', /^\/api\/bank\/rematch$/, async (req, res, _p, _q, body) => {
   if (!txns.length) return json(res, { ok: true, updated: 0, message: 'אין תנועות' });
   const iso = txns.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
   let expenses = [];
-  if (greenInvoice.haveCredentials() && iso.length && companyId === giCompanyId()) {
+  if (iso.length && giEnabled(companyId)) {
     const from = shiftISODays(iso[0], -75), to = shiftISODays(iso[iso.length - 1], 5);
     try { expenses = await greenInvoice.expensesInRange(from, to); } catch { /* בלי התאמה */ }
   }
@@ -2092,7 +2092,7 @@ add('GET', /^\/api\/bank$/, async (req, res, _p, q) => {
   const db = load();
   let list = (db.bankTx || []).filter(t => !q.companyId || t.companyId === q.companyId);
   // השלמה חד-פעמית של קישורי צפייה/הורדה לחשבוניות מותאמות שאין להן url (נשמר, כך שלא נטען שוב)
-  if (greenInvoice.haveCredentials() && (!q.companyId || q.companyId === giCompanyId())) {
+  if (giEnabled(q.companyId || giCompanyId())) {
     let changed = false, budget = 25;
     for (const t of list) {
       if (budget <= 0) break;
@@ -2261,15 +2261,21 @@ add('DELETE', /^\/api\/users\/([^/]+)$/, (req, res, params) => {
   json(res, { ok: true });
 });
 
-// GET /api/health
-add('GET', /^\/api\/health$/, (req, res) => json(res, {
-  ok: true,
-  greenInvoiceConnected: greenInvoice.haveCredentials(),
-  paperlessConnected: paperless.haveCredentials(),
-  calendarConnected: hasCalendar(),
-  chatConnected: chatConfigured(),
-  whatsapp: getBridgeStatus().status,
-}));
+// GET /api/health?companyId= — סטטוס חיבורים. חשבונית ירוקה/יומן מדווחים לפי החברה הנבחרת (בידוד).
+add('GET', /^\/api\/health$/, (req, res, _p, q) => {
+  const cid = q.companyId || null;
+  // חשבונית ירוקה מחוברת = לחברה הזו יש מפתחות משלה. יומן גוגל שייך כרגע ל-BPM בלבד.
+  const giConn = cid ? giEnabled(cid) : greenInvoice.haveCredentials();
+  const calConn = (!cid || cid === giCompanyId()) ? hasCalendar() : false;
+  json(res, {
+    ok: true,
+    greenInvoiceConnected: giConn,
+    paperlessConnected: paperless.haveCredentials(),
+    calendarConnected: calConn,
+    chatConnected: chatConfigured(),
+    whatsapp: getBridgeStatus().status,
+  });
+});
 
 // ================= פייפרלס (אופק) =================
 // מזהה החברה המחוברת לפייפרלס (אופק)
@@ -2441,8 +2447,13 @@ const COMPANY_SEED = [
   { id: 'co_ofek', name: 'אופק ידעי הגברה ותאורה', active: false, accounting: 'paperless' },
   { id: 'co_moshe', name: 'משה כורסיה בע"מ', active: false, accounting: 'greenInvoice' },
 ];
-// מזהה החברה שאליה מחוברת חשבונית ירוקה (ברירת מחדל BPM) — לשם בידוד נתונים
+// מזהה חברת ה-GI הראשית (ברירת מחדל BPM) — לשם תאימות לאחור בלבד
 function giCompanyId() { const c = (load().companies || []).find(x => x.accounting === 'greenInvoice'); return c ? c.id : 'co_bpm'; }
+// האם החברה מחוברת לחשבונית ירוקה בפועל (סוג חשבונאי greenInvoice + יש מפתחות משלה)?
+function giEnabled(companyId) {
+  const c = (load().companies || []).find(x => x.id === companyId);
+  return !!(c && c.accounting === 'greenInvoice' && greenInvoice.haveCredentials(companyId));
+}
 // תשובה ריקה לכל endpoint שנשען על חשבונית ירוקה — עבור חברות שאינן חברת ה-GI (אופק/משה)
 function giEmptyFor(pathname) {
   if (pathname === '/api/dashboard') return { income: 0, vat: 0, openInvoices: 0, openInvoicesSum: 0, monthDocs: 0, docs: [], clients: [], errors: {} };
@@ -2532,8 +2543,8 @@ const server = http.createServer((req, res) => {
       }
     }
     req.user = authUser;
-    // בידוד חברות: נתוני חשבונית ירוקה שייכים לחברת ה-GI בלבד (BPM). לחברות אחרות מחזירים ריק.
-    if (req.method === 'GET' && q.companyId && q.companyId !== giCompanyId()) {
+    // בידוד חברות: נתוני חשבונית ירוקה שייכים לחברה שאליה החיבור שייך. חברה שאינה מחוברת ל-GI → ריק.
+    if (req.method === 'GET' && q.companyId && !giEnabled(q.companyId)) {
       const empty = giEmptyFor(url.pathname);
       if (empty !== undefined) return json(res, empty);
     }
@@ -2545,7 +2556,8 @@ const server = http.createServer((req, res) => {
     req.on('end', async () => {
       let body = {};
       try { body = raw ? JSON.parse(raw) : {}; } catch { /* ignore */ }
-      try { await route.handler(req, res, params, q, body); }
+      // כל הבקשה רצה בהקשר החברה הנבחרת — כך שקריאות חשבונית ירוקה משתמשות במפתחות/מטמון של אותה חברה בלבד
+      try { await greenInvoice.withCompany(q.companyId, () => route.handler(req, res, params, q, body)); }
       catch (e) { json(res, { error: e.message }, 500); }
     });
   } else {
