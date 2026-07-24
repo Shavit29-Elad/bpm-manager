@@ -649,16 +649,9 @@ async function renderHome(c) {
       </div>
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
     </div>
-    <div class="panel" id="openInvWrap"><div class="empty">טוען חשבוניות פתוחות…</div></div>
-    <div class="panel">
-      <div class="row-between">
-        <div><h2>מסמכים — ${label}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${docTypeSelect()}${periodControls()}</div>
-      </div>
-      ${state.period !== 'month' ? `<div style="margin-top:12px">${monthlyBreakdown(docs)}</div>` : ''}
-      <div style="margin-top:12px">${docsTable(docs, { showClient: true })}</div>
-    </div>`;
+    <div class="panel" id="openInvWrap"><div class="empty">טוען חשבוניות פתוחות…</div></div>`;
   loadOpenInvoices();
+  // חלק "מסמכים" עבר ללשונית "מסמכים ולקוחות" (renderClients)
 }
 
 // ---- חשבוניות פתוחות בדף הבית (כמו "חיובים קרובים" בחשבונית ירוקה) ----
@@ -1084,12 +1077,26 @@ function monthlyBreakdown(docs) {
 // ---- לקוחות (רשימה עם חיפוש; לחיצה מציגה את כל מסמכי הלקוח) ----
 const DOC_TYPE_NAMES = { 10: 'הצעת מחיר', 100: 'הזמנה', 200: 'תעודת משלוח', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 330: 'חשבונית זיכוי', 400: 'קבלה', 405: 'קבלה על תרומה' };
 async function renderClients(c) {
+  initPeriod();
+  c.innerHTML = `<div class="panel"><div class="empty">טוען מסמכים ולקוחות…</div></div>`;
+  // חלק המסמכים (עבר לכאן מדף הבית) — לפי הבוררים; ורשימת הלקוחות
+  const d = await api(`/api/dashboard?companyId=${state.company}&${periodQuery()}`).catch(() => ({ docs: [], income: 0 }));
   if (!state.clientsList) {
-    c.innerHTML = `<div class="panel"><div class="empty">טוען לקוחות…</div></div>`;
     const list = await api(`/api/clients`);
     state.clientsList = Array.isArray(list) ? list : [];
   }
-  c.innerHTML = `<div class="panel">
+  const docs = d.docs || [];
+  const label = periodLabel();
+  c.innerHTML = `
+    <div class="panel">
+      <div class="row-between">
+        <div><h2>מסמכים — ${label}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${docTypeSelect()}${periodControls()}</div>
+      </div>
+      ${state.period !== 'month' ? `<div style="margin-top:12px">${monthlyBreakdown(docs)}</div>` : ''}
+      <div style="margin-top:12px">${docsTable(docs, { showClient: true })}</div>
+    </div>
+    <div class="panel">
     <div class="row-between"><div><h2>לקוחות</h2><span class="muted">${state.clientsList.length} לקוחות</span></div>
       <button class="btn primary" onclick="openContactForm('client')">+ הוסף לקוח</button></div>
     <div style="display:flex;gap:16px;align-items:stretch;min-height:64vh">
