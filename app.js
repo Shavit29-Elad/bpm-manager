@@ -4766,8 +4766,8 @@ window.openBankImport = () => {
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(640px,94vw)">
     <h3>ייבוא תנועות בנק</h3>
-    <p class="muted" style="font-size:13px">שתי דרכים: להעלות את קובץ ה-Excel שהורדת ממזרחי (מהיר, כל התנועות), או להדביק ידנית מהתצוגה המפורטת באתר (מוסיף מספרי חשבונית).</p>
-    <label class="btn ghost" style="display:inline-block;cursor:pointer;margin:6px 0">📄 העלה קובץ Excel (מזרחי)
+    <p class="muted" style="font-size:13px">שתי דרכים: להעלות את קובץ ה-Excel שהורדת מהבנק (מזרחי או דיסקונט — מהיר, כל התנועות), או להדביק ידנית מהתצוגה המפורטת באתר (מוסיף מספרי חשבונית).</p>
+    <label class="btn ghost" style="display:inline-block;cursor:pointer;margin:6px 0">📄 העלה קובץ Excel מהבנק
       <input type="file" id="bankFile" accept=".xls,.xlsx,.csv,.htm,.html" style="display:none" onchange="bankFilePicked(this)"/>
     </label>
     <div class="muted" style="font-size:12px;margin:6px 0">— או —</div>
@@ -4786,12 +4786,48 @@ window.bankFilePicked = (input) => {
   const status = document.getElementById('bankStatus');
   if (status) status.innerHTML = `<span class="muted">נבחר קובץ: ${f.name} — לחץ "ייבא והתאם".</span>`;
 };
+// טעינת SheetJS (רק כשצריך לקרוא xlsx אמיתי)
+let _xlsxPromise = null;
+function ensureSheetJS() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (!_xlsxPromise) {
+    _xlsxPromise = new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      s.onload = () => res(window.XLSX);
+      s.onerror = () => rej(new Error('טעינת קורא ה-Excel נכשלה'));
+      document.head.appendChild(s);
+    });
+  }
+  return _xlsxPromise;
+}
+// המרת קובץ בנק לטקסט לשליחה לשרת:
+//  • xlsx/xls בינארי אמיתי (דיסקונט וכו') → קריאה עם SheetJS והמרה לרשת שורות עם הסימן #BANKGRID#
+//  • קובץ "אקסל" של מזרחי (בפועל HTML) / CSV / הדבקה → טקסט גולמי כמו קודם
+async function bankFileToText(f) {
+  let isBinary = false;
+  try {
+    const head = new Uint8Array(await f.slice(0, 8).arrayBuffer());
+    isBinary = (head[0] === 0x50 && head[1] === 0x4B) ||   // ZIP → xlsx
+               (head[0] === 0xD0 && head[1] === 0xCF);      // OLE → xls בינארי ישן
+  } catch { /* אם נכשל — ננסה כטקסט */ }
+  if (!isBinary) return await f.text();
+  const XLSX = await ensureSheetJS();
+  const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'dd/mm/yyyy', blankrows: false, defval: '' })
+    .map(r => (r || []).map(c => (c == null ? '' : String(c))));
+  return '#BANKGRID#' + JSON.stringify(rows);
+}
 window.doBankImport = async (btn) => {
   const fileInput = document.getElementById('bankFile');
   const ta = document.getElementById('bankText');
   const status = document.getElementById('bankStatus');
   let text = '';
-  if (fileInput && fileInput.files && fileInput.files[0]) { text = await fileInput.files[0].text(); }
+  if (fileInput && fileInput.files && fileInput.files[0]) {
+    try { text = await bankFileToText(fileInput.files[0]); }
+    catch (e) { if (status) status.innerHTML = `<span style="color:var(--danger)">שגיאה בקריאת הקובץ: ${e.message}</span>`; return; }
+  }
   else { text = (ta?.value || '').trim(); }
   if (!text) { if (status) status.innerHTML = '<span style="color:var(--warn)">בחר קובץ או הדבק תנועות.</span>'; return; }
   btn.disabled = true; btn.textContent = 'מייבא ומתאים…';

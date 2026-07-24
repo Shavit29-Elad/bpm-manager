@@ -143,9 +143,145 @@ export function parseMizrahiExcel(htmlText) {
   return txns;
 }
 
+// ============================================================================
+// פורמט "רשת" (grid) — קובץ xlsx אמיתי (למשל בנק דיסקונט). הדפדפן קורא את ה-xlsx
+// עם SheetJS וממיר למערך שורות (כל שורה = מערך תאים כמחרוזות), ושולח עם הסימן #BANKGRID#.
+// כאן מזהים אוטומטית את שורת-הכותרת ואת מיקום העמודות, ותומכים בשני מבנים:
+//   • עמודת סכום חתומה אחת ("₪ זכות/חובה": שלילי=חובה/יוצא, חיובי=זכות/נכנס) — דיסקונט.
+//   • עמודות זכות + חובה נפרדות (חיוביות) — כמו מזרחי.
+// ============================================================================
+const GRID_SENTINEL = '#BANKGRID#';
+
+function gridPayload(text) {
+  const s = String(text || '');
+  if (!s.startsWith(GRID_SENTINEL)) return null;
+  try { const g = JSON.parse(s.slice(GRID_SENTINEL.length)); return Array.isArray(g) ? g : null; }
+  catch { return null; }
+}
+
+// פירוק סכום חתום: תומך במינוס מוביל/נגרר, בסוגריים (שלילי), ובמפרידי-אלפים.
+function parseSignedAmt(s) {
+  let t = String(s == null ? '' : s).replace(BIDI, '').trim();
+  if (!t) return null;
+  const neg = /^-/.test(t) || /-\s*$/.test(t) || /^\(.*\)$/.test(t);
+  t = t.replace(/[^\d.]/g, '');
+  if (!t || t === '.') return null;
+  const n = parseFloat(t);
+  if (isNaN(n)) return null;
+  return neg ? -Math.abs(n) : Math.abs(n);
+}
+
+const p2 = (x) => String(x).padStart(2, '0');
+function normDateLoose(raw) {
+  const m = String(raw || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (!m) return null;
+  const y = m[3].length === 2 ? '20' + m[3] : m[3];
+  return `${p2(m[1])}/${p2(m[2])}/${y}`;
+}
+const toSortISO = (ddmmyyyy) => { const m = String(ddmmyyyy || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m ? `${m[3]}-${m[2]}-${m[1]}` : ''; };
+
+function headerText(cell) { return String(cell || '').replace(BIDI, '').replace(/\s+/g, ' ').trim(); }
+function findHeaderRow(rows) {
+  for (let i = 0; i < Math.min(rows.length, 40); i++) {
+    const cells = (rows[i] || []).map(headerText);
+    const hasDate = cells.some(c => /תאריך/.test(c));
+    const hasDesc = cells.some(c => /תיאור|פעולה|פירוט/.test(c));
+    const hasAmt = cells.some(c => /זכות|חובה|סכום/.test(c));
+    if (hasDate && hasDesc && hasAmt) return i;
+  }
+  return -1;
+}
+function mapColumns(rows, hi) {
+  const H = (rows[hi] || []).map(headerText);
+  const find = (re) => H.findIndex(c => re.test(c));
+  const dateCol = find(/תאריך/);                    // עמודת "תאריך" (לא "יום ערך")
+  const descCol = find(/תיאור|פעולה|פירוט/);
+  let signedCol = H.findIndex(c => /זכות/.test(c) && /חובה/.test(c));   // "זכות/חובה" באותו תא
+  const creditCol = signedCol >= 0 ? -1 : find(/זכות/);
+  const debitCol = signedCol >= 0 ? -1 : find(/חובה/);
+  if (signedCol < 0 && creditCol < 0 && debitCol < 0) signedCol = find(/סכום/);
+  const balCol = find(/יתרה/);
+  const refCol = find(/אסמכת|אסמ'|reference/i);
+  return { dateCol, descCol, signedCol, creditCol, debitCol, balCol, refCol };
+}
+
+// חילוץ שם הצד-הנגדי מתוך תיאור תנועה של דיסקונט (השם מוטמע בתיאור, אין שדה נפרד).
+function trimName(s) {
+  // הערה: \b של JS לא עובד על אותיות עבריות, לכן משתמשים ב-(?:\s.*)?$ במקום גבול-מילה.
+  return clean(s)
+    .replace(/\s+[בל]סניף(?:\s.*)?$/, '')     // "... בסניף 10-905" / "... לסניף 11-103"
+    .replace(/\s*-\s*$/, '')
+    .replace(/\s+\d{1,3}-\d{2,4}\s*$/, '')
+    .trim() || null;
+}
+function discountCounterparty(desc) {
+  const d = clean(desc);
+  let m = d.match(/^העברה\s+מ(.+)$/); if (m) return trimName(m[1]);            // העברה נכנסת
+  m = d.match(/^הו["'׳]?ק\s+ל(.+)$/); if (m) return trimName(m[1]);             // הוראת קבע יוצאת
+  m = d.match(/^הע(?:ברה)?\.?\s+ל(.+)$/); if (m) return trimName(m[1]);         // העברה יוצאת
+  m = d.match(/^(.+?)\s+(?:חיוב|זיכוי)$/); if (m) return trimName(m[1]);        // "<שם> חיוב/זיכוי"
+  return null;
+}
+
+export function parseGridStatement(rows) {
+  const hi = findHeaderRow(rows);
+  if (hi < 0) return [];
+  const col = mapColumns(rows, hi);
+  if (col.dateCol < 0 || col.descCol < 0) return [];
+  const txns = [];
+  for (let i = hi + 1; i < rows.length; i++) {
+    const cells = (rows[i] || []).map(c => String(c == null ? '' : c));
+    const date = normDateLoose(cells[col.dateCol]);
+    if (!date) continue;                                   // רק שורות נתונים
+    let amount = null;
+    if (col.signedCol >= 0) amount = parseSignedAmt(cells[col.signedCol]);
+    else {
+      const cr = parseSignedAmt(cells[col.creditCol]);
+      const db = parseSignedAmt(cells[col.debitCol]);
+      if (cr) amount = Math.abs(cr); else if (db) amount = -Math.abs(db);
+    }
+    if (amount == null || amount === 0) continue;          // מדלגים על שורות ריקות/סיכום
+    const description = clean(cells[col.descCol] || '');
+    const balance = col.balCol >= 0 ? parseSignedAmt(cells[col.balCol]) : null;
+    let reference = col.refCol >= 0 ? String(cells[col.refCol] || '').replace(BIDI, '').replace(/\s+/g, '').trim() : '';
+    reference = reference || null;
+    const t = {
+      date, description, amount, absAmount: Math.abs(amount),
+      direction: amount < 0 ? 'debit' : 'credit',          // זיכוי=נכנס, חיוב=יוצא
+      balance, reference, memo: '',
+    };
+    t.invoiceNumber = extractInvoiceNumber(description);
+    t.counterparty = discountCounterparty(description);
+    t.nameHint = t.counterparty || nameHintFrom(null, description);
+    txns.push(t);
+  }
+  return txns;
+}
+
+// יתרת עו"ש מתוך קובץ הרשת: יתרת התנועה בעלת התאריך האחרון (בדיסקונט התנועות ממוינות מהחדש לישן).
+function gridAccountBalance(rows) {
+  const hi = findHeaderRow(rows);
+  if (hi < 0) return null;
+  const col = mapColumns(rows, hi);
+  if (col.dateCol < 0 || col.balCol < 0) return null;
+  let best = null;
+  for (let i = hi + 1; i < rows.length; i++) {
+    const cells = (rows[i] || []).map(c => String(c == null ? '' : c));
+    const date = normDateLoose(cells[col.dateCol]);
+    if (!date) continue;
+    const bal = parseSignedAmt(cells[col.balCol]);
+    if (bal == null) continue;
+    const iso = toSortISO(date);
+    if (!best || iso > best.iso) best = { iso, balance: bal, date };
+  }
+  return best ? { balance: best.balance, date: best.date, time: null } : null;
+}
+
 // חילוץ יתרת החשבון הרשמית מכותרת הקובץ: "יתרה בחשבון: 391,252.69 לתאריך - 16/07/26 14:38"
 // זו היתרה הקובעת (עו"ש) — מדויקת יותר מהיתרה שבשורת התנועה האחרונה (שלרוב ריקה).
 export function extractAccountBalance(text) {
+  const grid = gridPayload(text);
+  if (grid) return gridAccountBalance(grid);
   const flat = String(text || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(BIDI, '').replace(/\s+/g, ' ');
   // תומך בגרסאות שונות של הכותרת + מספר עם/בלי עשרוני ומינוס מוביל/נגרר
   const m = flat.match(/(?:יתרה\s*(?:ב|ה)?חשבון|יתרה\s*משוערכת|היתרה\s*בחשבון)\s*:?\s*(-?[\d,]+(?:\.\d{1,2})?-?)/);
@@ -160,10 +296,12 @@ export function extractAccountBalance(text) {
   return { balance, date, time };
 }
 
-// זיהוי אוטומטי: אם זה טבלת HTML (קובץ אקסל של מזרחי) — פרסר אקסל, אחרת פרסר הדבקה
+// זיהוי אוטומטי: רשת xlsx (דיסקונט) → parseGridStatement · טבלת HTML (מזרחי) → parseMizrahiExcel · אחרת הדבקה
 export function parseBank(text) {
+  const grid = gridPayload(text);
+  if (grid) return parseGridStatement(grid);
   if (/<tr[\s>]/i.test(text) || /<table/i.test(text)) return parseMizrahiExcel(text);
   return parseMizrahi(text);
 }
 
-export default { parseMizrahi, parseMizrahiExcel, parseBank, extractAccountBalance };
+export default { parseMizrahi, parseMizrahiExcel, parseGridStatement, parseBank, extractAccountBalance };
