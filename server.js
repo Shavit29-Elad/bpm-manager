@@ -639,6 +639,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     const baseDesc = (body.description || draft.description || '').trim() || 'הוצאת ספק';
     const newPayable = (extra) => ({
       id: 'pay_' + Math.random().toString(36).slice(2, 10),
+      companyId: q.companyId || giCompanyId(),   // שיוך ההוצאה לחברה הפעילה (מונע ערבוב עם BPM)
       supplierId, supplierName: body.supplierName || draft.supplierName || '',
       taxId: (body.taxId || '').trim() || null,
       documentType: Number(body.documentType || draft.documentType) || 305,
@@ -2203,10 +2204,11 @@ add('DELETE', /^\/api\/bank\/([^/]+)$/, (req, res, params) => {
   json(res, { ok: true });
 });
 
-// DELETE /api/bank  — ניקוי כל התנועות של החברה
+// DELETE /api/bank  — ניקוי כל התנועות של החברה. חובה companyId (אחרת היינו מוחקים תנועות של כל החברות!)
 add('DELETE', /^\/api\/bank$/, (req, res, _p, q) => {
+  if (!q.companyId) return json(res, { error: 'חסר מזהה חברה' }, 400);
   const db = load();
-  db.bankTx = (db.bankTx || []).filter(t => q.companyId && t.companyId !== q.companyId);
+  db.bankTx = (db.bankTx || []).filter(t => t.companyId !== q.companyId);
   save(db);
   json(res, { ok: true });
 });
@@ -2789,8 +2791,10 @@ const server = http.createServer((req, res) => {
     req.on('end', async () => {
       let body = {};
       try { body = raw ? JSON.parse(raw) : {}; } catch { /* ignore */ }
-      // כל הבקשה רצה בהקשר החברה הנבחרת — כך שקריאות חשבונית ירוקה משתמשות במפתחות/מטמון של אותה חברה בלבד
-      try { await greenInvoice.withCompany(q.companyId, () => route.handler(req, res, params, q, body)); }
+      // כל הבקשה רצה בהקשר החברה הנבחרת — כך שקריאות חשבונית ירוקה משתמשות במפתחות/מטמון של אותה חברה בלבד.
+      // הקשר החברה נלקח מה-query, ואם חסר — מגוף הבקשה (הגנה לכתיבות שלא צירפו companyId ל-URL).
+      const _cid = q.companyId || (body && body.companyId) || undefined;
+      try { await greenInvoice.withCompany(_cid, () => route.handler(req, res, params, q, body)); }
       catch (e) { json(res, { error: e.message }, 500); }
     });
   } else {

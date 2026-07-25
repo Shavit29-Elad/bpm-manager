@@ -1,5 +1,19 @@
 // app.js — לוגיקת הממשק (SPA פשוט ללא ספריות)
 const state = { company: null, companies: [], tab: 'home', user: null };
+// בידוד חברות מוחלט: מצרף companyId לכל קריאת /api/ — כולל כתיבה (POST/PUT/DELETE) — כדי שכל פעולה
+// (יצירת חשבונית, אישור הוצאה, מחיקה וכו') תרוץ תמיד על החברה הפעילה ולא תיפול לחברת ברירת המחדל בשרת.
+(function () {
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    try {
+      if (typeof input === 'string' && input.indexOf('/api/') === 0 && input.indexOf('/api/auth/') !== 0
+        && input.indexOf('companyId=') === -1 && state && state.company) {
+        input += (input.indexOf('?') === -1 ? '?' : '&') + 'companyId=' + encodeURIComponent(state.company);
+      }
+    } catch (e) { /* לא חוסם */ }
+    return _origFetch(input, init);
+  };
+})();
 const $ = (s) => document.querySelector(s);
 const money = (n) => (n == null ? '—' : '₪' + Number(n).toLocaleString('he-IL'));
 
