@@ -2309,7 +2309,7 @@ add('POST', /^\/api\/tx-group-rules\/apply$/, (req, res, _p, _q, body) => {
 // GET /api/group-summary?companyId=&year=YYYY
 // סיכום נטו (ללא מע"מ) לפי קבוצה וחודש: לתנועות משויכות-לקבוצה, לוקחים את הסכום ללא מע"מ של המסמך המשויך.
 // תנועה משויכת לקבוצה אך בלי מסמך — נספרת בנפרד (unlinked) ולא נכנסת לנטו.
-add('GET', /^\/api\/group-summary$/, (req, res, _p, q) => {
+add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   const db = load();
   if (ensureGroupsSeeded(db)) save(db);
   const cid = q.companyId || null;
@@ -2323,34 +2323,65 @@ add('GET', /^\/api\/group-summary$/, (req, res, _p, q) => {
   };
   const groups = (db.txGroups || []).filter(g => g.companyId === cid);
   const gmap = {};
-  for (const g of groups) gmap[g.id] = { income: Array(12).fill(0), expense: Array(12).fill(0), unlinkedIncome: 0, unlinkedExpense: 0 };
+  for (const g of groups) gmap[g.id] = { income: Array(12).fill(0), expense: Array(12).fill(0), unlinkedExpense: 0 };
+
+  // ===== הכנסות = חשבוניות מס (305) + מס-קבלה (320) שיצאו בפועל השנה, ברוטו (כולל מע"מ) =====
+  // כל מסמך משויך לקטגוריה לפי תנועת הבנק שאליה הוא הותאם (אם לתנועה יש קבוצה). מסמך שטרם הותאם/סווג → "ללא שיוך".
+  const docGroup = new Map(); // 'id:'+docId / 'num:'+number  →  groupId
   for (const t of (db.bankTx || [])) {
     if (cid && t.companyId !== cid) continue;
     if (!t.group || !gmap[t.group]) continue;
+    for (const inv of (t.matchedInvoices || [])) {
+      if (inv && inv.id != null) docGroup.set('id:' + inv.id, t.group);
+      if (inv && inv.number != null) docGroup.set('num:' + inv.number, t.group);
+    }
+  }
+  const ungrouped = Array(12).fill(0);
+  let incomeError = null;
+  if (greenInvoice.haveCredentials()) {
+    try {
+      const inc = await greenInvoice.incomeForRange(`${year}-01-01`, `${year}-12-31`, [305, 320]);
+      for (const d of (inc.docs || [])) {
+        const iso = String(d.date || '');
+        if (iso.slice(0, 4) !== year) continue;
+        const mi = (parseInt(iso.slice(5, 7), 10) || 0) - 1;
+        if (mi < 0 || mi > 11) continue;
+        const amt = Number(d.amountIncVat != null ? d.amountIncVat : d.amount) || 0;
+        const gid = docGroup.get('id:' + d.id) || (d.number != null ? docGroup.get('num:' + d.number) : null) || null;
+        if (gid && gmap[gid]) gmap[gid].income[mi] += amt; else ungrouped[mi] += amt;
+      }
+    } catch (e) { incomeError = e.message; }
+  } else { incomeError = 'חשבונית ירוקה לא מחוברת'; }
+
+  // ===== הוצאות = תנועות חובה בבנק לפי קבוצה. עם מסמך → נטו (ללא מע"מ); בלי מסמך (מיסים/מע"מ/עמלות) → סכום הבנק =====
+  for (const t of (db.bankTx || [])) {
+    if (cid && t.companyId !== cid) continue;
+    if (!t.group || !gmap[t.group]) continue;
+    if (t.direction !== 'debit') continue;
     const m = String(t.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
     if (!m || m[3] !== year) continue;
     const mi = (+m[2]) - 1;
     const invs = Array.isArray(t.matchedInvoices) ? t.matchedInvoices : [];
     const net = invs.reduce((s, inv) => s + netOf(inv), 0);
     const b = gmap[t.group];
-    // עם מסמך → נטו (ללא מע"מ) מהמסמך. בלי מסמך (מיסים/מע"מ/עמלות/כרטיסי אשראי שאין להם חשבונית) → סכום הבנק עצמו,
-    // כדי שקטגוריות אלה ייכללו בסיכום. שדות ה-unlinked ממשיכים לעקוב כמה מהסכום נספר לפי הבנק (ברוטו) לצורך שקיפות.
     const val = invs.length ? net : (t.absAmount || 0);
-    if (t.direction === 'credit') { b.income[mi] += val; if (!invs.length) b.unlinkedIncome += (t.absAmount || 0); }
-    else { b.expense[mi] += val; if (!invs.length) b.unlinkedExpense += (t.absAmount || 0); }
+    b.expense[mi] += val;
+    if (!invs.length) b.unlinkedExpense += (t.absAmount || 0);
   }
-  const out = groups.map(g => {
-    const b = gmap[g.id];
-    const totalIncome = b.income.reduce((a, x) => a + x, 0);
-    const totalExpense = b.expense.reduce((a, x) => a + x, 0);
+
+  const mkGroup = (id, name, key, inc, exp, unlinkedExp) => {
+    const totalIncome = inc.reduce((a, x) => a + x, 0);
+    const totalExpense = exp.reduce((a, x) => a + x, 0);
     return {
-      id: g.id, name: g.name, key: g.key || null,
-      months: b.income.map((inc, i) => ({ m: i + 1, income: r2(inc), expense: r2(b.expense[i]), profit: r2(inc - b.expense[i]) })),
+      id, name, key: key || null,
+      months: inc.map((v, i) => ({ m: i + 1, income: r2(v), expense: r2(exp[i]), profit: r2(v - exp[i]) })),
       totalIncome: r2(totalIncome), totalExpense: r2(totalExpense), totalProfit: r2(totalIncome - totalExpense),
-      unlinkedIncome: r2(b.unlinkedIncome), unlinkedExpense: r2(b.unlinkedExpense),
+      unlinkedIncome: 0, unlinkedExpense: r2(unlinkedExp || 0),
     };
-  });
-  json(res, { ok: true, year, groups: out });
+  };
+  const out = groups.map(g => mkGroup(g.id, g.name, g.key, gmap[g.id].income, gmap[g.id].expense, gmap[g.id].unlinkedExpense));
+  if (ungrouped.some(x => x)) out.push(mkGroup('ungrouped', 'הכנסות ללא שיוך לקטגוריה', null, ungrouped, Array(12).fill(0), 0));
+  json(res, { ok: true, year, incomeBasis: 'issued-305-320-gross', incomeError, groups: out });
 });
 
 // ================= התחברות והרשאות =================
