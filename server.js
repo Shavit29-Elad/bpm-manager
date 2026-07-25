@@ -2333,8 +2333,11 @@ add('GET', /^\/api\/group-summary$/, (req, res, _p, q) => {
     const invs = Array.isArray(t.matchedInvoices) ? t.matchedInvoices : [];
     const net = invs.reduce((s, inv) => s + netOf(inv), 0);
     const b = gmap[t.group];
-    if (t.direction === 'credit') { if (invs.length) b.income[mi] += net; else b.unlinkedIncome += (t.absAmount || 0); }
-    else { if (invs.length) b.expense[mi] += net; else b.unlinkedExpense += (t.absAmount || 0); }
+    // עם מסמך → נטו (ללא מע"מ) מהמסמך. בלי מסמך (מיסים/מע"מ/עמלות/כרטיסי אשראי שאין להם חשבונית) → סכום הבנק עצמו,
+    // כדי שקטגוריות אלה ייכללו בסיכום. שדות ה-unlinked ממשיכים לעקוב כמה מהסכום נספר לפי הבנק (ברוטו) לצורך שקיפות.
+    const val = invs.length ? net : (t.absAmount || 0);
+    if (t.direction === 'credit') { b.income[mi] += val; if (!invs.length) b.unlinkedIncome += (t.absAmount || 0); }
+    else { b.expense[mi] += val; if (!invs.length) b.unlinkedExpense += (t.absAmount || 0); }
   }
   const out = groups.map(g => {
     const b = gmap[g.id];

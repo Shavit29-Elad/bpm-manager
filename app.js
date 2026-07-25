@@ -722,7 +722,7 @@ function groupSummaryHtml(r) {
       <td style="color:var(--accent2)">${money(g.totalIncome)}</td>
       <td style="color:var(--danger)">${money(g.totalExpense)}</td>
       <td style="color:${g.totalProfit >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(g.totalProfit)}</td></tr>`;
-    const unlinked = (g.unlinkedIncome || g.unlinkedExpense) ? `<div class="muted" style="font-size:11.5px;margin-top:6px">⚠️ תנועות ששויכו לקבוצה אך בלי מסמך (לא נכללות בנטו): הכנסות ${money(g.unlinkedIncome)} · הוצאות ${money(g.unlinkedExpense)}</div>` : '';
+    const unlinked = (g.unlinkedIncome || g.unlinkedExpense) ? `<div class="muted" style="font-size:11.5px;margin-top:6px">ℹ️ כולל תנועות ללא מסמך משויך — נספרות לפי סכום הבנק (ברוטו, כולל מע"מ): הכנסות ${money(g.unlinkedIncome)} · הוצאות ${money(g.unlinkedExpense)}</div>` : '';
     return `<details open style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;font-size:15px">${emoji} ${escapeHtml(g.name)} — ${year} · רווח ${money(g.totalProfit)}</summary>
       <div style="overflow-x:auto;margin-top:8px"><table style="min-width:440px;font-size:13px"><thead><tr><th>חודש</th><th>הכנסות</th><th>הוצאות</th><th>רווח</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="muted">אין נתונים משויכים לשנה זו.</td></tr>'}${totalRow}</tbody></table></div>${unlinked}</details>`;
   };
@@ -780,7 +780,7 @@ function businessSummaryHtml(r) {
       <td style="color:var(--accent2)">${money(g.totalIncome)}</td>
       <td style="color:var(--danger)">${money(g.totalExpense)}</td>
       <td style="color:${g.totalProfit >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(g.totalProfit)}</td></tr>`;
-    const unlinked = (g.unlinkedIncome || g.unlinkedExpense) ? `<div class="muted" style="font-size:11.5px;margin-top:6px">⚠️ תנועות ששויכו לקבוצה אך בלי מסמך (לא נכללות בנטו): הכנסות ${money(g.unlinkedIncome)} · הוצאות ${money(g.unlinkedExpense)}</div>` : '';
+    const unlinked = (g.unlinkedIncome || g.unlinkedExpense) ? `<div class="muted" style="font-size:11.5px;margin-top:6px">ℹ️ כולל תנועות ללא מסמך משויך — נספרות לפי סכום הבנק (ברוטו, כולל מע"מ): הכנסות ${money(g.unlinkedIncome)} · הוצאות ${money(g.unlinkedExpense)}</div>` : '';
     return `<details ${hasData ? 'open' : ''} style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;font-size:15px">${bizGroupEmoji(g)} ${escapeHtml(g.name)} — ${year} · רווח ${money(g.totalProfit)}</summary>
       <div style="overflow-x:auto;margin-top:8px"><table style="min-width:440px;font-size:13px"><thead><tr><th>חודש</th><th>הכנסות</th><th>הוצאות</th><th>רווח</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="muted">אין נתונים משויכים לשנה זו.</td></tr>'}${totalRow}</tbody></table></div>${unlinked}</details>`;
   };
