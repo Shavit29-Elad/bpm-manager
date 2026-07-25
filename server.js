@@ -43,10 +43,11 @@ function normName(s) {
     .trim().toLowerCase();
 }
 // מוצא את שם-הלקוח הממופה לזמר (אם קיים במיפוי)
-function mappedClientName(db, artist) {
+function mappedClientName(db, artist, companyId) {
   const a = normName(artist);
   if (!a) return null;
-  const map = db.artistClientMap || [];
+  // מיפוי פר-חברה (רשומות ישנות ללא companyId שייכות ל-BPM)
+  const map = (db.artistClientMap || []).filter(m => (m.companyId || 'co_bpm') === (companyId || 'co_bpm'));
   // התאמה: שם הזמר במיפוי מוכל בשם הזמר של האירוע (או להפך)
   const hit = map.find(m => {
     const key = normName(m.artist);
@@ -90,7 +91,7 @@ async function ingestText(text, companyId) {
       : (parsed.contractors || []).map(name => ({ name, amount: null }));
     // מיפוי זמר → לקוח ברירת-מחדל
     let clientName = null, clientId = null;
-    const mapped = mappedClientName(db, parsed.artist);
+    const mapped = mappedClientName(db, parsed.artist, cid);
     if (mapped) {
       const r = await resolveCached(mapped);
       clientName = r.clientName; clientId = r.clientId;
@@ -146,18 +147,19 @@ add('POST', /^\/api\/events\/ingest$/, async (req, res, _p, _q, body) => {
 
 // ---- מיפוי זמר → לקוח ברירת-מחדל (צפייה/עריכה) ----
 // GET /api/artist-map — כל המיפויים
-add('GET', /^\/api\/artist-map$/, (req, res) => json(res, load().artistClientMap || []));
-// POST /api/artist-map — הוספה/עדכון { artist, clientName }
-add('POST', /^\/api\/artist-map$/, (req, res, _p, _q, body) => {
+add('GET', /^\/api\/artist-map$/, (req, res, _p, q) => json(res, (load().artistClientMap || []).filter(m => (m.companyId || 'co_bpm') === (q.companyId || 'co_bpm'))));
+// POST /api/artist-map — הוספה/עדכון { artist, clientName } (פר-חברה)
+add('POST', /^\/api\/artist-map$/, (req, res, _p, q, body) => {
   const db = load();
   const artist = String(body?.artist || '').trim();
   const clientName = String(body?.clientName || '').trim();
+  const cid = q.companyId || 'co_bpm';
   if (!artist || !clientName) return json(res, { error: 'חסר זמר או שם לקוח' }, 400);
   db.artistClientMap = db.artistClientMap || [];
-  const i = db.artistClientMap.findIndex(m => normName(m.artist) === normName(artist));
+  const i = db.artistClientMap.findIndex(m => (m.companyId || 'co_bpm') === cid && normName(m.artist) === normName(artist));
   if (i >= 0) db.artistClientMap[i].clientName = clientName;
-  else db.artistClientMap.push({ artist, clientName });
-  save(db); json(res, { ok: true, map: db.artistClientMap });
+  else db.artistClientMap.push({ artist, clientName, companyId: cid });
+  save(db); json(res, { ok: true, map: db.artistClientMap.filter(m => (m.companyId || 'co_bpm') === cid) });
 });
 // DELETE /api/artist-map/:artist — הסרת מיפוי
 add('DELETE', /^\/api\/artist-map\/(.+)$/, (req, res, params) => {
@@ -215,7 +217,9 @@ add('PUT', /^\/api\/events\/([^/]+)$/, (req, res, params, _q, body) => {
   const db = load();
   const ev = db.events.find(e => e.id === params[0]);
   if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
-  Object.assign(ev, body); save(db); json(res, ev);
+  const b = { ...(body || {}) };
+  delete b.id; delete b.companyId; delete b.createdAt;   // שדות מוגנים — עריכה לא מזיזה אירוע בין חברות ולא משנה מזהה
+  Object.assign(ev, b); save(db); json(res, ev);
 });
 
 // DELETE /api/events/:id — מוחק רק מרשימת האירועים שלנו (לא מיומן גוגל)
@@ -408,6 +412,13 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
   const type = Number(body.type) || greenInvoice.DOC_TYPES.INVOICE;
   const subtotal = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
   if (!items.length) return json(res, { error: 'אין שורות לחיוב' }, 400);
+  if (!(subtotal > 0)) return json(res, { error: 'סכום החיוב חייב להיות גדול מ-0' }, 400);
+  // מניעת חיוב כפול: אירועים שכבר חויבו לא יופקו שוב אלא באישור מפורש (allowReinvoice)
+  const already = evs.filter(e => e.invoiceStatus === 'invoiced');
+  if (already.length && !body.allowReinvoice) {
+    const nums = already.map(e => e.invoiceNumber || '').filter(Boolean).join(', ') || '—';
+    return json(res, { error: `חלק מהאירועים כבר חויבו (מסמך ${nums}). כדי להפיק חשבונית נוספת לאותם אירועים — אשר במפורש.`, alreadyInvoiced: already.map(e => ({ id: e.id, invoiceNumber: e.invoiceNumber })) }, 409);
+  }
   if (!greenInvoice.haveCredentials()) {
     return json(res, { error: 'חסרים מפתחות חשבונית ירוקה — הוסף אותם כדי להפיק בפועל',
       preview: { type, items, subtotal, subject: subjectForEvents(evs) } }, 400);
@@ -505,6 +516,8 @@ add('POST', /^\/api\/quotes\/create$/, async (req, res, _p, _q, body) => {
       .map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }))
       .filter(it => it.description);
     if (!items.length) return json(res, { error: 'אין שורות בהצעת המחיר' }, 400);
+    const _qtotal = items.reduce((s, it) => s + it.price * it.quantity, 0);
+    if (!(_qtotal > 0)) return json(res, { error: 'סכום הצעת המחיר חייב להיות גדול מ-0' }, 400);
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim(), add: true };
     const opts = { type: 10, client, items, description: body.subject || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
@@ -525,6 +538,8 @@ add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
       .map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }))
       .filter(it => it.description);
     if (!items.length) return json(res, { error: 'אין שורות במסמך' }, 400);
+    const _dtotal = items.reduce((s, it) => s + it.price * it.quantity, 0);
+    if (!isFinite(_dtotal) || _dtotal === 0) return json(res, { error: 'סכום המסמך אינו תקין (0)' }, 400);
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim(), add: true };
     const opts = { type, client, items, description: body.subject || body.description || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
@@ -2808,6 +2823,6 @@ server.listen(PORT, async () => {
   runMigrations();
   autoVerifyConnections();
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);
-  startWhatsappBridge(async (text) => { try { await ingestText(text); } catch {} })
+  startWhatsappBridge(async (text) => { try { const wc = process.env.WHATSAPP_COMPANY || 'co_bpm'; await greenInvoice.withCompany(wc, () => ingestText(text, wc)); } catch {} })
     .then(r => { if (r && !r.ok) console.log('ווטסאפ:', r.reason); });
 });

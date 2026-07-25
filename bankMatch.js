@@ -149,13 +149,15 @@ export function matchDebits(txns, expenses) {
 // כדי לא לתפוס קבלה מחודש אחר שבמקרה זהה בסכום. הסכום הוא תנאי סף; התאריך מכריע בין המועמדות.
 export function attachReceipts(matched, receipts) {
   if (!receipts || !receipts.length) return matched;
+  const used = new Set();   // קבלה שכבר צורפה לחשבונית — לא תצורף לחשבונית נוספת
   for (const t of matched) {
     for (const inv of (t.matchedInvoices || [])) {
       if (inv.type === 320 || inv.type === '320') continue;    // מס-קבלה — כולל קבלה
-      const cands = receipts.filter(r => nameMatch(inv.clientName, r.clientName) && Math.abs((r.amountIncVat ?? r.amount) - inv.amount) <= tol(inv.amount));
+      const cands = receipts.filter(r => !used.has(r.id ?? r.number) && nameMatch(inv.clientName, r.clientName) && Math.abs((r.amountIncVat ?? r.amount) - inv.amount) <= tol(inv.amount));
       if (!cands.length) continue;
       cands.sort((a, b) => daysBetween(inv.date, a.date) - daysBetween(inv.date, b.date)); // הקרובה ביותר לתאריך החשבונית
       const rec = cands[0];
+      used.add(rec.id ?? rec.number);
       inv.receipt = { number: rec.number, url: rec.url || null, amount: rec.amountIncVat ?? rec.amount };
     }
   }

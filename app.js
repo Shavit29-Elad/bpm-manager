@@ -533,6 +533,7 @@ window.doSendDoc = async (id) => {
   const st = document.getElementById('sendDocStatus');
   const btn = document.getElementById('sendDocBtn');
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש להזין כתובת מייל תקינה.</span>'; return; }
+  if (!confirm(`לשלוח את המסמך לכתובת:\n${email}?`)) return;
   if (btn) { btn.disabled = true; btn.textContent = 'שולח…'; }
   if (st) st.innerHTML = '<span class="muted">שולח מייל…</span>';
   const r = await fetch(`/api/documents/${id}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
@@ -2139,10 +2140,13 @@ window.generateInvoice = async (btn) => {
   if (!confirm(`להפיק ${typeName} על סך ${money(invTotals().total)} עבור ${p.client}?\nהמסמך ייווצר בחשבונית ירוקה ולא ניתן למחיקה (רק לזכות).${emailNote}`)) return;
   btn.disabled = true; btn.textContent = 'מפיק…';
   const st = document.getElementById('invPvStatus'); st.innerHTML = '<span class="muted">יוצר מסמך בחשבונית ירוקה…</span>';
-  const r = await fetch('/api/invoicing/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  const doGen = (allowReinvoice) => fetch('/api/invoicing/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ companyId: state.company, eventIds: p.ids, clientName: p.client, clientId: p.clientId,
       type: p.type, items, description: p.subject, date: p.docDate || null,
-      sendEmail: p.sendEmail, email: p.sendEmail ? p.email : null }) }).then(r => r.json()).catch(() => ({ error: 'שגיאת רשת' }));
+      sendEmail: p.sendEmail, email: p.sendEmail ? p.email : null, allowReinvoice }) }).then(r => r.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  let r = await doGen(false);
+  // אירועים שכבר חויבו — דורש אישור מפורש כדי להפיק חשבונית נוספת (מונע חיוב כפול)
+  if (r && r.alreadyInvoiced && confirm(`${r.error}\n\nלהפיק בכל זאת חשבונית נוספת לאותם אירועים?`)) { st.innerHTML = '<span class="muted">מפיק…</span>'; r = await doGen(true); }
   btn.disabled = false; btn.textContent = '✓ הפק בחשבונית ירוקה';
   if (r.ok) {
     document.getElementById('invPvModal').classList.add('hidden');

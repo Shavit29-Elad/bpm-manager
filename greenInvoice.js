@@ -259,10 +259,14 @@ function lastDay(month) {
   return `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
 }
 
+// שיעור מע"מ מרוכז (ברירת מחדל 18%). ניתן לעדכן דרך משתנה הסביבה VAT_RATE.
+const VAT_RATE = Number(process.env.VAT_RATE) || 0.18;
+const VAT_DIV = 1 + VAT_RATE;
+
 // מיפוי מסמך לתצוגה, כולל פירוק מע"מ (הסכום בחשבונית ירוקה כולל מע"מ)
 function mapDoc(d) {
   const amount = num(d.amount ?? d.total ?? d.sum); // כולל מע"מ
-  const vat = d.vat != null ? num(d.vat) : amount - amount / 1.18; // 18% אם לא סופק
+  const vat = d.vat != null ? num(d.vat) : amount - amount / VAT_DIV; // אם לא סופק — לפי שיעור המע"מ המוגדר
   return {
     id: d.id, number: d.number, type: d.type, date: d.documentDate,
     status: d.status, // 0=פתוח, 1=סגור, 2=סומן ידנית כסגור, 3=מבטל מסמך אחר, 4=מבוטל
@@ -426,7 +430,8 @@ function mapExpense(e) {
     supplierName: e.supplier?.name || e.supplierName || '—',
     supplierId: e.supplier?.id || e.supplierId || null,
     amount, amountIncVat: amount,
-    amountExVat: e.amountExcludeVat != null ? num(e.amountExcludeVat) : amount,
+    // אם חשבונית ירוקה לא סיפקה סכום ללא מע"מ — מחלצים לפי שיעור המע"מ (ולא משאירים כולל מע"מ, שהיה מנפח הוצאות בסיכום)
+    amountExVat: e.amountExcludeVat != null ? num(e.amountExcludeVat) : Math.round((amount / VAT_DIV) * 100) / 100,
     category: e.category?.name || e.categoryName || e.description || '',
     description: e.description || e.category?.name || e.categoryName || e.remarks || '',
     url: (e.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e.url === 'string' ? e.url : null),
