@@ -3759,7 +3759,9 @@ async function renderBusiness(c) {
       <label>מס׳ עסק / ח.פ<input id="biz_number" value="${escapeHtml(p.businessNumber || '')}"></label>
       <label>מייל<input id="biz_email" value="${escapeHtml(p.email || '')}"></label>
       <label>כתובת עסק<input id="biz_address" value="${escapeHtml(p.address || '')}"></label>
+      <label>אימייל רו״ח (להעברת הוצאות)<input id="biz_acct" type="email" dir="ltr" placeholder="ריק = לא מעביר לאף אחד" value="${escapeHtml(p.accountantEmail || '')}"></label>
     </div>
+    <div class="muted" style="font-size:12px;margin-top:8px">כשמאשרים קליטת הוצאה, קובץ החשבונית נשלח אוטומטית לכתובת רו״ח <b>של החברה הזו בלבד</b>. אם ריק — לא נשלח מייל.</div>
     <div style="margin-top:14px"><button class="btn primary" onclick="bizSave()">💾 שמור פרטים</button></div>
   </div>
 
@@ -3910,7 +3912,7 @@ window.bizSave = async () => {
   const g = (id) => (document.getElementById(id)?.value || '').trim();
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
-    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'),
+    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'),
     managers: [
       { name: g('mgr0_name'), idNumber: g('mgr0_id'), phone: g('mgr0_phone'), email: g('mgr0_email') },
       { name: g('mgr1_name'), idNumber: g('mgr1_id'), phone: g('mgr1_phone'), email: g('mgr1_email') },

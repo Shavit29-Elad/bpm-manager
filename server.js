@@ -595,9 +595,10 @@ function applyLinkedEvents(db, linkedEvents, invoiceNumber, payableId) {
 
 // POST /api/expense-drafts/:id/approve — אישור טיוטה → יצירת הוצאה אמיתית מנתוני ה-OCR (עם תיקונים)
 // body: { supplierId, number, date, documentType, amount, vatIncluded, description, accountingClassificationId? }
-add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params, _q, body) => {
+add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params, q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   const draftId = params[0];
+  const _acctEmail = bizProfile(load(), q.companyId || giCompanyId()).accountantEmail || '';   // רו"ח של החברה הפעילה בלבד
   try {
     const draft = await greenInvoice.getExpenseDraft(draftId);
     if (!draft) return json(res, { error: 'הטיוטה לא נמצאה (ייתכן שכבר טופלה)' }, 404);
@@ -709,7 +710,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     // העברת קובץ ההוצאה אוטומטית לכתובת רו"ח (best-effort)
     let forwarded = false, forwardError = null;
     try {
-      const fwd = mailer.forwardExpenseTo();
+      const fwd = _acctEmail;   // כתובת רו"ח של החברה הפעילה (ריק = לא מעבירים)
       if (mailer.mailerConfigured() && fwd && fileBuf) {
         await mailer.sendMail({
           to: fwd,
@@ -743,7 +744,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       try { await greenInvoice.updateSupplier(supplierId, { accountingClassificationId: body.accountingClassificationId }); } catch { }
     }
 
-    json(res, { ok: true, expense: created, draftRemoved, forwarded, forwardError, forwardTo: mailer.forwardExpenseTo(), payableId, linkedCount });
+    json(res, { ok: true, expense: created, draftRemoved, forwarded, forwardError, forwardTo: _acctEmail || null, payableId, linkedCount });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -880,8 +881,9 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/delete$/, (req, res, params) =>
 });
 
 // GET /api/mail/status — האם שליחת מייל מוגדרת ולאן מועברות הוצאות
-add('GET', /^\/api\/mail\/status$/, (req, res) => {
-  json(res, { configured: mailer.mailerConfigured(), forwardTo: mailer.forwardExpenseTo() });
+add('GET', /^\/api\/mail\/status$/, (req, res, _p, q) => {
+  const acct = bizProfile(load(), q.companyId || giCompanyId()).accountantEmail || null;
+  json(res, { configured: mailer.mailerConfigured(), forwardTo: acct });
 });
 
 // GET /api/mail/test — אימות SMTP ושליחת מייל בדיקה. דורש ?key=<MAIL_TEST_KEY> כדי למנוע הפעלה לא רצויה.
@@ -1443,6 +1445,8 @@ function bizProfile(db, cid) {
   p.managers = Array.isArray(p.managers) ? p.managers : [{}, {}];
   while (p.managers.length < 2) p.managers.push({});
   p.additionalDocs = Array.isArray(p.additionalDocs) ? p.additionalDocs : [];
+  // כתובת רו"ח להעברת הוצאות — פר-חברה. BPM: ברירת המחדל ההיסטורית. חברות אחרות: ריק עד שמגדירים (לא מעבירים לאף אחד).
+  if (p.accountantEmail === undefined) p.accountantEmail = (cid === 'co_bpm') ? (process.env.FORWARD_EXPENSE_EMAIL || '516942349@rivh.it') : '';
   return p;
 }
 // GET /api/business-profile?companyId=
@@ -1480,6 +1484,7 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   const p = bizProfile(db, q.companyId || giCompanyId());
   const b = body || {};
   ['name', 'businessNumber', 'email', 'address'].forEach(k => { if (k in b) p[k] = String(b[k] || ''); });
+  if ('accountantEmail' in b) p.accountantEmail = String(b.accountantEmail || '').trim();
   if (Array.isArray(b.managers)) b.managers.slice(0, 2).forEach((m, i) => {
     p.managers[i] = p.managers[i] || {};
     ['name', 'idNumber', 'phone', 'email'].forEach(k => { if (k in m) p.managers[i][k] = String(m[k] || ''); });
