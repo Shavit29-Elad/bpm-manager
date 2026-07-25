@@ -49,7 +49,7 @@ const api = (p) => {
   };
 })();
 
-const TAB_LABELS = { home: '🏠 בית', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
+const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
 // התאמת שם לפי כל המילים בשאילתה (בכל מיקום) — עמיד לשמות עם תיאור באמצע, למשל "אורן מושייב" מול "אורן אירועים - אורן מושייב"
 const nameHas = (name, q) => { const toks = String(q || '').trim().split(/\s+/).filter(Boolean); const nm = String(name || ''); return !toks.length || toks.every(t => nm.includes(t)); };
 // קידוד אובייקט ל-onclick בצורה בטוחה: encodeURIComponent לא מקודד גרש ' — נחליף ל-%27 כדי שגרש בתיאור (למשל "מס' הקצאה") לא ישבור את מחרוזת ה-onclick. פענוח ב-decodeURIComponent מחזיר את הגרש.
@@ -181,6 +181,9 @@ function applyCompanyTabs() {
     document.querySelectorAll(`.tab[data-tab="${tab}"]`).forEach(t => { t.style.display = (!isMoshe && userAllows(tab)) ? '' : 'none'; });
   });
   if (isMoshe && MOSHE_HIDDEN_TABS.includes(state.tab)) goHome();
+  // "סיכום עסק" — אך ורק אצל משה כורסיה (סיכום כל הקטגוריות: חודשי + שנתי)
+  document.querySelectorAll('.tab[data-tab="summary"]').forEach(t => { t.style.display = (isMoshe && userAllows('summary')) ? '' : 'none'; });
+  if (!isMoshe && state.tab === 'summary') goHome();
 }
 
 // ---- ניהול משתמשים (מנהל בלבד) ----
@@ -296,7 +299,7 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ home: renderHome, events: renderCombined, clients: renderClients, invoicing: renderInvoicing, quotes: renderQuotes, team: renderTeam,
+  ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderInvoicing, quotes: renderQuotes, team: renderTeam,
      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections, business: renderBusiness }[state.tab])(c);
 }
 
@@ -727,6 +730,65 @@ function groupSummaryHtml(r) {
     ${kpis}
     ${section(music, '🎵')}
     ${section(digital, '💻')}`;
+}
+
+// ---- לשונית "סיכום עסק" (רק אצל משה) — סיכום חודשי + שנתי לכל הקטגוריות, בדיוק כמו בדף הבית ----
+let _bizSumYear = null;
+window.setBizSumYear = (y) => { _bizSumYear = y; renderBusinessSummary($('#content')); };
+async function renderBusinessSummary(c) {
+  if (!mosheBank()) { c.innerHTML = '<div class="panel"><div class="empty">הסיכום זמין בעסק זה בלבד.</div></div>'; return; }
+  const year = _bizSumYear || new Date().getFullYear();
+  c.innerHTML = `<div class="panel"><div class="empty">טוען סיכום עסק…</div></div>`;
+  const r = await api(`/api/group-summary?companyId=${state.company}&year=${year}`).catch(() => null);
+  if (!r || !r.ok) { c.innerHTML = '<div class="panel"><div class="empty">שגיאה בטעינת הסיכום</div></div>'; return; }
+  c.innerHTML = businessSummaryHtml(r);
+}
+function bizGroupEmoji(g) {
+  const byKey = { music: '🎵', digital: '💻', operating: '🧾', other: '📁' };
+  if (g.key && byKey[g.key]) return byKey[g.key];
+  const n = g.name || '';
+  if (/עמלות|בנק/.test(n)) return '🏦';
+  if (/רכב|דלק|רכבים/.test(n)) return '🚗';
+  if (/אשראי|כרטיס/.test(n)) return '💳';
+  if (/מיס|מע"?מ|ביטוח לאומי/.test(n)) return '🧾';
+  return '📊';
+}
+function businessSummaryHtml(r) {
+  const year = r.year;
+  const groups = r.groups || [];
+  const curY = new Date().getFullYear();
+  const years = []; for (let y = curY + 1; y >= curY - 4; y--) years.push(y);
+  const yearSel = `<select onchange="setBizSumYear(this.value)" style="padding:5px 9px;font-size:13px">${years.map(y => `<option value="${y}" ${String(y) === String(year) ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
+  const totIncome = groups.reduce((s, g) => s + (g.totalIncome || 0), 0);
+  const totExpense = groups.reduce((s, g) => s + (g.totalExpense || 0), 0);
+  const totProfit = totIncome - totExpense;
+  const card = (lbl, val, color) => `<div class="card" style="padding:11px 14px"><div class="label" style="font-size:12px">${lbl}</div><div style="font-size:19px;font-weight:700;color:${color || 'var(--text)'}">${money(val)}</div></div>`;
+  const kpis = `<div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-top:12px">
+    ${card('סה"כ הכנסות', totIncome, 'var(--accent2)')}
+    ${card('סה"כ הוצאות', totExpense, 'var(--danger)')}
+    ${card('רווח כולל', totProfit, totProfit >= 0 ? 'var(--accent2)' : 'var(--danger)')}
+  </div>`;
+  const section = (g) => {
+    const hasData = g.months.some(m => m.income || m.expense) || g.totalIncome || g.totalExpense;
+    const rows = g.months.map((m, i) => (!m.income && !m.expense) ? '' : `<tr>
+      <td style="white-space:nowrap">${MONTHS_HE[i]} ${year}</td>
+      <td style="color:var(--accent2);font-weight:600">${money(m.income)}</td>
+      <td style="color:var(--danger);font-weight:600">${money(m.expense)}</td>
+      <td style="font-weight:700;color:${m.profit >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(m.profit)}</td></tr>`).join('');
+    const totalRow = `<tr style="border-top:2px solid var(--line);font-weight:800">
+      <td>סה"כ ${year}</td>
+      <td style="color:var(--accent2)">${money(g.totalIncome)}</td>
+      <td style="color:var(--danger)">${money(g.totalExpense)}</td>
+      <td style="color:${g.totalProfit >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(g.totalProfit)}</td></tr>`;
+    const unlinked = (g.unlinkedIncome || g.unlinkedExpense) ? `<div class="muted" style="font-size:11.5px;margin-top:6px">⚠️ תנועות ששויכו לקבוצה אך בלי מסמך (לא נכללות בנטו): הכנסות ${money(g.unlinkedIncome)} · הוצאות ${money(g.unlinkedExpense)}</div>` : '';
+    return `<details ${hasData ? 'open' : ''} style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;font-size:15px">${bizGroupEmoji(g)} ${escapeHtml(g.name)} — ${year} · רווח ${money(g.totalProfit)}</summary>
+      <div style="overflow-x:auto;margin-top:8px"><table style="min-width:440px;font-size:13px"><thead><tr><th>חודש</th><th>הכנסות</th><th>הוצאות</th><th>רווח</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="muted">אין נתונים משויכים לשנה זו.</td></tr>'}${totalRow}</tbody></table></div>${unlinked}</details>`;
+  };
+  return `<div class="panel">
+    <div class="row-between"><div><h2>📊 סיכום עסק — ${year}</h2><span class="muted">רווח נטו (ללא מע"מ) לכל הקטגוריות · לפי שיוך תנועות הבנק למסמכים</span></div><div style="white-space:nowrap">שנה: ${yearSel}</div></div>
+    ${kpis}
+    ${groups.length ? groups.map(section).join('') : '<div class="empty">אין קטגוריות עדיין — אפשר להוסיף בקבוצות שיוך בפרטי העסק.</div>'}
+  </div>`;
 }
 
 // ---- חשבוניות פתוחות בדף הבית (כמו "חיובים קרובים" בחשבונית ירוקה) ----
