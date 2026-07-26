@@ -2873,7 +2873,11 @@ function supplierPayablesSection(list) {
       ${missingAlloc ? '<span class="tag" style="background:#fde8e8;color:var(--danger);font-size:10.5px;white-space:nowrap">⚠ חסר מס׳ הקצאה</span>' : ''}
       <span class="muted" style="white-space:nowrap">#${escapeHtml(String(p.number || ''))} · ${fmtDate(p.date)}</span>
     </div>
-    ${p.description ? `<div class="muted" style="font-size:12px;margin:5px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(p.description)}">${escapeHtml(p.description)}</div>` : ''}
+    ${p.description ? `<div style="font-size:12.5px;margin:5px 0 0;white-space:pre-wrap;word-break:break-word"><span class="muted">תיאור:</span> ${escapeHtml(p.description)}</div>` : ''}
+    ${(p.coveredEvents && p.coveredEvents.length) ? `<div style="margin:7px 0 0;padding:7px 9px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;font-size:12px">
+      <div class="muted" style="font-weight:600;margin-bottom:3px">📋 פירוט אירועים (${p.coveredEvents.length}):</div>
+      ${p.coveredEvents.map(e => `<div style="display:flex;gap:10px;justify-content:space-between;padding:2px 0;border-top:1px dashed var(--line)"><span>${ddmy(e.date)}${e.artist ? ` · ${escapeHtml(e.artist)}` : ''}${e.location ? ` · ${escapeHtml(e.location)}` : ''}</span><span style="white-space:nowrap;font-weight:600">${money(e.amount)}</span></div>`).join('')}
+    </div>` : ''}
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:7px">
       <span style="font-size:12.5px">ללא מע"מ: <b>${money(p.amountExcludeVat)}</b></span>
       <span style="font-size:12.5px">כולל מע"מ: <b style="color:var(--danger)">${money(p.amount)}</b></span>

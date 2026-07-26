@@ -815,9 +815,25 @@ add('GET', /^\/api\/supplier-payables$/, (req, res, _p, q) => {
   // סינון לפי חברה — רשומות ישנות ללא companyId משויכות לחברת ה-GI (BPM); אופק/משה יקבלו רק את שלהם
   const want = q.companyId || giCompanyId();
   const list = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === want);
+  const evs = (db.events || []).filter(e => (e.companyId || giCompanyId()) === want);
+  // פירוט: האירועים שההוצאה מכסה — שורות קבלן באירועים ששויכו להוצאה זו (לפי מזהה רישום / מזהה מסמך ירוק / מספר חשבונית)
+  const coveredFor = (p) => {
+    const out = [];
+    for (const ev of evs) {
+      const details = ev.contractorDetails || [];
+      for (const c of details) {
+        if (!c) continue;
+        const byId = p.id && c.paidPayableId && String(c.paidPayableId) === String(p.id);
+        const byExp = p.giExpenseId && c.paidExpenseId && String(c.paidExpenseId) === String(p.giExpenseId);
+        const byNum = p.number && c.paidInvoice && String(c.paidInvoice) === String(p.number) && (c.name || '').trim() === (p.supplierName || '').trim();
+        if (byId || byExp || byNum) out.push({ date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0 });
+      }
+    }
+    return out.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+  };
   const out = (q.all ? list : list.filter(p => !p.paid)).slice()
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
-    .map(p => ({ ...p, hasFile: !!(p.giExpenseId || p.draftId) }));
+    .map(p => ({ ...p, hasFile: !!(p.giExpenseId || p.draftId), coveredEvents: coveredFor(p) }));
   json(res, { ok: true, payables: out });
 });
 
