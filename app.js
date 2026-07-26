@@ -2861,6 +2861,14 @@ function draftsSection() {
 }
 // ===== הוצאות ספקים לתשלום (מסמכי מס שלא שולמו + חשבונות עסקה פנימיים) =====
 const PAYABLE_TYPE_NAMES = { 20: 'חשבון עסקה', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'מס-קבלה', 400: 'קבלה', 330: 'זיכוי' };
+// חיווי מוכנות לתשלום לספק — לפי אם הלקוח כבר שילם על האירועים שההוצאה מכסה
+function payReadinessBadge(p) {
+  const r = p.readiness;
+  if (r === 'ready') return `<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap" title="הלקוח שילם על כל האירועים שההוצאה מכסה">🟢 מוכן לתשלום</span>`;
+  if (r === 'waiting') return `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap" title="הלקוח עדיין לא שילם על האירועים">🟡 ממתין לתשלום מהלקוח</span>`;
+  if (r === 'partial') return `<span class="tag" style="background:#fef3c7;color:#92600a;white-space:nowrap" title="חלק מהאירועים שולמו ע״י הלקוח">🟠 חלקי</span>`;
+  return `<span class="muted" style="font-size:11px;white-space:nowrap" title="ההוצאה לא משויכת לאירוע — אין תלות בתשלום מלקוח">לא משויך לאירוע</span>`;
+}
 function supplierPayablesSection(list) {
   const items = Array.isArray(list) ? list : [];
   const total = items.reduce((s, p) => s + (Number(p.amount) || 0), 0);
@@ -2870,6 +2878,7 @@ function supplierPayablesSection(list) {
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <span class="tag" style="${p.isBusinessDoc ? 'background:#fff4e5;color:#8a5a00' : 'background:#eef;color:var(--accent)'}">${PAYABLE_TYPE_NAMES[p.documentType] || ('סוג ' + p.documentType)}${p.isBusinessDoc ? ' · פנימי' : ''}</span>
       <span style="font-weight:600;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.supplierName || 'ספק')}</span>
+      ${payReadinessBadge(p)}
       ${missingAlloc ? '<span class="tag" style="background:#fde8e8;color:var(--danger);font-size:10.5px;white-space:nowrap">⚠ חסר מס׳ הקצאה</span>' : ''}
       <span class="muted" style="white-space:nowrap">#${escapeHtml(String(p.number || ''))} · ${fmtDate(p.date)}</span>
     </div>

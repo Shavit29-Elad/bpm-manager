@@ -810,12 +810,24 @@ add('GET', /^\/api\/contractors\/open-events$/, (req, res, _p, q) => {
 });
 
 // GET /api/supplier-payables?all= — הוצאות ספקים לתשלום (ברירת מחדל: רק שלא שולמו)
-add('GET', /^\/api\/supplier-payables$/, (req, res, _p, q) => {
+add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
   const db = load();
   // סינון לפי חברה — רשומות ישנות ללא companyId משויכות לחברת ה-GI (BPM); אופק/משה יקבלו רק את שלהם
   const want = q.companyId || giCompanyId();
   const list = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === want);
   const evs = (db.events || []).filter(e => (e.companyId || giCompanyId()) === want);
+  // מפת "הלקוח שילם" — כדי לקבוע לכל הוצאה אם היא מוכנה לתשלום (הכסף מהלקוח כבר נכנס על האירועים שההוצאה מכסה)
+  const bankPaid = new Map();
+  for (const t of (db.bankTx || [])) {
+    if (want && t.companyId !== want) continue;
+    if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
+    for (const inv of (t.matchedInvoices || [])) {
+      if (inv && inv.number != null && !bankPaid.has('num:' + inv.number)) bankPaid.set('num:' + inv.number, t.date || null);
+      if (inv && inv.id != null && !bankPaid.has('id:' + inv.id)) bankPaid.set('id:' + inv.id, t.date || null);
+    }
+  }
+  let openNums = null;
+  try { if (greenInvoice.haveCredentials()) { const open = await greenInvoice.openDocuments(); openNums = new Set((open || []).map(d => String(d.number))); } } catch { openNums = null; }
   // פירוט: האירועים שההוצאה מכסה — שורות קבלן באירועים ששויכו להוצאה זו (לפי מזהה רישום / מזהה מסמך ירוק / מספר חשבונית)
   const coveredFor = (p) => {
     const out = [];
@@ -826,14 +838,20 @@ add('GET', /^\/api\/supplier-payables$/, (req, res, _p, q) => {
         const byId = p.id && c.paidPayableId && String(c.paidPayableId) === String(p.id);
         const byExp = p.giExpenseId && c.paidExpenseId && String(c.paidExpenseId) === String(p.giExpenseId);
         const byNum = p.number && c.paidInvoice && String(c.paidInvoice) === String(p.number) && (c.name || '').trim() === (p.supplierName || '').trim();
-        if (byId || byExp || byNum) out.push({ date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0 });
+        if (byId || byExp || byNum) out.push({ date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0, clientPaid: eventClientPaid(ev, bankPaid, openNums) });
       }
     }
     return out.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
   };
+  // מוכנות לתשלום לספק: ready = הלקוח שילם על כל האירועים · waiting = טרם · partial = חלק · nolink = לא משויך לאירוע
+  const readinessOf = (events) => {
+    if (!events.length) return 'nolink';
+    const paid = events.filter(e => e.clientPaid && e.clientPaid.status === 'paid').length;
+    return paid === events.length ? 'ready' : paid === 0 ? 'waiting' : 'partial';
+  };
   const out = (q.all ? list : list.filter(p => !p.paid)).slice()
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
-    .map(p => ({ ...p, hasFile: !!(p.giExpenseId || p.draftId), coveredEvents: coveredFor(p) }));
+    .map(p => { const cov = coveredFor(p); return { ...p, hasFile: !!(p.giExpenseId || p.draftId), coveredEvents: cov, readiness: readinessOf(cov) }; });
   json(res, { ok: true, payables: out });
 });
 
