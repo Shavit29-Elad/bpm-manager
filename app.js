@@ -2915,7 +2915,7 @@ window.filterReadyPayables = (on) => {
 let _linkPay = null;
 window.openLinkEventsToPayable = async (pid) => {
   const p = (_supPayables || []).find(x => x.id === pid); if (!p) return;
-  _linkPay = { pid, name: p.supplierName || '', sel: new Set(), events: [] };
+  _linkPay = { pid, name: p.supplierName || '', sel: new Set(), events: [], q: '', year: 'all', month: 'all' };
   let m = document.getElementById('linkEvModal');
   if (!m) { m = document.createElement('div'); m.id = 'linkEvModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
@@ -2925,19 +2925,42 @@ window.openLinkEventsToPayable = async (pid) => {
   const events = [];
   (pay || []).forEach(g => (g.events || []).forEach(ev => events.push({ ...ev, contractor: g.name })));
   _linkPay.events = events;
-  renderLinkEv();
+  buildLinkEvShell(); renderLinkEvRows();
 };
-function renderLinkEv() {
+const _linkNorm = s => (s || '').replace(/בע["'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
+function buildLinkEvShell() {
   const m = document.getElementById('linkEvModal'); if (!m || !_linkPay) return;
-  const norm = s => (s || '').replace(/בע["'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
-  const evs = (_linkPay.events || []).slice().sort((a, b) => {
-    const am = norm(a.contractor) === norm(_linkPay.name) ? 0 : 1, bm = norm(b.contractor) === norm(_linkPay.name) ? 0 : 1;
-    return am - bm || String(a.date || '').localeCompare(String(b.date || ''));
+  const years = [...new Set((_linkPay.events || []).map(e => String(e.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  const yearOpts = ['<option value="all">כל השנים</option>'].concat(years.map(y => `<option value="${y}" ${_linkPay.year === y ? 'selected' : ''}>${y}</option>`)).join('');
+  const monthOpts = ['<option value="all">כל החודשים</option>'].concat(MONTHS_HE.map((n, i) => { const v = String(i + 1).padStart(2, '0'); return `<option value="${v}" ${_linkPay.month === v ? 'selected' : ''}>${n}</option>`; })).join('');
+  m.querySelector('.modal-card').innerHTML = `
+    <div class="row-between"><h3>🔗 שייך אירועים — ${escapeHtml(_linkPay.name)}</h3><button class="btn ghost" onclick="document.getElementById('linkEvModal').classList.add('hidden')">סגור</button></div>
+    <p class="muted" style="font-size:12px;margin:2px 0 8px">בחר את האירועים שההוצאה מכסה. אפשר לחפש חופשי (זמר / מיקום / תאריך) או לסנן לפי חודש ושנה. אירועים של אותו ספק מודגשים.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+      <input id="linkEvSearch" placeholder="חיפוש — למשל: נסרין אמארה · 02/07" oninput="onLinkEvSearch(this.value)" style="flex:1;min-width:180px;padding:6px 9px" value="${escAttr(_linkPay.q || '')}"/>
+      <select onchange="setLinkEvYM('year',this.value)" style="padding:6px 8px;font-size:13px">${yearOpts}</select>
+      <select onchange="setLinkEvYM('month',this.value)" style="padding:6px 8px;font-size:13px">${monthOpts}</select>
+    </div>
+    <div id="linkEvRows"></div>
+    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('linkEvModal').classList.add('hidden')">ביטול</button><button class="btn success" onclick="confirmLinkEv(this)">✓ שייך נבחרים</button></div>`;
+}
+function renderLinkEvRows() {
+  const box = document.getElementById('linkEvRows'); if (!box || !_linkPay) return;
+  const low = s => (s || '').toString().toLowerCase();
+  const tokens = low(_linkPay.q).trim().split(/\s+/).filter(Boolean);
+  let evs = (_linkPay.events || []).filter(ev => {
+    const iso = String(ev.date || ''); const y = iso.slice(0, 4), mo = iso.slice(5, 7);
+    if (_linkPay.year !== 'all' && y !== _linkPay.year) return false;
+    if (_linkPay.month !== 'all' && mo !== _linkPay.month) return false;
+    if (tokens.length) { const hay = low([ev.artist, ev.location, ev.contractor, iso, ddmy(ev.date), MONTHS_HE[(+mo) - 1] || ''].join(' ')); if (!tokens.every(t => hay.includes(t))) return false; }
+    return true;
   });
+  evs.sort((a, b) => { const am = _linkNorm(a.contractor) === _linkNorm(_linkPay.name) ? 0 : 1, bm = _linkNorm(b.contractor) === _linkNorm(_linkPay.name) ? 0 : 1; return am - bm || String(a.date || '').localeCompare(String(b.date || '')); });
+  if (!evs.length) { box.innerHTML = '<div class="muted" style="font-size:12.5px;padding:8px">לא נמצאו אירועים תואמים.</div>'; return; }
   const rows = evs.map(ev => {
     const key = ev.eventId + '|' + ev.index;
     const on = _linkPay.sel.has(key);
-    const match = norm(ev.contractor) === norm(_linkPay.name);
+    const match = _linkNorm(ev.contractor) === _linkNorm(_linkPay.name);
     const cp = ev.clientPaid || { status: 'unknown' };
     const cpTag = cp.status === 'paid' ? '🟢' : cp.status === 'pending' ? '🟡' : '⚪';
     return `<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:6px 8px;border-top:1px solid var(--line);${match ? 'background:#f0f7ff' : ''}">
@@ -2947,11 +2970,11 @@ function renderLinkEv() {
       <span title="תשלום מהלקוח">${cpTag}</span>
       <span style="white-space:nowrap;font-weight:600">${money(ev.amount)}</span></label>`;
   }).join('');
-  m.querySelector('.modal-card').innerHTML = `<div class="row-between"><h3>🔗 שייך אירועים — ${escapeHtml(_linkPay.name)}</h3><button class="btn ghost" onclick="document.getElementById('linkEvModal').classList.add('hidden')">סגור</button></div>
-    <p class="muted" style="font-size:12px;margin:2px 0 8px">בחר את האירועים שההוצאה הזו מכסה. אירועים של אותו ספק מודגשים. שיוך יסמן אותם כ"שולם לספק" ויעדכן את חיווי המוכנות.</p>
-    ${evs.length ? `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="muted" style="font-size:12.5px">אין אירועים פתוחים לשיוך.</div>'}
-    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('linkEvModal').classList.add('hidden')">ביטול</button><button class="btn success" onclick="confirmLinkEv(this)">✓ שייך נבחרים</button></div>`;
+  const selCount = _linkPay.sel.size;
+  box.innerHTML = `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div><div class="muted" style="font-size:11.5px;margin-top:5px">מוצגים ${evs.length} אירועים${selCount ? ` · נבחרו ${selCount}` : ''}</div>`;
 }
+window.onLinkEvSearch = (v) => { if (!_linkPay) return; _linkPay.q = v; renderLinkEvRows(); };
+window.setLinkEvYM = (k, v) => { if (!_linkPay) return; _linkPay[k] = v; renderLinkEvRows(); };
 window.toggleLinkEv = (key, on) => { if (!_linkPay) return; if (on) _linkPay.sel.add(key); else _linkPay.sel.delete(key); };
 window.confirmLinkEv = async (btn) => {
   const items = [..._linkPay.sel].map(k => { const [eventId, index] = k.split('|'); return { eventId, index: +index }; });
