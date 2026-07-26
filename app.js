@@ -2884,6 +2884,7 @@ function supplierPayablesSection(list) {
       <span style="flex:1;min-width:8px"></span>
       ${p.hasFile ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="previewDoc('/api/supplier-payables/${p.id}/file')">תצוגה 👁</button>
       <a class="btn ghost" style="padding:3px 10px;font-size:12px;text-decoration:none" href="/api/supplier-payables/${p.id}/file" download target="_blank" rel="noopener">הורדה ↓</a>` : ''}
+      <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openPayableDetail('${p.id}')" title="פירוט מה כתוב על החשבונית">📄 פירוט</button>
       <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openEditPayable('${p.id}')" title="עריכת פרטים / השלמת מס׳ הקצאה">✏️ עריכה</button>
       <button class="btn success" style="padding:3px 10px;font-size:12px" onclick="markPayablePaid('${p.id}')">✓ סמן כשולם</button>
       <button class="btn ghost" style="padding:3px 8px;font-size:12px" onclick="deletePayable('${p.id}')" title="הסר רישום">✕</button>
@@ -2895,6 +2896,27 @@ function supplierPayablesSection(list) {
     ${items.length ? `<div style="margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="empty">אין הוצאות פתוחות לתשלום.</div>'}`;
 }
 let _supPayables = [];
+// פירוט ההוצאה — מה כתוב על החשבונית (תיאור + שורות פריטים מחשבונית ירוקה)
+window.openPayableDetail = async (pid) => {
+  const p = (_supPayables || []).find(x => x.id === pid);
+  let m = document.getElementById('payDetailModal');
+  if (!m) { m = document.createElement('div'); m.id = 'payDetailModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw)"><div class="empty">טוען פירוט…</div></div>`;
+  const r = await api(`/api/supplier-payables/${pid}/detail`).catch(() => null);
+  const title = escapeHtml((p && p.supplierName) || 'הוצאה') + (p && p.number ? ` · #${escapeHtml(String(p.number))}` : '');
+  if (!r) { m.querySelector('.modal-card').innerHTML = `<div class="row-between"><h3>📄 פירוט — ${title}</h3><button class="btn ghost" onclick="document.getElementById('payDetailModal').classList.add('hidden')">סגור</button></div><div class="warn-banner" style="margin-top:10px">שגיאה בטעינת הפירוט.</div>`; return; }
+  const rows = r.rows || [];
+  const rowsHtml = rows.length ? `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:8px">
+      <div style="display:flex;gap:8px;padding:6px 10px;background:var(--panel2);font-size:11.5px;font-weight:700"><span style="flex:1">תיאור הפריט</span><span style="width:44px;text-align:center">כמות</span><span style="width:80px;text-align:left">מחיר</span><span style="width:90px;text-align:left">סה"כ</span></div>
+      ${rows.map(it => `<div style="display:flex;gap:8px;padding:6px 10px;border-top:1px solid var(--line);font-size:12.5px"><span style="flex:1">${escapeHtml(it.description || '—')}</span><span style="width:44px;text-align:center">${it.quantity != null ? it.quantity : ''}</span><span style="width:80px;text-align:left">${it.price != null ? money(it.price) : ''}</span><span style="width:90px;text-align:left;font-weight:600">${it.total != null ? money(it.total) : ''}</span></div>`).join('')}
+    </div>` : `<div class="muted" style="font-size:12.5px;margin-top:8px">אין שורות פריטים במסמך זה בחשבונית ירוקה — התיאור למעלה הוא מה שנרשם על החשבונית.</div>`;
+  m.querySelector('.modal-card').innerHTML = `<div class="row-between"><h3>📄 פירוט — ${title}</h3><button class="btn ghost" onclick="document.getElementById('payDetailModal').classList.add('hidden')">סגור</button></div>
+    ${r.description ? `<div style="margin-top:8px;font-size:13px"><span class="muted">תיאור:</span> ${escapeHtml(r.description)}</div>` : ''}
+    ${r.remarks ? `<div style="margin-top:4px;font-size:12.5px"><span class="muted">הערות:</span> ${escapeHtml(r.remarks)}</div>` : ''}
+    ${rowsHtml}`;
+};
 // עריכת פרטי הוצאת ספק — השלמת מידע שהיה חסר (מס' הקצאה, סכום, תיאור וכו')
 window.openEditPayable = (pid) => {
   const p = (_supPayables || []).find(x => x.id === pid); if (!p) return;

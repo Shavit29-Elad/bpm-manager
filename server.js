@@ -837,6 +837,28 @@ add('GET', /^\/api\/supplier-payables$/, (req, res, _p, q) => {
   json(res, { ok: true, payables: out });
 });
 
+// GET /api/supplier-payables/:id/detail — פירוט ההוצאה מחשבונית ירוקה (מה כתוב על החשבונית: תיאור + שורות פריטים)
+add('GET', /^\/api\/supplier-payables\/([^/]+)\/detail$/, async (req, res, params) => {
+  const db = load();
+  const p = (db.supplierPayables || []).find(x => x.id === params[0]);
+  if (!p) return json(res, { error: 'לא נמצא' }, 404);
+  const pick = (e) => {
+    const rowsRaw = e.expense || e.income || e.rows || e.items || e.expenses || e.lines || [];
+    const rows = (Array.isArray(rowsRaw) ? rowsRaw : []).map(it => ({
+      description: it.description || it.name || it.catalogNum || it.itemDescription || '',
+      quantity: it.quantity != null ? Number(it.quantity) : null,
+      price: it.price != null ? Number(it.price) : (it.unitPrice != null ? Number(it.unitPrice) : null),
+      total: it.total != null ? Number(it.total) : (it.sum != null ? Number(it.sum) : null),
+    })).filter(x => x.description || x.total != null);
+    return { description: e.description || '', remarks: e.remarks || e.remark || '', rows };
+  };
+  if (greenInvoice.haveCredentials() && p.giExpenseId) {
+    try { const e = await greenInvoice.getExpense(p.giExpenseId); return json(res, { ok: true, ...pick(e), _raw: e }); }
+    catch (err) { return json(res, { ok: false, error: err.message, description: p.description || '', remarks: '', rows: [] }); }
+  }
+  json(res, { ok: true, description: p.description || '', remarks: '', rows: [] });
+});
+
 // GET /api/supplier-payables/:id/file — צפייה/הורדה של קובץ החשבונית (מההוצאה בחשבונית ירוקה או מהטיוטה)
 add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
