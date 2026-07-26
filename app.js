@@ -2874,7 +2874,7 @@ function supplierPayablesSection(list) {
   const total = items.reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const rows = items.map(p => {
     const missingAlloc = [305, 320].includes(Number(p.documentType)) && Math.max(Number(p.amount) || 0, Number(p.amountExcludeVat) || 0) > 5000 && !p.allocationNumber;
-    return `<div style="padding:10px 12px;border-top:1px solid var(--line);font-size:13px">
+    return `<div class="sp-row" data-readiness="${p.readiness || 'nolink'}" style="padding:10px 12px;border-top:1px solid var(--line);font-size:13px">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <span class="tag" style="${p.isBusinessDoc ? 'background:#fff4e5;color:#8a5a00' : 'background:#eef;color:var(--accent)'}">${PAYABLE_TYPE_NAMES[p.documentType] || ('סוג ' + p.documentType)}${p.isBusinessDoc ? ' · פנימי' : ''}</span>
       <span style="font-weight:600;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.supplierName || 'ספק')}</span>
@@ -2894,6 +2894,7 @@ function supplierPayablesSection(list) {
       ${p.hasFile ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="previewDoc('/api/supplier-payables/${p.id}/file')">תצוגה 👁</button>
       <a class="btn ghost" style="padding:3px 10px;font-size:12px;text-decoration:none" href="/api/supplier-payables/${p.id}/file" download target="_blank" rel="noopener">הורדה ↓</a>` : ''}
       <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openPayableDetail('${p.id}')" title="פירוט מה כתוב על החשבונית">📄 פירוט</button>
+      <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openLinkEventsToPayable('${p.id}')" title="שייך אירועים שההוצאה מכסה">🔗 שייך אירועים</button>
       <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openEditPayable('${p.id}')" title="עריכת פרטים / השלמת מס׳ הקצאה">✏️ עריכה</button>
       <button class="btn success" style="padding:3px 10px;font-size:12px" onclick="markPayablePaid('${p.id}')">✓ סמן כשולם</button>
       <button class="btn ghost" style="padding:3px 8px;font-size:12px" onclick="deletePayable('${p.id}')" title="הסר רישום">✕</button>
@@ -2901,10 +2902,67 @@ function supplierPayablesSection(list) {
   </div>`;
   }).join('');
   return `<div class="row-between"><div><h2>🧾 רשימת ספקים לתשלום</h2>
-      <span class="muted">${items.length ? `${items.length} הוצאות שטרם שולמו · סה"כ ${money(total)} (כולל מע"מ). "חשבון עסקה · פנימי" = רישום שלא נשלח לחשבונית ירוקה/רו״ח.` : 'אין הוצאות ספקים פתוחות. הוצאה שתסמן "לא שולם" (או חשבון עסקה) תופיע כאן.'}</span></div></div>
+      <span class="muted">${items.length ? `${items.length} הוצאות שטרם שולמו · סה"כ ${money(total)} (כולל מע"מ). "חשבון עסקה · פנימי" = רישום שלא נשלח לחשבונית ירוקה/רו״ח.` : 'אין הוצאות ספקים פתוחות. הוצאה שתסמן "לא שולם" (או חשבון עסקה) תופיע כאן.'}</span></div>
+      ${items.length ? `<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;white-space:nowrap" title="מציג רק הוצאות שהלקוח כבר שילם על האירועים שהן מכסות"><input type="checkbox" onchange="filterReadyPayables(this.checked)"/> 🟢 רק מוכן לתשלום</label>` : ''}</div>
     ${items.length ? `<div style="margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="empty">אין הוצאות פתוחות לתשלום.</div>'}`;
 }
 let _supPayables = [];
+// סינון "רק מוכן לתשלום" ברשימת הספקים לתשלום
+window.filterReadyPayables = (on) => {
+  document.querySelectorAll('.sp-row').forEach(r => { r.style.display = (!on || r.dataset.readiness === 'ready') ? '' : 'none'; });
+};
+// שיוך אירועים להוצאת ספק קיימת — פותח בחירת אירועים פתוחים ומקשר אותם להוצאה (מסמן "שולם לספק")
+let _linkPay = null;
+window.openLinkEventsToPayable = async (pid) => {
+  const p = (_supPayables || []).find(x => x.id === pid); if (!p) return;
+  _linkPay = { pid, name: p.supplierName || '', sel: new Set(), events: [] };
+  let m = document.getElementById('linkEvModal');
+  if (!m) { m = document.createElement('div'); m.id = 'linkEvModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:88vh;overflow:auto"><div class="empty">טוען אירועים…</div></div>`;
+  const pay = await api(`/api/contractors/payables?companyId=${state.company}`).catch(() => []);
+  const events = [];
+  (pay || []).forEach(g => (g.events || []).forEach(ev => events.push({ ...ev, contractor: g.name })));
+  _linkPay.events = events;
+  renderLinkEv();
+};
+function renderLinkEv() {
+  const m = document.getElementById('linkEvModal'); if (!m || !_linkPay) return;
+  const norm = s => (s || '').replace(/בע["'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
+  const evs = (_linkPay.events || []).slice().sort((a, b) => {
+    const am = norm(a.contractor) === norm(_linkPay.name) ? 0 : 1, bm = norm(b.contractor) === norm(_linkPay.name) ? 0 : 1;
+    return am - bm || String(a.date || '').localeCompare(String(b.date || ''));
+  });
+  const rows = evs.map(ev => {
+    const key = ev.eventId + '|' + ev.index;
+    const on = _linkPay.sel.has(key);
+    const match = norm(ev.contractor) === norm(_linkPay.name);
+    const cp = ev.clientPaid || { status: 'unknown' };
+    const cpTag = cp.status === 'paid' ? '🟢' : cp.status === 'pending' ? '🟡' : '⚪';
+    return `<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:6px 8px;border-top:1px solid var(--line);${match ? 'background:#f0f7ff' : ''}">
+      <input type="checkbox" ${on ? 'checked' : ''} onchange="toggleLinkEv('${key}',this.checked)"/>
+      <span style="white-space:nowrap">${ddmy(ev.date)}</span>
+      <span style="flex:1;min-width:0">${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''} <span class="muted">· ${escapeHtml(ev.contractor || '')}</span></span>
+      <span title="תשלום מהלקוח">${cpTag}</span>
+      <span style="white-space:nowrap;font-weight:600">${money(ev.amount)}</span></label>`;
+  }).join('');
+  m.querySelector('.modal-card').innerHTML = `<div class="row-between"><h3>🔗 שייך אירועים — ${escapeHtml(_linkPay.name)}</h3><button class="btn ghost" onclick="document.getElementById('linkEvModal').classList.add('hidden')">סגור</button></div>
+    <p class="muted" style="font-size:12px;margin:2px 0 8px">בחר את האירועים שההוצאה הזו מכסה. אירועים של אותו ספק מודגשים. שיוך יסמן אותם כ"שולם לספק" ויעדכן את חיווי המוכנות.</p>
+    ${evs.length ? `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="muted" style="font-size:12.5px">אין אירועים פתוחים לשיוך.</div>'}
+    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('linkEvModal').classList.add('hidden')">ביטול</button><button class="btn success" onclick="confirmLinkEv(this)">✓ שייך נבחרים</button></div>`;
+}
+window.toggleLinkEv = (key, on) => { if (!_linkPay) return; if (on) _linkPay.sel.add(key); else _linkPay.sel.delete(key); };
+window.confirmLinkEv = async (btn) => {
+  const items = [..._linkPay.sel].map(k => { const [eventId, index] = k.split('|'); return { eventId, index: +index }; });
+  if (!items.length) { alert('לא נבחרו אירועים'); return; }
+  const notPaid = items.filter(it => { const ev = _linkPay.events.find(e => e.eventId === it.eventId && e.index === it.index); return !(ev && ev.clientPaid && ev.clientPaid.status === 'paid'); }).length;
+  if (notPaid) { if (!confirm(`ל-${notPaid} מהאירועים הלקוח עדיין לא שילם — לשייך (ולסמן שולם לספק) בכל זאת?`)) return; }
+  if (btn) btn.disabled = true;
+  await fetch(`/api/supplier-payables/${_linkPay.pid}/link-events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) }).catch(() => {});
+  document.getElementById('linkEvModal').classList.add('hidden');
+  renderContractors($('#content'));
+};
 // פירוט ההוצאה — מה כתוב על החשבונית (תיאור + שורות פריטים מחשבונית ירוקה)
 window.openPayableDetail = async (pid) => {
   const p = (_supPayables || []).find(x => x.id === pid);

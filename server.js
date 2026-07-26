@@ -855,6 +855,27 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
   json(res, { ok: true, payables: out });
 });
 
+// POST /api/supplier-payables/:id/link-events { items:[{eventId,index}] } — שיוך אירועים להוצאת ספק קיימת (מסמן "שולם לספק")
+add('POST', /^\/api\/supplier-payables\/([^/]+)\/link-events$/, (req, res, params, _q, body) => {
+  const db = load();
+  const p = (db.supplierPayables || []).find(x => x.id === params[0]);
+  if (!p) return json(res, { error: 'לא נמצא' }, 404);
+  const items = Array.isArray(body?.items) ? body.items : [];
+  let n = 0;
+  for (const it of items) {
+    const ev = (db.events || []).find(e => String(e.id) === String(it.eventId));
+    if (ev && Array.isArray(ev.contractorDetails) && ev.contractorDetails[it.index]) {
+      const cd = ev.contractorDetails[it.index];
+      cd.paid = true;
+      cd.paidPayableId = p.id;
+      cd.paidInvoice = p.number || cd.paidInvoice || null;
+      cd.paidExpenseId = p.giExpenseId || cd.paidExpenseId || null;
+      n++;
+    }
+  }
+  save(db); json(res, { ok: true, linked: n });
+});
+
 // GET /api/supplier-payables/:id/detail — פירוט ההוצאה מחשבונית ירוקה (מה כתוב על החשבונית: תיאור + שורות פריטים)
 add('GET', /^\/api\/supplier-payables\/([^/]+)\/detail$/, async (req, res, params) => {
   const db = load();
