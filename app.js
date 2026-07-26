@@ -2908,14 +2908,20 @@ window.openPayableDetail = async (pid) => {
   const title = escapeHtml((p && p.supplierName) || 'הוצאה') + (p && p.number ? ` · #${escapeHtml(String(p.number))}` : '');
   if (!r) { m.querySelector('.modal-card').innerHTML = `<div class="row-between"><h3>📄 פירוט — ${title}</h3><button class="btn ghost" onclick="document.getElementById('payDetailModal').classList.add('hidden')">סגור</button></div><div class="warn-banner" style="margin-top:10px">שגיאה בטעינת הפירוט.</div>`; return; }
   const rows = r.rows || [];
+  const ocr = (r.ocrTexts || []).filter(Boolean);
   const rowsHtml = rows.length ? `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:8px">
       <div style="display:flex;gap:8px;padding:6px 10px;background:var(--panel2);font-size:11.5px;font-weight:700"><span style="flex:1">תיאור הפריט</span><span style="width:44px;text-align:center">כמות</span><span style="width:80px;text-align:left">מחיר</span><span style="width:90px;text-align:left">סה"כ</span></div>
       ${rows.map(it => `<div style="display:flex;gap:8px;padding:6px 10px;border-top:1px solid var(--line);font-size:12.5px"><span style="flex:1">${escapeHtml(it.description || '—')}</span><span style="width:44px;text-align:center">${it.quantity != null ? it.quantity : ''}</span><span style="width:80px;text-align:left">${it.price != null ? money(it.price) : ''}</span><span style="width:90px;text-align:left;font-weight:600">${it.total != null ? money(it.total) : ''}</span></div>`).join('')}
-    </div>` : `<div class="muted" style="font-size:12.5px;margin-top:8px">אין שורות פריטים במסמך זה בחשבונית ירוקה — התיאור למעלה הוא מה שנרשם על החשבונית.</div>`;
+    </div>`
+    : ocr.length ? `<div style="margin-top:8px;font-size:12.5px"><div class="muted" style="font-weight:600;margin-bottom:3px">טקסט מהחשבונית:</div><div style="white-space:pre-wrap;word-break:break-word;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px">${ocr.map(escapeHtml).join('\n')}</div></div>`
+    : `<div class="muted" style="font-size:12.5px;margin-top:10px">בחשבונית ירוקה אין שורות פריטים נפרדות להוצאה — הפירוט המלא (מה נקנה) נמצא בקובץ החשבונית עצמו. אפשר לפתוח אותו בכפתור למטה.</div>`;
+  const viewBtn = r.hasFile ? `<button class="btn ghost" style="padding:4px 12px;font-size:12.5px;margin-top:10px" onclick="previewDoc('/api/supplier-payables/${pid}/file')">👁 פתח את החשבונית</button>` : '';
   m.querySelector('.modal-card').innerHTML = `<div class="row-between"><h3>📄 פירוט — ${title}</h3><button class="btn ghost" onclick="document.getElementById('payDetailModal').classList.add('hidden')">סגור</button></div>
     ${r.description ? `<div style="margin-top:8px;font-size:13px"><span class="muted">תיאור:</span> ${escapeHtml(r.description)}</div>` : ''}
+    ${r.classification ? `<div style="margin-top:4px;font-size:12.5px"><span class="muted">סיווג חשבונאי:</span> ${escapeHtml(r.classification)}</div>` : ''}
     ${r.remarks ? `<div style="margin-top:4px;font-size:12.5px"><span class="muted">הערות:</span> ${escapeHtml(r.remarks)}</div>` : ''}
-    ${rowsHtml}`;
+    ${rowsHtml}
+    ${viewBtn}`;
 };
 // עריכת פרטי הוצאת ספק — השלמת מידע שהיה חסר (מס' הקצאה, סכום, תיאור וכו')
 window.openEditPayable = (pid) => {
