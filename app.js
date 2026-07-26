@@ -3013,41 +3013,58 @@ window.openPayableDetail = async (pid) => {
     ${rowsHtml}
     ${viewBtn}`;
 };
-// עריכת פרטי הוצאת ספק — השלמת מידע שהיה חסר (מס' הקצאה, סכום, תיאור וכו')
+// עריכת הוצאת ספק — טופס מלא (כמו אישור הוצאה). העדכון נשמר מקומית בלבד (לא נשלח לחשבונית ירוקה).
 window.openEditPayable = (pid) => {
   const p = (_supPayables || []).find(x => x.id === pid); if (!p) return;
   let m = document.getElementById('editPayModal');
   if (!m) { m = document.createElement('div'); m.id = 'editPayModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  const fld = (lbl, inner) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px">${lbl}${inner}</label>`;
+  const fld = (lbl, inner, span) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted)${span ? ';grid-column:1/3' : ''}">${lbl}${inner}</label>`;
   const typeOpts = [[305, 'חשבונית מס'], [320, 'מס-קבלה'], [300, 'חשבון עסקה'], [400, 'קבלה'], [330, 'זיכוי']].map(([v, l]) => `<option value="${v}" ${Number(p.documentType) === v ? 'selected' : ''}>${l}</option>`).join('');
-  m.innerHTML = `<div class="modal-card" style="width:min(520px,95vw)">
-    <h3>עריכת הוצאת ספק — ${escapeHtml(p.supplierName || '')}</h3>
-    <p class="muted" style="font-size:12px;margin:2px 0 10px">השלם/תקן פרטים שהיו חסרים (למשל מספר הקצאה). העדכון נשמר ברשימת הספקים לתשלום.</p>
-    <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <div style="flex:1;min-width:130px">${fld('מספר חשבונית', `<input id="epNum" dir="ltr" value="${escAttr(String(p.number || ''))}"/>`)}</div>
-      <div style="flex:1;min-width:130px">${fld('תאריך', `<input id="epDate" type="date" value="${p.date ? String(p.date).slice(0, 10) : ''}"/>`)}</div>
+  m.innerHTML = `<div class="modal-card" style="width:min(680px,96vw);max-height:92vh;overflow:auto">
+    <div class="row-between"><h3>✏️ עריכת הוצאת ספק</h3><button class="btn ghost" onclick="document.getElementById('editPayModal').classList.add('hidden')">סגור</button></div>
+    <p class="muted" style="font-size:12px;margin:2px 0 10px">עריכה מלאה — נשמר כאן במערכת בלבד (לא נשלח לחשבונית ירוקה).</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      ${fld('שם ספק', `<input id="epSup" list="epSupList" value="${escAttr(String(p.supplierName || ''))}"/>`, true)}
+      ${fld('ח.פ / עוסק', `<input id="epTax" dir="ltr" value="${escAttr(String(p.taxId || ''))}"/>`)}
+      ${fld('סוג מסמך', `<select id="epType">${typeOpts}</select>`)}
+      ${fld('מספר חשבונית', `<input id="epNum" dir="ltr" value="${escAttr(String(p.number || ''))}"/>`)}
+      ${fld('תאריך', `<input id="epDate" type="date" value="${p.date ? String(p.date).slice(0, 10) : ''}"/>`)}
+      ${fld('מספר הקצאה', `<input id="epAlloc" dir="ltr" value="${escAttr(String(p.allocationNumber || ''))}" placeholder="מס' הקצאה"/>`)}
+      ${fld('סכום כולל מע"מ ₪', `<input id="epAmount" type="number" step="any" value="${p.amount ?? ''}"/>`)}
+      ${fld('סכום ללא מע"מ ₪', `<input id="epNet" type="number" step="any" value="${p.amountExcludeVat ?? ''}"/>`)}
+      ${fld('סיווג חשבונאי', `<input id="epClass" value="${escAttr(String(p.classificationTitle || ''))}" placeholder="למשל: ספק סאונד"/>`, true)}
+      ${fld('תיאור', `<textarea id="epDesc" rows="2" style="resize:vertical">${escapeHtml(String(p.description || ''))}</textarea>`, true)}
+      ${fld('הערה', `<input id="epNote" value="${escAttr(String(p.note || ''))}"/>`, true)}
     </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <div style="flex:1;min-width:130px">${fld('סוג מסמך', `<select id="epType">${typeOpts}</select>`)}</div>
-      <div style="flex:1;min-width:130px">${fld('מספר הקצאה', `<input id="epAlloc" dir="ltr" value="${escAttr(String(p.allocationNumber || ''))}" placeholder="מס' הקצאה"/>`)}</div>
+    <datalist id="epSupList">${(_suppliers || []).map(s => `<option value="${escapeHtml(s.name)}">`).join('')}</datalist>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:12.5px">
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="epPaid" ${p.paid ? 'checked' : ''}/> שולם</label>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="epBiz" ${p.isBusinessDoc ? 'checked' : ''}/> חשבון עסקה · פנימי (לא לרו"ח)</label>
     </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <div style="flex:1;min-width:130px">${fld('סכום כולל מע"מ', `<input id="epAmount" type="number" step="any" value="${p.amount ?? ''}"/>`)}</div>
-      <div style="flex:1;min-width:130px">${fld('סכום ללא מע"מ', `<input id="epNet" type="number" step="any" value="${p.amountExcludeVat ?? ''}"/>`)}</div>
-    </div>
-    ${fld('תיאור', `<input id="epDesc" value="${escAttr(String(p.description || ''))}"/>`)}
-    <div id="epStatus" style="font-size:13px;min-height:18px;margin:4px 0"></div>
-    <div class="modal-actions">
-      <button class="btn ghost" onclick="document.getElementById('editPayModal').classList.add('hidden')">ביטול</button>
-      <button class="btn success" onclick="savePayableEdit('${pid}',this)">💾 שמור</button>
+    <div id="epStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
+    <div class="modal-actions" style="justify-content:space-between;align-items:center">
+      <div style="display:flex;gap:8px">
+        ${p.hasFile ? `<button class="btn ghost" style="font-size:12px" onclick="previewDoc('/api/supplier-payables/${pid}/file')">👁 חשבונית</button>` : ''}
+        <button class="btn ghost" style="font-size:12px" onclick="openLinkEventsToPayable('${pid}')">🔗 שייך אירועים</button>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost" onclick="document.getElementById('editPayModal').classList.add('hidden')">ביטול</button>
+        <button class="btn success" onclick="savePayableEdit('${pid}',this)">💾 שמור</button>
+      </div>
     </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
 };
 window.savePayableEdit = async (pid, btn) => {
   const g = (id) => document.getElementById(id);
-  const body = { number: g('epNum').value.trim(), date: g('epDate').value || null, documentType: g('epType').value, allocationNumber: g('epAlloc').value.trim(), amount: g('epAmount').value, amountExcludeVat: g('epNet').value, description: g('epDesc').value.trim() };
+  const body = {
+    supplierName: g('epSup').value.trim(), taxId: g('epTax').value.trim(),
+    number: g('epNum').value.trim(), date: g('epDate').value || null, documentType: g('epType').value,
+    allocationNumber: g('epAlloc').value.trim(), amount: g('epAmount').value, amountExcludeVat: g('epNet').value,
+    classificationTitle: g('epClass').value.trim(), description: g('epDesc').value.trim(), note: g('epNote').value.trim(),
+    paid: g('epPaid').checked, isBusinessDoc: g('epBiz').checked,
+  };
   const st = g('epStatus'); if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">שומר…</span>';
   const r = await fetch(`/api/supplier-payables/${pid}/update`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;

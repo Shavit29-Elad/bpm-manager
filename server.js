@@ -958,6 +958,13 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/update$/, (req, res, params, _q
   }
   if (b.documentType != null) p.documentType = Number(b.documentType) || p.documentType;
   if (b.allocationNumber !== undefined) p.allocationNumber = String(b.allocationNumber || '').replace(/[^\d]/g, '').trim() || null;
+  // עריכה מלאה — עדכון מקומי בלבד (לא נשלח לחשבונית ירוקה)
+  if (b.supplierName != null) p.supplierName = String(b.supplierName).trim();
+  if (b.taxId !== undefined) p.taxId = String(b.taxId || '').trim() || null;
+  if (b.classificationTitle !== undefined) p.classificationTitle = String(b.classificationTitle || '').trim() || null;
+  if (b.note !== undefined) p.note = String(b.note || '').trim();
+  if (typeof b.isBusinessDoc === 'boolean') p.isBusinessDoc = b.isBusinessDoc;
+  if (typeof b.paid === 'boolean') { p.paid = b.paid; p.paidAt = b.paid ? (p.paidAt || new Date().toISOString()) : null; }
   if (b.amount != null && b.amount !== '') {
     p.amount = Number(b.amount) || 0;
     p.amountExcludeVat = (b.amountExcludeVat != null && b.amountExcludeVat !== '') ? Number(b.amountExcludeVat) : +(p.amount / (1 + 0.18)).toFixed(2);
