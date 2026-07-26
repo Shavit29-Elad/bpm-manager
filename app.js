@@ -2569,7 +2569,7 @@ async function renderContractors(c) {
   <div class="panel">
     <div class="row-between"><div><h2>רשימת ספקים לתשלום לפי הכנסת אירועים</h2>
       <span class="muted">${payables.length} קבלנים · שולם ${money(totalPaid)} · נותר לתשלום (ללא מע״מ) <b style="color:var(--danger)">${money(totalUnpaid)}</b> · כולל מע״מ <b>${money(totalUnpaid * (1 + VAT_RATE))}</b>. סמן אירועים (או הכל) וקשר אותם לחשבונית הספק, או לחץ "טופל" לסגירת מה שנותר.</span>${_ctrSyncNote ? `<div style="font-size:12px;color:var(--accent2);margin-top:2px">✓ ${_ctrSyncNote}</div>` : ''}</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center"><label style="font-size:12.5px;display:flex;gap:6px;align-items:center;white-space:nowrap" title="מציג רק אירועים שהלקוח כבר שילם עליהם (לפי בנק / חשבונית ירוקה)"><input type="checkbox" onchange="filterReadyToPay(this.checked)"/> 🟢 רק מוכן לתשלום לספק</label><button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק/קבלן</button></div></div>
     ${payables.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${payables.map(contractorCard).join('')}</div>`
       : `<div class="empty">אין קבלנים עם סכומים עדיין. הוסף סכום לקבלן באירוע.</div>`}
   </div>
@@ -2611,26 +2611,51 @@ async function renderContractors(c) {
   }
   kickDraftsAi(); // AI קורא את הטיוטות ברקע כדי שהכרטיסים יציגו ספק/סכום/תיאור והמסך יהיה מוכן מראש
 }
+// חיווי "האם הלקוח שילם" על האירוע (לפי בנק / חשבונית ירוקה) — מוצג בשורת האירוע ב"קבלנים לתשלום"
+function clientPaidBadge(cp) {
+  cp = cp || { status: 'unknown' };
+  if (cp.status === 'paid') {
+    const d = cp.date ? ' · ' + ddmy(cp.date) : '';
+    const src = cp.via === 'bank' ? 'זוהה תשלום בבנק' : 'סומן שולם בחשבונית ירוקה';
+    return `<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap" title="${src}">🟢 הלקוח שילם${d}</span>`;
+  }
+  if (cp.status === 'pending') return `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap" title="החשבונית עדיין פתוחה / לא זוהה תשלום בבנק">🟡 ממתין לתשלום מהלקוח</span>`;
+  if (cp.status === 'uninvoiced') return `<span class="tag" style="background:#eef1ff;color:#4a5578;white-space:nowrap" title="עדיין לא הופקה חשבונית לאירוע">טרם חויב</span>`;
+  if (cp.status === 'noinvoice') return `<span class="muted" style="font-size:11px;white-space:nowrap">ללא חשבונית</span>`;
+  return '';
+}
+// סינון "מוכן לתשלום לספק" — מציג רק אירועים שהלקוח שילם עליהם (והספק עדיין לא שולם)
+window.filterReadyToPay = (on) => {
+  document.querySelectorAll('.ctr-ev-row').forEach(r => { r.style.display = (!on || r.dataset.cp === 'paid') ? '' : 'none'; });
+  document.querySelectorAll('.ctr-card').forEach(card => {
+    const rows = [...card.querySelectorAll('.ctr-ev-row')];
+    const anyVisible = rows.some(r => r.style.display !== 'none');
+    card.style.display = anyVisible ? '' : 'none';
+    if (on && anyVisible) { const body = card.querySelector('.ctr-body'); if (body) body.classList.remove('hidden'); }
+  });
+};
 function contractorCard(x) {
   const safe = 'ct_' + String(x.name).replace(/[^a-zA-Z0-9֐-׿]/g, '_');
   const rows = x.events.map(ev => {
+    const cp = ev.clientPaid || { status: 'unknown' };
     const sel = ev.paid
       ? `<span class="tag invoiced" style="white-space:nowrap">שולם${ev.paidInvoice ? ` · חשבונית ${escapeHtml(String(ev.paidInvoice))}` : ''}</span>${ev.paidExpenseUrl ? ` <button class="btn ghost" style="padding:1px 7px;font-size:10.5px" onclick="previewDoc('${String(ev.paidExpenseUrl).replace(/'/g, '%27')}')">👁</button>` : ''}`
-      : `<input type="checkbox" class="ctchk" data-c="${safe}" data-ev="${ev.eventId}" data-ix="${ev.index}"/>`;
-    return `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
+      : `<input type="checkbox" class="ctchk" data-c="${safe}" data-ev="${ev.eventId}" data-ix="${ev.index}" data-cp="${cp.status}"/>`;
+    return `<div class="ctr-ev-row" data-cp="${cp.status}" style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
       <span style="width:28px;text-align:center">${sel}</span>
       <span class="muted" style="white-space:nowrap">${ddmy(ev.date)}</span>
-      <span>${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''}</span>
-      <span style="margin-inline-start:auto;text-align:left;white-space:nowrap"><span style="font-weight:600">${money(ev.amount)}</span> <span class="muted" style="font-size:11px">ללא מע״מ</span><br><span class="muted" style="font-size:11px">כולל מע״מ ${money(ev.amount * (1 + VAT_RATE))}</span></span>
-      <button class="btn ${ev.paid ? 'success' : 'ghost'}" style="padding:3px 10px;font-size:12px" onclick="toggleContractorPaid('${ev.eventId}',${ev.index},${ev.paid ? 0 : 1})">${ev.paid ? 'בטל תשלום' : 'שולם'}</button>
+      <span style="flex:1;min-width:0">${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''}</span>
+      ${clientPaidBadge(cp)}
+      <span style="text-align:left;white-space:nowrap"><span style="font-weight:600">${money(ev.amount)}</span> <span class="muted" style="font-size:11px">ללא מע״מ</span><br><span class="muted" style="font-size:11px">כולל מע״מ ${money(ev.amount * (1 + VAT_RATE))}</span></span>
+      <button class="btn ${ev.paid ? 'success' : 'ghost'}" style="padding:3px 10px;font-size:12px" onclick="toggleContractorPaid('${ev.eventId}',${ev.index},${ev.paid ? 0 : 1},'${cp.status}')">${ev.paid ? 'בטל תשלום' : 'שולם'}</button>
     </div>`;
   }).join('');
-  return `<div class="card" style="padding:0;overflow:hidden">
+  return `<div class="card ctr-card" style="padding:0;overflow:hidden">
     <div class="row-between" style="margin:0;padding:11px 13px;cursor:pointer" onclick="document.getElementById('${safe}').classList.toggle('hidden')">
       <div><b>${escapeHtml(x.name)}</b> <span class="muted">· ${x.events.length} אירועים</span></div>
       <div style="font-size:13px;text-align:left"><span style="color:var(--danger);font-weight:600">לתשלום ${money(x.unpaidTotal)}</span> <span class="muted" style="font-size:11px">ללא מע״מ</span><div class="muted" style="font-size:11px">כולל מע״מ ${money(x.unpaidTotal * (1 + VAT_RATE))}</div></div>
     </div>
-    <div id="${safe}" class="${x.events.length > 3 ? 'hidden' : ''}">
+    <div id="${safe}" class="ctr-body ${x.events.length > 3 ? 'hidden' : ''}">
       <div style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-top:1px solid var(--line);background:var(--panel2)">
         <label style="font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" onchange="ctSelectAll('${safe}',this.checked)"/> בחר הכל</label>
         <button class="btn success" style="margin-inline-start:auto;padding:4px 12px;font-size:12px" onclick="ctMarkPaid('${safe}','${encodeURIComponent(x.name)}')">🔗 קשר נבחרים לחשבונית ספק</button>
@@ -2647,7 +2672,7 @@ window.ctMarkPaid = async (safe, nameEnc) => {
   const name = decodeURIComponent(nameEnc);
   const boxes = [...document.querySelectorAll(`.ctchk[data-c="${safe}"]:checked`)];
   if (!boxes.length) { alert('לא נבחרו אירועים'); return; }
-  const items = boxes.map(b => ({ eventId: b.dataset.ev, index: +b.dataset.ix }));
+  const items = boxes.map(b => ({ eventId: b.dataset.ev, index: +b.dataset.ix, cp: b.dataset.cp }));
   const sup = (_suppliers || []).find(s => (s.name || '').trim() === String(name).trim());
   _ctLink = { items, name, supplierId: sup ? sup.id : null, docs: null, selected: null };
   let m = document.getElementById('ctLinkModal');
@@ -2684,6 +2709,8 @@ function renderCtLink() {
 }
 window.ctLinkPick = (jj) => { _ctLink.selected = JSON.parse(decodeURIComponent(jj)); renderCtLink(); };
 window.ctLinkConfirm = async (btn) => {
+  const notPaid = (_ctLink.items || []).filter(it => it.cp && it.cp !== 'paid').length;
+  if (notPaid) { if (!confirm(`ל-${notPaid} מהאירועים שנבחרו הלקוח עדיין לא שילם — לשלם לספק בכל זאת?`)) return; }
   const manual = (document.getElementById('ctManualNum')?.value || '').trim();
   const sel = _ctLink.selected;
   const invoiceNumber = manual || (sel ? String(sel.number) : '') || null;
@@ -2701,7 +2728,13 @@ window.ctDismissSupplier = async (nameEnc) => {
   await fetch('/api/contractors/dismiss-supplier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }).catch(() => {});
   renderContractors($('#content'));
 };
-window.toggleContractorPaid = async (eventId, index, paid) => {
+window.toggleContractorPaid = async (eventId, index, paid, cpStatus) => {
+  if (paid && cpStatus && cpStatus !== 'paid') {
+    const msg = cpStatus === 'pending' ? 'הלקוח עדיין לא שילם על האירוע הזה — לשלם לספק בכל זאת?'
+      : cpStatus === 'uninvoiced' ? 'עדיין לא הופקה חשבונית ללקוח על האירוע הזה — לשלם לספק בכל זאת?'
+        : 'לא ידוע אם הלקוח שילם על האירוע — לשלם לספק בכל זאת?';
+    if (!confirm(msg)) return;
+  }
   await fetch('/api/contractors/toggle-paid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId, index, paid: !!paid }) }).catch(() => {});
   renderContractors($('#content'));
 };

@@ -1238,8 +1238,45 @@ add('GET', /^\/api\/open-invoices$/, async (req, res) => {
 });
 
 // GET /api/contractors/payables?companyId=
-add('GET', /^\/api\/contractors\/payables$/, (req, res, _p, q) =>
-  json(res, contractorPayables(companyEvents(load(), q.companyId))));
+// מוסיף לכל אירוע חיווי "האם הלקוח שילם" — לפי התאמת בנק (זיכוי מאושר) או סטטוס חשבונית ירוקה (מס-קבלה/סגורה/פתוחה).
+add('GET', /^\/api\/contractors\/payables$/, async (req, res, _p, q) => {
+  const db = load();
+  const payables = contractorPayables(companyEvents(db, q.companyId));
+  // 1) חשבוניות ששולמו לפי הבנק — זיכוי (credit) שהותאם לחשבונית ואושר/הותאם ידני/אוטומטי
+  const bankPaid = new Map(); // 'num:'/'id:' -> תאריך התנועה
+  for (const t of (db.bankTx || [])) {
+    if (q.companyId && t.companyId !== q.companyId) continue;
+    if (t.direction !== 'credit') continue;
+    if (!['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
+    for (const inv of (t.matchedInvoices || [])) {
+      if (inv && inv.number != null && !bankPaid.has('num:' + inv.number)) bankPaid.set('num:' + inv.number, t.date || null);
+      if (inv && inv.id != null && !bankPaid.has('id:' + inv.id)) bankPaid.set('id:' + inv.id, t.date || null);
+    }
+  }
+  // 2) חשבוניות פתוחות (טרם שולמו) לפי חשבונית ירוקה — לפי מספר מסמך
+  let openNums = null;
+  try { if (greenInvoice.haveCredentials()) { const open = await greenInvoice.openDocuments(); openNums = new Set((open || []).map(d => String(d.number))); } } catch { openNums = null; }
+  const evMap = new Map((db.events || []).map(e => [e.id, e]));
+  for (const g of payables) for (const ev of g.events) ev.clientPaid = eventClientPaid(evMap.get(ev.eventId), bankPaid, openNums);
+  json(res, payables);
+});
+
+// קובע האם הלקוח שילם על אירוע (עבור חיווי "קבלנים לתשלום"): בנק או חשבונית ירוקה
+function eventClientPaid(e, bankPaid, openNums) {
+  if (!e) return { status: 'unknown' };
+  if (e.noInvoice) return { status: 'noinvoice' };
+  if (e.invoiceStatus !== 'invoiced') return { status: 'uninvoiced' };
+  const num = e.invoiceNumber != null ? String(e.invoiceNumber) : null;
+  const id = e.invoiceId != null ? String(e.invoiceId) : null;
+  // בנק — הכסף נכנס בפועל (האות החזק ביותר)
+  const key = (num && bankPaid.has('num:' + num)) ? 'num:' + num : (id && bankPaid.has('id:' + id)) ? 'id:' + id : null;
+  if (key) return { status: 'paid', via: 'bank', date: bankPaid.get(key) || null };
+  // חשבונית ירוקה — מס-קבלה (320) שולמה מעצם הגדרתה
+  if (Number(e.invoiceType) === 320) return { status: 'paid', via: 'greeninvoice' };
+  // פתוח/סגור לפי רשימת המסמכים הפתוחים בחשבונית ירוקה
+  if (openNums != null && num != null) return openNums.has(num) ? { status: 'pending' } : { status: 'paid', via: 'greeninvoice' };
+  return { status: 'pending' };
+}
 
 // POST /api/contractors/toggle-paid — סימון תשלום לקבלן על אירוע מסוים
 add('POST', /^\/api\/contractors\/toggle-paid$/, (req, res, _p, _q, body) => {
