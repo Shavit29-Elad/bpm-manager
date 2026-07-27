@@ -4809,12 +4809,10 @@ async function renderBank(c, soft) {
       <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמה אוטומטית: תנועות זכות ↔ חשבוניות הכנסה · תנועות חובה ↔ חשבוניות ספקים</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost" onclick="rematchBank(this)">↻ רענן הצעות חובה</button>
-        <button class="btn ghost" onclick="bankCoverageAudit(this)">🔎 בדוק כיסוי</button>
         <button class="btn success" onclick="approveAllStrong(this)">✓ אשר את כל ההתאמות המדויקות</button>
         <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
       </div>
     </div>
-    <div id="bankAuditPanel"></div>
     ${bankHeaderHtml()}
     ${bankMonthlyHtml()}
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px">${bankDirControls()}${bankPeriodControls()}</div>
@@ -4823,29 +4821,24 @@ async function renderBank(c, soft) {
     <p class="muted" style="font-size:12.5px;margin-top:10px">תגית ירוקה <b>"מדויק"</b> = סכום זהה או מספר חשבונית (בטוח לאישור) · צהובה <b>"לבדיקה"</b> = ניכוי 5% / צירוף / שם בלבד (כדאי לוודא בתצוגה) · שורות אדומות = לא מותאמות · 🔗 שייך לשיוך ידני.</p>
     ${table}
   </div>`;
-  bankCoverageAudit(null, true); // בדיקת כיסוי אוטומטית בכל רינדור/רענון של לשונית הבנק (בלי כפתור)
 }
-// בדיקה רטרואקטיבית: שורות זכות/חובה מאושרות שהמסמכים המשויכים לא מכסים את הסכום
-window.bankCoverageAudit = async (btn, silent) => {
-  const panel = document.getElementById('bankAuditPanel'); if (!panel) return;
-  if (btn) { btn.disabled = true; btn.textContent = 'בודק…'; }
-  const r = await api(`/api/bank/coverage-audit?companyId=${state.company}`).catch(() => null);
-  if (btn) { btn.disabled = false; btn.textContent = '🔎 בדוק כיסוי'; }
-  const flagged = (r && r.flagged) || [];
-  if (!flagged.length) { panel.innerHTML = silent ? '' : `<div class="panel" style="margin-top:10px"><span style="color:var(--accent2)"><b>✓ כל השורות המאושרות מכוסות כראוי.</b></span> <button class="btn ghost" style="float:left;padding:2px 8px" onclick="document.getElementById('bankAuditPanel').innerHTML=''">✕</button></div>`; return; }
-  const rows = flagged.map(f => `<tr><td>${f.date}</td><td>${f.dir === 'debit' ? 'הוצאה' : 'הכנסה'}</td><td><b>${escapeHtml(f.name || '')}</b></td><td>${money(f.bankAmount)}</td><td>${money(f.matchedSum)}</td><td style="color:var(--danger)">${money(f.shortfall)}</td><td class="muted">${(f.numbers || []).map(n => '#' + n).join(', ')}</td></tr>`).join('');
-  panel.innerHTML = `<div class="panel" style="margin-top:10px;border-color:var(--warn)">
-    <div class="row-between"><b>⚠ ${flagged.length} שורות מאושרות שהמסמכים לא מכסים את הסכום</b><button class="btn ghost" style="padding:2px 8px" onclick="document.getElementById('bankAuditPanel').innerHTML=''">✕ סגור</button></div>
-    <p class="muted" style="font-size:12px;margin:6px 0">שורות שאושרו אך סכום המסמכים המשויכים קטן מהסכום שבבנק. מצא אותן בטבלה (לפי תאריך/סכום), לחץ "בטל" ושייך מחדש את כל המסמכים עד לכיסוי מלא.</p>
-    <div style="overflow-x:auto"><table style="min-width:620px;font-size:13px"><thead><tr><th>תאריך</th><th>סוג</th><th>שם</th><th>בבנק</th><th>שויך</th><th>חסר</th><th>מסמכים</th></tr></thead><tbody>${rows}</tbody></table></div>
-  </div>`;
-};
+// כיסוי שורת בנק: סכום ההקצאות של המסמכים המשויכים מול הסכום שבבנק (מדויק, או −5% ניכוי מס בהכנסות)
+function bankRowCovered(t) {
+  const invs = t.matchedInvoices || [];
+  if (!invs.length) return false;
+  const sum = invs.reduce((s, inv) => s + (Number(inv.allocated != null ? inv.allocated : inv.amount) || 0), 0);
+  const bank = Math.abs(Number(t.absAmount) || 0);
+  const tol = Math.max(3, bank * 0.004);
+  return Math.abs(sum - bank) <= tol || (t.direction === 'credit' && Math.abs(sum * 0.95 - bank) <= tol);
+}
 function bankTr(t) {
   const credit = t.direction === 'credit';
   const amt = `${credit ? '' : '−'}${money(t.absAmount)}`;
   const esc = (u) => String(u).replace(/'/g, '%27');
   const mis = t.matchedInvoices || [];
-  const isMatched = mis.length && (t.matchStatus === 'auto' || t.matchStatus === 'manual'); // זכות או חובה
+  const isMatched = mis.length && ['auto', 'manual', 'approved'].includes(t.matchStatus); // זכות או חובה
+  // שורה נחשבת "מכוסה" רק אם המסמכים משלימים את הסכום, או שאושרה ידנית (approved). אחרת — אדומה עד השלמה/אישור.
+  const covered = isMatched ? (t.matchStatus === 'approved' || bankRowCovered(t)) : false;
   const notesInput = `<input value="${(t.notes || '').replace(/"/g, '&quot;')}" placeholder="הערה…" onchange="saveBankNotes('${t.id}', this.value)" style="width:90px;padding:4px 6px;font-size:12px"/>`;
   const stack = (arr) => arr.map(x => `<div style="padding:2px 0${arr.length > 1 ? ';border-bottom:1px dashed var(--line)' : ''}">${x}</div>`).join('');
   // תצוגה 👁 + הורדה ↓ צמודים לשם המסמך (במקום עמודות נפרדות)
@@ -4874,8 +4867,16 @@ function bankTr(t) {
     const whAmt = sumInv - t.absAmount;
     wh = (whAmt > 1 && whAmt < sumInv * 0.08) ? `<span style="color:var(--warn)">${money(whAmt)}</span>` : '—';
     const conf = bankConfidence(t);
-    const confBadge = t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'מדויק' : 'לבדיקה'}</span>` : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '');
-    action = `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
+    const shortAmt = Math.abs(Number(t.absAmount) || 0) - mis.reduce((s, i) => s + (Number(i.allocated != null ? i.allocated : i.amount) || 0), 0);
+    const confBadge = !covered
+      ? `<span class="tag miss" style="font-size:10px;margin-inline-end:4px">חסר ${money(shortAmt)}</span>`
+      : (t.matchStatus === 'approved' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">מאושר</span>'
+        : (t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'מדויק' : 'לבדיקה'}</span>`
+          : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '')));
+    // לא מכוסה → אדום, עם "אשר" (לאשר בכל זאת) ו-"בטל". מכוסה → כרגיל.
+    action = !covered
+      ? `${confBadge}<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="approveBank('${t.id}')">אשר</button> <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`
+      : `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
   } else if (t.matchStatus === 'approved') {
     // אושר ידנית ללא מסמך (למשל עמלות) — מסומן מאושר, לא אדום
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
@@ -4908,6 +4909,7 @@ function bankTr(t) {
   const incomeBtn = credit ? `<button class="btn ghost" style="padding:3px 9px;font-size:12px;color:var(--accent2)" onclick="openCreateIncome('${t.id}')">➕ צור הכנסה</button>` : '';
   // חובה: כל שורה שאינה מותאמת אדומה — עד שמסמנים "התעלם". זכות: אדום רק ב"ממתין לאישור".
   const rowStyle = (t.matchStatus === 'ignored') ? 'opacity:.55'
+    : (isMatched && !covered) ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)'   // מותאם אך לא מכסה את הסכום — אדום עד השלמה/אישור
     : (t.matchStatus === 'approved') ? ''
     : (!isMatched && (t.direction === 'debit' || t.matchStatus === 'unmatched')) ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)'
     : '';

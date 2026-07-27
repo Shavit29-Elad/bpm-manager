@@ -2405,7 +2405,7 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
     } else {
       let remaining = bankAbs;
       for (const x of rem) { const a = Math.min(x.r, remaining); x.inv.allocated = +a.toFixed(2); remaining = +(remaining - a).toFixed(2); }
-      if (Math.abs(remaining) > tol) return json(res, { ok: true, covered: false, matchedSum: +(bankAbs - remaining).toFixed(2), bankAmount: +bankAbs.toFixed(2), shortfall: +remaining.toFixed(2) });
+      // אם לא מכוסה — לא חוסמים; השיוך נשמר, והשורה תוצג אדומה בממשק (לא מאושרת) עד השלמה או אישור ידני.
     }
   }
   if (body.matchStatus) t.matchStatus = body.matchStatus;
