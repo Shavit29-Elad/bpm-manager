@@ -4727,6 +4727,7 @@ function bankConfidence(t) {
 async function bankAction(id, body) {
   const r = await fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => null);
   if (r && r.error) { alert(r.error); return; }
+  if (r && r.covered === false) { alert(`המסמכים המשויכים מכסים ₪${money(r.matchedSum)} מתוך ₪${money(r.bankAmount)} — חסר ₪${money(r.shortfall)}.\nהשורה נשארת לא מתואמת עד שהסכום המלא מכוסה (או שההעברה = הסכום פחות 5% ניכוי מס). שייך מסמכים נוספים דרך "שייך מסמכים".`); return; }
   const tx = r && r.tx;
   if (tx) { const i = _bankList.findIndex(t => t.id === id); if (i >= 0) _bankList[i] = tx; renderBankBody(); }
 }
@@ -4913,9 +4914,17 @@ function invChip(inv) {
     const rdl = inv.receipt.url ? `<a href="${inv.receipt.url}" target="_blank" class="muted" style="font-size:11px">↓</a>` : '';
     receipt = `<div class="muted" style="font-size:11px;margin-top:1px">🧾 קבלה #${inv.receipt.number} · ${money(inv.receipt.amount)} ${rpv} ${rdl}</div>`;
   }
+  // חשבונית המס המקורית שממנה נגזרה הקבלה (מסמך המשך) — מוצגת מקוננת תחת הקבלה
+  let src = '';
+  if (inv.sourceInvoice) {
+    const s = inv.sourceInvoice;
+    const spv = s.url ? `<button class="btn ghost" style="padding:2px 7px;font-size:11px" onclick="previewDoc('${esc(s.url)}')">👁</button>` : '';
+    const sdl = s.url ? `<a href="${s.url}" target="_blank" class="muted" style="font-size:11px">↓</a>` : '';
+    src = `<div class="muted" style="font-size:11px;margin-top:1px">📄 ${DOC_TYPE_NAMES[s.type] || 'חשבונית מס'} #${s.number} · ${money(s.amount)} ${spv} ${sdl}</div>`;
+  }
   return `<div style="padding:4px 0;border-bottom:1px dashed var(--line)">
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">✓ <b>${escapeHtml(inv.clientName || '')}</b> · ${typeLabel} #${inv.number} · ${money(inv.amount)} ${pv} ${dl}</div>
-    ${receipt}</div>`;
+    ${src}${receipt}</div>`;
 }
 // פעולות מתעדכנות במקום (בלי לרנדר מחדש את כל הטבלה ובלי לקפוץ למעלה)
 window.matchBank = (id, j) => { if (!bankGroupOk(id)) return; bankAction(id, { matchStatus: 'manual', matchedInvoices: [JSON.parse(decodeURIComponent(j))] }); };
@@ -5162,6 +5171,7 @@ window.linkDetachRec = (i) => { if (_linkSel[i]) delete _linkSel[i].receipt; _re
 window.linkSave = async () => {
   const r = await fetch(`/api/bank/${_linkTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: _linkSel.length ? 'manual' : 'unmatched', matchedInvoices: _linkSel, allowDup: _linkInclUsed }) }).then(x => x.json()).catch(() => null);
   if (r && r.error) { alert(r.error); return; }
+  if (r && r.covered === false) { alert(`המסמכים שבחרת מכסים ₪${money(r.matchedSum)} מתוך ₪${money(r.bankAmount)} — חסר ₪${money(r.shortfall)}.\nהשורה תישאר לא מתואמת. הוסף עוד מסמכים עד לכיסוי מלא (או שההעברה תהיה בדיוק הסכום פחות 5% ניכוי מס).`); return; } // משאירים את המודל פתוח כדי להוסיף עוד
   const m = document.getElementById('linkModal'); if (m) m.classList.add('hidden');
   if (r && r.tx) { const i = _bankList.findIndex(t => t.id === _linkTxId); if (i >= 0) _bankList[i] = r.tx; renderBankBody(); }
 };

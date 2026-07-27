@@ -2315,6 +2315,31 @@ async function enrichMatchedUrl(inv) {
   return false;
 }
 
+// #1 — לכל קבלה (400) שמשויכת לשורת בנק: שולף את חשבונית המס המקורית (300/305) שממנה נגזרה,
+// ומקנן אותה תחת הקבלה (inv.sourceInvoice). אם המשתמש בחר גם את חשבונית המקור כשורה נפרדת — מסירים אותה
+// כדי לא לספור את אותו הכסף פעמיים בבדיקת כיסוי הסכום.
+async function attachSourceInvoices(matched) {
+  for (const inv of matched.slice()) {
+    if (!inv || Number(inv.type) !== 400 || inv.sourceInvoice || /^(exp_|pay_)/.test(String(inv.id))) continue;
+    let ids = [];
+    try { const raw = await greenInvoice.getDocument(inv.id); ids = Array.isArray(raw && raw.linkedDocumentIds) ? raw.linkedDocumentIds : []; } catch { continue; }
+    for (const sid of ids) {
+      try {
+        const s = await greenInvoice.getDocument(sid);
+        const st = Number(s && s.type);
+        if (st === 305 || st === 300) {
+          const amount = Number(s.amount ?? s.total ?? s.sum) || 0;
+          const url = (s.url && (s.url.he || s.url.origin || s.url.pdf)) || (typeof s.url === 'string' ? s.url : null);
+          inv.sourceInvoice = { id: s.id, number: s.number, type: st, amount, clientName: (s.client && s.client.name) || inv.clientName || '', url };
+          const dupIdx = matched.findIndex(x => String(x.id) === String(s.id));
+          if (dupIdx >= 0) matched.splice(dupIdx, 1);
+          break;
+        }
+      } catch { }
+    }
+  }
+}
+
 // GET /api/bank?companyId=
 add('GET', /^\/api\/bank$/, async (req, res, _p, q) => {
   const db = load();
@@ -2360,6 +2385,19 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
   // חובת שיוך לקבוצה לפני אישור תנועה (התאמה למסמך או אישור-ללא-מסמך) — אך ורק אצל משה כורסיה
   if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && t.companyId === 'co_moshe' && !t.group) {
     return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה (מוזיקה / דיגיטל / הוצאות שוטפות / אחר).' }, 400);
+  }
+  // #1 — קבלה (400) משויכת: משיכת חשבונית המס המקורית (המסמך שממנו נגזרה) וקינון תחתיה (מונע ספירה כפולה של אותו כסף)
+  if (greenInvoice.haveCredentials() && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
+    try { await attachSourceInvoices(body.matchedInvoices); } catch { }
+  }
+  // #2 — שיוך שאינו מכסה את מלוא ההעברה (וגם לא "ההעברה = הסכום פחות 5% ניכוי מס") — לא סוגר את השורה.
+  // השורה נשארת לא מתואמת, עם חיווי כמה חסר. (לא חל על "אישור ללא מסמך" — שם אין matchedInvoices).
+  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
+    const sum = body.matchedInvoices.reduce((s, inv) => s + (Number(inv.amount) || 0), 0);
+    const bankAbs = Math.abs(Number(t.absAmount) || 0);
+    const tol = Math.max(3, sum * 0.004);
+    const covered = Math.abs(sum - bankAbs) <= tol || Math.abs(sum * 0.95 - bankAbs) <= tol;
+    if (!covered) return json(res, { ok: true, covered: false, matchedSum: +sum.toFixed(2), bankAmount: +bankAbs.toFixed(2), shortfall: +(bankAbs - sum).toFixed(2) });
   }
   if (body.matchStatus) t.matchStatus = body.matchStatus;
   if (body.matchedInvoices !== undefined) t.matchedInvoices = body.matchedInvoices;
