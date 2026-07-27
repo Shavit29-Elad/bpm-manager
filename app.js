@@ -970,6 +970,19 @@ function derSyncFromDom() {
   const desc = document.querySelector('#derModal .der-descr'); if (desc) e.description = desc.value;
   const rem = document.querySelector('#derModal .der-rem'); if (rem) e.remarks = rem.value;
 }
+// שינוי תאריך המסמך → תאריכי התקבולים שעדיין עוקבים אחרי תאריך המסמך (ריקים או זהים לתאריך הקודם) מתעדכנים אוטומטית.
+// תקבול שערכת ידנית לתאריך אחר — נשאר כפי שהוא.
+window.derDateChanged = (v) => {
+  const e = _derEdit; if (!e) return;
+  const old = (e.date || '').slice(0, 10);
+  e.date = v;
+  if (e.needsPay) {
+    document.querySelectorAll('#derModal .der-pdate').forEach((inp, i) => {
+      const cur = (inp.value || '').slice(0, 10);
+      if (!cur || cur === old) { inp.value = v; if (e.payments[i]) e.payments[i].date = v; }
+    });
+  }
+};
 window.derAddItem = () => { derSyncFromDom(); _derEdit.items.push({ description: '', quantity: 1, price: 0 }); renderDeriveEditor(); };
 window.derDelItem = (i) => { derSyncFromDom(); _derEdit.items.splice(i, 1); if (!_derEdit.items.length) _derEdit.items.push({ description: '', quantity: 1, price: 0 }); renderDeriveEditor(); };
 window.derAddPay = () => {
@@ -1040,7 +1053,7 @@ function renderDeriveEditor() {
     <div class="row-between"><h3>${e.linked ? 'מסמך המשך' : 'שכפול'} — ${typeName}</h3><span class="muted">${escapeHtml(e.clientName)}</span></div>
 
     <div style="margin:8px 0 4px">
-      <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" ${(!e.allowBackdate && e.lastDocDate) ? `min="${e.lastDocDate}"` : ''} style="padding:6px 8px;margin-inline-start:6px"></label>
+      <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" ${(!e.allowBackdate && e.lastDocDate) ? `min="${e.lastDocDate}"` : ''} onchange="derDateChanged(this.value)" style="padding:6px 8px;margin-inline-start:6px"></label>
       ${e.lastDocDate ? `<div style="margin-top:6px;font-size:12px">
         <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer">
           <input type="checkbox" ${e.allowBackdate ? 'checked' : ''} onchange="derToggleBackdate(this.checked)">
