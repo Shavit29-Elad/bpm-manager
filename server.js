@@ -574,7 +574,7 @@ add('POST', /^\/api\/expenses\/upload-file$/, async (req, res, _p, _q, body) => 
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   if (!body?.fileBase64) return json(res, { error: 'חסר קובץ' }, 400);
   try { json(res, await greenInvoice.uploadExpenseFile(body.fileBase64, body.fileName, body.mime)); }
-  catch (e) { json(res, { error: e.message }, 500); }
+  catch (e) { console.error('upload-file failed:', body.fileName, e.message); json(res, { error: e.message }, 500); }
 });
 
 // GET /api/expense-drafts — טיוטות הוצאה שהעלינו (OCR) שממתינות לאישור, ללא כאלה שכבר אושרו/נדחו אצלנו

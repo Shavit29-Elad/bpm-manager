@@ -3658,12 +3658,22 @@ window.handleExpenseFile = (f) => handleExpenseFiles(f ? [f] : []);
 // העלאת כמה קובצי הוצאה — כל קובץ כהוצאה נפרדת + זיהוי אוטומטי (OCR) לכל אחד בנפרד
 window.handleExpenseFiles = async (fileList) => {
   const all = Array.from(fileList || []);
-  const files = all.filter(f => (/\.(pdf|png|jpe?g)$/i.test(f.name) || /(pdf|image)/i.test(f.type || '')) && f.size <= 10 * 1024 * 1024);
+  // מסננים לפי סוג נתמך (PDF/JPG/PNG בלבד — Green Invoice לא קולט HEIC/וכו') וגודל, ושומרים סיבת דילוג לכל קובץ שנפסל
+  const tooBig = [], badType = [], files = [];
+  for (const f of all) {
+    const okType = /\.(pdf|png|jpe?g)$/i.test(f.name) || /^(application\/pdf|image\/(png|jpe?g))$/i.test(f.type || '');
+    if (!okType) { badType.push(f.name); continue; }
+    if (f.size > 10 * 1024 * 1024) { tooBig.push(`${f.name} (${(f.size / 1048576).toFixed(1)}MB)`); continue; }
+    files.push(f);
+  }
+  const skipNotes = [];
+  if (badType.length) skipNotes.push(`סוג לא נתמך (נדרש PDF/JPG/PNG — לא HEIC): ${badType.join(', ')}`);
+  if (tooBig.length) skipNotes.push(`גדול מ-10MB: ${tooBig.join(', ')}`);
   const skipped = all.length - files.length;
-  if (!files.length) { alert('יש להעלות קובצי PDF או תמונה (עד 10MB לכל קובץ).'); return; }
+  if (!files.length) { alert('לא הועלה אף קובץ.\n' + (skipNotes.join('\n') || 'נדרש קובץ PDF או תמונה (JPG/PNG) עד 10MB.')); return; }
   const toast = _expToast();
   const baseline = (_drafts || []).length;
-  let uploaded = 0, failed = 0;
+  let uploaded = 0, failed = 0, lastErr = '';
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     toast.innerHTML = files.length > 1 ? `מעלה קובץ ${i + 1} מתוך ${files.length}: "${escapeHtml(f.name)}"…` : `מעלה את "${escapeHtml(f.name)}" לחשבונית ירוקה…`;
@@ -3671,10 +3681,10 @@ window.handleExpenseFiles = async (fileList) => {
       const data = await fileToB64(f);
       const r = await fetch('/api/expenses/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fileBase64: data, fileName: f.name, mime: f.type || 'application/pdf' }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-      if (r.ok) uploaded++; else failed++;
-    } catch { failed++; }
+      if (r.ok) uploaded++; else { failed++; lastErr = r.error || lastErr; }
+    } catch (e) { failed++; lastErr = String((e && e.message) || e || ''); }
   }
-  if (!uploaded) { toast.innerHTML = `<span style="color:var(--danger)">שגיאה בהעלאה (${failed} נכשלו).</span>`; setTimeout(() => { toast.style.display = 'none'; }, 5000); return; }
+  if (!uploaded) { toast.innerHTML = `<span style="color:var(--danger)">ההעלאה נכשלה${lastErr ? ': ' + escapeHtml(String(lastErr)) : ` (${failed})`}${skipNotes.length ? ' · ' + escapeHtml(skipNotes.join(' · ')) : ''}</span>`; setTimeout(() => { toast.style.display = 'none'; }, 12000); return; }
   toast.innerHTML = `✓ הועלו ${uploaded} קבצים${failed ? ` · ${failed} נכשלו` : ''}${skipped ? ` · ${skipped} דולגו` : ''}. מזהה כל חשבונית אוטומטית (OCR)… זה עשוי לקחת עד דקה.`;
   let tries = 0;
   const poll = async () => {
