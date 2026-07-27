@@ -667,16 +667,33 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
 
     // ===== חשבון עסקה — רישום פנימי בלבד (לא בחשבונית ירוקה, לא לרו"ח) =====
     if (isBusiness) {
+      // מורידים עותק מקומי של קובץ החשבונית לפני מחיקת הטיוטה — כדי לשמור צפייה/הורדה אצלנו גם אחרי המחיקה
+      let localFileId = null;
+      try {
+        if (draft.url) {
+          const fr = await fetch(draft.url, { redirect: 'follow' });
+          if (fr.ok) {
+            const buf = Buffer.from(await fr.arrayBuffer());
+            const ct = fr.headers.get('content-type') || 'application/pdf';
+            const ext = /pdf/i.test(ct) ? 'pdf' : (/png/i.test(ct) ? 'png' : (/jpe?g/i.test(ct) ? 'jpg' : 'pdf'));
+            const saved = await saveFile({ employeeId: 'payable', kind: 'expense', filename: `expense-${String(number).replace(/[^\w.-]/g, '_')}.${ext}`, mime: ct, data: buf.toString('base64') });
+            localFileId = saved.id;
+          }
+        }
+      } catch { }
+      // מוחקים את הטיוטה מחשבונית ירוקה — כדי שלא תישאר ב"הוצאות לקליטה" גם שם (רישום פנימי בלבד)
+      let draftDeleted = false;
+      try { await greenInvoice.deleteExpenseDraft(draftId); draftDeleted = true; } catch { }
       const db = load();
       db.supplierPayables = db.supplierPayables || [];
-      // שומרים את draftId (הקובץ נשאר בחשבונית ירוקה כטיוטה מוסתרת) כדי שתהיה צפייה/הורדה — לא נוצר כהוצאה
-      const payable = newPayable({ isBusinessDoc: true, giExpenseId: null, draftId });
+      // אם המחיקה הצליחה — הקובץ מוגש מהעותק המקומי (localFileId); אם נכשלה — נשארת הפניה לטיוטה כגיבוי
+      const payable = newPayable({ isBusinessDoc: true, giExpenseId: null, draftId: draftDeleted ? null : draftId, localFileId });
       db.supplierPayables.push(payable);
       const linked = applyLinkedEvents(db, linkedEvents, number, payable.id);
       db.approvedDrafts = db.approvedDrafts || {};
-      db.approvedDrafts[draftId] = { businessPayableId: payable.id, at: new Date().toISOString() };
-      save(db); // הטיוטה מוסתרת מרשימת הטיוטות (approvedDrafts) אך נשמרת כדי לשמור על הקובץ
-      return json(res, { ok: true, businessDoc: true, payableId: payable.id, linkedCount: linked });
+      db.approvedDrafts[draftId] = { businessPayableId: payable.id, at: new Date().toISOString(), draftDeleted };
+      save(db);
+      return json(res, { ok: true, businessDoc: true, payableId: payable.id, linkedCount: linked, draftDeleted });
     }
 
     // ===== מסמך מס אמיתי — נוצר בחשבונית ירוקה =====
@@ -851,7 +868,7 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
   };
   const out = (q.all ? list : list.filter(p => !p.paid)).slice()
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
-    .map(p => { const cov = coveredFor(p); return { ...p, hasFile: !!(p.giExpenseId || p.draftId), coveredEvents: cov, readiness: readinessOf(cov) }; });
+    .map(p => { const cov = coveredFor(p); return { ...p, hasFile: !!(p.giExpenseId || p.draftId || p.localFileId), coveredEvents: cov, readiness: readinessOf(cov) }; });
   json(res, { ok: true, payables: out });
 });
 
@@ -899,7 +916,7 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/detail$/, async (req, res, param
     try { const e = await greenInvoice.getExpense(p.giExpenseId); return json(res, { ok: true, ...pick(e) }); }
     catch (err) { return json(res, { ok: false, error: err.message, description: p.description || '', remarks: '', classification: '', rows: [], ocrTexts: [], hasFile: !!p.giExpenseId }); }
   }
-  json(res, { ok: true, description: p.description || '', remarks: '', classification: '', rows: [], ocrTexts: [], hasFile: !!(p.giExpenseId || p.draftId) });
+  json(res, { ok: true, description: p.description || '', remarks: '', classification: '', rows: [], ocrTexts: [], hasFile: !!(p.giExpenseId || p.draftId || p.localFileId) });
 });
 
 // GET /api/supplier-payables/:id/file — צפייה/הורדה של קובץ החשבונית (מההוצאה בחשבונית ירוקה או מהטיוטה)
@@ -909,6 +926,18 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params)
     const db = load();
     const p = (db.supplierPayables || []).find(x => x.id === params[0]);
     if (!p) return json(res, { error: 'לא נמצא' }, 404);
+    // עותק מקומי (חשבון עסקה פנימי שהטיוטה שלו נמחקה מחשבונית ירוקה) — מוגש ישירות
+    if (p.localFileId) {
+      try {
+        const f = await getFile(p.localFileId);
+        if (f && f.data) {
+          let ct = f.mime || 'application/pdf';
+          if (/image\/jpg/i.test(ct)) ct = 'image/jpeg';
+          res.writeHead(200, { 'Content-Type': ct, 'Content-Disposition': 'inline', 'Cache-Control': 'private, max-age=300' });
+          return res.end(Buffer.from(f.data, 'base64'));
+        }
+      } catch { }
+    }
     let fileUrl = null;
     if (p.giExpenseId) { try { const e = await greenInvoice.getExpense(p.giExpenseId); fileUrl = (e?.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e?.url === 'string' ? e.url : null); } catch { } }
     if (!fileUrl && p.draftId) { try { const d = await greenInvoice.getExpenseDraft(p.draftId); fileUrl = d?.url || null; } catch { } }

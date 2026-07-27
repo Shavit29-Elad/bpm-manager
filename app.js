@@ -3503,7 +3503,7 @@ window.approveDraft = async (id, btn) => {
     const linkNote = r.linkedCount ? ` · 🔗 קושרו ${r.linkedCount} אירועים בקבלנים לתשלום` : '';
     let msg;
     if (r.duplicate) { alert('⚠ המסמך כבר קיים במערכת\n\nחשבונית זו כבר נקלטה קודם לכן. כדי למנוע כפילות, הקובץ הכפול נמחק ולא נוצרה הוצאה נוספת.'); msg = '✓ המסמך כבר קיים במערכת — לא נוצרה כפילות.'; }
-    else if (r.businessDoc) msg = `✓ נרשם כ"חשבון עסקה" ב"הוצאות ספקים לתשלום" (לא נשלח לחשבונית ירוקה/רו״ח).${linkNote}`;
+    else if (r.businessDoc) msg = `✓ נרשם כ"חשבון עסקה" ב"הוצאות ספקים לתשלום" (לא נשלח לחשבונית ירוקה/רו״ח).${r.draftDeleted ? ' · 🗑 הוסר מ"הוצאות לקליטה" בחשבונית ירוקה' : ''}${linkNote}`;
     else {
       const fwdNote = r.forwarded ? ` · 📧 נשלח גם לרו"ח` : (r.forwardError ? ` · <span style="color:var(--warn)">שליחת המייל לרו"ח נכשלה</span>` : '');
       const payNote = paid ? '' : ' · נוסף ל"הוצאות ספקים לתשלום"';
