@@ -1158,10 +1158,10 @@ add('POST', /^\/api\/quotes\/([^/]+)\/close$/, async (req, res, params) => {
 
 // פרטי חשבון להעברה בנקאית + שורת התייחסות למקור — נכנסים להערות של כל מסמך המשך
 const DOC_NAMES_HE = { 10: 'הצעת מחיר', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 330: 'חשבונית זיכוי' };
-const PAYMENT_BENEFICIARY = `שם מוטב: בי פי אם הגברה ותאורה בע"מ\nמספר חשבון: 347346\nמס' סניף: 521 (מודיעין)\nמזרחי טפחות (20)`;
+// שורת מקור למסמך המשך (תמיד מופיעה). פרטי הבנק מגיעים מההערה הקבועה של העסק (documentBody מזריק אותה).
 function followupRemarks(srcType, srcNumber) {
   const nm = DOC_NAMES_HE[Number(srcType)] || 'מסמך';
-  return `מסמך המשך ל${nm}${srcNumber ? ` מס' ${srcNumber}` : ''}\n\n${PAYMENT_BENEFICIARY}`;
+  return `מסמך המשך ל${nm}${srcNumber ? ` מס' ${srcNumber}` : ''}`;
 }
 
 // POST /api/quotes/:id/followup { type } — יצירת מסמך המשך מהצעת מחיר (אותן שורות, מקושר)
@@ -1346,7 +1346,13 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
         return row;
       }).filter(p => Math.abs(p.price) > 0); // מתעלמים משורות תקבול ריקות
     }
-    if (body.linked) opts.linkedDocumentIds = [params[0]]; // מסמך המשך — קישור למקור
+    if (body.linked) {
+      opts.linkedDocumentIds = [params[0]]; // מסמך המשך — קישור למקור
+      // שורת "מסמך המשך ל..." תמיד מופיעה. פרטי הבנק/ההערה הקבועה נוספים ע"י documentBody.
+      const ref = followupRemarks(src.type, src.number);
+      const cur = (body.remarks != null) ? String(body.remarks).trim() : '';
+      opts.remarks = cur.includes(ref) ? cur : (cur ? `${ref}\n\n${cur}` : ref);
+    }
     const doc = await greenInvoice.createDocument(opts);
     json(res, { ok: true, doc });
   } catch (e) { json(res, { error: e.message }, 500); }
@@ -1611,6 +1617,12 @@ add('DELETE', /^\/api\/files\/([^/]+)$/, async (req, res, params) => {
 });
 
 // ===== פרטי העסק (Business Profile) — פר-חברה, עם מסמכים בטבלה נפרדת =====
+// הערת ברירת מחדל שנוספת לכל המסמכים (ניתנת לעריכה בפרטי העסק פר-חברה). כוללת פרטי בנק להעברה.
+function defaultDocRemark(cid) {
+  if (cid === 'co_bpm') return 'שם מוטב: בי פי אם הגברה ותאורה בע"מ\nמספר חשבון: 347346\nמס\' סניף: 521 (מודיעין)\nמזרחי טפחות (20)';
+  if (cid === 'co_moshe') return 'משה כורסיה בע"מ\nדיסקונט (11)\nסניף 152\nמספר חשבון: 0215130040';
+  return '';
+}
 function bizProfile(db, cid) {
   db.businessProfiles = db.businessProfiles || {};
   if (!db.businessProfiles[cid]) {
@@ -1622,6 +1634,8 @@ function bizProfile(db, cid) {
   p.additionalDocs = Array.isArray(p.additionalDocs) ? p.additionalDocs : [];
   // כתובת רו"ח להעברת הוצאות — פר-חברה. BPM: ברירת המחדל ההיסטורית. חברות אחרות: ריק עד שמגדירים (לא מעבירים לאף אחד).
   if (p.accountantEmail === undefined) p.accountantEmail = (cid === 'co_bpm') ? (process.env.FORWARD_EXPENSE_EMAIL || '516942349@rivh.it') : '';
+  if (p.docRemark === undefined) p.docRemark = defaultDocRemark(cid);
+  try { greenInvoice.setCompanyRemark(cid, p.docRemark); } catch { } // סנכרון: ההערה תוזרק לכל מסמך שנוצר בחברה
   return p;
 }
 // GET /api/business-profile?companyId=
@@ -1656,9 +1670,11 @@ add('GET', /^\/api\/business-profile\/alerts$/, (req, res) => {
 // PUT /api/business-profile?companyId= — שמירת שדות טקסט
 add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   const db = load();
-  const p = bizProfile(db, q.companyId || giCompanyId());
+  const cid = q.companyId || giCompanyId();
+  const p = bizProfile(db, cid);
   const b = body || {};
   ['name', 'businessNumber', 'email', 'address'].forEach(k => { if (k in b) p[k] = String(b[k] || ''); });
+  if ('docRemark' in b) p.docRemark = String(b.docRemark || ''); // הערה קבועה לכל המסמכים (פר-חברה)
   if ('accountantEmail' in b) p.accountantEmail = String(b.accountantEmail || '').trim();
   if (Array.isArray(b.managers)) b.managers.slice(0, 2).forEach((m, i) => {
     p.managers[i] = p.managers[i] || {};
@@ -2564,6 +2580,8 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
     }
   }
   const ungrouped = Array(12).fill(0);
+  const ungroupedDocs = []; // מסמכי הכנסה שאין להם שיוך לקבוצה — להצגה בסוף הסיכום, לשיוך ידני
+  const ov = (db.docGroupOverrides && db.docGroupOverrides[cid]) || {}; // שיוך ידני מסמך→קבוצה (למסמכים בלי תנועת בנק); גובר
   let incomeError = null;
   if (greenInvoice.haveCredentials()) {
     try {
@@ -2574,8 +2592,9 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
         const mi = (parseInt(iso.slice(5, 7), 10) || 0) - 1;
         if (mi < 0 || mi > 11) continue;
         const amt = Number(d.amountIncVat != null ? d.amountIncVat : d.amount) || 0;
-        const gid = docGroup.get('id:' + d.id) || (d.number != null ? docGroup.get('num:' + d.number) : null) || null;
-        if (gid && gmap[gid]) gmap[gid].income[mi] += amt; else ungrouped[mi] += amt;
+        const gid = (d.number != null && ov[String(d.number)]) || docGroup.get('id:' + d.id) || (d.number != null ? docGroup.get('num:' + d.number) : null) || null;
+        if (gid && gmap[gid]) gmap[gid].income[mi] += amt;
+        else { ungrouped[mi] += amt; ungroupedDocs.push({ number: d.number, type: d.type, date: iso.slice(0, 10), clientName: d.clientName || '', amount: r2(amt) }); }
       }
     } catch (e) { incomeError = e.message; }
   } else { incomeError = 'חשבונית ירוקה לא מחוברת'; }
@@ -2608,7 +2627,21 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   };
   const out = groups.map(g => mkGroup(g.id, g.name, g.key, gmap[g.id].income, gmap[g.id].expense, gmap[g.id].unlinkedExpense));
   if (ungrouped.some(x => x)) out.push(mkGroup('ungrouped', 'הכנסות ללא שיוך לקטגוריה', null, ungrouped, Array(12).fill(0), 0));
-  json(res, { ok: true, year, incomeBasis: 'issued-305-320-gross', incomeError, groups: out });
+  json(res, { ok: true, year, incomeBasis: 'issued-305-320-gross', incomeError, groups: out, ungroupedDocs: ungroupedDocs.sort((a, b) => String(a.date).localeCompare(String(b.date))), groupsList: groups.map(g => ({ id: g.id, name: g.name })) });
+});
+
+// POST /api/doc-group { companyId, number, groupId } — שיוך ידני של מסמך הכנסה לקבוצה (למסמכים שאין להם תנועת בנק). groupId ריק = הסרה.
+add('POST', /^\/api\/doc-group$/, (req, res, _p, q, body) => {
+  const cid = (body && body.companyId) || q.companyId;
+  const num = String((body && body.number) != null ? body.number : '').trim();
+  if (!cid || !num) return json(res, { error: 'חסר מזהה חברה או מספר מסמך' }, 400);
+  const db = load();
+  db.docGroupOverrides = db.docGroupOverrides || {};
+  db.docGroupOverrides[cid] = db.docGroupOverrides[cid] || {};
+  if (body && body.groupId) db.docGroupOverrides[cid][num] = String(body.groupId);
+  else delete db.docGroupOverrides[cid][num];
+  save(db);
+  json(res, { ok: true, number: num, groupId: (body && body.groupId) || null });
 });
 
 // ================= התחברות והרשאות =================

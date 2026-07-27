@@ -792,8 +792,35 @@ function businessSummaryHtml(r) {
     <div class="row-between"><div><h2>📊 סיכום עסק — ${year}</h2><span class="muted">הכנסות: חשבוניות מס (305) ומס-קבלה (320) שיצאו — כולל מע"מ · הוצאות: לפי תנועות הבנק</span></div><div style="white-space:nowrap">שנה: ${yearSel}</div></div>
     ${kpis}
     ${groups.length ? groups.map(section).join('') : '<div class="empty">אין קטגוריות עדיין — אפשר להוסיף בקבוצות שיוך בפרטי העסק.</div>'}
+    ${(r.ungroupedDocs && r.ungroupedDocs.length) ? ungroupedDocsHtml(r) : ''}
   </div>`;
 }
+// מסמכי הכנסה שאין להם שיוך לבנק — מוצגים בסוף הסיכום עם אפשרות לשייך לקטגוריה
+function ungroupedDocsHtml(r) {
+  const docs = r.ungroupedDocs || [];
+  const glist = (r.groupsList || []).filter(g => g.id !== 'ungrouped');
+  const total = docs.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const opts = glist.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  const rows = docs.map(d => `<tr>
+    <td style="white-space:nowrap">${fmtDate(d.date)}</td>
+    <td style="white-space:nowrap">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number}</td>
+    <td>${escapeHtml(d.clientName || '')}</td>
+    <td style="font-weight:600">${money(d.amount)}</td>
+    <td style="white-space:nowrap"><select id="ug_${d.number}" style="padding:3px 6px;font-size:12px"><option value="">— בחר קטגוריה —</option>${opts}</select>
+      <button class="btn primary" style="padding:2px 10px;font-size:11.5px" onclick="assignDocGroup('${String(d.number)}')">שייך</button></td></tr>`).join('');
+  return `<details open style="margin-top:18px;border-top:2px solid var(--line);padding-top:10px">
+    <summary style="cursor:pointer;font-weight:700;font-size:15px;color:var(--warn)">⚠ הכנסות ללא שיוך לבנק (${docs.length}) — ${money(total)}</summary>
+    <p class="muted" style="font-size:12px;margin:6px 0">מסמכי הכנסה שאין להם תנועת בנק תואמת עם קטגוריה. בחר קטגוריה לכל אחד כדי לשייך אותו לסיכום.</p>
+    <div style="overflow-x:auto"><table style="min-width:560px;font-size:13px"><thead><tr><th>תאריך</th><th>מסמך</th><th>לקוח</th><th>סכום</th><th>שיוך</th></tr></thead><tbody>${rows}</tbody></table></div>
+  </details>`;
+}
+window.assignDocGroup = async (number) => {
+  const sel = document.getElementById('ug_' + number); const gid = sel ? sel.value : '';
+  if (!gid) { alert('בחר קטגוריה לשיוך'); return; }
+  const r = await fetch('/api/doc-group', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, number: String(number), groupId: gid }) }).then(x => x.json()).catch(() => null);
+  if (!r || r.error) { alert((r && r.error) || 'שגיאה בשיוך'); return; }
+  renderBusinessSummary($('#content')); // ריענון — המסמך נכנס לקטגוריה ויורד מהרשימה
+};
 
 // ---- חשבוניות פתוחות בדף הבית (כמו "חיובים קרובים" בחשבונית ירוקה) ----
 let _openInv = null, _openInvErr = null, _openInvFilter = 'all', _openInvExpanded = false;
@@ -859,13 +886,10 @@ function openInvClientHtml(cl) {
 const FOLLOWUP_FOR = { 10: [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 300: [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 305: [[400, 'קבלה']] };
 // שכפול — אפשר לבחור כל סוג (כולל הצעת מחיר)
 const DUPLICATE_TYPES = [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה'], [10, 'הצעת מחיר']];
-// פרטי חשבון להעברה בנקאית — מופיעים בהערות של כל מסמך המשך
-const PAYMENT_BENEFICIARY = `שם מוטב: בי פי אם הגברה ותאורה בע"מ\nמספר חשבון: 347346\nמס' סניף: 521 (מודיעין)\nמזרחי טפחות (20)`;
-// הערות למסמך המשך: שורת התייחסות למסמך המקור + פרטי החשבון
+// הערות למסמך המשך: שורת התייחסות למסמך המקור בלבד. פרטי הבנק מגיעים מ"הערה קבועה" של העסק (נוספת בשרת לכל מסמך).
 function followupRemarks(srcType, srcNumber) {
   const nm = DOC_TYPE_NAMES[Number(srcType)] || 'מסמך';
-  const ref = `מסמך המשך ל${nm}${srcNumber ? ` מס' ${srcNumber}` : ''}`;
-  return `${ref}\n\n${PAYMENT_BENEFICIARY}`;
+  return `מסמך המשך ל${nm}${srcNumber ? ` מס' ${srcNumber}` : ''}`;
 }
 window._docActionRefresh = null; // פונקציית רענון אחרי פעולת מסמך (לפי המסך שממנו נפתח)
 window.openDerive = (id, number, srcType, mode, fromClient) => {
@@ -4080,6 +4104,10 @@ async function renderBusiness(c) {
       <label>אימייל רו״ח (להעברת הוצאות)<input id="biz_acct" type="email" dir="ltr" placeholder="ריק = לא מעביר לאף אחד" value="${escapeHtml(p.accountantEmail || '')}"></label>
     </div>
     <div class="muted" style="font-size:12px;margin-top:8px">כשמאשרים קליטת הוצאה, קובץ החשבונית נשלח אוטומטית לכתובת רו״ח <b>של החברה הזו בלבד</b>. אם ריק — לא נשלח מייל.</div>
+    <label style="display:block;margin-top:14px">הערה קבועה לכל המסמכים (פרטי בנק להעברה וכו')
+      <textarea id="biz_docremark" rows="5" style="width:100%;margin-top:4px;font-size:13px" placeholder="למשל שם מוטב, בנק, סניף ומספר חשבון…">${escapeHtml(p.docRemark || '')}</textarea>
+    </label>
+    <div class="muted" style="font-size:12px;margin-top:4px">הטקסט הזה נוסף אוטומטית לתחתית ההערות של <b>כל</b> מסמך שמופק בחברה הזו (הצעה / עסקה / מס / קבלה / זיכוי). במסמכי המשך תופיע גם שורת "מסמך המשך ל..." מעליו.</div>
     <div style="margin-top:14px"><button class="btn primary" onclick="bizSave()">💾 שמור פרטים</button></div>
   </div>
 
@@ -4230,7 +4258,7 @@ window.bizSave = async () => {
   const g = (id) => (document.getElementById(id)?.value || '').trim();
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
-    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'),
+    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), docRemark: g('biz_docremark'),
     managers: [
       { name: g('mgr0_name'), idNumber: g('mgr0_id'), phone: g('mgr0_phone'), email: g('mgr0_email') },
       { name: g('mgr1_name'), idNumber: g('mgr1_id'), phone: g('mgr1_phone'), email: g('mgr1_email') },

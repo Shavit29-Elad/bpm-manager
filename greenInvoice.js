@@ -26,6 +26,9 @@ const DEFAULT_CO = 'co_bpm';
 const als = new AsyncLocalStorage();
 export function withCompany(companyId, fn) { return als.run({ companyId: companyId || DEFAULT_CO }, fn); }
 function curCompany() { const s = als.getStore(); return (s && s.companyId) || DEFAULT_CO; }
+// הערה קבועה פר-חברה (מוגדרת בפרטי העסק) — מוזרקת להערות של כל מסמך שנוצר בחברה
+const _companyRemark = new Map();
+export function setCompanyRemark(companyId, text) { if (text && String(text).trim()) _companyRemark.set(companyId || DEFAULT_CO, String(text).trim()); else _companyRemark.delete(companyId || DEFAULT_CO); }
 // רשימת מזהי החברות שיש להן מיפוי מפתחות (לאימות אוטומטי בעליית שרת)
 export function giCompanies() { return Object.keys(CRED_ENV); }
 
@@ -142,7 +145,11 @@ function documentBody({ client, items, type, remarks, description, dueDate, date
   // שליחת מייל ללקוח רק אם המשתמש ביקש במפורש (ברירת מחדל: לא נשלח)
   if (sendEmail && email) body.emails = [String(email).trim()];
   if (description) body.description = description;   // כותרת/נושא המסמך
-  if (remarks) body.remarks = remarks;              // הערה בתחתית
+  // הערה בתחתית: הערת המשתמש + הערת ברירת המחדל של העסק (פרטי בנק וכו') — נוספת לכל המסמכים
+  const defRemark = _companyRemark.get(curCompany());
+  let finalRemarks = remarks ? String(remarks) : '';
+  if (defRemark && !finalRemarks.includes(defRemark)) finalRemarks = finalRemarks ? finalRemarks + '\n\n' + defRemark : defRemark;
+  if (finalRemarks) body.remarks = finalRemarks;
   // "תשלום עד" — תמיד מוגדר לתאריך המסמך שהמשתמש בחר (אלא אם נשלח dueDate מפורש אחר)
   body.dueDate = dueDate || body.date;
   // מסמכים מסוג קבלה/מס-קבלה מחייבים תיעוד תשלום
@@ -736,5 +743,5 @@ export async function updateSupplierDetails(id, data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, withCompany, giCompanies, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, withCompany, setCompanyRemark, giCompanies, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;
