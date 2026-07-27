@@ -905,6 +905,9 @@ window.doDerive = async (id, type, linked, btn) => {
 // ============ עורך מסמך המשך: שורות לעריכה + תאריך + תקבולים ============
 // סוגי תקבול לפי חשבונית ירוקה: ניכוי מס במקור=0, מזומן=1, צ'ק=2, אשראי=3, העברה בנקאית=4
 const DER_PAY_TYPES = [[4, 'העברה בנקאית'], [2, "צ'ק"], [0, 'ניכוי מס במקור'], [1, 'מזומן'], [3, 'כרטיס אשראי']];
+// רשימת הבנקים בישראל (שם + קוד) — לבחירה בשדה הבנק של תקבול, כמו בחשבונית ירוקה
+const BANKS_IL = [['10', 'בנק לאומי לישראל בע"מ'], ['11', 'בנק דיסקונט לישראל בע"מ'], ['12', 'בנק הפועלים בע"מ'], ['20', 'בנק מזרחי טפחות בע"מ'], ['31', 'הבנק הבינלאומי הראשון לישראל בע"מ'], ['17', 'בנק מרכנתיל דיסקונט בע"מ'], ['14', 'בנק אוצר החייל בע"מ'], ['04', 'בנק יהב לעובדי המדינה בע"מ'], ['09', 'בנק הדואר'], ['46', 'בנק מסד בע"מ'], ['52', 'בנק פועלי אגודת ישראל בע"מ'], ['54', 'בנק ירושלים בע"מ'], ['34', 'בנק ערבי ישראלי בע"מ'], ['13', 'בנק איגוד לישראל בע"מ'], ['26', 'יובנק בע"מ'], ['65', 'בנק החקלאות לישראל בע"מ'], ['68', 'בנק מוניציפל בע"מ'], ['22', 'Citibank N.A'], ['23', 'HSBC Bank plc'], ['39', 'SBI State Bank of India'], ['50', 'מרכז סליקה בנקאי (מס"ב)'], ['59', 'שירותי בנק אוטומטיים בע"מ']];
+const bankOptionsHtml = () => BANKS_IL.map(([code, name]) => `<option value="${escAttr(name + ' (' + code + ')')}"></option>`).join('');
 const DER_PAYMENT_DOCS = new Set([320, 400]); // מסמכים שמחייבים תקבול (מס-קבלה / קבלה)
 let _derEdit = null;
 let _derBankLink = null; // כשמפיקים מתוך "צור הכנסה" בבנק — לקשר את המסמך שנוצר לתנועת הבנק
@@ -965,6 +968,8 @@ function derSyncFromDom() {
     e.payments[i].date = row.querySelector('.der-pdate')?.value ?? e.payments[i].date;
     e.payments[i].chequeNum = row.querySelector('.der-pcheque')?.value ?? e.payments[i].chequeNum;
     e.payments[i].bankName = row.querySelector('.der-pbank')?.value ?? e.payments[i].bankName;
+    e.payments[i].bankBranch = row.querySelector('.der-pbranch')?.value ?? e.payments[i].bankBranch;
+    e.payments[i].bankAccount = row.querySelector('.der-paccount')?.value ?? e.payments[i].bankAccount;
   });
   const d = document.querySelector('#derModal .der-date'); if (d) e.date = d.value;
   const desc = document.querySelector('#derModal .der-descr'); if (desc) e.description = desc.value;
@@ -1063,8 +1068,12 @@ function renderDeriveEditor() {
       <input class="der-pprice" type="number" step="any" value="${p.price}" oninput="derRecalc()" style="padding:6px 6px;text-align:left" title="סכום">
       <input class="der-pdate" type="date" value="${(p.date || e.date || '').slice(0, 10)}" style="padding:6px 6px" title="תאריך תקבול">
       <button class="btn ghost" style="padding:4px 8px;font-size:14px" onclick="derDelPay(${i})" title="הסר תקבול">✕</button>
-      ${isCheque ? `<input class="der-pcheque" value="${escAttr(p.chequeNum || '')}" placeholder="מספר צ'ק" style="grid-column:1/4;padding:6px 8px">` : ''}
-      ${isBank ? `<input class="der-pbank" value="${escAttr(p.bankName || '')}" placeholder="שם בנק (לא חובה)" style="grid-column:1/4;padding:6px 8px">` : ''}
+      ${(isCheque || isBank) ? `<div style="grid-column:1/4;display:grid;grid-template-columns:${isCheque ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr'};gap:6px;margin-top:2px">
+        <input class="der-pbank" list="ilBanks" value="${escAttr(p.bankName || '')}" placeholder="בנק (בחר/חפש)" style="padding:6px 8px">
+        <input class="der-pbranch" value="${escAttr(p.bankBranch || '')}" placeholder="סניף" style="padding:6px 8px">
+        <input class="der-paccount" value="${escAttr(p.bankAccount || '')}" placeholder="מספר חשבון" style="padding:6px 8px">
+        ${isCheque ? `<input class="der-pcheque" value="${escAttr(p.chequeNum || '')}" placeholder="מס' צ'ק *" style="padding:6px 8px">` : ''}
+      </div>` : ''}
     </div>`;
   }).join('') : '';
   const m = document.getElementById('derModal');
@@ -1098,6 +1107,7 @@ function renderDeriveEditor() {
       <p class="muted" style="font-size:11.5px;margin:0 0 6px">סכום התקבולים צריך להשתוות לסה"כ המסמך. ניכוי מס במקור מוזן כשורת תקבול נפרדת על סכום הניכוי.</p>
       <div style="display:grid;grid-template-columns:1fr 96px 130px 28px;gap:6px;font-size:11px;color:var(--muted);margin-bottom:3px"><span>סוג תקבול</span><span style="text-align:left">סכום</span><span>תאריך</span><span></span></div>
       <div id="derPays">${payRows}</div>
+      <datalist id="ilBanks">${bankOptionsHtml()}</datalist>
       <button class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:2px" onclick="derAddPay()">+ הוסף תקבול</button>
       <div id="derPaySum" style="margin-top:8px;font-size:13px"></div>
     </div>` : ''}
@@ -1120,7 +1130,7 @@ window.derPreviewPdf = async (btn) => {
   const st = document.getElementById('derEditStatus');
   if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות לתצוגה.</span>'; return; }
   let payment = [];
-  if (e.needsPay) payment = e.payments.map(p => ({ type: Number(p.type), price: Number(p.price) || 0, date: (p.date || e.date), chequeNum: p.chequeNum || '', bankName: p.bankName || '' })).filter(p => Math.abs(p.price) > 0);
+  if (e.needsPay) payment = e.payments.map(p => ({ type: Number(p.type), price: Number(p.price) || 0, date: (p.date || e.date), chequeNum: p.chequeNum || '', bankName: p.bankName || '', bankBranch: p.bankBranch || '', bankAccount: p.bankAccount || '' })).filter(p => Math.abs(p.price) > 0);
   await openDesignedPdf('/api/documents/preview-pdf', { type: e.type, clientName: e.clientName || null, items, description: e.description, date: e.date, remarks: e.remarks, payment }, { statusEl: st, btn });
 };
 window.derConfirm = async () => {
@@ -1131,7 +1141,7 @@ window.derConfirm = async () => {
   const t = derTotals();
   let payment = [];
   if (e.needsPay) {
-    payment = e.payments.map(p => ({ type: Number(p.type), price: Number(p.price) || 0, date: (p.date || e.date), chequeNum: p.chequeNum || '', bankName: p.bankName || '' })).filter(p => Math.abs(p.price) > 0);
+    payment = e.payments.map(p => ({ type: Number(p.type), price: Number(p.price) || 0, date: (p.date || e.date), chequeNum: p.chequeNum || '', bankName: p.bankName || '', bankBranch: p.bankBranch || '', bankAccount: p.bankAccount || '' })).filter(p => Math.abs(p.price) > 0);
     const psum = payment.reduce((s, p) => s + p.price, 0);
     if (!payment.length) { alert('מסמך מסוג ' + (DOC_TYPE_SHORT[e.type] || '') + ' מחייב לפחות תקבול אחד.'); return; }
     if (Math.abs(psum - t.total) > 0.01 && !confirm(`סכום התקבולים (${money(psum)}) שונה מסה"כ המסמך (${money(t.total)}).\nלהמשיך בכל זאת?`)) return;
