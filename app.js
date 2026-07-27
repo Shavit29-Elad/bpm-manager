@@ -983,6 +983,25 @@ window.derDateChanged = (v) => {
     });
   }
 };
+// ניכוי מס במקור 5% — מסמן וממלא אוטומטית שני תקבולים: העברה בנקאית על 95% מהסכום המלא + ניכוי מס במקור על 5% מהסכום המלא.
+window.derToggleWithholding = (on) => {
+  derSyncFromDom();
+  const e = _derEdit; if (!e) return;
+  e.withholding = on;
+  const total = derTotals().total;
+  const d = e.date;
+  if (on) {
+    const wh = +(total * 0.05).toFixed(2);      // ניכוי מס במקור 5% מהסכום המלא (כולל מע"מ)
+    const net = +(total - wh).toFixed(2);       // מה שנכנס בפועל = 95%
+    e.payments = [
+      { type: 4, price: net, date: d, chequeNum: '', bankName: '' },
+      { type: 0, price: wh, date: d, chequeNum: '', bankName: '' },
+    ];
+  } else {
+    e.payments = [{ type: 4, price: total, date: d, chequeNum: '', bankName: '' }];
+  }
+  renderDeriveEditor();
+};
 window.derAddItem = () => { derSyncFromDom(); _derEdit.items.push({ description: '', quantity: 1, price: 0 }); renderDeriveEditor(); };
 window.derDelItem = (i) => { derSyncFromDom(); _derEdit.items.splice(i, 1); if (!_derEdit.items.length) _derEdit.items.push({ description: '', quantity: 1, price: 0 }); renderDeriveEditor(); };
 window.derAddPay = () => {
@@ -1071,7 +1090,11 @@ function renderDeriveEditor() {
     <div id="derTotals" style="margin-top:10px;font-size:14px">ביניים: <b>${money(t.sub)}</b> · מע"מ ${Math.round(VAT_RATE * 100)}%: <b>${money(t.vat)}</b> · סה"כ: <b style="color:var(--accent2)">${money(t.total)}</b></div>
 
     ${e.needsPay ? `<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:10px">
-      <div class="row-between" style="margin-bottom:4px"><div style="font-weight:600;font-size:13px">תקבולים</div><button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="derFillBalance()">מלא יתרה בשורה 1</button></div>
+      <div class="row-between" style="margin-bottom:4px"><div style="font-weight:600;font-size:13px">תקבולים</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label style="font-size:12px;display:flex;gap:5px;align-items:center;cursor:pointer" title="ממלא אוטומטית: העברה בנקאית על 95% + ניכוי מס במקור על 5% מהסכום המלא"><input type="checkbox" ${e.withholding ? 'checked' : ''} onchange="derToggleWithholding(this.checked)"> ניכוי מס במקור 5%</label>
+          <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="derFillBalance()">מלא יתרה בשורה 1</button>
+        </div></div>
       <p class="muted" style="font-size:11.5px;margin:0 0 6px">סכום התקבולים צריך להשתוות לסה"כ המסמך. ניכוי מס במקור מוזן כשורת תקבול נפרדת על סכום הניכוי.</p>
       <div style="display:grid;grid-template-columns:1fr 96px 130px 28px;gap:6px;font-size:11px;color:var(--muted);margin-bottom:3px"><span>סוג תקבול</span><span style="text-align:left">סכום</span><span>תאריך</span><span></span></div>
       <div id="derPays">${payRows}</div>
