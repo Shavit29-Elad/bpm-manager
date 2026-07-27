@@ -4803,10 +4803,12 @@ async function renderBank(c, soft) {
       <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמה אוטומטית: תנועות זכות ↔ חשבוניות הכנסה · תנועות חובה ↔ חשבוניות ספקים</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost" onclick="rematchBank(this)">↻ רענן הצעות חובה</button>
+        <button class="btn ghost" onclick="bankCoverageAudit(this)">🔎 מאושרות לא מכוסות</button>
         <button class="btn success" onclick="approveAllStrong(this)">✓ אשר את כל ההתאמות המדויקות</button>
         <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
       </div>
     </div>
+    <div id="bankAuditPanel"></div>
     ${bankHeaderHtml()}
     ${bankMonthlyHtml()}
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px">${bankDirControls()}${bankPeriodControls()}</div>
@@ -4816,6 +4818,21 @@ async function renderBank(c, soft) {
     ${table}
   </div>`;
 }
+// בדיקה רטרואקטיבית: שורות זכות מאושרות שהמסמכים המשויכים לא מכסים את הסכום שהועבר
+window.bankCoverageAudit = async (btn) => {
+  const panel = document.getElementById('bankAuditPanel'); if (!panel) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'בודק…'; }
+  const r = await api(`/api/bank/coverage-audit?companyId=${state.company}`).catch(() => null);
+  if (btn) { btn.disabled = false; btn.textContent = '🔎 מאושרות לא מכוסות'; }
+  const flagged = (r && r.flagged) || [];
+  if (!flagged.length) { panel.innerHTML = `<div class="panel" style="margin-top:10px"><span style="color:var(--accent2)"><b>✓ כל השורות המאושרות מכוסות כראוי.</b></span> <button class="btn ghost" style="float:left;padding:2px 8px" onclick="document.getElementById('bankAuditPanel').innerHTML=''">✕</button></div>`; return; }
+  const rows = flagged.map(f => `<tr><td>${f.date}</td><td><b>${escapeHtml(f.name || '')}</b></td><td>${money(f.bankAmount)}</td><td>${money(f.matchedSum)}</td><td style="color:var(--danger)">${money(f.shortfall)}</td><td class="muted">${(f.numbers || []).map(n => '#' + n).join(', ')}</td></tr>`).join('');
+  panel.innerHTML = `<div class="panel" style="margin-top:10px;border-color:var(--warn)">
+    <div class="row-between"><b>⚠ ${flagged.length} שורות מאושרות שהמסמכים לא מכסים את הסכום</b><button class="btn ghost" style="padding:2px 8px" onclick="document.getElementById('bankAuditPanel').innerHTML=''">✕ סגור</button></div>
+    <p class="muted" style="font-size:12px;margin:6px 0">שורות שאושרו אך סכום המסמכים המשויכים קטן מהסכום שהועבר. מצא אותן בטבלה (לפי תאריך/סכום), לחץ "בטל" ושייך מחדש את כל המסמכים עד לכיסוי מלא.</p>
+    <div style="overflow-x:auto"><table style="min-width:560px;font-size:13px"><thead><tr><th>תאריך</th><th>שם</th><th>בבנק</th><th>שויך</th><th>חסר</th><th>מסמכים</th></tr></thead><tbody>${rows}</tbody></table></div>
+  </div>`;
+};
 function bankTr(t) {
   const credit = t.direction === 'credit';
   const amt = `${credit ? '' : '−'}${money(t.absAmount)}`;
@@ -4922,8 +4939,10 @@ function invChip(inv) {
     const sdl = s.url ? `<a href="${s.url}" target="_blank" class="muted" style="font-size:11px">↓</a>` : '';
     src = `<div class="muted" style="font-size:11px;margin-top:1px">📄 ${DOC_TYPE_NAMES[s.type] || 'חשבונית מס'} #${s.number} · ${money(s.amount)} ${spv} ${sdl}</div>`;
   }
+  const allocNote = (inv.allocated != null && Math.abs((inv.allocated || 0) - (inv.amount || 0)) > 1)
+    ? `<span style="font-size:11px;color:var(--warn)">· נזקף ${money(inv.allocated)} מתוך ${money(inv.amount)}</span>` : '';
   return `<div style="padding:4px 0;border-bottom:1px dashed var(--line)">
-    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">✓ <b>${escapeHtml(inv.clientName || '')}</b> · ${typeLabel} #${inv.number} · ${money(inv.amount)} ${pv} ${dl}</div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">✓ <b>${escapeHtml(inv.clientName || '')}</b> · ${typeLabel} #${inv.number} · ${money(inv.amount)} ${allocNote} ${pv} ${dl}</div>
     ${src}${receipt}</div>`;
 }
 // פעולות מתעדכנות במקום (בלי לרנדר מחדש את כל הטבלה ובלי לקפוץ למעלה)

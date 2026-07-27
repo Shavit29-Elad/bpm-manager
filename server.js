@@ -2367,37 +2367,46 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
   const db = load();
   const t = (db.bankTx || []).find(x => x.id === params[0]);
   if (!t) return json(res, { error: 'לא נמצא' }, 404);
-  // חסימת שיוך כפול: חשבונית שכבר משויכת לתנועת בנק אחרת לא ניתנת לשיוך שוב — אלא אם נשלח allowDup (סימון מפורש)
-  if (!body.allowDup && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
-    const usedBy = new Map();
+  // כמה מחשבונית מסוימת כבר הוקצה בשורות בנק אחרות (מאושרות/מותאמות) — בסיס לתשלום בפעימות
+  const allocatedElsewhere = (invId) => {
+    let s = 0;
     for (const o of (db.bankTx || [])) {
-      if (o.id === t.id) continue;
-      if (o.matchStatus !== 'manual' && o.matchStatus !== 'auto') continue;
-      for (const inv of (o.matchedInvoices || [])) usedBy.set(String(inv.id), o);
+      if (o.id === t.id || !['manual', 'auto', 'approved'].includes(o.matchStatus)) continue;
+      for (const mi of (o.matchedInvoices || [])) if (String(mi.id) === String(invId)) s += (Number(mi.allocated != null ? mi.allocated : mi.amount) || 0);
     }
-    const clash = body.matchedInvoices.find(inv => inv && usedBy.has(String(inv.id)));
-    if (clash) {
-      const o = usedBy.get(String(clash.id));
-      return json(res, { error: `החשבונית #${clash.number || ''} כבר משויכת לתנועת בנק אחרת (${o.date} · ${o.absAmount}). כדי לשייך בכל זאת, סמן "אפשר לבחור גם חשבוניות שכבר משויכות".` }, 409);
+    return s;
+  };
+  // חסימת שיוך-כפול — רק אם החשבונית כבר שולמה במלואה בשורות אחרות. אם נשארה יתרה — מותר (תשלום בפעימות).
+  if (!body.allowDup && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
+    for (const inv of body.matchedInvoices) {
+      const amt = Number(inv.amount) || 0; if (amt <= 0) continue;
+      const used = allocatedElsewhere(inv.id);
+      if (used >= amt - Math.max(3, amt * 0.004)) return json(res, { error: `החשבונית #${inv.number || ''} כבר שולמה במלואה בשורות בנק אחרות (₪${Math.round(used)} מתוך ₪${Math.round(amt)}). כדי לשייך בכל זאת, סמן "אפשר לבחור גם חשבוניות שכבר משויכות".` }, 409);
     }
   }
   if (body.group !== undefined) t.group = body.group || null;
-  // חובת שיוך לקבוצה לפני אישור תנועה (התאמה למסמך או אישור-ללא-מסמך) — אך ורק אצל משה כורסיה
+  // חובת שיוך לקבוצה לפני אישור תנועה — אך ורק אצל משה כורסיה
   if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && t.companyId === 'co_moshe' && !t.group) {
     return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה (מוזיקה / דיגיטל / הוצאות שוטפות / אחר).' }, 400);
   }
-  // #1 — קבלה (400) משויכת: משיכת חשבונית המס המקורית (המסמך שממנו נגזרה) וקינון תחתיה (מונע ספירה כפולה של אותו כסף)
+  // #1 — קבלה (400) משויכת: משיכת חשבונית המס המקורית וקינון תחתיה (מונע ספירה כפולה)
   if (greenInvoice.haveCredentials() && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
     try { await attachSourceInvoices(body.matchedInvoices); } catch { }
   }
-  // #2 — שיוך שאינו מכסה את מלוא ההעברה (וגם לא "ההעברה = הסכום פחות 5% ניכוי מס") — לא סוגר את השורה.
-  // השורה נשארת לא מתואמת, עם חיווי כמה חסר. (לא חל על "אישור ללא מסמך" — שם אין matchedInvoices).
+  // #2 + תשלום בפעימות — הקצאה אוטומטית: כל העברה נזקפת ליתרת החשבונית. השורה נסגרת רק אם כל סכום ההעברה הוקצה
+  // (או שההעברה = יתרת החשבוניות פחות 5% ניכוי מס — ואז הן נסגרות במלואן). אחרת נשארת לא מתואמת עם חיווי החוסר.
   if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
-    const sum = body.matchedInvoices.reduce((s, inv) => s + (Number(inv.amount) || 0), 0);
     const bankAbs = Math.abs(Number(t.absAmount) || 0);
-    const tol = Math.max(3, sum * 0.004);
-    const covered = Math.abs(sum - bankAbs) <= tol || Math.abs(sum * 0.95 - bankAbs) <= tol;
-    if (!covered) return json(res, { ok: true, covered: false, matchedSum: +sum.toFixed(2), bankAmount: +bankAbs.toFixed(2), shortfall: +(bankAbs - sum).toFixed(2) });
+    const rem = body.matchedInvoices.map(inv => ({ inv, r: Math.max(0, (Number(inv.amount) || 0) - allocatedElsewhere(inv.id)) }));
+    const totalRem = rem.reduce((s, x) => s + x.r, 0);
+    const tol = Math.max(3, bankAbs * 0.004);
+    if (totalRem > 0 && Math.abs(bankAbs - totalRem * 0.95) <= Math.max(3, totalRem * 0.004)) {
+      rem.forEach(x => { x.inv.allocated = +x.r.toFixed(2); });   // ניכוי מס במקור — החשבוניות נסגרות במלואן, הבנק קיבל 95%
+    } else {
+      let remaining = bankAbs;
+      for (const x of rem) { const a = Math.min(x.r, remaining); x.inv.allocated = +a.toFixed(2); remaining = +(remaining - a).toFixed(2); }
+      if (Math.abs(remaining) > tol) return json(res, { ok: true, covered: false, matchedSum: +(bankAbs - remaining).toFixed(2), bankAmount: +bankAbs.toFixed(2), shortfall: +remaining.toFixed(2) });
+    }
   }
   if (body.matchStatus) t.matchStatus = body.matchStatus;
   if (body.matchedInvoices !== undefined) t.matchedInvoices = body.matchedInvoices;
@@ -2406,6 +2415,26 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
   if (greenInvoice.haveCredentials()) { for (const inv of (t.matchedInvoices || [])) await enrichMatchedUrl(inv); }
   save(db);
   json(res, { ok: true, tx: t });
+});
+
+// GET /api/bank/coverage-audit?companyId= — שורות זכות מאושרות שהמסמכים המשויכים לא מכסים את הסכום שהועבר
+add('GET', /^\/api\/bank\/coverage-audit$/, (req, res, _p, q) => {
+  const db = load();
+  const cid = q.companyId;
+  const flagged = [];
+  for (const t of (db.bankTx || [])) {
+    if (cid && t.companyId !== cid) continue;
+    if (t.direction !== 'credit' || !['manual', 'approved', 'auto'].includes(t.matchStatus)) continue;
+    const invs = t.matchedInvoices || [];
+    if (!invs.length) continue; // אושר ללא מסמך — לא נכלל
+    const allocSum = invs.reduce((s, inv) => s + (Number(inv.allocated != null ? inv.allocated : inv.amount) || 0), 0);
+    const bankAbs = Math.abs(Number(t.absAmount) || 0);
+    const tol = Math.max(3, bankAbs * 0.004);
+    const covered = Math.abs(allocSum - bankAbs) <= tol || Math.abs(allocSum * 0.95 - bankAbs) <= tol;
+    if (!covered) flagged.push({ id: t.id, date: t.date, bankAmount: +bankAbs.toFixed(2), matchedSum: +allocSum.toFixed(2), shortfall: +(bankAbs - allocSum).toFixed(2), name: t.nameHint || t.description || '', numbers: invs.map(i => i.number).filter(Boolean) });
+  }
+  flagged.sort((a, b) => Math.abs(b.shortfall) - Math.abs(a.shortfall));
+  json(res, { flagged, count: flagged.length });
 });
 
 // DELETE /api/bank/:id
