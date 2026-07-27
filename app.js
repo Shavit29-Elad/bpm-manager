@@ -953,7 +953,7 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
       _derEdit.payments = [{ type: 4, price: 0, date, chequeNum: '', bankName: '' }];
     }
   }
-  _derBankLink = opts.bankTxId ? { txId: opts.bankTxId } : null;
+  _derBankLink = opts.bankTxId ? { txId: opts.bankTxId, sourceId: opts.sourceDocId || null } : null;
   renderDeriveEditor();
 };
 // סנכרון ערכי ה-DOM לתוך ה-state לפני רינדור מחדש
@@ -1172,10 +1172,16 @@ window.derConfirm = async () => {
   }
 };
 // קישור מסמך שהופק לתנועת בנק (מוסיף ל-matchedInvoices ומעדכן את השורה)
-async function linkDocToBankTx(txId, entry) {
+async function linkDocToBankTx(txId, entry, sourceId) {
   const tx = (_bankList || []).find(t => t.id === txId); if (!tx) return;
-  const matched = [...(tx.matchedInvoices || [])];
-  if (!matched.find(x => x.id === entry.id)) matched.push(entry);
+  const matched = JSON.parse(JSON.stringify(tx.matchedInvoices || []));
+  // #3 — אם המסמך החדש הוא קבלה (400) וחשבונית המקור כבר משויכת לשורה — מצרפים אותה כקבלה מקוננת תחת החשבונית, לא כשורה נפרדת
+  const src = sourceId ? matched.find(x => String(x.id) === String(sourceId)) : null;
+  if (src && Number(entry.type) === 400) {
+    src.receipt = { number: entry.number, url: entry.url || null, amount: entry.amount };
+  } else if (!matched.find(x => x.id === entry.id)) {
+    matched.push(entry);
+  }
   const r = await fetch(`/api/bank/${txId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual', matchedInvoices: matched }) }).then(x => x.json()).catch(() => null);
   if (r && r.error) { alert(r.error); return; }
   if (r && r.tx) { const i = _bankList.findIndex(t => t.id === txId); if (i >= 0) _bankList[i] = r.tx; renderBankBody(); }
@@ -2459,7 +2465,7 @@ window.createNewQuote = async (btn) => {
     if (r.ok) {
       if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצר ${docName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
       autoDownloadDoc(r.doc?.url);
-      if (e.bankTxId && r.doc) await linkDocToBankTx(e.bankTxId, { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: +total.toFixed(2), url: r.doc.url || null });
+      if (e.bankTxId && r.doc) await linkDocToBankTx(e.bankTxId, { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: +total.toFixed(2), url: r.doc.url || null }, (_derBankLink && _derBankLink.sourceId) || null);
       setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); }, 1300);
     } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
     return;
@@ -4886,10 +4892,8 @@ function bankTr(t) {
     const _usedIds = bankMatchedIds(t.id);
     const sugg = (t.suggestions || []).filter(s => !_usedIds.has(String(s.id))).map(s => { const j = jenc(s); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
     invNo = `<span class="tag miss" style="font-size:10px">לא מותאם</span>${sugg ? `<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;max-width:280px">${sugg}</div>` : ''}`;
-    // אצל משה: "אשר" (מסמן מאושר ללא מסמך) במקום "התעלם"
-    action = mosheBank()
-      ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="approveBank('${t.id}')">אשר</button>`
-      : `<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',true)">התעלם</button>`;
+    // אשר (מסמן מאושר ללא מסמך) + בטל (מסיר מהרשימה) — בשתי החברות
+    action = `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="approveBank('${t.id}')">אשר</button> <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',true)">בטל</button>`;
   } else {
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
   }
@@ -4960,6 +4964,8 @@ let _linkTxId = null, _linkSel = [], _linkClients = null, _linkSuppliers = null,
 let _linkMode = 'clients', _linkDocsKind = 'income', _linkQuery = '', _linkNumTimer = null, _linkNumResults = [], _linkIncludeCredits = false, _linkInclUsed = false;
 // התאמת סכום בין קבלה לחשבונית (מלא או פחות 5% ניכוי)
 const _amtClose = (a, b) => { const t = Math.max(3, (a || 0) * 0.004); return Math.min(Math.abs(a - b), Math.abs(a - b * 0.95)) <= t; };
+// #1 — לא מציגים לשיוך מסמכים ישנים מ-מאי 2026 (רק מאי 2026 והלאה)
+const _docFromMay26 = (d) => { const dt = String((d && d.date) || '').slice(0, 10); return !dt || dt >= '2026-05-01'; };
 function linkSelHtml() {
   if (!_linkSel.length) return '<span class="muted">אין מסמכים מקושרים.</span>';
   return _linkSel.map((d, i) => `<div style="padding:3px 0">
@@ -5008,6 +5014,16 @@ window.openLinkModal = async (txId) => {
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   await ensureLinkPool();
   renderLinkContacts('');
+  // #2 — אם כבר משויכת חשבונית של לקוח, טוענים אוטומטית את מסמכי אותו הלקוח (הפתוחים) כדי לשייך עוד חשבוניות שלו
+  if (_linkMode === 'clients' && Array.isArray(_linkClients)) {
+    const firstInc = _linkSel.find(d => d.kind !== 'expense' && d.clientName);
+    if (firstInc) {
+      const nm = String(firstInc.clientName || '').trim();
+      const cl = _linkClients.find(c => (c.name || '').trim() === nm)
+        || _linkClients.find(c => { const cn = (c.name || '').trim(); return cn && (cn.includes(nm) || nm.includes(cn)); });
+      if (cl && cl.id) linkPickContact(cl.id, encodeURIComponent(cl.name || nm));
+    }
+  }
 };
 // ---- העלאת חשבונית ספק ישירות מתוך שיוך בנק → קליטת הוצאה מלאה + שיוך אוטומטי לתנועה ----
 window.bankExpensePick = (input, txId) => { const f = input.files && input.files[0]; if (f) bankExpenseUpload(f, txId); input.value = ''; };
@@ -5096,7 +5112,7 @@ async function linkNumberSearch(term) {
   const expItems = (exp.items || []).map(d => ({ id: d.id, number: d.number, type: d.type, clientName: d.supplierName || '—', amount: d.amountIncVat ?? d.amount, date: d.date, url: d.url, kind: 'expense' }));
   _linkNumResults = [...incItems, ...expItems];
   const { ids, used } = linkedDocIds();
-  const avail = _linkNumResults.filter(d => !ids.has(d.id));
+  const avail = _linkNumResults.filter(d => !ids.has(d.id) && _docFromMay26(d));
   if (!avail.length) { nb.innerHTML = ''; return; }
   const rows = avail.map(d => {
     const j = jenc(d);
@@ -5145,7 +5161,7 @@ window.renderLinkDocs = () => {
   const q = (_linkQuery || '').trim();
   const qMatch = (d) => !q || String(d.number || '').includes(q) || (d.category || d.description || '').includes(q);
   const amountOf = (d) => isExp ? (d.amountIncVat ?? d.amount) : d.amountIncVat;
-  let avail = _linkClientDocs.filter(d => !ids.has(d.id) && qMatch(d));
+  let avail = _linkClientDocs.filter(d => !ids.has(d.id) && qMatch(d) && _docFromMay26(d));
   if (!isExp) {
     // ברירת מחדל: חשבונית מס / מס-קבלה / קבלה (חיוביות בלבד). עם הסימון — גם זיכוי (330) וקבלות שליליות.
     const allowed = _linkIncludeCredits ? [305, 320, 400, 330] : [305, 320, 400];
@@ -5265,7 +5281,7 @@ window.incSearch = (q) => { _incQuery = q || ''; const box = document.getElement
 // הפקת מסמך-המשך מחשבונית פתוחה, עם תאריך+תקבול לפי התנועה, וקישור לבנק
 window.incProduce = (docId, srcType, txId, X, isWh) => {
   const im = document.getElementById('incModal'); if (im) im.classList.add('hidden');
-  openDeriveEditor(docId, incTargetFor(srcType), true, { date: txIsoDate(txId) || todayIso(), bankReceived: Number(X) || 0, withholding: isWh === true || isWh === 'true', bankTxId: txId });
+  openDeriveEditor(docId, incTargetFor(srcType), true, { date: txIsoDate(txId) || todayIso(), bankReceived: Number(X) || 0, withholding: isWh === true || isWh === 'true', bankTxId: txId, sourceDocId: docId });
 };
 // מסמך הכנסה חדש מאפס (מס-קבלה/קבלה) — דרך עורך המסמך החדש, עם קישור לבנק
 window.incNewDoc = async (txId, type, X) => {
