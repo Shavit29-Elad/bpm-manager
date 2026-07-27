@@ -2424,14 +2424,15 @@ add('GET', /^\/api\/bank\/coverage-audit$/, (req, res, _p, q) => {
   const flagged = [];
   for (const t of (db.bankTx || [])) {
     if (cid && t.companyId !== cid) continue;
-    if (t.direction !== 'credit' || !['manual', 'approved', 'auto'].includes(t.matchStatus)) continue;
+    if (!['manual', 'approved', 'auto'].includes(t.matchStatus)) continue; // גם זכות (הכנסות) וגם חובה (הוצאות)
     const invs = t.matchedInvoices || [];
     if (!invs.length) continue; // אושר ללא מסמך — לא נכלל
     const allocSum = invs.reduce((s, inv) => s + (Number(inv.allocated != null ? inv.allocated : inv.amount) || 0), 0);
     const bankAbs = Math.abs(Number(t.absAmount) || 0);
     const tol = Math.max(3, bankAbs * 0.004);
-    const covered = Math.abs(allocSum - bankAbs) <= tol || Math.abs(allocSum * 0.95 - bankAbs) <= tol;
-    if (!covered) flagged.push({ id: t.id, date: t.date, bankAmount: +bankAbs.toFixed(2), matchedSum: +allocSum.toFixed(2), shortfall: +(bankAbs - allocSum).toFixed(2), name: t.nameHint || t.description || '', numbers: invs.map(i => i.number).filter(Boolean) });
+    // בהכנסות מותר גם "פחות 5%" (ניכוי מס במקור); בהוצאות רק סכום מדויק
+    const covered = Math.abs(allocSum - bankAbs) <= tol || (t.direction === 'credit' && Math.abs(allocSum * 0.95 - bankAbs) <= tol);
+    if (!covered) flagged.push({ id: t.id, date: t.date, dir: t.direction, bankAmount: +bankAbs.toFixed(2), matchedSum: +allocSum.toFixed(2), shortfall: +(bankAbs - allocSum).toFixed(2), name: t.nameHint || t.description || '', numbers: invs.map(i => i.number).filter(Boolean) });
   }
   flagged.sort((a, b) => Math.abs(b.shortfall) - Math.abs(a.shortfall));
   json(res, { flagged, count: flagged.length });

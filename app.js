@@ -4803,7 +4803,7 @@ async function renderBank(c, soft) {
       <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמה אוטומטית: תנועות זכות ↔ חשבוניות הכנסה · תנועות חובה ↔ חשבוניות ספקים</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost" onclick="rematchBank(this)">↻ רענן הצעות חובה</button>
-        <button class="btn ghost" onclick="bankCoverageAudit(this)">🔎 מאושרות לא מכוסות</button>
+        <button class="btn ghost" onclick="bankCoverageAudit(this)">🔎 בדוק כיסוי</button>
         <button class="btn success" onclick="approveAllStrong(this)">✓ אשר את כל ההתאמות המדויקות</button>
         <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
       </div>
@@ -4817,20 +4817,21 @@ async function renderBank(c, soft) {
     <p class="muted" style="font-size:12.5px;margin-top:10px">תגית ירוקה <b>"מדויק"</b> = סכום זהה או מספר חשבונית (בטוח לאישור) · צהובה <b>"לבדיקה"</b> = ניכוי 5% / צירוף / שם בלבד (כדאי לוודא בתצוגה) · שורות אדומות = לא מותאמות · 🔗 שייך לשיוך ידני.</p>
     ${table}
   </div>`;
+  bankCoverageAudit(null, true); // בדיקת כיסוי אוטומטית בכל רינדור/רענון של לשונית הבנק (בלי כפתור)
 }
-// בדיקה רטרואקטיבית: שורות זכות מאושרות שהמסמכים המשויכים לא מכסים את הסכום שהועבר
-window.bankCoverageAudit = async (btn) => {
+// בדיקה רטרואקטיבית: שורות זכות/חובה מאושרות שהמסמכים המשויכים לא מכסים את הסכום
+window.bankCoverageAudit = async (btn, silent) => {
   const panel = document.getElementById('bankAuditPanel'); if (!panel) return;
   if (btn) { btn.disabled = true; btn.textContent = 'בודק…'; }
   const r = await api(`/api/bank/coverage-audit?companyId=${state.company}`).catch(() => null);
-  if (btn) { btn.disabled = false; btn.textContent = '🔎 מאושרות לא מכוסות'; }
+  if (btn) { btn.disabled = false; btn.textContent = '🔎 בדוק כיסוי'; }
   const flagged = (r && r.flagged) || [];
-  if (!flagged.length) { panel.innerHTML = `<div class="panel" style="margin-top:10px"><span style="color:var(--accent2)"><b>✓ כל השורות המאושרות מכוסות כראוי.</b></span> <button class="btn ghost" style="float:left;padding:2px 8px" onclick="document.getElementById('bankAuditPanel').innerHTML=''">✕</button></div>`; return; }
-  const rows = flagged.map(f => `<tr><td>${f.date}</td><td><b>${escapeHtml(f.name || '')}</b></td><td>${money(f.bankAmount)}</td><td>${money(f.matchedSum)}</td><td style="color:var(--danger)">${money(f.shortfall)}</td><td class="muted">${(f.numbers || []).map(n => '#' + n).join(', ')}</td></tr>`).join('');
+  if (!flagged.length) { panel.innerHTML = silent ? '' : `<div class="panel" style="margin-top:10px"><span style="color:var(--accent2)"><b>✓ כל השורות המאושרות מכוסות כראוי.</b></span> <button class="btn ghost" style="float:left;padding:2px 8px" onclick="document.getElementById('bankAuditPanel').innerHTML=''">✕</button></div>`; return; }
+  const rows = flagged.map(f => `<tr><td>${f.date}</td><td>${f.dir === 'debit' ? 'הוצאה' : 'הכנסה'}</td><td><b>${escapeHtml(f.name || '')}</b></td><td>${money(f.bankAmount)}</td><td>${money(f.matchedSum)}</td><td style="color:var(--danger)">${money(f.shortfall)}</td><td class="muted">${(f.numbers || []).map(n => '#' + n).join(', ')}</td></tr>`).join('');
   panel.innerHTML = `<div class="panel" style="margin-top:10px;border-color:var(--warn)">
     <div class="row-between"><b>⚠ ${flagged.length} שורות מאושרות שהמסמכים לא מכסים את הסכום</b><button class="btn ghost" style="padding:2px 8px" onclick="document.getElementById('bankAuditPanel').innerHTML=''">✕ סגור</button></div>
-    <p class="muted" style="font-size:12px;margin:6px 0">שורות שאושרו אך סכום המסמכים המשויכים קטן מהסכום שהועבר. מצא אותן בטבלה (לפי תאריך/סכום), לחץ "בטל" ושייך מחדש את כל המסמכים עד לכיסוי מלא.</p>
-    <div style="overflow-x:auto"><table style="min-width:560px;font-size:13px"><thead><tr><th>תאריך</th><th>שם</th><th>בבנק</th><th>שויך</th><th>חסר</th><th>מסמכים</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted" style="font-size:12px;margin:6px 0">שורות שאושרו אך סכום המסמכים המשויכים קטן מהסכום שבבנק. מצא אותן בטבלה (לפי תאריך/סכום), לחץ "בטל" ושייך מחדש את כל המסמכים עד לכיסוי מלא.</p>
+    <div style="overflow-x:auto"><table style="min-width:620px;font-size:13px"><thead><tr><th>תאריך</th><th>סוג</th><th>שם</th><th>בבנק</th><th>שויך</th><th>חסר</th><th>מסמכים</th></tr></thead><tbody>${rows}</tbody></table></div>
   </div>`;
 };
 function bankTr(t) {
