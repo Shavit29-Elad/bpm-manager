@@ -107,8 +107,12 @@ async function startApp() {
   state.companies = await api('/api/companies');
   const sel = $('#companySelect');
   sel.innerHTML = state.companies.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-  state.company = state.companies[0]?.id;
-  sel.onchange = () => { state.company = sel.value; clearApiCache(); applyCompanyTabs(); renderStatus(); render(); };
+  // שחזור החברה שנבחרה לאחרונה (רענון/חזרה), אם עדיין קיימת ברשימה — אחרת החברה הראשונה
+  let savedCompany = null;
+  try { savedCompany = localStorage.getItem('bpm_company'); } catch { }
+  state.company = (savedCompany && state.companies.some(c => c.id === savedCompany)) ? savedCompany : state.companies[0]?.id;
+  sel.value = state.company || '';
+  sel.onchange = () => { state.company = sel.value; try { localStorage.setItem('bpm_company', state.company); } catch { } clearApiCache(); applyCompanyTabs(); renderStatus(); render(); };
   applyPermissions();
   applyCompanyTabs();
 
