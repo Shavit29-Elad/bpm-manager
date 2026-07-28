@@ -1439,7 +1439,11 @@ async function renderClients(c) {
       }).catch(() => {});
     }, 250);
   };
-  inp.focus();
+  // מיקוד בלי לגלול — אחרת הדף קופץ למטה לחלק הלקוחות בכל כניסה ללשונית
+  inp.focus({ preventScroll: true });
+  // ודא שהלשונית נפתחת מראש הדף
+  if (c && typeof c.scrollTo === 'function') c.scrollTo(0, 0);
+  window.scrollTo(0, 0);
 }
 // שורות תוצאות חיפוש מסמכים (מספר/תיאור) — קליק פותח את הלקוח
 function docSearchRows(items) {
