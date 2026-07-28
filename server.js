@@ -398,12 +398,13 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
     }
     // התצוגה המקדימה היא ויזואלית בלבד. אם חשבונית ירוקה דוחה את התאריך (עתידי/מוקדם מדי לסוג המסמך — שגיאה 2405,
     // למשל מסמך המשך שתאריכו מוקדם מהמסמך האחרון) — מנסים שוב עם תאריך היום כדי שהתצוגה תרונדר. התאריך האמיתי נבחר בהפקה.
-    let pv;
+    let pv, dateAdjusted = false; const requestedDate = opts.date || null; let usedDate = opts.date || null;
     try { pv = await greenInvoice.previewDocument(opts); }
     catch (e) {
       if (/2405|עתידי|מוקדם|תאריך|\bdate\b/i.test(String(e.message || ''))) {
         const today = new Date().toISOString().slice(0, 10);
-        opts.date = today;
+        dateAdjusted = Boolean(requestedDate && requestedDate !== today);
+        usedDate = today; opts.date = today;
         if (Array.isArray(opts.payment)) opts.payment = opts.payment.map(p => ({ ...p, date: (!p.date || p.date < today) ? today : p.date }));
         pv = await greenInvoice.previewDocument(opts);
       } else throw e;
@@ -411,7 +412,7 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
     let pdfBase64 = pv.pdfBase64 || null;
     if (!pdfBase64 && pv.url) { const fr = await fetch(pv.url, { redirect: 'follow' }).catch(() => null); if (fr && fr.ok) pdfBase64 = Buffer.from(await fr.arrayBuffer()).toString('base64'); }
     if (!pdfBase64) return json(res, { error: 'לא התקבלה תצוגה מקדימה', debug: pv.raw || null });
-    json(res, { ok: true, pdfBase64 });
+    json(res, { ok: true, pdfBase64, dateAdjusted, requestedDate, usedDate });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -1414,7 +1415,11 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
     }
     const doc = await greenInvoice.createDocument(opts);
     json(res, { ok: true, doc });
-  } catch (e) { json(res, { error: e.message }, 500); }
+  } catch (e) {
+    const msg = String(e.message || '');
+    if (/2405|עתידי|מוקדם/i.test(msg)) return json(res, { error: 'חשבונית ירוקה לא מאפשרת להפיק מסמך מסוג זה בתאריך מוקדם מהמסמך האחרון מסוגו. בחר את תאריך היום או מאוחר יותר.' }, 400);
+    json(res, { error: msg }, 500);
+  }
 });
 
 // GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה

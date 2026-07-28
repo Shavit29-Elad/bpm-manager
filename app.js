@@ -2594,9 +2594,14 @@ async function openDesignedPdf(endpoint, body, { statusEl, btn, label } = {}) {
     const m = document.getElementById('designPvModal') || (() => { const x = document.createElement('div'); x.id = 'designPvModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
     m.style.zIndex = '10050'; // מעל מודל התצוגה המקדימה של האתר כדי שלא יופיע מאחור
     m.classList.remove('hidden');
+    const dmy = (d) => { const m2 = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m2 ? `${m2[3]}/${m2[2]}/${m2[1]}` : (d || ''); };
+    const dateNote = r.dateAdjusted
+      ? `<div class="warn-banner" style="margin-bottom:8px;font-size:12.5px">⚠ חשבונית ירוקה אינה מאפשרת את התאריך שנבחר (${dmy(r.requestedDate)}) למסמך מסוג זה — הוא מוקדם מהמסמך האחרון. התצוגה מוצגת עם ${dmy(r.usedDate)}. גם ההפקה בפועל תידחה בתאריך מוקדם — בחר ${dmy(r.usedDate)} או מאוחר יותר.</div>`
+      : '';
     m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;overflow:hidden;display:flex;flex-direction:column">
       <div class="row-between" style="margin-bottom:8px"><h3 style="margin:0">תצוגה מקדימה — כפי שייראה בחשבונית ירוקה</h3><button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('designPvModal').classList.add('hidden')">✕</button></div>
-      <iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:80vh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+      ${dateNote}
+      <iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:${r.dateAdjusted ? '72vh' : '80vh'};border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
       <p class="muted" style="font-size:12px;margin-top:8px">תצוגה מקדימה בלבד — עדיין לא נוצר מסמך.</p>
     </div>`;
     m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
