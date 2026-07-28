@@ -4217,8 +4217,8 @@ function renderJobsReport() {
   const head = `<div style="font-size:16px;font-weight:800;margin-bottom:2px">${escapeHtml(_report.empName)}</div>
     <div style="color:#6b7488;font-size:13px;margin-bottom:12px">דוח עבודות חודשי · ${monthLabelFromKey(_report.month)} · ${label}</div>`;
   if (!rows.length) { el.innerHTML = head + `<div class="empty">אין עבודות לחודש זה.</div>`; return; }
-  el.innerHTML = head + `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#fff">
-      <thead><tr>${th('#', '32px')}${th('אמן')}${th('תאריך', '86px')}${th('מיקום')}${th('תשלום', '72px')}${th('בונוס', '66px')}${th('אוכל', '64px')}${th('נסיעות', '70px')}${th('הערות')}</tr></thead>
+  el.innerHTML = head + `<div style="overflow-x:auto"><table style="width:100%;min-width:960px;border-collapse:collapse;background:#fff;table-layout:fixed">
+      <thead><tr>${th('#', '30px')}${th('אמן', '19%')}${th('תאריך', '78px')}${th('מיקום', '22%')}${th('תשלום', '68px')}${th('בונוס', '62px')}${th('אוכל', '60px')}${th('נסיעות', '66px')}${th('הערות', '15%')}</tr></thead>
       <tbody>
         ${rows.map((r, i) => `<tr${i % 2 ? ' style="background:#fafbff"' : ''}>${cell(i + 1)}${cell(inTxt(i, 'artist'))}${cell(dmy(r.date), 'white-space:nowrap')}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${cell(inNum(i, 'travel'))}${cell(inTxt(i, 'note'))}</tr>`).join('')}
         <tr>${cell('<b>סה"כ</b>', 'border-top:2px solid #c7cce0;text-align:center')}<td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0', 'sumPay')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0', 'sumBonus')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0', 'sumFood')}${cell('<b>' + _nisFmt(sum('travel')) + '</b>', 'border-top:2px solid #c7cce0', 'sumTravel')}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
