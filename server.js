@@ -507,10 +507,16 @@ add('GET', /^\/api\/invoicing\/linkable-docs$/, async (req, res, _p, q) => {
       for (const d of (e.linkedDocs || [])) if (d && d.id != null) linkedElsewhere.add(String(d.id));
       if (e.invoiceId != null) linkedElsewhere.add(String(e.invoiceId));
     }
-    const docs = all.filter(d => types.includes(Number(d.type)) && !linkedElsewhere.has(String(d.id)))
+    const includeClosed = q.includeClosed === '1' || q.includeClosed === 'true';
+    const relevant = all.filter(d => types.includes(Number(d.type)) && !linkedElsewhere.has(String(d.id)));
+    // ברירת מחדל: רק מסמכים בסטטוס פתוח (status 0). "הצג סגורים" → כולל גם סגורים.
+    const openOnly = relevant.filter(d => Number(d.status) === 0);
+    const docs = (includeClosed ? relevant : openOnly)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-      .slice(0, 50);
-    json(res, { docs, clientId });
+      .slice(0, 60);
+    // כמה מסמכים סגורים קיימים (כדי להציג/להסתיר את אפשרות "הצג סגורים")
+    const closedCount = relevant.length - openOnly.length;
+    json(res, { docs, clientId, closedCount });
   } catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
@@ -1559,6 +1565,51 @@ add('POST', /^\/api\/contractors\/auto-sync-names$/, async (req, res) => {
     if (changed) save(db);
   }
   json(res, { ok: true, changed, applied });
+});
+
+// POST /api/sync-names?companyId= — יישור אוטומטי של שמות לקוחות/ספקים באירועים לפי חשבונית ירוקה,
+// כולל תיקון מזהה שגוי (clientId/supplierId) כשיש התאמת שם ודאית יחידה. מונע תקלות משמות חתוכים/וריאציות.
+// פר-חברה: רץ בהקשר החברה (withCompany מהראוטר) ומעדכן רק את אירועי אותה חברה.
+add('POST', /^\/api\/sync-names$/, async (req, res, _p, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { ok: false, error: 'חשבונית ירוקה לא מחוברת' });
+  let clients = [], suppliers = [];
+  try { clients = await greenInvoice.listClients(); } catch (e) { return json(res, { ok: false, error: e.message }); }
+  try { suppliers = await greenInvoice.listSuppliers(); } catch { suppliers = []; }
+  const norm = (s) => String(s || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[."'׳״,()\-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const clById = new Map(clients.map(c => [String(c.id), c]));
+  // התאמת שם ודאית: מדויק > מנורמל-מדויק > תת-מחרוזת יחידה. מחזיר ישות אחת או null (לא נוגעים בעמימות).
+  const resolveBy = (arr, name) => {
+    const raw = (name || '').trim(); if (!raw) return null;
+    let c = arr.find(x => (x.name || '').trim() === raw); if (c) return c;
+    const nn = norm(raw); if (nn.length < 3) return null;
+    c = arr.find(x => norm(x.name) === nn); if (c) return c;
+    const cand = arr.filter(x => { const xn = norm(x.name); return xn && (xn.includes(nn) || nn.includes(xn)); });
+    return cand.length === 1 ? cand[0] : null;
+  };
+  const db = load();
+  const evs = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  let clientsFixed = 0, clientIdFixed = 0, ctrFixed = 0;
+  const applied = { clients: {}, contractors: {} };
+  for (const ev of evs) {
+    // ---- לקוח האירוע ----
+    const name = (ev.clientName || '').trim();
+    if (name) {
+      const byName = resolveBy(clients, name);
+      const byId = ev.clientId ? clById.get(String(ev.clientId)) : null;
+      // שם הלקוח הוא מקור האמת ל"מי הלקוח"; אם אין התאמת שם ודאית אבל יש מזהה תקין ושם ריק — משלימים מהמזהה.
+      const canonical = byName || (byId && !name ? byId : null);
+      if (canonical) {
+        if (ev.clientName !== canonical.name) { applied.clients[name] = canonical.name; ev.clientName = canonical.name; clientsFixed++; }
+        if (String(ev.clientId || '') !== String(canonical.id)) { ev.clientId = canonical.id; clientIdFixed++; }
+      }
+    }
+    // ---- קבלנים/ספקים של האירוע ----
+    const fixName = (n) => { const nm = (n || '').trim(); if (!nm) return n; const s = resolveBy(suppliers, nm); if (s && s.name !== nm) { applied.contractors[nm] = s.name; ctrFixed++; return s.name; } return n; };
+    if (Array.isArray(ev.contractorDetails)) for (const c of ev.contractorDetails) { const nn = fixName(c.name); if (nn !== c.name) c.name = nn; }
+    if (Array.isArray(ev.contractors)) ev.contractors = ev.contractors.map(n => fixName(n));
+  }
+  if (clientsFixed || clientIdFixed || ctrFixed) save(db);
+  json(res, { ok: true, clientsFixed, clientIdFixed, ctrFixed, applied });
 });
 
 // GET /api/contractors/:id/documents — מסמכי הוצאה של קבלן/ספק מחשבונית ירוקה

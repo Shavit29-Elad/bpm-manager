@@ -17,7 +17,7 @@ export function employeePayForMonth(events, month /* yyyy-mm */, employees = [])
       const name = w.name;
       if (!name) continue;
       if (!byEmployee[name]) {
-        byEmployee[name] = { name, month, base: 0, bonus: 0, food: 0, total: 0, baseRate: rateOf(name), shifts: [] };
+        byEmployee[name] = { name, month, base: 0, bonus: 0, food: 0, travel: 0, total: 0, baseRate: rateOf(name), shifts: [] };
       }
       const rate = rateOf(name);
       const factor = w.factor != null && w.factor !== '' ? Number(w.factor) : 1;
@@ -25,12 +25,14 @@ export function employeePayForMonth(events, month /* yyyy-mm */, employees = [])
       // בונוס = סכום קבוע + (שבר יומית × שכר בסיס). "בונוס חצי יומית" → bonusFactor 0.5
       const bonus = (Number(w.bonus) || 0) + (Number(w.bonusFactor) || 0) * rate;
       const food = Number(w.food) || 0;
+      const travel = Number(w.travel) || 0;
       byEmployee[name].base += base;
       byEmployee[name].bonus += bonus;
       byEmployee[name].food += food;
-      byEmployee[name].total += base + bonus + food;
+      byEmployee[name].travel += travel;
+      byEmployee[name].total += base + bonus + food + travel;
       byEmployee[name].shifts.push({
-        eventId: ev.id, date: ev.date, artist: ev.artist, location: ev.location || '', factor, base, bonus, food, note: w.note || '',
+        eventId: ev.id, date: ev.date, artist: ev.artist, location: ev.location || '', factor, base, bonus, food, travel, note: w.note || '',
       });
     }
   }

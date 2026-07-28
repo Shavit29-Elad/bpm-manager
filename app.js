@@ -1537,7 +1537,20 @@ window.saveContactEdit = async (kind, id) => {
 };
 
 // ---- אירועים + אי-התאמות + יומן (לשונית אחת מאוחדת) ----
+// סנכרון אוטומטי של שמות לקוחות/ספקים לפי חשבונית ירוקה — פעם אחת לכל חברה בסשן.
+// מיישר שמות חתוכים/וריאציות ומתקן קישור (clientId/supplierId) שגוי, כדי למנוע תקלות שיוך.
+async function ensureNamesSynced(onChange) {
+  state._syncedCompanies = state._syncedCompanies || new Set();
+  const co = state.company;
+  if (!co || state._syncedCompanies.has(co)) return;
+  state._syncedCompanies.add(co);
+  try {
+    const r = await fetch(`/api/sync-names?companyId=${encodeURIComponent(co)}`, { method: 'POST' }).then(x => x.json()).catch(() => null);
+    if (r && (r.clientsFixed || r.clientIdFixed || r.ctrFixed)) { clearApiCache(); if (typeof onChange === 'function' && state.company === co) onChange(); }
+  } catch { /* לא חוסם */ }
+}
 async function renderCombined(c) {
+  ensureNamesSynced(() => { if (state.tab === 'combined' || state.tab === 'events') renderCombined($('#content')); }); // ברקע, פעם בחברה
   const [events, m] = await Promise.all([
     api(`/api/events?companyId=${state.company}`),
     api(`/api/calendar/match?companyId=${state.company}`),
@@ -1556,7 +1569,8 @@ async function renderCombined(c) {
   if (_evContractorFilter !== 'all' && !approvedContractors.includes(_evContractorFilter)) _evContractorFilter = 'all';
   let approvedShown = _evClientFilter === 'all' ? approved : approved.filter(e => (e.clientName || '').trim() === _evClientFilter);
   if (_evContractorFilter !== 'all') approvedShown = approvedShown.filter(e => (e.contractors || []).some(c => (c || '').trim() === _evContractorFilter));
-  const anyApprovedFilter = _evClientFilter !== 'all' || _evContractorFilter !== 'all';
+  if (_evText.trim()) approvedShown = approvedShown.filter(e => evMatchesText(e, _evText.trim()));
+  const anyApprovedFilter = _evClientFilter !== 'all' || _evContractorFilter !== 'all' || !!_evText.trim();
   const evClientSel = approvedClients.length ? `<select onchange="setEvClient(this.value)" style="padding:5px 10px;font-size:13px"><option value="all" ${_evClientFilter === 'all' ? 'selected' : ''}>כל הלקוחות</option>${approvedClients.map(cn => `<option value="${escAttr(cn)}" ${_evClientFilter === cn ? 'selected' : ''}>${escapeHtml(cn)}</option>`).join('')}</select>` : '';
   const evContractorSel = approvedContractors.length ? `<select onchange="setEvContractor(this.value)" style="padding:5px 10px;font-size:13px"><option value="all" ${_evContractorFilter === 'all' ? 'selected' : ''}>כל הקבלנים</option>${approvedContractors.map(cn => `<option value="${escAttr(cn)}" ${_evContractorFilter === cn ? 'selected' : ''}>${escapeHtml(cn)}</option>`).join('')}</select>` : '';
   c.innerHTML = `
@@ -1574,10 +1588,11 @@ async function renderCombined(c) {
         ${pending.length ? eventsByMonthHtml(pending, 'pending') : `<div class="empty">אין אירועים הממתינים לאישור 👌</div>`}
         <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:22px 0 4px">
           <h3 style="margin:0;font-size:15px">✓ אירועים מאושרים <span class="muted" style="font-weight:400;font-size:13px">· ${approvedShown.length}${anyApprovedFilter ? ` מתוך ${approved.length}` : ''}</span></h3>
+          <div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">🔍</span><input id="evTextSearch" value="${escAttr(_evText)}" oninput="setEvText(this.value)" placeholder="חיפוש חופשי: זמר / מיקום / לקוח / קבלן…" style="padding:5px 10px;font-size:13px;min-width:230px"/>${_evText ? `<button class="btn ghost" style="padding:4px 9px;font-size:12px" onclick="setEvText('')">✕</button>` : ''}</div>
           ${approvedClients.length ? `<div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">לקוח:</span>${evClientSel}</div>` : ''}
           ${approvedContractors.length ? `<div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">קבלן:</span>${evContractorSel}</div>` : ''}
         </div>
-        ${approvedShown.length ? eventsByMonthHtml(approvedShown, 'approved') : `<div class="empty">${_evClientFilter === 'all' ? 'עדיין אין אירועים מאושרים' : 'אין אירועים מאושרים ללקוח זה'}</div>`}`
+        ${approvedShown.length ? eventsByMonthHtml(approvedShown, 'approved') : `<div class="empty">${anyApprovedFilter ? 'אין אירועים מאושרים שתואמים לחיפוש/סינון' : 'עדיין אין אירועים מאושרים'}</div>`}`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
     </div>
 
@@ -1766,6 +1781,27 @@ let _evClientFilter = 'all';
 window.setEvClient = (v) => { _evClientFilter = v; renderCombined($('#content')); };
 let _evContractorFilter = 'all';
 window.setEvContractor = (v) => { _evContractorFilter = v; renderCombined($('#content')); };
+// חיפוש טקסט חופשי באירועים מאושרים (זמר/מיקום/לקוח/קבלן/עובד/סאונד) — בתוך התקופה שנבחרה
+let _evText = '';
+let _evTextT = null;
+window.setEvText = (v) => {
+  _evText = v;
+  clearTimeout(_evTextT);
+  _evTextT = setTimeout(async () => {
+    await renderCombined($('#content'));
+    const inp = document.getElementById('evTextSearch');
+    if (inp) { inp.focus(); const val = inp.value; inp.value = ''; inp.value = val; } // שמירת פוקוס + סמן בסוף
+  }, 250);
+};
+// האם אירוע תואם לחיפוש הטקסט החופשי
+function evMatchesText(e, qq) {
+  if (!qq) return true;
+  const hay = [e.artist, e.location, e.sound, e.clientName, e.employeeBonusRaw,
+    ...(e.contractors || []), ...(e.employees || []),
+    ...((e.contractorDetails || []).map(c => c.name)), ...((e.employeeDetails || []).map(w => w.name))]
+    .filter(Boolean).join(' ').toLowerCase();
+  return qq.toLowerCase().split(/\s+/).filter(Boolean).every(tok => hay.includes(tok));
+}
 const monthKeyLabel = (k) => { const m = String(k).match(/^(\d{4})-(\d{2})$/); return m ? `${MONTHS_HE[+m[2] - 1]} ${m[1]}` : k; };
 const curMonthKey = () => new Date().toISOString().slice(0, 7);
 const isNoInvoiceEv = (e) => Boolean(e.noInvoice) || /ללא\s*-?\s*שול[םמ]/.test(e.clientName || '');
@@ -1785,8 +1821,8 @@ function invoiceCell(e) {
   const isReceipt = docs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(e.invoiceType));
   if (isBilledEv(e) || docs.length) {
     const tags = docs.length
-      ? docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="לחץ לפתיחת/הורדת המסמך" onclick="openLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} ⬇</span>`).join(' ')
-      : `<span class="tag invoiced" ${e.invoiceId ? `style="cursor:pointer;text-decoration:underline" title="לחץ לפתיחת/הורדת המסמך" onclick="openLinkedDoc('${e.invoiceId}',this)"` : ''}>שויך · ${DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}${e.invoiceId ? ' ⬇' : ''}</span>`;
+      ? docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה במסמך" onclick="openLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ')
+      : `<span class="tag invoiced" ${e.invoiceId ? `style="cursor:pointer;text-decoration:underline" title="צפייה במסמך" onclick="openLinkedDoc('${e.invoiceId}',this)"` : ''}>שויך · ${DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}${e.invoiceId ? ' 👁' : ''}</span>`;
     const status = isReceipt
       ? `<div style="font-size:10.5px;color:var(--accent2);font-weight:700">שולם ✓</div>`
       : `<div style="font-size:10.5px;color:var(--muted)">ממתין לקבלה</div>`;
@@ -1890,7 +1926,7 @@ async function openEventEditor(ev) {
   _evCtr = (ev.contractorDetails && ev.contractorDetails.length ? ev.contractorDetails
     : (ev.contractors || []).map(n => ({ name: n, amount: null }))).map(c => ({ name: c.name || '', amount: c.amount ?? '', paid: !!c.paid, paidInvoice: c.paidInvoice || null, paidExpenseUrl: c.paidExpenseUrl || null, handled: !!c.handled }));
   _evEmp = (ev.employeeDetails && ev.employeeDetails.length ? ev.employeeDetails
-    : (ev.employees || []).map(n => ({ name: n }))).map(w => ({ name: w.name || '', factor: w.factor ?? '1', bonus: w.bonus ?? '', food: w.food ?? '', note: w.note ?? '', bonusFactor: w.bonusFactor ?? null }));
+    : (ev.employees || []).map(n => ({ name: n }))).map(w => ({ name: w.name || '', factor: w.factor ?? '1', bonus: w.bonus ?? '', food: w.food ?? '', travel: w.travel ?? '', note: w.note ?? '', bonusFactor: w.bonusFactor ?? null }));
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
   if (!_evEmployees) { try { _evEmployees = await api(`/api/employees?companyId=${state.company}`); } catch { _evEmployees = []; } }
   if (!_evSuppliers) { try { const s = await api('/api/suppliers'); _evSuppliers = Array.isArray(s) ? s : []; } catch { _evSuppliers = []; } }
@@ -1919,6 +1955,7 @@ async function openEventEditor(ev) {
         <button type="button" class="btn ghost" style="padding:6px 12px;font-size:12.5px" onclick="openEventDocLink('${ev.id}', (document.getElementById('evClient')?.value||'').trim(), '')">🔗 שייך מסמך קיים</button>
         <span class="muted" style="font-size:11.5px">הצעת מחיר / עסקה / מס / מס-קבלה / זיכוי — של הלקוח בלבד, שאינו משוייך לאירוע אחר</span>
       </div>
+      <div id="evLinkedDocs" style="grid-column:1/3">${evLinkedDocsHtml(ev)}</div>
       ${fld('הערת בונוס/תשלום (טקסט חופשי) — מוחל אוטומטית', `<div style="display:flex;gap:6px"><input id="evBonus" value="${v(ev.employeeBonusRaw)}" placeholder="למשל: בונוס 278 לשניהם · בונוס חצי יומית · יומית וחצי" style="flex:1" onchange="applyBonusNote(null,true)"/><button type="button" class="btn ghost" style="white-space:nowrap;padding:8px 12px" onclick="applyBonusNote(this)">✨ החל שוב</button></div>`, true)}
     </div>
     <datalist id="evClientList">${(_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
@@ -1988,10 +2025,11 @@ function evEmpHtml() {
     <select onchange="_evEmp[${i}].factor=this.value" style="width:105px">${EV_FACTORS.map(([val, lbl]) => `<option value="${val}"${String(w.factor) === val ? ' selected' : ''}>${lbl}</option>`).join('')}</select>
     <input type="number" inputmode="decimal" value="${w.bonus ?? ''}" placeholder="בונוס ₪" oninput="_evEmp[${i}].bonus=this.value" style="width:82px"/>
     <input type="number" inputmode="decimal" value="${w.food ?? ''}" placeholder="אוכל ₪" oninput="_evEmp[${i}].food=this.value" style="width:80px"/>
+    <input type="number" inputmode="decimal" value="${w.travel ?? ''}" placeholder="נסיעות ₪" oninput="_evEmp[${i}].travel=this.value" style="width:84px"/>
     <input value="${(w.note || '').replace(/"/g, '&quot;')}" placeholder="הערה" oninput="_evEmp[${i}].note=this.value" style="width:120px"/>
     <button class="btn ghost" style="padding:4px 11px" onclick="evRemoveEmp(${i})" title="הסר">×</button></div>`).join('');
 }
-window.evAddEmp = () => { _evEmp.push({ name: '', factor: '1', bonus: '', food: '', note: '' }); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
+window.evAddEmp = () => { _evEmp.push({ name: '', factor: '1', bonus: '', food: '', travel: '', note: '' }); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
 window.evRemoveEmp = (i) => { _evEmp.splice(i, 1); document.getElementById('evEmpBox').innerHTML = evEmpHtml(); };
 let _lastBonusNote = null;
 // silent=true → החלה אוטומטית (בלי התראות, בלי כפתור). נקרא גם כשמסיימים לכתוב את ההערה.
@@ -2027,7 +2065,7 @@ function collectEventBody() {
     if (c.handled) o.handled = true;
     return o;
   });
-  const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus), bonusFactor: (w.bonusFactor == null || w.bonusFactor === '') ? null : +w.bonusFactor, food: num(w.food), note: (w.note || '').trim() || null }));
+  const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus), bonusFactor: (w.bonusFactor == null || w.bonusFactor === '') ? null : +w.bonusFactor, food: num(w.food), travel: num(w.travel), note: (w.note || '').trim() || null }));
   return {
     date: g('evDate').value || null, dateRaw: g('evDate').value || _evEditing.dateRaw || null,
     artist: g('evArtist').value.trim() || null,
@@ -2130,7 +2168,7 @@ function invClientCard(g) {
   // מציגים אירועים שטרם "שולמו" (אין להם קבלה/מס-קבלה). אירוע עם קבלה מוסר לגמרי.
   const openEvents = g.events.filter(ev => !ev.paid);
   const rows = openEvents.map(ev => {
-    const tags = (ev.linkedDocs || []).map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="לחץ לפתיחת/הורדת המסמך" onclick="openLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} ⬇</span>`).join(' ');
+    const tags = (ev.linkedDocs || []).map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה במסמך" onclick="openLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ');
     return `<tr>
       <td style="text-align:center"><input type="checkbox" class="invchk" data-c="${safe}" value="${ev.id}" ${ev.billed ? '' : 'checked'}/></td>
       <td>${ddmy(ev.date)}</td>
@@ -2256,8 +2294,11 @@ window.openEventDocLink = async (eventId, presetClient, presetClientId) => {
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;overflow:auto">
     <div class="row-between"><h3>🔗 שיוך מסמך לאירוע</h3></div>
     <p class="muted" style="font-size:12.5px">בחר לקוח — יוצגו רק מסמכים של אותו לקוח (הצעת מחיר / עסקה / מס / מס-קבלה / זיכוי) שאינם משוייכים לאף אירוע אחר. אפשר לשייך הצעת מחיר ולהפיק ממנה מסמך המשך (עסקה / מס / מס-קבלה).</p>
-    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted);max-width:360px">לקוח
-      <input id="evLinkClient" list="evLinkClientList" value="${escAttr(clientVal)}" placeholder="בחר / חפש לקוח…" onchange="evLinkLoadDocs()"/></label>
+    <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted);max-width:360px;flex:1;min-width:220px">לקוח
+        <input id="evLinkClient" list="evLinkClientList" value="${escAttr(clientVal)}" placeholder="בחר / חפש לקוח…" onchange="evLinkLoadDocs()"/></label>
+      <label id="evLinkClosedWrap" style="display:none;gap:7px;align-items:center;font-size:12.5px;color:var(--muted);padding-bottom:6px"><input type="checkbox" id="evLinkClosed" onchange="evLinkLoadDocs()"/> הצג גם מסמכים סגורים</label>
+    </div>
     <datalist id="evLinkClientList">${(_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
     <div id="evLinkBody" style="margin-top:12px"><div class="empty">בחר לקוח כדי לראות מסמכים ניתנים לשיוך.</div></div>
     <div id="evLinkStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
@@ -2276,24 +2317,34 @@ window.evLinkLoadDocs = async () => {
   const cid = (_evClients || []).find(c => c.name === client)?.id || '';
   _evLinkCtx.client = client; _evLinkCtx.clientId = cid;
   if (box) box.innerHTML = '<div class="empty">טוען מסמכים…</div>';
-  const q = `clientName=${encodeURIComponent(client)}${cid ? `&clientId=${encodeURIComponent(cid)}` : ''}${_evLinkCtx.eventId ? `&excludeEventId=${encodeURIComponent(_evLinkCtx.eventId)}` : ''}`;
+  const includeClosed = document.getElementById('evLinkClosed')?.checked ? '&includeClosed=1' : '';
+  const q = `clientName=${encodeURIComponent(client)}${cid ? `&clientId=${encodeURIComponent(cid)}` : ''}${_evLinkCtx.eventId ? `&excludeEventId=${encodeURIComponent(_evLinkCtx.eventId)}` : ''}${includeClosed}`;
   const r = await api(`/api/invoicing/linkable-docs?${q}`).catch(() => ({ docs: [] }));
   const docs = r.docs || [];
+  // חושפים את "הצג סגורים" רק אם יש מסמכים סגורים ללקוח (או כשהתיבה כבר מסומנת)
+  const closedWrap = document.getElementById('evLinkClosedWrap');
+  if (closedWrap) closedWrap.style.display = ((r.closedCount || 0) > 0 || document.getElementById('evLinkClosed')?.checked) ? 'flex' : 'none';
   if (!box) return;
+  const closedNote = document.getElementById('evLinkClosed')?.checked ? '' : ((r.closedCount || 0) > 0 ? ` <span class="muted">(${r.closedCount} מסמכים סגורים מוסתרים — סמן "הצג סגורים")</span>` : '');
   box.innerHTML = docs.length
-    ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">סמן עד 4 מסמכים לשיוך:</div><div style="display:flex;flex-direction:column;gap:8px">${docs.map(d => evLinkDocRow(d)).join('')}</div>`
-    : `<div class="empty">אין מסמכים ניתנים לשיוך ללקוח זה (ייתכן שכולם כבר משוייכים לאירועים אחרים, או שאין מסמכים מהסוגים הרלוונטיים).</div>`;
+    ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">סמן עד 4 מסמכים פתוחים לשיוך:${closedNote}</div><div style="display:flex;flex-direction:column;gap:8px">${docs.map(d => evLinkDocRow(d)).join('')}</div>`
+    : `<div class="empty">אין מסמכים פתוחים ניתנים לשיוך ללקוח זה${(r.closedCount || 0) > 0 ? ' (יש מסמכים סגורים — סמן "הצג גם מסמכים סגורים")' : ' (ייתכן שכולם כבר משוייכים לאירועים אחרים)'}.</div>`;
 };
 function evLinkDocRow(d) {
   const isQuote = Number(d.type) === 10;
+  const url = String(d.url || '').replace(/'/g, '%27');
+  const closed = Number(d.status) !== 0;
+  const prevBtn = url ? `<button type="button" class="btn ghost" style="padding:3px 9px;font-size:11px;white-space:nowrap" onclick="event.preventDefault();event.stopPropagation();previewDoc('${url}')">👁 תצוגה מקדימה</button>` : '';
   const deriveBtn = isQuote ? `<button type="button" class="btn ghost" style="padding:3px 9px;font-size:11px;white-space:nowrap" onclick="event.preventDefault();event.stopPropagation();evLinkDeriveQuote('${escAttr(String(d.id))}','${escAttr(String(d.number))}')">↪ הפק מסמך המשך</button>` : '';
   return `<label class="card" style="padding:9px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;cursor:pointer">
       <input type="checkbox" class="evlinkchk" data-id="${escAttr(String(d.id))}" data-number="${escAttr(String(d.number))}" data-type="${d.type}" onchange="evLinkChkChanged(this)"/>
       <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}</span>
       <span style="white-space:nowrap">#${d.number}</span>
+      ${closed ? '<span class="tag" style="background:rgba(120,120,120,.18);color:var(--muted)">סגור</span>' : ''}
       <span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
       <span style="flex:1;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.description ? escapeHtml(d.description) : ''}</span>
       <span style="font-weight:600;white-space:nowrap">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>
+      ${prevBtn}
       ${deriveBtn}
     </label>`;
 }
@@ -2315,6 +2366,7 @@ window.evLinkConfirm = async () => {
       const ld = _evEditing.linkedDocs || [];
       docs.forEach(d => { if (!ld.some(x => String(x.id) === String(d.id))) ld.push(d); });
       _evEditing.linkedDocs = ld;
+      const box = document.getElementById('evLinkedDocs'); if (box) box.innerHTML = evLinkedDocsHtml(_evEditing); // ריענון הצפייה בעורך
     }
     setTimeout(() => { const mm = document.getElementById('evLinkModal'); if (mm) mm.classList.add('hidden'); if (typeof renderCombined === 'function' && $('#content')) renderCombined($('#content')); }, 1100);
   } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
@@ -2327,6 +2379,15 @@ window.evLinkDeriveQuote = (quoteId, quoteNumber) => {
   // מודל העורך העשיר צריך להופיע מעל מודל עריכת האירוע שנשאר פתוח מאחור
   setTimeout(() => { const dm = document.getElementById('derModal'); if (dm) dm.style.zIndex = '95'; const rm = document.getElementById('docReadyModal'); if (rm) rm.style.zIndex = '100'; }, 30);
 };
+// תצוגת מסמכים משויכים לאירוע (בעורך + אירועים מאושרים) עם צפייה — לחיצה פותחת/מורידה את המסמך
+function evLinkedDocsHtml(ev) {
+  const docs = Array.isArray(ev && ev.linkedDocs) ? ev.linkedDocs : [];
+  if (!docs.length) return '<span class="muted" style="font-size:11.5px">אין מסמכים משויכים לאירוע.</span>';
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+    <span class="muted" style="font-size:11.5px">מסמכים משויכים:</span>
+    ${docs.map(d => `<span class="tag invoiced" style="font-size:11px;cursor:pointer;text-decoration:underline" title="צפייה במסמך" onclick="openLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join('')}
+  </div>`;
+}
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
   if (!ids.length) { alert('לא נבחרו אירועים לחיוב'); return; }
@@ -3989,7 +4050,7 @@ function openEmpJobsModal(name, r) {
   _report = {
     empId: emp.id, empName: name, month: state.payMonth,
     salaryType: emp.salaryType || 'gross',
-    rows: shifts.map(s => ({ eventId: s.eventId, artist: s.artist || '', date: s.date, location: s.location || '', payment: Number(s.base) || 0, bonus: Number(s.bonus) || 0, food: Number(s.food) || 0, note: s.note || '' })),
+    rows: shifts.map(s => ({ eventId: s.eventId, artist: s.artist || '', date: s.date, location: s.location || '', payment: Number(s.base) || 0, bonus: Number(s.bonus) || 0, food: Number(s.food) || 0, travel: Number(s.travel) || 0, note: s.note || '' })),
   };
   let m = document.getElementById('jobsModal'); if (!m) { m = document.createElement('div'); m.id = 'jobsModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
@@ -4014,27 +4075,27 @@ function renderJobsReport() {
   const inTxt = (i, f) => `<input value="${String(_report.rows[i][f] || '').replace(/"/g, '&quot;')}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;width:100%;text-align:right;font:inherit;color:inherit;padding:2px 0"/>`;
   const inNum = (i, f) => `<input type="number" inputmode="decimal" value="${_report.rows[i][f] || 0}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;width:100%;text-align:right;font:inherit;color:inherit;padding:2px 0"/>`;
   const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
-  const grand = sum('payment') + sum('bonus') + sum('food');
+  const grand = sum('payment') + sum('bonus') + sum('food') + sum('travel');
   const head = `<div style="font-size:16px;font-weight:800;margin-bottom:2px">${escapeHtml(_report.empName)}</div>
     <div style="color:#6b7488;font-size:13px;margin-bottom:12px">דוח עבודות חודשי · ${monthLabelFromKey(_report.month)} · ${label}</div>`;
   if (!rows.length) { el.innerHTML = head + `<div class="empty">אין עבודות לחודש זה.</div>`; return; }
   el.innerHTML = head + `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#fff">
-      <thead><tr>${th('#', '34px')}${th('אמן')}${th('תאריך', '92px')}${th('מיקום')}${th('תשלום', '96px')}${th('בונוס', '88px')}${th('אוכל', '88px')}${th('הערות')}</tr></thead>
+      <thead><tr>${th('#', '34px')}${th('אמן')}${th('תאריך', '92px')}${th('מיקום')}${th('תשלום', '96px')}${th('בונוס', '88px')}${th('אוכל', '88px')}${th('נסיעות', '88px')}${th('הערות')}</tr></thead>
       <tbody>
-        ${rows.map((r, i) => `<tr${i % 2 ? ' style="background:#fafbff"' : ''}>${cell(i + 1)}${cell(inTxt(i, 'artist'))}${cell(dmy(r.date), 'white-space:nowrap')}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${cell(inTxt(i, 'note'))}</tr>`).join('')}
-        <tr>${cell('<b>סה"כ</b>', 'border-top:2px solid #c7cce0;text-align:center')}<td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0', 'sumPay')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0', 'sumBonus')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0', 'sumFood')}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
-        <tr style="background:#eef0fb"><td colspan="4" style="border:1px solid #d8dced;padding:8px 10px;text-align:start;white-space:nowrap"><b>סה"כ כולל הכל (${label})</b></td><td colspan="4" id="grandTotal" style="border:1px solid #d8dced;padding:8px 10px;text-align:right"><b style="color:#4338ca;font-size:15.5px">${_nisFmt(grand)}</b></td></tr>
+        ${rows.map((r, i) => `<tr${i % 2 ? ' style="background:#fafbff"' : ''}>${cell(i + 1)}${cell(inTxt(i, 'artist'))}${cell(dmy(r.date), 'white-space:nowrap')}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${cell(inNum(i, 'travel'))}${cell(inTxt(i, 'note'))}</tr>`).join('')}
+        <tr>${cell('<b>סה"כ</b>', 'border-top:2px solid #c7cce0;text-align:center')}<td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0', 'sumPay')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0', 'sumBonus')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0', 'sumFood')}${cell('<b>' + _nisFmt(sum('travel')) + '</b>', 'border-top:2px solid #c7cce0', 'sumTravel')}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
+        <tr style="background:#eef0fb"><td colspan="4" style="border:1px solid #d8dced;padding:8px 10px;text-align:start;white-space:nowrap"><b>סה"כ כולל הכל (${label})</b></td><td colspan="5" id="grandTotal" style="border:1px solid #d8dced;padding:8px 10px;text-align:right"><b style="color:#4338ca;font-size:15.5px">${_nisFmt(grand)}</b></td></tr>
       </tbody>
     </table></div>`;
 }
 window.editReport = async (i, f, val) => {
   const row = _report.rows[i]; if (!row) return;
-  if (['payment', 'bonus', 'food'].includes(f)) row[f] = val === '' ? 0 : +val; else row[f] = val;
+  if (['payment', 'bonus', 'food', 'travel'].includes(f)) row[f] = val === '' ? 0 : +val; else row[f] = val;
   // עדכון הסכומים בלבד (שומר על הפוקוס)
   const sum = (k) => _report.rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
-  const grand = sum('payment') + sum('bonus') + sum('food');
+  const grand = sum('payment') + sum('bonus') + sum('food') + sum('travel');
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.innerHTML = v; };
-  set('sumPay', '<b>' + _nisFmt(sum('payment')) + '</b>'); set('sumBonus', '<b>' + _nisFmt(sum('bonus')) + '</b>'); set('sumFood', '<b>' + _nisFmt(sum('food')) + '</b>');
+  set('sumPay', '<b>' + _nisFmt(sum('payment')) + '</b>'); set('sumBonus', '<b>' + _nisFmt(sum('bonus')) + '</b>'); set('sumFood', '<b>' + _nisFmt(sum('food')) + '</b>'); set('sumTravel', '<b>' + _nisFmt(sum('travel')) + '</b>');
   set('grandTotal', '<b style="color:#4338ca;font-size:15px">' + _nisFmt(grand) + '</b>');
   // שמירה לשרת: שדות משותפים על האירוע, שדות עובד על employeeDetails
   const ev = await fetchEventById(row.eventId); if (!ev) return;
@@ -4046,6 +4107,7 @@ window.editReport = async (i, f, val) => {
     if (f === 'payment') d.rate = val === '' ? null : +val;
     else if (f === 'bonus') d.bonus = val === '' ? null : +val;
     else if (f === 'food') d.food = val === '' ? null : +val;
+    else if (f === 'travel') d.travel = val === '' ? null : +val;
     else if (f === 'note') d.note = val;
   }
   await fetch(`/api/events/${row.eventId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ev) }).catch(() => {});
