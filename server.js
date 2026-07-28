@@ -1336,7 +1336,8 @@ add('GET', /^\/api\/documents\/([^/]+)\/url$/, async (req, res, params) => {
     const raw = await greenInvoice.getDocument(params[0]);
     const url = (raw.url && (raw.url.he || raw.url.origin || raw.url.pdf)) || (typeof raw.url === 'string' ? raw.url : null);
     if (!url) return json(res, { error: 'לא נמצא קובץ למסמך זה' }, 404);
-    json(res, { ok: true, url });
+    // status: 0=פתוח, 1=סגור/הומר, ... — משמש להצגת אופציית "מסמך המשך" רק כשהמסמך פתוח
+    json(res, { ok: true, url, status: Number(raw.status), type: Number(raw.type), number: raw.number });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 

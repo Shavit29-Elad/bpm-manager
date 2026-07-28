@@ -404,15 +404,17 @@ function fmtDate(s) { if (!s) return '—'; const m = String(s).slice(0, 10).mat
 
 // תצוגה מקדימה של מסמך (PDF) בחלון קופץ — מושכים את הקובץ כ-blob ומציגים בתוך המסך (בלי הורדה)
 let _previewBlobUrl = null;
-window.previewDoc = async (url) => {
+window.previewDoc = async (url, opts = {}) => {
   if (!url) return;
   let m = document.getElementById('docPreview');
   if (!m) { m = document.createElement('div'); m.id = 'docPreview'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
+  const extra = opts.extraActions || '';
   const shell = (inner) => `<div class="modal-card" style="width:min(920px,95vw);height:90vh;padding:0;display:flex;flex-direction:column;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">
       <b>תצוגה מקדימה של המסמך</b>
       <div style="display:flex;gap:8px;align-items:center">
+        ${extra}
         <a href="${url}" target="_blank" class="btn ghost" style="padding:6px 13px;text-decoration:none">הורדה ↓</a>
         <button class="btn primary" style="padding:6px 13px" onclick="closePreview()">סגור</button>
       </div>
@@ -441,15 +443,27 @@ window.closePreview = () => {
   const m = document.getElementById('docPreview'); if (m) m.classList.add('hidden');
   if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
 };
-// פתיחת מסמך משוייך לפי מזהה בחלונית תצוגה מקדימה (עם אפשרות צפייה והורדה) — לא הורדה אוטומטית
-window.previewLinkedDoc = async (docId, el) => {
+// פתיחת מסמך משוייך לפי מזהה בחלונית תצוגה מקדימה (צפייה + הורדה + מסמך המשך אם רלוונטי) — לא הורדה אוטומטית
+window.previewLinkedDoc = async (docId, el, eventId) => {
   if (!docId) return;
   const prev = el ? el.style.opacity : '';
   if (el) { el.style.opacity = '0.5'; el.style.pointerEvents = 'none'; }
   const r = await api(`/api/documents/${docId}/url`).catch(() => ({}));
   if (el) { el.style.opacity = prev; el.style.pointerEvents = ''; }
-  if (r && r.url) previewDoc(r.url);
-  else alert('לא ניתן לפתוח את המסמך' + (r && r.error ? ': ' + r.error : ''));
+  if (!r || !r.url) { alert('לא ניתן לפתוח את המסמך' + (r && r.error ? ': ' + r.error : '')); return; }
+  const tp = Number(r.type);
+  // "מסמך המשך" רק כשהמסמך פתוח וניתן להמשך לפי הכללים (עסקה→מס/מס-קבלה, מס→קבלה). לא על הצעת מחיר/מס-קבלה/קבלה/זיכוי.
+  let extra = '';
+  if (Number(r.status) === 0 && tp !== 10 && FOLLOWUP_FOR[tp] && FOLLOWUP_FOR[tp].length) {
+    extra = `<button class="btn success" style="padding:6px 12px" onclick="previewDeriveFromDoc('${docId}','${escAttr(String(r.number || ''))}',${tp},'${eventId || ''}')">↪ מסמך המשך</button>`;
+  }
+  previewDoc(r.url, { extraActions: extra });
+};
+// הפקת מסמך המשך מתוך חלונית התצוגה המקדימה — מסמך ההמשך יקושר לאירוע (אם ידוע)
+window.previewDeriveFromDoc = (docId, number, type, eventId) => {
+  window._deriveEventLink = eventId || null;
+  closePreview();
+  openDerive(docId, number, type, 'followup');
 };
 
 // הורדה אוטומטית של קובץ מסמך (PDF) מיד אחרי הפקה, בלי ניווט ובלי לחיצה
@@ -1831,8 +1845,8 @@ function invoiceCell(e) {
   const isReceipt = docs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(e.invoiceType));
   if (isBilledEv(e) || docs.length) {
     const tags = docs.length
-      ? docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה / הורדה" onclick="previewLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ')
-      : `<span class="tag invoiced" ${e.invoiceId ? `style="cursor:pointer;text-decoration:underline" title="צפייה / הורדה" onclick="previewLinkedDoc('${e.invoiceId}',this)"` : ''}>שויך · ${DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}${e.invoiceId ? ' 👁' : ''}</span>`;
+      ? docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה / הורדה / מסמך המשך" onclick="previewLinkedDoc('${d.id}',this,'${e.id}')">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ')
+      : `<span class="tag invoiced" ${e.invoiceId ? `style="cursor:pointer;text-decoration:underline" title="צפייה / הורדה / מסמך המשך" onclick="previewLinkedDoc('${e.invoiceId}',this,'${e.id}')"` : ''}>שויך · ${DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}${e.invoiceId ? ' 👁' : ''}</span>`;
     const status = isReceipt
       ? `<div style="font-size:10.5px;color:var(--accent2);font-weight:700">שולם ✓</div>`
       : `<div style="font-size:10.5px;color:var(--muted)">ממתין לקבלה</div>`;
@@ -4177,7 +4191,7 @@ function openEmpJobsModal(name, r) {
   };
   let m = document.getElementById('jobsModal'); if (!m) { m = document.createElement('div'); m.id = 'jobsModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(900px,96vw);max-height:90vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:90vh;overflow:auto">
     <div class="row-between" style="align-items:center">
       <div><h3 style="margin:0">${escapeHtml(name)}</h3><span class="muted" style="font-size:13.5px">דוח עבודות · ${monthLabelFromKey(_report.month)} · ${_report.salaryType === 'net' ? 'נטו' : 'ברוטו'} · לחיצה על תא לעריכה</span></div>
       <button class="btn ghost" style="padding:6px 13px" onclick="printJobsReport()">🖨 הדפס / PDF</button>
@@ -4193,8 +4207,8 @@ function renderJobsReport() {
   const el = document.getElementById('jobsReport'); if (!el || !_report) return;
   const rows = _report.rows;
   const label = _report.salaryType === 'net' ? 'נטו' : 'ברוטו';
-  const th = (t, w) => `<th style="border:1px solid #d8dced;padding:9px 10px;text-align:right;background:#eef0fb;font-size:13px;font-weight:700${w ? `;width:${w}` : ''}">${t}</th>`;
-  const cell = (inner, opt = '', id = '') => `<td${id ? ` id="${id}"` : ''} style="border:1px solid #d8dced;padding:6px 9px;text-align:right;font-size:13.5px;${opt}">${inner}</td>`;
+  const th = (t, w) => `<th style="border:1px solid #d8dced;padding:7px 8px;text-align:right;background:#eef0fb;font-size:12.5px;font-weight:700${w ? `;width:${w}` : ''}">${t}</th>`;
+  const cell = (inner, opt = '', id = '') => `<td${id ? ` id="${id}"` : ''} style="border:1px solid #d8dced;padding:5px 8px;text-align:right;font-size:13px;${opt}">${inner}</td>`;
   const inTxt = (i, f) => `<input value="${String(_report.rows[i][f] || '').replace(/"/g, '&quot;')}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;width:100%;text-align:right;font:inherit;color:inherit;padding:2px 0"/>`;
   const inNum = (i, f) => `<span style="display:inline-flex;align-items:center;gap:2px;width:100%"><input type="number" inputmode="decimal" value="${_report.rows[i][f] || 0}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;flex:1;min-width:0;text-align:right;font:inherit;color:inherit;padding:2px 0"/><span style="color:#8b93a7">₪</span></span>`;
   const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
