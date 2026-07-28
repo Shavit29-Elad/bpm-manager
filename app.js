@@ -1136,14 +1136,8 @@ function renderDeriveEditor() {
     <div class="row-between"><h3>${e.linked ? 'מסמך המשך' : 'שכפול'} — ${typeName}</h3><span class="muted">${escapeHtml(e.clientName)}</span></div>
 
     <div style="margin:8px 0 4px">
-      <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" ${(!e.allowBackdate && e.lastDocDate) ? `min="${e.lastDocDate}"` : ''} onchange="derDateChanged(this.value)" style="padding:6px 8px;margin-inline-start:6px"></label>
-      ${e.lastDocDate ? `<div style="margin-top:6px;font-size:12px">
-        <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer">
-          <input type="checkbox" ${e.allowBackdate ? 'checked' : ''} onchange="derToggleBackdate(this.checked)">
-          <span>אפשר תאריך מוקדם מ-${fmtDate(e.lastDocDate)} (${escapeHtml(e.lastDocTypeName || '')} האחרון/ה)</span>
-        </label>
-        ${e.allowBackdate ? `<div class="warn-banner" style="margin-top:6px;font-size:11.5px">⚠ הפקת מסמך בתאריך מוקדם מ${escapeHtml(e.lastDocTypeName || 'המסמך')} האחרון/ה היא באחריותך — מומלץ להתייעץ עם רו״ח.</div>` : ''}
-      </div>` : ''}
+      <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" ${e.lastDocDate ? `min="${e.lastDocDate}"` : ''} onchange="derDateChanged(this.value)" style="padding:6px 8px;margin-inline-start:6px"></label>
+      ${e.lastDocDate ? `<div class="muted" style="margin-top:6px;font-size:12px;line-height:1.5">אפשר להפיק גם בתאריך עבר — עד ${fmtDate(e.lastDocDate)} (${escapeHtml(e.lastDocTypeName || '')} האחרון/ה). חשבונית ירוקה אינה מאפשרת תאריך מוקדם מזה, כדי לשמור על רצף כרונולוגי של המסמכים.</div>` : ''}
     </div>
     <label style="font-size:13px;display:block;margin-bottom:8px">נושא/כותרת <input class="der-descr" value="${escAttr(e.description)}" placeholder="נושא המסמך" style="width:100%;padding:6px 8px;margin-top:3px"></label>
 
@@ -2596,7 +2590,7 @@ async function openDesignedPdf(endpoint, body, { statusEl, btn, label } = {}) {
     m.classList.remove('hidden');
     const dmy = (d) => { const m2 = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m2 ? `${m2[3]}/${m2[2]}/${m2[1]}` : (d || ''); };
     const dateNote = r.dateAdjusted
-      ? `<div class="warn-banner" style="margin-bottom:8px;font-size:12.5px">⚠ חשבונית ירוקה אינה מאפשרת את התאריך שנבחר (${dmy(r.requestedDate)}) למסמך מסוג זה — הוא מוקדם מהמסמך האחרון. התצוגה מוצגת עם ${dmy(r.usedDate)}. גם ההפקה בפועל תידחה בתאריך מוקדם — בחר ${dmy(r.usedDate)} או מאוחר יותר.</div>`
+      ? `<div class="warn-banner" style="margin-bottom:8px;font-size:12.5px">⚠ התאריך שנבחר (${dmy(r.requestedDate)}) מוקדם מהמסמך האחרון מסוגו — חשבונית ירוקה לא מאפשרת אותו (רצף כרונולוגי). אפשר להפיק החל מ-${dmy(r.usedDate)}; התצוגה מוצגת עם תאריך זה.</div>`
       : '';
     m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;overflow:hidden;display:flex;flex-direction:column">
       <div class="row-between" style="margin-bottom:8px"><h3 style="margin:0">תצוגה מקדימה — כפי שייראה בחשבונית ירוקה</h3><button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('designPvModal').classList.add('hidden')">✕</button></div>

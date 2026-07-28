@@ -398,21 +398,25 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
     }
     // התצוגה המקדימה היא ויזואלית בלבד. אם חשבונית ירוקה דוחה את התאריך (עתידי/מוקדם מדי לסוג המסמך — שגיאה 2405,
     // למשל מסמך המשך שתאריכו מוקדם מהמסמך האחרון) — מנסים שוב עם תאריך היום כדי שהתצוגה תרונדר. התאריך האמיתי נבחר בהפקה.
-    let pv, dateAdjusted = false; const requestedDate = opts.date || null; let usedDate = opts.date || null;
+    // חשבונית ירוקה מאפשרת תאריך עבר, אך לא מוקדם מהמסמך האחרון *מאותו סוג* (רצף כרונולוגי — שגיאה 2405).
+    // אם התאריך שנבחר מוקדם מדי, מרנדרים את התצוגה עם התאריך המוקדם ביותר המותר = תאריך המסמך האחרון מסוגו (לא "היום").
+    let pv, dateAdjusted = false; const requestedDate = opts.date || null; let usedDate = opts.date || null; let minDate = null;
     try { pv = await greenInvoice.previewDocument(opts); }
     catch (e) {
       if (/2405|עתידי|מוקדם|תאריך|\bdate\b/i.test(String(e.message || ''))) {
         const today = new Date().toISOString().slice(0, 10);
-        dateAdjusted = Boolean(requestedDate && requestedDate !== today);
-        usedDate = today; opts.date = today;
-        if (Array.isArray(opts.payment)) opts.payment = opts.payment.map(p => ({ ...p, date: (!p.date || p.date < today) ? today : p.date }));
+        try { minDate = await greenInvoice.latestDocumentDate(type); } catch { /* לא חוסם */ }
+        const fallback = (minDate && (!requestedDate || minDate > requestedDate)) ? minDate : today;
+        dateAdjusted = Boolean(requestedDate && requestedDate !== fallback);
+        usedDate = fallback; opts.date = fallback;
+        if (Array.isArray(opts.payment)) opts.payment = opts.payment.map(p => ({ ...p, date: (!p.date || p.date < fallback) ? fallback : p.date }));
         pv = await greenInvoice.previewDocument(opts);
       } else throw e;
     }
     let pdfBase64 = pv.pdfBase64 || null;
     if (!pdfBase64 && pv.url) { const fr = await fetch(pv.url, { redirect: 'follow' }).catch(() => null); if (fr && fr.ok) pdfBase64 = Buffer.from(await fr.arrayBuffer()).toString('base64'); }
     if (!pdfBase64) return json(res, { error: 'לא התקבלה תצוגה מקדימה', debug: pv.raw || null });
-    json(res, { ok: true, pdfBase64, dateAdjusted, requestedDate, usedDate });
+    json(res, { ok: true, pdfBase64, dateAdjusted, requestedDate, usedDate, minDate });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -1417,7 +1421,11 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
     json(res, { ok: true, doc });
   } catch (e) {
     const msg = String(e.message || '');
-    if (/2405|עתידי|מוקדם/i.test(msg)) return json(res, { error: 'חשבונית ירוקה לא מאפשרת להפיק מסמך מסוג זה בתאריך מוקדם מהמסמך האחרון מסוגו. בחר את תאריך היום או מאוחר יותר.' }, 400);
+    if (/2405|עתידי|מוקדם/i.test(msg)) {
+      let minDate = null; try { minDate = await greenInvoice.latestDocumentDate(Number(body.type)); } catch { /* לא חוסם */ }
+      const dmy = minDate ? minDate.split('-').reverse().join('/') : '';
+      return json(res, { error: `חשבונית ירוקה לא מאפשרת תאריך מוקדם מהמסמך האחרון מסוג זה${minDate ? ` (${dmy})` : ''}. בחר תאריך זה או מאוחר יותר.`, minDate }, 400);
+    }
     json(res, { error: msg }, 500);
   }
 });
