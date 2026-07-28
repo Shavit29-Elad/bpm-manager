@@ -1187,7 +1187,7 @@ window.derPreviewPdf = async (btn) => {
   if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות לתצוגה.</span>'; return; }
   let payment = [];
   if (e.needsPay) payment = e.payments.map(p => ({ type: Number(p.type), price: Number(p.price) || 0, date: (p.date || e.date), chequeNum: p.chequeNum || '', bankName: p.bankName || '', bankBranch: p.bankBranch || '', bankAccount: p.bankAccount || '' })).filter(p => Math.abs(p.price) > 0);
-  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type, clientName: e.clientName || null, items, description: e.description, date: e.date, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }, { statusEl: st, btn });
+  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type, clientName: e.clientName || null, items, description: e.description, date: e.date, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }, { statusEl: st, btn, onIssue: () => derConfirm(), issueLabel: `✓ הפק ${DOC_TYPE_SHORT[e.type] || 'מסמך'}` });
 };
 window.derConfirm = async () => {
   derSyncFromDom();
@@ -1305,8 +1305,10 @@ window.openCreditModal = (id, number, srcType) => {
     <div class="warn-banner" style="margin:8px 0">${twoStage
       ? 'זיכוי לחשבונית מס-קבלה מפיק <b>שני מסמכים</b> לביטול מלא:<br>1) חשבונית זיכוי — לביטול חלק החשבונית.<br>2) קבלה שלילית — לביטול חלק הקבלה (התקבול).'
       : 'תופק <b>חשבונית זיכוי</b> אחת, מקושרת כביטול של החשבונית המקורית.'}</div>
-    <label style="font-size:13px;display:block;margin-bottom:8px">תאריך הזיכוי
+    <label style="font-size:13px;display:block;margin-bottom:6px">תאריך הזיכוי
       <input id="creditDate" type="date" value="${todayIso()}" style="padding:6px 8px;margin-inline-start:6px"></label>
+    <label style="font-size:12px;display:inline-flex;gap:6px;align-items:center;cursor:pointer;margin-bottom:8px">
+      <input type="checkbox" id="creditSkipSeq"><span>אפשר תאריך מוקדם מהמסמך האחרון (הפקה מחוץ לרצף)</span></label>
     <p class="muted" style="font-size:12px">המסמכים ייווצרו בחשבונית ירוקה עם אותן שורות/סכומים כמו המקור, ולא ניתנים למחיקה.</p>
     <div id="creditStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
     <div class="modal-actions">
@@ -1319,12 +1321,13 @@ window.openCreditModal = (id, number, srcType) => {
 window.doCredit = async (id, srcType) => {
   const twoStage = Number(srcType) === 320;
   const date = (document.getElementById('creditDate')?.value || todayIso());
+  const skipDateValidation = !!document.getElementById('creditSkipSeq')?.checked;
   if (!confirm(twoStage
     ? 'להפיק חשבונית זיכוי + קבלה שלילית לביטול מלא של החשבונית?\nהפעולה יוצרת מסמכים אמיתיים בחשבונית ירוקה.'
     : 'להפיק חשבונית זיכוי לביטול החשבונית?\nהפעולה יוצרת מסמך אמיתי בחשבונית ירוקה.')) return;
   const btn = document.getElementById('creditBtn'); if (btn) btn.disabled = true;
   const st = document.getElementById('creditStatus'); if (st) st.innerHTML = '<span class="muted">מפיק זיכוי…</span>';
-  const r = await fetch(`/api/documents/${id}/credit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const r = await fetch(`/api/documents/${id}/credit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date, skipDateValidation }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
     const parts = [`✓ חשבונית זיכוי #${r.credit?.number || ''}`];
     if (r.negativeReceipt) parts.push(`קבלה שלילית #${r.negativeReceipt?.number || ''}`);
@@ -2523,6 +2526,7 @@ function renderInvoicePreviewModal() {
       <label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted)">תאריך המסמך
         <input type="date" value="${p.docDate || todayIso()}" oninput="_invPreview.docDate=this.value"/></label>
     </div>
+    <label style="font-size:12px;display:inline-flex;gap:6px;align-items:center;cursor:pointer;margin:0 0 8px"><input type="checkbox" ${p.skipSeq ? 'checked' : ''} onchange="_invPreview.skipSeq=this.checked"><span>אפשר תאריך מוקדם מהמסמך האחרון (הפקה מחוץ לרצף)</span></label>
     ${isReceipt ? `<div class="warn-banner" style="margin-bottom:10px">שים לב: ${DOC_TYPE_SHORT[+p.type]} מתעדת קבלת תשלום. תיווצר שורת תקבול של העברה בנקאית על מלוא הסכום.</div>` : ''}
     <table><thead><tr><th>פירוט</th><th>כמות</th><th>מחיר</th><th>סה"כ</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     <div style="margin-top:8px"><button class="btn ghost" onclick="invAddRow()">+ הוסף שורה</button></div>
@@ -2566,17 +2570,18 @@ window.generateInvoice = async (btn) => {
   if (p.sendEmail && !(p.email || '').trim()) { document.getElementById('invPvStatus').innerHTML = '<span style="color:var(--danger)">סימנת שליחה במייל אך לא הזנת כתובת.</span>'; return; }
   const emailNote = p.sendEmail ? `\nהמסמך יישלח במייל אל ${p.email}.` : '';
   if (!confirm(`להפיק ${typeName} על סך ${money(invTotals().total)} עבור ${p.client}?\nהמסמך ייווצר בחשבונית ירוקה ולא ניתן למחיקה (רק לזכות).${emailNote}`)) return;
-  btn.disabled = true; btn.textContent = 'מפיק…';
-  const st = document.getElementById('invPvStatus'); st.innerHTML = '<span class="muted">יוצר מסמך בחשבונית ירוקה…</span>';
+  if (btn) { btn.disabled = true; btn.textContent = 'מפיק…'; }
+  const st = document.getElementById('invPvStatus'); if (st) st.innerHTML = '<span class="muted">יוצר מסמך בחשבונית ירוקה…</span>';
   const doGen = (allowReinvoice) => fetch('/api/invoicing/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ companyId: state.company, eventIds: p.ids, clientName: p.client, clientId: p.clientId,
       type: p.type, items, description: p.subject, date: p.docDate || null,
-      sendEmail: p.sendEmail, email: p.sendEmail ? p.email : null, allowReinvoice }) }).then(r => r.json()).catch(() => ({ error: 'שגיאת רשת' }));
+      sendEmail: p.sendEmail, email: p.sendEmail ? p.email : null, allowReinvoice, skipDateValidation: !!p.skipSeq }) }).then(r => r.json()).catch(() => ({ error: 'שגיאת רשת' }));
   let r = await doGen(false);
   // אירועים שכבר חויבו — דורש אישור מפורש כדי להפיק חשבונית נוספת (מונע חיוב כפול)
-  if (r && r.alreadyInvoiced && confirm(`${r.error}\n\nלהפיק בכל זאת חשבונית נוספת לאותם אירועים?`)) { st.innerHTML = '<span class="muted">מפיק…</span>'; r = await doGen(true); }
-  btn.disabled = false; btn.textContent = '✓ הפק בחשבונית ירוקה';
+  if (r && r.alreadyInvoiced && confirm(`${r.error}\n\nלהפיק בכל זאת חשבונית נוספת לאותם אירועים?`)) { if (st) st.innerHTML = '<span class="muted">מפיק…</span>'; r = await doGen(true); }
+  if (btn) { btn.disabled = false; btn.textContent = '✓ הפק בחשבונית ירוקה'; }
   if (r.ok) {
+    const dpv = document.getElementById('designPvModal'); if (dpv) dpv.classList.add('hidden');
     document.getElementById('invPvModal').classList.add('hidden');
     showInvoiceDoneDialog(typeName, r.doc?.number, r.doc?.url);
     renderInvoicing($('#content'));
@@ -2584,14 +2589,26 @@ window.generateInvoice = async (btn) => {
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }
 };
+// סגירת חלונית התצוגה + הפעלת פעולת ההפקה שנשמרה (כפתור "הפק מסמך" בתצוגה המקדימה)
+window._designPvIssue = null;
+window._designPvDoIssue = () => { const f = window._designPvIssue; const m = document.getElementById('designPvModal'); if (m) m.classList.add('hidden'); if (typeof f === 'function') setTimeout(f, 60); };
+// HTML של כותרת חלונית התצוגה: כפתור "הפק מסמך" (אם סופקה פעולה) + כפתור סגירה
+function designPvHeader(onIssue, issueLabel) {
+  return `<div class="row-between" style="margin-bottom:8px"><h3 style="margin:0">תצוגה מקדימה — כפי שייראה בחשבונית ירוקה</h3>
+    <div style="display:flex;gap:8px;align-items:center">
+      ${onIssue ? `<button class="btn success" style="padding:3px 14px" onclick="_designPvDoIssue()">${issueLabel || '✓ הפק מסמך'}</button>` : ''}
+      <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('designPvModal').classList.add('hidden')">✕ סגור</button>
+    </div></div>`;
+}
 // עוזר כללי: מציג PDF מעוצב מ-endpoint תצוגה מקדימה כלשהו בתוך חלון צף
-async function openDesignedPdf(endpoint, body, { statusEl, btn, label } = {}) {
+async function openDesignedPdf(endpoint, body, { statusEl, btn, label, onIssue, issueLabel } = {}) {
   if (btn) { btn.disabled = true; btn.textContent = 'טוען…'; }
   if (statusEl) statusEl.innerHTML = '<span class="muted">טוען תצוגה מקדימה מעוצבת מחשבונית ירוקה…</span>';
   const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) { btn.disabled = false; btn.textContent = label || '👁 תצוגה מקדימה מעוצבת'; }
   if (r.ok && r.pdfBase64) {
     if (statusEl) statusEl.innerHTML = '';
+    window._designPvIssue = (typeof onIssue === 'function') ? onIssue : null;
     const m = document.getElementById('designPvModal') || (() => { const x = document.createElement('div'); x.id = 'designPvModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
     m.style.zIndex = '10050'; // מעל מודל התצוגה המקדימה של האתר כדי שלא יופיע מאחור
     m.classList.remove('hidden');
@@ -2600,10 +2617,10 @@ async function openDesignedPdf(endpoint, body, { statusEl, btn, label } = {}) {
       ? `<div class="warn-banner" style="margin-bottom:8px;font-size:12.5px">⚠ התאריך שנבחר (${dmy(r.requestedDate)}) מוקדם מהמסמך האחרון מסוגו — חשבונית ירוקה לא מאפשרת אותו (רצף כרונולוגי). אפשר להפיק החל מ-${dmy(r.usedDate)}; התצוגה מוצגת עם תאריך זה.</div>`
       : '';
     m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;overflow:hidden;display:flex;flex-direction:column">
-      <div class="row-between" style="margin-bottom:8px"><h3 style="margin:0">תצוגה מקדימה — כפי שייראה בחשבונית ירוקה</h3><button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('designPvModal').classList.add('hidden')">✕</button></div>
+      ${designPvHeader(onIssue, issueLabel)}
       ${dateNote}
       <iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:${r.dateAdjusted ? '72vh' : '80vh'};border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
-      <p class="muted" style="font-size:12px;margin-top:8px">תצוגה מקדימה בלבד — עדיין לא נוצר מסמך.</p>
+      <p class="muted" style="font-size:12px;margin-top:8px">תצוגה מקדימה בלבד — עדיין לא נוצר מסמך.${onIssue ? ' לחיצה על "הפק מסמך" תיצור אותו בחשבונית ירוקה.' : ''}</p>
     </div>`;
     m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
     return true;
@@ -2620,17 +2637,23 @@ window.showDesignedPreview = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'טוען…'; }
   if (st) st.innerHTML = '<span class="muted">טוען תצוגה מקדימה מעוצבת מחשבונית ירוקה…</span>';
   const r = await fetch('/api/invoicing/preview-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ eventIds: p.ids, items, type: p.type, description: p.subject, date: p.docDate || null, clientId: p.clientId, clientName: p.client }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    body: JSON.stringify({ eventIds: p.ids, items, type: p.type, description: p.subject, date: p.docDate || null, clientId: p.clientId, clientName: p.client, skipDateValidation: !!p.skipSeq }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) { btn.disabled = false; btn.textContent = '👁 תצוגה מקדימה מעוצבת'; }
   if (r.ok && r.pdfBase64) {
     if (st) st.innerHTML = '';
+    window._designPvIssue = () => generateInvoice();
     const m = document.getElementById('designPvModal') || (() => { const x = document.createElement('div'); x.id = 'designPvModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
     m.style.zIndex = '10050'; // מעל מודל התצוגה המקדימה של האתר כדי שלא יופיע מאחור
     m.classList.remove('hidden');
+    const dmy = (d) => { const m2 = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m2 ? `${m2[3]}/${m2[2]}/${m2[1]}` : (d || ''); };
+    const dateNote = r.dateAdjusted
+      ? `<div class="warn-banner" style="margin-bottom:8px;font-size:12.5px">⚠ התאריך שנבחר (${dmy(r.requestedDate)}) מוקדם מהמסמך האחרון מסוגו — חשבונית ירוקה לא מאפשרת אותו (רצף כרונולוגי). אפשר להפיק החל מ-${dmy(r.usedDate)}; התצוגה מוצגת עם תאריך זה. לחלופין סמן "אפשר תאריך מוקדם" כדי להפיק בכל זאת.</div>`
+      : '';
     m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;overflow:hidden;display:flex;flex-direction:column">
-      <div class="row-between" style="margin-bottom:8px"><h3 style="margin:0">תצוגה מקדימה — כפי שייראה בחשבונית ירוקה</h3><button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('designPvModal').classList.add('hidden')">✕</button></div>
-      <iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:80vh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
-      <p class="muted" style="font-size:12px;margin-top:8px">תצוגה מקדימה בלבד — עדיין לא הופק מסמך. סגור וחזור ל"✓ הפק בחשבונית ירוקה" כדי ליצור בפועל.</p>
+      ${designPvHeader(true, '✓ הפק בחשבונית ירוקה')}
+      ${dateNote}
+      <iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:${r.dateAdjusted ? '72vh' : '80vh'};border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+      <p class="muted" style="font-size:12px;margin-top:8px">תצוגה מקדימה בלבד — לחיצה על "הפק בחשבונית ירוקה" תיצור את המסמך בפועל.</p>
     </div>`;
     m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   } else if (st) st.innerHTML = `<span style="color:var(--danger)">לא ניתן להציג תצוגה מקדימה: ${escapeHtml(String(r.error || ''))}</span>`;
@@ -2702,6 +2725,7 @@ function nqSync() {
   const r = m.querySelector('.nq-remarks'); if (r) e.remarks = r.value;
   const em = m.querySelector('.nq-email'); if (em) e.email = em.value;
   const se = m.querySelector('.nq-sendemail'); if (se) e.sendEmail = se.checked;
+  const sk = m.querySelector('.nq-skipseq'); if (sk) e.skipSeq = sk.checked;
   m.querySelectorAll('.nq-item').forEach((row, i) => { if (!e.items[i]) return; e.items[i].description = row.querySelector('.nq-desc')?.value ?? e.items[i].description; e.items[i].quantity = row.querySelector('.nq-qty')?.value ?? e.items[i].quantity; e.items[i].price = row.querySelector('.nq-price')?.value ?? e.items[i].price; });
 }
 window.nqAddItem = () => { nqSync(); _nq.items.push({ description: '', quantity: 1, price: 0 }); renderNewQuote(); };
@@ -2734,6 +2758,7 @@ function renderNewQuote() {
       <label style="font-size:13px;flex:1;min-width:260px">לקוח <div style="display:flex;gap:6px;align-items:center;margin-top:3px"><select class="nq-client" onchange="nqClientChanged()" style="flex:1;padding:6px 8px">${clientOpts}</select><button type="button" class="btn ghost" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="openAddClientForQuote()">+ לקוח חדש</button></div></label>
       <label style="font-size:13px">תאריך <input class="nq-date" type="date" value="${e.date}" style="padding:6px 8px;margin-top:3px"></label>
     </div>
+    <label style="font-size:12px;display:inline-flex;gap:6px;align-items:center;cursor:pointer;margin:0 0 6px"><input type="checkbox" class="nq-skipseq" ${e.skipSeq ? 'checked' : ''}><span>אפשר תאריך מוקדם מהמסמך האחרון (הפקה מחוץ לרצף)</span></label>
     <label style="font-size:13px;display:block;margin-bottom:8px">נושא/כותרת <input class="nq-subject" value="${escAttr(e.subject)}" placeholder="נושא ההצעה" style="width:100%;padding:6px 8px;margin-top:3px"></label>
     <div style="font-weight:600;font-size:13px;margin:8px 0 4px">שורות</div>
     <div style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;font-size:11px;color:var(--muted);margin-bottom:3px"><span>תיאור</span><span style="text-align:center">כמות</span><span style="text-align:left">מחיר</span><span></span></div>
@@ -2758,7 +2783,8 @@ window.nqPreviewPdf = async (btn) => {
   const items = e.items.map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
   const st = document.getElementById('nqStatus');
   if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות לתצוגה.</span>'; return; }
-  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type || 10, clientId: e.clientId || null, clientName: e.clientName || null, items, description: e.subject, date: e.date, remarks: e.remarks }, { statusEl: st, btn });
+  const issueLabel = (e.type && e.type !== 10) ? `✓ צור ${DOC_TYPE_NAMES[e.type] || 'מסמך'}` : '✓ צור הצעת מחיר';
+  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type || 10, clientId: e.clientId || null, clientName: e.clientName || null, items, description: e.subject, date: e.date, remarks: e.remarks, skipDateValidation: !!e.skipSeq }, { statusEl: st, btn, onIssue: () => createNewQuote(), issueLabel });
 };
 window.createNewQuote = async (btn) => {
   nqSync(); const e = _nq;
@@ -2774,7 +2800,7 @@ window.createNewQuote = async (btn) => {
     if (!confirm(`ליצור ${docName} על סך ${money(total)} עבור ${e.clientName || 'הלקוח'}?\nהמסמך ייווצר בחשבונית ירוקה ולא ניתן למחיקה (רק לזכות).`)) return;
     if (btn) btn.disabled = true; if (st) st.innerHTML = `<span class="muted">יוצר ${docName}…</span>`;
     const payment = [{ type: 4, price: +total.toFixed(2), date: e.date }];
-    const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items, date: e.date, subject: e.subject, remarks: e.remarks, payment };
+    const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items, date: e.date, subject: e.subject, remarks: e.remarks, payment, skipDateValidation: !!e.skipSeq };
     const r = await fetch('/api/documents/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (btn) btn.disabled = false;
     if (r.ok) {
@@ -2789,7 +2815,7 @@ window.createNewQuote = async (btn) => {
   if (e.sendEmail && !e.email.trim()) { alert('סמנת "שלח במייל" — יש להזין כתובת מייל.'); return; }
   if (e.sendEmail && !confirm(`ליצור את הצעת המחיר ולשלוח אותה במייל ל-${e.email.trim()}?`)) return;
   if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">יוצר הצעת מחיר…</span>';
-  const body = { clientId: e.clientId || null, clientName: e.clientName || null, items, date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim() };
+  const body = { clientId: e.clientId || null, clientName: e.clientName || null, items, date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim(), skipDateValidation: !!e.skipSeq };
   const r = await fetch('/api/quotes/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
   if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''} · מוריד קובץ…</span>`; autoDownloadDoc(r.doc?.url); setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); }, 1300); }

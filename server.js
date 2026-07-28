@@ -365,14 +365,27 @@ add('POST', /^\/api\/invoicing\/preview-pdf$/, async (req, res, _p, _q, body) =>
       remarks: body.remarks || null,
       date: body.date || undefined,
     };
-    const pv = await greenInvoice.previewDocument(opts);
+    if (body.skipDateValidation) opts.skipDateValidation = true; // אישור הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
+    // חשבונית ירוקה מאפשרת תאריך עבר, אך לא מוקדם מהמסמך האחרון מסוגו (רצף) — אם נדחה, מרנדרים עם התאריך המותר הקרוב.
+    let pv, dateAdjusted = false; const requestedDate = opts.date || null; let usedDate = opts.date || null; let minDate = null;
+    try { pv = await greenInvoice.previewDocument(opts); }
+    catch (e) {
+      if (!opts.skipDateValidation && /2405|עתידי|מוקדם|תאריך|\bdate\b/i.test(String(e.message || ''))) {
+        const today = new Date().toISOString().slice(0, 10);
+        try { minDate = await greenInvoice.latestDocumentDate(type); } catch { /* לא חוסם */ }
+        const fallback = (minDate && (!requestedDate || minDate > requestedDate)) ? minDate : today;
+        dateAdjusted = Boolean(requestedDate && requestedDate !== fallback);
+        usedDate = fallback; opts.date = fallback;
+        pv = await greenInvoice.previewDocument(opts);
+      } else throw e;
+    }
     let pdfBase64 = pv.pdfBase64 || null;
     if (!pdfBase64 && pv.url) {
       const fr = await fetch(pv.url, { redirect: 'follow' }).catch(() => null);
       if (fr && fr.ok) pdfBase64 = Buffer.from(await fr.arrayBuffer()).toString('base64');
     }
     if (!pdfBase64) return json(res, { error: 'לא התקבלה תצוגה מקדימה', debug: pv.raw || null });
-    json(res, { ok: true, pdfBase64 });
+    json(res, { ok: true, pdfBase64, dateAdjusted, requestedDate, usedDate, minDate });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -447,6 +460,7 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
       description: body.description || subjectForEvents(evs),
       remarks: body.remarks || null,
       date: body.date || undefined,   // תאריך המסמך שהמשתמש בחר (ברירת מחדל: היום)
+      skipDateValidation: Boolean(body.skipDateValidation), // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
       sendEmail: Boolean(body.sendEmail), email: body.email || null,
     });
     for (const ev of evs) {
@@ -585,6 +599,7 @@ add('POST', /^\/api\/quotes\/create$/, async (req, res, _p, _q, body) => {
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim(), add: true };
     const opts = { type: 10, client, items, description: body.subject || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
     const doc = await greenInvoice.createDocument(opts);
     json(res, { ok: true, doc });
@@ -607,6 +622,7 @@ add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim(), add: true };
     const opts = { type, client, items, description: body.subject || body.description || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
         const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
@@ -1319,11 +1335,12 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
     })).filter(it => it.description && String(it.description).trim());
     if (!items.length) return json(res, { error: 'אין שורות במסמך המקור' }, 400);
     const date = body && body.date ? String(body.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const skipDateValidation = Boolean(body && body.skipDateValidation); // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     const baseDesc = `זיכוי עבור ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`;
 
     // שלב 1 — חשבונית זיכוי (330), מקושרת כביטול המסמך המקורי
     const credit = await greenInvoice.createDocument({
-      type: 330, client, items, date,
+      type: 330, client, items, date, skipDateValidation,
       description: src.description ? `${baseDesc} — ${src.description}` : baseDesc,
       linkedDocumentIds: [params[0]], linkType: 'cancel',
     });
@@ -1339,7 +1356,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
       return row;
     }).filter(p => Math.abs(p.price) > 0);
     const negativeReceipt = await greenInvoice.createDocument({
-      type: 400, client, items: [], payment: negPayment, date,
+      type: 400, client, items: [], payment: negPayment, date, skipDateValidation,
       description: `ביטול קבלה — חשבונית מס-קבלה #${src.number}`,
     });
     json(res, { ok: true, mode: 'two-stage', credit, negativeReceipt });
