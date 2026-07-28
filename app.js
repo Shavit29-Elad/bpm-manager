@@ -408,6 +408,7 @@ window.previewDoc = async (url, opts = {}) => {
   if (!url) return;
   let m = document.getElementById('docPreview');
   if (!m) { m = document.createElement('div'); m.id = 'docPreview'; m.className = 'modal'; document.body.appendChild(m); }
+  m.style.zIndex = '200'; // תמיד מעל כל מודל אחר שפתוח (שיוך מסמך, עריכת אירוע וכו')
   m.classList.remove('hidden');
   const extra = opts.extraActions || '';
   const shell = (inner) => `<div class="modal-card" style="width:min(920px,95vw);height:90vh;padding:0;display:flex;flex-direction:column;overflow:hidden">
@@ -4210,14 +4211,14 @@ function renderJobsReport() {
   const th = (t, w) => `<th style="border:1px solid #d8dced;padding:7px 8px;text-align:right;background:#eef0fb;font-size:12.5px;font-weight:700${w ? `;width:${w}` : ''}">${t}</th>`;
   const cell = (inner, opt = '', id = '') => `<td${id ? ` id="${id}"` : ''} style="border:1px solid #d8dced;padding:5px 8px;text-align:right;font-size:13px;${opt}">${inner}</td>`;
   const inTxt = (i, f) => `<input value="${String(_report.rows[i][f] || '').replace(/"/g, '&quot;')}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;width:100%;text-align:right;font:inherit;color:inherit;padding:2px 0"/>`;
-  const inNum = (i, f) => `<span style="display:inline-flex;align-items:center;gap:2px;width:100%"><input type="number" inputmode="decimal" value="${_report.rows[i][f] || 0}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;flex:1;min-width:0;text-align:right;font:inherit;color:inherit;padding:2px 0"/><span style="color:#8b93a7">₪</span></span>`;
+  const inNum = (i, f) => `<span style="display:inline-flex;align-items:center;gap:2px;width:100%"><input type="number" inputmode="decimal" value="${_report.rows[i][f] || 0}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;flex:1;min-width:0;text-align:right;font:inherit;color:inherit;padding:2px 0;-webkit-appearance:none;-moz-appearance:textfield;appearance:textfield;margin:0"/><span style="color:#8b93a7;flex:none">₪</span></span>`;
   const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
   const grand = sum('payment') + sum('bonus') + sum('food') + sum('travel');
   const head = `<div style="font-size:16px;font-weight:800;margin-bottom:2px">${escapeHtml(_report.empName)}</div>
     <div style="color:#6b7488;font-size:13px;margin-bottom:12px">דוח עבודות חודשי · ${monthLabelFromKey(_report.month)} · ${label}</div>`;
   if (!rows.length) { el.innerHTML = head + `<div class="empty">אין עבודות לחודש זה.</div>`; return; }
   el.innerHTML = head + `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:#fff">
-      <thead><tr>${th('#', '34px')}${th('אמן')}${th('תאריך', '92px')}${th('מיקום')}${th('תשלום', '96px')}${th('בונוס', '88px')}${th('אוכל', '88px')}${th('נסיעות', '88px')}${th('הערות')}</tr></thead>
+      <thead><tr>${th('#', '32px')}${th('אמן')}${th('תאריך', '86px')}${th('מיקום')}${th('תשלום', '72px')}${th('בונוס', '66px')}${th('אוכל', '64px')}${th('נסיעות', '70px')}${th('הערות')}</tr></thead>
       <tbody>
         ${rows.map((r, i) => `<tr${i % 2 ? ' style="background:#fafbff"' : ''}>${cell(i + 1)}${cell(inTxt(i, 'artist'))}${cell(dmy(r.date), 'white-space:nowrap')}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${cell(inNum(i, 'travel'))}${cell(inTxt(i, 'note'))}</tr>`).join('')}
         <tr>${cell('<b>סה"כ</b>', 'border-top:2px solid #c7cce0;text-align:center')}<td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0', 'sumPay')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0', 'sumBonus')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0', 'sumFood')}${cell('<b>' + _nisFmt(sum('travel')) + '</b>', 'border-top:2px solid #c7cce0', 'sumTravel')}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
