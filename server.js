@@ -420,6 +420,22 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// [DIAG זמני] בדיקת דגלי-עקיפה לתאריך מחוץ לרצף מול חשבונית ירוקה. body: { type, clientId, date, extra:{...} }
+add('POST', /^\/api\/_diag\/preview$/, async (req, res, _p, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'no creds' }, 400);
+  try {
+    const opts = {
+      type: Number(body.type) || 305,
+      client: body.clientId ? { id: body.clientId } : { name: 'לקוח' },
+      items: [{ description: 'בדיקה', quantity: 1, price: 100 }],
+      date: body.date,
+      _extra: body.extra || undefined,
+    };
+    await greenInvoice.previewDocument(opts);
+    json(res, { ok: true });
+  } catch (e) { json(res, { ok: false, error: String(e.message || '').slice(0, 400) }); }
+});
+
 // POST /api/invoicing/generate — יוצר מסמך בחשבונית ירוקה ומסמן את האירועים כמחויבים
 add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
   const db = load();
