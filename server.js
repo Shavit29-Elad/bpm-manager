@@ -473,6 +473,38 @@ add('GET', /^\/api\/invoicing\/recent-for-client$/, async (req, res, _p, q) => {
   } catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
+// GET /api/invoicing/linkable-docs?clientId=&clientName=&excludeEventId=&companyId=
+// מסמכים של הלקוח הנבחר בלבד (הצעת מחיר/עסקה/מס/מס-קבלה/זיכוי) שלא משוייכים לאף אירוע אחר — לשיוך לאירוע.
+add('GET', /^\/api\/invoicing\/linkable-docs$/, async (req, res, _p, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
+  try {
+    let clientId = q.clientId || null;
+    const name = (q.clientName || '').trim();
+    if (!clientId && name) {
+      const clients = await greenInvoice.listClients();
+      const c = clients.find(cl => (cl.name || '').trim() === name);
+      clientId = c?.id || null;
+    }
+    if (!clientId) return json(res, { docs: [] });
+    const all = await greenInvoice.clientDocuments(clientId);   // כבר של הלקוח בלבד
+    const types = [10, 300, 305, 320, 330]; // הצעת מחיר, עסקה, מס, מס-קבלה, זיכוי
+    // מסמכים שכבר משוייכים לאירוע אחר (מלבד האירוע הנוכחי) — נחסמים
+    const db = load();
+    const excludeId = q.excludeEventId || null;
+    const evs = q.companyId ? companyEvents(db, q.companyId) : (db.events || []);
+    const linkedElsewhere = new Set();
+    for (const e of evs) {
+      if (excludeId && e.id === excludeId) continue;
+      for (const d of (e.linkedDocs || [])) if (d && d.id != null) linkedElsewhere.add(String(d.id));
+      if (e.invoiceId != null) linkedElsewhere.add(String(e.invoiceId));
+    }
+    const docs = all.filter(d => types.includes(Number(d.type)) && !linkedElsewhere.has(String(d.id)))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .slice(0, 50);
+    json(res, { docs, clientId });
+  } catch (e) { json(res, { docs: [], error: e.message }, 500); }
+});
+
 // POST /api/invoicing/link { eventIds, docs:[{id,number,type}] } — שיוך אירועים לעד 4 מסמכים קיימים וסגירת האירוע
 add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
   const db = load();

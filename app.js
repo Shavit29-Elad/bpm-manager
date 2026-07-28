@@ -1192,6 +1192,13 @@ window.derConfirm = async () => {
       _derBankLink = null;
       setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); if (typeof _docActionRefresh === 'function') _docActionRefresh(); }, 1200);
     } else {
+      // הופק מתוך "שיוך מסמך לאירוע" (מהצעת מחיר) — נשייך את מסמך ההמשך שנוצר לאותו אירוע
+      if (window._deriveEventLink && r.doc) {
+        const evId = window._deriveEventLink; window._deriveEventLink = null;
+        await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ eventIds: [evId], docs: [{ id: r.doc.id, number: r.doc.number, type: e.type }] }) }).catch(() => {});
+        if (_evEditing && _evEditing.id === evId) { const ld = _evEditing.linkedDocs || []; if (!ld.some(x => String(x.id) === String(r.doc.id))) ld.push({ id: r.doc.id, number: r.doc.number, type: e.type }); _evEditing.linkedDocs = ld; }
+      }
       // סוגרים את העורך ומציגים חלונית עם 3 כפתורים: הורדה / שליחה למייל הלקוח / צפייה
       const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');
       showDocReadyPopup(r.doc, typeName);
@@ -1908,6 +1915,10 @@ async function openEventEditor(ev) {
       ${fld('מחיר תוספות ₪', `<input id="evPriceExtras" type="number" inputmode="decimal" value="${ev.priceExtras ?? ''}"/>`)}
       ${fld('שיוך ללקוח (לחיוב חודשי)', `<input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…"/>`)}
       <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted);grid-column:1/3"><input id="evNoInvoice" type="checkbox" ${ev.noInvoice ? 'checked' : ''}/> לא צריך להוציא חשבונית על אירוע זה (שולם במזומן / ללא חיוב)</label>
+      <div style="grid-column:1/3;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button type="button" class="btn ghost" style="padding:6px 12px;font-size:12.5px" onclick="openEventDocLink('${ev.id}', (document.getElementById('evClient')?.value||'').trim(), '')">🔗 שייך מסמך קיים</button>
+        <span class="muted" style="font-size:11.5px">הצעת מחיר / עסקה / מס / מס-קבלה / זיכוי — של הלקוח בלבד, שאינו משוייך לאירוע אחר</span>
+      </div>
       ${fld('הערת בונוס/תשלום (טקסט חופשי) — מוחל אוטומטית', `<div style="display:flex;gap:6px"><input id="evBonus" value="${v(ev.employeeBonusRaw)}" placeholder="למשל: בונוס 278 לשניהם · בונוס חצי יומית · יומית וחצי" style="flex:1" onchange="applyBonusNote(null,true)"/><button type="button" class="btn ghost" style="white-space:nowrap;padding:8px 12px" onclick="applyBonusNote(this)">✨ החל שוב</button></div>`, true)}
     </div>
     <datalist id="evClientList">${(_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
@@ -2175,9 +2186,8 @@ window.openLinkExisting = (safe, clientEnc, clientId) => {
 };
 // שיוך מסמכים לאירוע בודד — מלשונית האירועים (עמודת חיוב). רק מסמכים של אותו לקוח.
 window.linkForEvent = (eventId, clientEnc, clientId) => {
-  const client = decodeURIComponent(clientEnc);
-  if (!client && !clientId) { alert('יש לשייך את האירוע ללקוח לפני קישור מסמכים.'); return; }
-  openDocLinkModal([eventId], client, clientId, renderCombined);
+  // מודל שיוך עם בורר לקוח (גם אם לא הוגדר לקוח מראש) — מציג רק מסמכים של הלקוח שאינם משוייכים לאירוע אחר
+  openEventDocLink(eventId, decodeURIComponent(clientEnc || ''), clientId || '');
 };
 // שיוך מסמכים לאירוע בודד מתוך כרטיס החשבוניות (בלי תלות ב-checkbox) — מרענן את מסך החשבוניות
 window.linkOneEvent = (eventId, clientEnc, clientId) => {
@@ -2230,6 +2240,89 @@ window.linkConfirm = async () => {
     const done = (_linkCtx && _linkCtx.onDone) || renderInvoicing;
     setTimeout(() => { document.getElementById('docLinkModal').classList.add('hidden'); done($('#content')); }, 1200);
   } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
+};
+// ===== שיוך מסמך לאירוע (עם בורר לקוח) — מתוך העריכה או מכפתור עצמאי =====
+// תנאים: מסמך של הלקוח הנבחר בלבד + לא משוייך לאף אירוע אחר. סוגים: הצעת מחיר/עסקה/מס/מס-קבלה/זיכוי.
+let _evLinkCtx = null;
+window.openEventDocLink = async (eventId, presetClient, presetClientId) => {
+  _evLinkCtx = { eventId, clientId: presetClientId || '', client: presetClient || '' };
+  if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
+  let m = document.getElementById('evLinkModal');
+  if (!m) { m = document.createElement('div'); m.id = 'evLinkModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  const clientVal = presetClient || '';
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;overflow:auto">
+    <div class="row-between"><h3>🔗 שיוך מסמך לאירוע</h3></div>
+    <p class="muted" style="font-size:12.5px">בחר לקוח — יוצגו רק מסמכים של אותו לקוח (הצעת מחיר / עסקה / מס / מס-קבלה / זיכוי) שאינם משוייכים לאף אירוע אחר. אפשר לשייך הצעת מחיר ולהפיק ממנה מסמך המשך (עסקה / מס / מס-קבלה).</p>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted);max-width:360px">לקוח
+      <input id="evLinkClient" list="evLinkClientList" value="${escAttr(clientVal)}" placeholder="בחר / חפש לקוח…" onchange="evLinkLoadDocs()"/></label>
+    <datalist id="evLinkClientList">${(_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
+    <div id="evLinkBody" style="margin-top:12px"><div class="empty">בחר לקוח כדי לראות מסמכים ניתנים לשיוך.</div></div>
+    <div id="evLinkStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('evLinkModal').classList.add('hidden')">סגור</button>
+      <button class="btn success" id="evLinkConfirmBtn" disabled onclick="evLinkConfirm()">✓ שייך לאירוע</button>
+    </div>
+  </div>`;
+  if (clientVal) evLinkLoadDocs();
+};
+window.evLinkLoadDocs = async () => {
+  const client = (document.getElementById('evLinkClient')?.value || '').trim();
+  const box = document.getElementById('evLinkBody');
+  const btn = document.getElementById('evLinkConfirmBtn'); if (btn) { btn.disabled = true; btn.textContent = '✓ שייך לאירוע'; }
+  if (!client) { if (box) box.innerHTML = '<div class="empty">בחר לקוח כדי לראות מסמכים ניתנים לשיוך.</div>'; return; }
+  const cid = (_evClients || []).find(c => c.name === client)?.id || '';
+  _evLinkCtx.client = client; _evLinkCtx.clientId = cid;
+  if (box) box.innerHTML = '<div class="empty">טוען מסמכים…</div>';
+  const q = `clientName=${encodeURIComponent(client)}${cid ? `&clientId=${encodeURIComponent(cid)}` : ''}${_evLinkCtx.eventId ? `&excludeEventId=${encodeURIComponent(_evLinkCtx.eventId)}` : ''}`;
+  const r = await api(`/api/invoicing/linkable-docs?${q}`).catch(() => ({ docs: [] }));
+  const docs = r.docs || [];
+  if (!box) return;
+  box.innerHTML = docs.length
+    ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">סמן עד 4 מסמכים לשיוך:</div><div style="display:flex;flex-direction:column;gap:8px">${docs.map(d => evLinkDocRow(d)).join('')}</div>`
+    : `<div class="empty">אין מסמכים ניתנים לשיוך ללקוח זה (ייתכן שכולם כבר משוייכים לאירועים אחרים, או שאין מסמכים מהסוגים הרלוונטיים).</div>`;
+};
+function evLinkDocRow(d) {
+  const isQuote = Number(d.type) === 10;
+  const deriveBtn = isQuote ? `<button type="button" class="btn ghost" style="padding:3px 9px;font-size:11px;white-space:nowrap" onclick="event.preventDefault();event.stopPropagation();evLinkDeriveQuote('${escAttr(String(d.id))}','${escAttr(String(d.number))}')">↪ הפק מסמך המשך</button>` : '';
+  return `<label class="card" style="padding:9px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;cursor:pointer">
+      <input type="checkbox" class="evlinkchk" data-id="${escAttr(String(d.id))}" data-number="${escAttr(String(d.number))}" data-type="${d.type}" onchange="evLinkChkChanged(this)"/>
+      <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}</span>
+      <span style="white-space:nowrap">#${d.number}</span>
+      <span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
+      <span style="flex:1;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.description ? escapeHtml(d.description) : ''}</span>
+      <span style="font-weight:600;white-space:nowrap">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>
+      ${deriveBtn}
+    </label>`;
+}
+window.evLinkChkChanged = (el) => {
+  const checked = [...document.querySelectorAll('.evlinkchk:checked')];
+  if (checked.length > 4) { el.checked = false; alert('אפשר לשייך עד 4 מסמכים לאירוע.'); return; }
+  const btn = document.getElementById('evLinkConfirmBtn');
+  if (btn) { const n = document.querySelectorAll('.evlinkchk:checked').length; btn.disabled = n === 0; btn.textContent = n ? `✓ שייך ${n} מסמכים לאירוע` : '✓ שייך לאירוע'; }
+};
+window.evLinkConfirm = async () => {
+  if (!_evLinkCtx) return;
+  const docs = [...document.querySelectorAll('.evlinkchk:checked')].map(x => ({ id: x.dataset.id, number: x.dataset.number, type: +x.dataset.type }));
+  if (!docs.length) { alert('סמן לפחות מסמך אחד לשיוך.'); return; }
+  const st = document.getElementById('evLinkStatus'); if (st) st.innerHTML = '<span class="muted">משייך…</span>';
+  const r = await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventIds: [_evLinkCtx.eventId], docs }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) {
+    if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ שויכו ${r.docs} מסמכים לאירוע.</span>`;
+    if (_evEditing && _evEditing.id === _evLinkCtx.eventId) {
+      const ld = _evEditing.linkedDocs || [];
+      docs.forEach(d => { if (!ld.some(x => String(x.id) === String(d.id))) ld.push(d); });
+      _evEditing.linkedDocs = ld;
+    }
+    setTimeout(() => { const mm = document.getElementById('evLinkModal'); if (mm) mm.classList.add('hidden'); if (typeof renderCombined === 'function' && $('#content')) renderCombined($('#content')); }, 1100);
+  } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
+};
+// הפקת מסמך המשך מהצעת מחיר משוייכת — פותח את העורך העשיר; מסמך ההמשך שייווצר יקושר אוטומטית לאירוע
+window.evLinkDeriveQuote = (quoteId, quoteNumber) => {
+  window._deriveEventLink = (_evLinkCtx && _evLinkCtx.eventId) || null;
+  const mm = document.getElementById('evLinkModal'); if (mm) mm.classList.add('hidden');
+  openDerive(quoteId, quoteNumber, 10, 'followup');
 };
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
