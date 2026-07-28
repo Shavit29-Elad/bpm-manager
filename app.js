@@ -1136,8 +1136,15 @@ function renderDeriveEditor() {
     <div class="row-between"><h3>${e.linked ? 'מסמך המשך' : 'שכפול'} — ${typeName}</h3><span class="muted">${escapeHtml(e.clientName)}</span></div>
 
     <div style="margin:8px 0 4px">
-      <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" ${e.lastDocDate ? `min="${e.lastDocDate}"` : ''} onchange="derDateChanged(this.value)" style="padding:6px 8px;margin-inline-start:6px"></label>
-      ${e.lastDocDate ? `<div class="muted" style="margin-top:6px;font-size:12px;line-height:1.5">אפשר להפיק גם בתאריך עבר — עד ${fmtDate(e.lastDocDate)} (${escapeHtml(e.lastDocTypeName || '')} האחרון/ה). חשבונית ירוקה אינה מאפשרת תאריך מוקדם מזה, כדי לשמור על רצף כרונולוגי של המסמכים.</div>` : ''}
+      <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" ${(!e.allowBackdate && e.lastDocDate) ? `min="${e.lastDocDate}"` : ''} onchange="derDateChanged(this.value)" style="padding:6px 8px;margin-inline-start:6px"></label>
+      ${e.lastDocDate ? `<div style="margin-top:6px;font-size:12px;line-height:1.5">
+        <div class="muted">ניתן להפיק בתאריך עבר עד ${fmtDate(e.lastDocDate)} (${escapeHtml(e.lastDocTypeName || '')} האחרון/ה).</div>
+        <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;margin-top:4px">
+          <input type="checkbox" ${e.allowBackdate ? 'checked' : ''} onchange="derToggleBackdate(this.checked)">
+          <span>אפשר תאריך מוקדם מזה (הפקה מחוץ לרצף)</span>
+        </label>
+        ${e.allowBackdate ? `<div class="warn-banner" style="margin-top:6px;font-size:11.5px">⚠ המסמך יופק בתאריך מוקדם מ${escapeHtml(e.lastDocTypeName || 'המסמך')} האחרון/ה — כלומר מחוץ לרצף הכרונולוגי. באחריותך; מומלץ להתייעץ עם רו״ח.</div>` : ''}
+      </div>` : ''}
     </div>
     <label style="font-size:13px;display:block;margin-bottom:8px">נושא/כותרת <input class="der-descr" value="${escAttr(e.description)}" placeholder="נושא המסמך" style="width:100%;padding:6px 8px;margin-top:3px"></label>
 
@@ -1180,7 +1187,7 @@ window.derPreviewPdf = async (btn) => {
   if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות לתצוגה.</span>'; return; }
   let payment = [];
   if (e.needsPay) payment = e.payments.map(p => ({ type: Number(p.type), price: Number(p.price) || 0, date: (p.date || e.date), chequeNum: p.chequeNum || '', bankName: p.bankName || '', bankBranch: p.bankBranch || '', bankAccount: p.bankAccount || '' })).filter(p => Math.abs(p.price) > 0);
-  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type, clientName: e.clientName || null, items, description: e.description, date: e.date, remarks: e.remarks, payment }, { statusEl: st, btn });
+  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type, clientName: e.clientName || null, items, description: e.description, date: e.date, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }, { statusEl: st, btn });
 };
 window.derConfirm = async () => {
   derSyncFromDom();
@@ -1200,7 +1207,7 @@ window.derConfirm = async () => {
   const btn = document.getElementById('derConfirmBtn'); if (btn) { btn.disabled = true; }
   const st = document.getElementById('derEditStatus'); if (st) st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
   const r = await fetch(`/api/documents/${e.id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: e.type, linked: e.linked, items, date: e.date, description: e.description, remarks: e.remarks, payment }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    body: JSON.stringify({ type: e.type, linked: e.linked, items, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
     if (_derBankLink && r.doc) {
       // הופק מתוך "צור הכנסה" בבנק — קישור לתנועה + הורדה + סגירה (התנהגות קיימת)

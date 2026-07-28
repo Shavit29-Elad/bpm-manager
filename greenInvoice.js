@@ -116,7 +116,7 @@ const PAYMENT_REQUIRED = new Set([320, 400, 405]);
 
 // בונה גוף מסמך. items = [{ description, quantity, price }].
 // client = { id? , name, taxId?, emails? } — אם יש id משתמשים בו (נמנע כפילות לקוח).
-function documentBody({ client, items, type, remarks, description, dueDate, date, payment, sendEmail, email, linkedDocumentIds, linkType, _extra }) {
+function documentBody({ client, items, type, remarks, description, dueDate, date, payment, sendEmail, email, linkedDocumentIds, linkType, skipDateValidation }) {
   const total = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
   const body = {
     type,
@@ -157,8 +157,9 @@ function documentBody({ client, items, type, remarks, description, dueDate, date
     body.payment = payment && payment.length ? payment
       : [{ date: body.date, type: 4 /* העברה בנקאית */, price: total, currency: 'ILS' }];
   }
-  // passthrough לשדות נוספים (למשל דגל לאישור תאריך מחוץ לרצף) — נבדק/מוגדר ע"י ה-caller
-  if (_extra && typeof _extra === 'object') Object.assign(body, _extra);
+  // דילוג על ולידציית תאריך של חשבונית ירוקה — מאפשר להפיק מסמך בתאריך מוקדם מהמסמך האחרון מסוגו
+  // (מקביל לסימון "הפקה מחוץ לרצף" בממשק של חשבונית ירוקה). באחריות המשתמש.
+  if (skipDateValidation) body.skipDateValidation = true;
   return body;
 }
 

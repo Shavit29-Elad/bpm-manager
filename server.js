@@ -388,6 +388,7 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim() };
     const opts = { type, client, items, description: body.description || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true; // אישור הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
         const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
@@ -418,22 +419,6 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
     if (!pdfBase64) return json(res, { error: 'לא התקבלה תצוגה מקדימה', debug: pv.raw || null });
     json(res, { ok: true, pdfBase64, dateAdjusted, requestedDate, usedDate, minDate });
   } catch (e) { json(res, { error: e.message }, 500); }
-});
-
-// [DIAG זמני] בדיקת דגלי-עקיפה לתאריך מחוץ לרצף מול חשבונית ירוקה. body: { type, clientId, date, extra:{...} }
-add('POST', /^\/api\/_diag\/preview$/, async (req, res, _p, _q, body) => {
-  if (!greenInvoice.haveCredentials()) return json(res, { error: 'no creds' }, 400);
-  try {
-    const opts = {
-      type: Number(body.type) || 305,
-      client: body.clientId ? { id: body.clientId } : { name: 'לקוח' },
-      items: [{ description: 'בדיקה', quantity: 1, price: 100 }],
-      date: body.date,
-      _extra: body.extra || undefined,
-    };
-    await greenInvoice.previewDocument(opts);
-    json(res, { ok: true });
-  } catch (e) { json(res, { ok: false, error: String(e.message || '').slice(0, 400) }); }
 });
 
 // POST /api/invoicing/generate — יוצר מסמך בחשבונית ירוקה ומסמן את האירועים כמחויבים
@@ -1412,6 +1397,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
       remarks: body.remarks != null ? body.remarks : (src.remarks || null),
     };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true; // אישור הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון מסוגו)
     // תקבולים ערוכים (למסמכי מס-קבלה/קבלה) — סוג + סכום + תאריך + פרטים
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
@@ -1440,7 +1426,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
     if (/2405|עתידי|מוקדם/i.test(msg)) {
       let minDate = null; try { minDate = await greenInvoice.latestDocumentDate(Number(body.type)); } catch { /* לא חוסם */ }
       const dmy = minDate ? minDate.split('-').reverse().join('/') : '';
-      return json(res, { error: `חשבונית ירוקה לא מאפשרת תאריך מוקדם מהמסמך האחרון מסוג זה${minDate ? ` (${dmy})` : ''}. בחר תאריך זה או מאוחר יותר.`, minDate }, 400);
+      return json(res, { error: `חשבונית ירוקה חוסמת תאריך מוקדם מהמסמך האחרון מסוג זה${minDate ? ` (${dmy})` : ''}. בחר תאריך זה או מאוחר יותר, או סמן "אפשר תאריך מוקדם מזה (הפקה מחוץ לרצף)" כדי להפיק בכל זאת.`, minDate }, 400);
     }
     json(res, { error: msg }, 500);
   }
