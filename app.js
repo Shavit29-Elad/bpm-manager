@@ -893,7 +893,9 @@ function followupRemarks(srcType, srcNumber) {
 }
 window._docActionRefresh = null; // פונקציית רענון אחרי פעולת מסמך (לפי המסך שממנו נפתח)
 window.openDerive = (id, number, srcType, mode, fromClient) => {
-  window._docActionRefresh = fromClient ? window.reloadClientDocs : null;
+  window._docActionRefresh = fromClient === 'quotes'
+    ? (() => { const c = document.getElementById('content'); if (c && state.tab === 'quotes') renderQuotes(c); })
+    : (fromClient ? window.reloadClientDocs : null);
   const followup = mode === 'followup';
   const opts = followup ? (FOLLOWUP_FOR[srcType] || []) : DUPLICATE_TYPES;
   let m = document.getElementById('derModal');
@@ -1181,19 +1183,55 @@ window.derConfirm = async () => {
   const r = await fetch(`/api/documents/${e.id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: e.type, linked: e.linked, items, date: e.date, description: e.description, remarks: e.remarks, payment }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
-    if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
-    autoDownloadDoc(r.doc?.url);
-    // אם הופק מתוך "צור הכנסה" בבנק — לקשר את המסמך שנוצר לתנועת הבנק כדי שתסומן כמותאמת
     if (_derBankLink && r.doc) {
+      // הופק מתוך "צור הכנסה" בבנק — קישור לתנועה + הורדה + סגירה (התנהגות קיימת)
+      if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
+      autoDownloadDoc(r.doc?.url);
       const entry = { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: t.total, url: r.doc.url || null };
       await linkDocToBankTx(_derBankLink.txId, entry);
       _derBankLink = null;
+      setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); if (typeof _docActionRefresh === 'function') _docActionRefresh(); }, 1200);
+    } else {
+      // סוגרים את העורך ומציגים חלונית עם 3 כפתורים: הורדה / שליחה למייל הלקוח / צפייה
+      const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');
+      showDocReadyPopup(r.doc, typeName);
+      loadOpenInvoices && loadOpenInvoices();
+      if (typeof _docActionRefresh === 'function') _docActionRefresh();
     }
-    setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); if (typeof _docActionRefresh === 'function') _docActionRefresh(); }, 1400);
   } else {
     if (btn) btn.disabled = false;
     if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }
+};
+// חלונית אחרי הפקת מסמך: הורדה למחשב / שליחה למייל הלקוח / צפייה
+function showDocReadyPopup(doc, typeName) {
+  if (!doc) return;
+  const url = String(doc.url || '').replace(/'/g, '%27');
+  let m = document.getElementById('docReadyModal');
+  if (!m) { m = document.createElement('div'); m.id = 'docReadyModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(400px,94vw);text-align:center">
+    <h3 style="margin-top:0">✓ ${escapeHtml(typeName)} #${doc.number || ''} הופק</h3>
+    <p class="muted" style="font-size:13px;margin:2px 0 12px">מה תרצה לעשות עכשיו?</p>
+    <div style="display:flex;flex-direction:column;gap:9px">
+      ${url ? `<button class="btn primary" onclick="autoDownloadDoc('${url}')">⬇ הורדה למחשב</button>` : ''}
+      <button class="btn success" onclick="docReadySend('${doc.id}',this)">✉️ שליחה למייל הלקוח</button>
+      ${url ? `<button class="btn ghost" onclick="previewDoc('${url}')">👁 צפייה</button>` : ''}
+    </div>
+    <div id="docReadyStatus" style="font-size:12.5px;min-height:16px;margin-top:10px"></div>
+    <div class="modal-actions" style="margin-top:8px"><button class="btn ghost" onclick="document.getElementById('docReadyModal').classList.add('hidden')">סגור</button></div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+}
+window.docReadySend = async (docId, btn) => {
+  const st = document.getElementById('docReadyStatus');
+  if (btn) btn.disabled = true;
+  if (st) st.innerHTML = '<span class="muted">שולח למייל הלקוח…</span>';
+  const r = await fetch(`/api/documents/${docId}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) btn.disabled = false;
+  if (st) st.innerHTML = r.ok
+    ? `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml((r.sentTo || []).join(', '))}</span>`
+    : `<span style="color:var(--danger)">${escapeHtml(String(r.error || 'שליחה נכשלה — ייתכן שאין מייל שמור ללקוח'))}</span>`;
 };
 // קישור מסמך שהופק לתנועת בנק (מוסיף ל-matchedInvoices ומעדכן את השורה)
 async function linkDocToBankTx(txId, entry, sourceId) {
@@ -2550,7 +2588,7 @@ window.saveNewClientForQuote = async (btn) => {
 };
 function quoteRow(d) {
   const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
-  const follow = `<button class="btn primary" style="padding:2px 9px;font-size:12px" onclick="quoteFollowup('${d.id}','${encodeURIComponent(d.clientName || '')}','${d.number}')">הפק מסמך המשך</button>`;
+  const follow = `<button class="btn primary" style="padding:2px 9px;font-size:12px" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',10,'followup','quotes')">הפק מסמך המשך</button>`;
   const dup = `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="openDuplicateQuote('${d.id}')">שכפול ⧉</button>`;
   const close = `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="quoteClose('${d.id}','${d.number}')">סגור הצעה</button>`;
   const send = `<button class="btn ghost" style="padding:2px 9px;font-size:12px;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number))}','הצעת מחיר','${encodeURIComponent(d.clientName || '')}')">✉️ שלח</button>`;
