@@ -5033,6 +5033,7 @@ window.openLinkModal = async (txId) => {
     <label id="linkCreditsWrap" style="display:${_linkMode === 'clients' ? 'flex' : 'none'};gap:6px;align-items:center;font-size:12px;margin:2px 0 4px;cursor:pointer"><input type="checkbox" id="linkCreditsChk" ${_linkIncludeCredits ? 'checked' : ''} onchange="toggleLinkCredits(this.checked)"> כלול גם חשבוניות זיכוי וקבלות שליליות</label>
     <label style="display:flex;gap:6px;align-items:center;font-size:12px;margin:2px 0 4px;cursor:pointer"><input type="checkbox" id="linkInclUsedChk" ${_linkInclUsed ? 'checked' : ''} onchange="toggleLinkInclUsed(this.checked)"> אפשר לבחור גם חשבוניות שכבר משויכות לתנועה אחרת</label>
     <input id="linkClientSearch" placeholder="חפש שם, או מספר מסמך…" style="width:100%;margin:6px 0" oninput="onLinkSearch(this.value)"/>
+    ${(tx && tx.direction !== 'debit') ? `<button class="btn ghost" style="margin:2px 0 6px;padding:4px 12px;font-size:12.5px" onclick="linkShowOpenDocs()">📂 הצג את כל המסמכים הפתוחים (עסקה / מס / מס-קבלה)</button>` : ''}
     <div id="linkNumResults"></div>
     <div id="linkClients" style="max-height:170px;overflow:auto"></div>
     <div id="linkDocs" style="margin-top:10px"></div>
@@ -5183,6 +5184,31 @@ function linkedDocIds() {
   for (const d of _linkSel) ids.add(d.id);                      // מה שכבר נבחר כאן
   return { ids, recs, used };
 }
+// הצגת כל המסמכים הפתוחים (עסקה / מס / מס-קבלה) לשיוך — בלי לבחור לקוח מראש
+window.linkShowOpenDocs = async () => {
+  const box = document.getElementById('linkDocs'); if (!box) return;
+  const nb = document.getElementById('linkNumResults'); if (nb) nb.innerHTML = '';
+  const si = document.getElementById('linkClientSearch'); if (si) si.value = ''; _linkQuery = '';
+  box.innerHTML = '<div class="muted" style="font-size:13px">טוען מסמכים פתוחים…</div>';
+  const r = await api('/api/open-invoices').catch(() => ({ docs: [] }));
+  _linkClientDocs = []; _linkClientName = 'כל המסמכים הפתוחים';
+  const { ids, used } = linkedDocIds();
+  const docs = (r.docs || []).filter(d => [300, 305, 320].includes(Number(d.type)) && _docFromMay26(d) && !ids.has(d.id));
+  docs.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const esc = (u) => String(u).replace(/'/g, '%27');
+  const rows = docs.map(d => {
+    const amt = Number(d.amount != null ? d.amount : (d.amountIncVat != null ? d.amountIncVat : d.amountDue)) || 0;
+    const j = jenc({ id: d.id, number: d.number, type: d.type, clientName: d.clientName, amount: amt, date: d.date, url: d.url, kind: 'income' });
+    const usedTag = used.has(String(d.id)) ? ' <span class="tag" style="background:#fde7ef;color:var(--danger);font-size:10px">כבר משויך לתנועה אחרת</span>' : '';
+    const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('${esc(d.url)}')">👁</button>` : '';
+    return `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)">
+      <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${fmtDate(d.date)} · ${money(amt)}${usedTag}</span>
+      ${pv}<button class="btn primary" style="padding:2px 12px;font-size:11px" onclick="linkAdd('${j}')">הוסף</button></div>`;
+  }).join('');
+  box.innerHTML = `<b style="font-size:13px">כל המסמכים הפתוחים (${docs.length}):</b>
+    <div class="muted" style="font-size:11.5px;margin:2px 0 4px">חשבון עסקה / חשבונית מס / מס-קבלה שטרם נסגרו — מאי 2026 והלאה.</div>
+    ${rows || '<div class="muted" style="font-size:13px;margin-top:4px">אין מסמכים פתוחים.</div>'}`;
+};
 // מציג את מסמכי הלקוח (הכנסה) או הספק (הוצאה) שלא שויכו עדיין — מסונן גם לפי מספר/תיאור בחיפוש
 window.renderLinkDocs = () => {
   const box = document.getElementById('linkDocs'); if (!box) return;
