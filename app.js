@@ -441,6 +441,16 @@ window.closePreview = () => {
   const m = document.getElementById('docPreview'); if (m) m.classList.add('hidden');
   if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
 };
+// פתיחת מסמך משוייך לפי מזהה בחלונית תצוגה מקדימה (עם אפשרות צפייה והורדה) — לא הורדה אוטומטית
+window.previewLinkedDoc = async (docId, el) => {
+  if (!docId) return;
+  const prev = el ? el.style.opacity : '';
+  if (el) { el.style.opacity = '0.5'; el.style.pointerEvents = 'none'; }
+  const r = await api(`/api/documents/${docId}/url`).catch(() => ({}));
+  if (el) { el.style.opacity = prev; el.style.pointerEvents = ''; }
+  if (r && r.url) previewDoc(r.url);
+  else alert('לא ניתן לפתוח את המסמך' + (r && r.error ? ': ' + r.error : ''));
+};
 
 // הורדה אוטומטית של קובץ מסמך (PDF) מיד אחרי הפקה, בלי ניווט ובלי לחיצה
 function autoDownloadDoc(url) {
@@ -1821,8 +1831,8 @@ function invoiceCell(e) {
   const isReceipt = docs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(e.invoiceType));
   if (isBilledEv(e) || docs.length) {
     const tags = docs.length
-      ? docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה במסמך" onclick="openLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ')
-      : `<span class="tag invoiced" ${e.invoiceId ? `style="cursor:pointer;text-decoration:underline" title="צפייה במסמך" onclick="openLinkedDoc('${e.invoiceId}',this)"` : ''}>שויך · ${DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}${e.invoiceId ? ' 👁' : ''}</span>`;
+      ? docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה / הורדה" onclick="previewLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ')
+      : `<span class="tag invoiced" ${e.invoiceId ? `style="cursor:pointer;text-decoration:underline" title="צפייה / הורדה" onclick="previewLinkedDoc('${e.invoiceId}',this)"` : ''}>שויך · ${DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}${e.invoiceId ? ' 👁' : ''}</span>`;
     const status = isReceipt
       ? `<div style="font-size:10.5px;color:var(--accent2);font-weight:700">שולם ✓</div>`
       : `<div style="font-size:10.5px;color:var(--muted)">ממתין לקבלה</div>`;
@@ -2212,7 +2222,7 @@ function invClientCard(g) {
   // מציגים אירועים שטרם "שולמו" (אין להם קבלה/מס-קבלה). אירוע עם קבלה מוסר לגמרי.
   const openEvents = g.events.filter(ev => !ev.paid);
   const rows = openEvents.map(ev => {
-    const tags = (ev.linkedDocs || []).map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה במסמך" onclick="openLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ');
+    const tags = (ev.linkedDocs || []).map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה / הורדה" onclick="previewLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ');
     return `<tr>
       <td style="text-align:center"><input type="checkbox" class="invchk" data-c="${safe}" value="${ev.id}" ${ev.billed ? '' : 'checked'}/></td>
       <td>${ddmy(ev.date)}</td>
@@ -2423,16 +2433,36 @@ window.evLinkDeriveQuote = (quoteId, quoteNumber) => {
   // מודל העורך העשיר צריך להופיע מעל מודל עריכת האירוע שנשאר פתוח מאחור
   setTimeout(() => { const dm = document.getElementById('derModal'); if (dm) dm.style.zIndex = '95'; const rm = document.getElementById('docReadyModal'); if (rm) rm.style.zIndex = '100'; }, 30);
 };
-// תצוגת מסמכים משויכים לאירוע (בעורך + אירועים מאושרים) עם צפייה — לחיצה פותחת/מורידה את המסמך
+// תצוגת מסמכים משויכים לאירוע (בעורך) — צפייה בצד + פעולות: מסמך המשך / שכפול / זיכוי
 function evLinkedDocsHtml(ev) {
   const docs = Array.isArray(ev && ev.linkedDocs) ? ev.linkedDocs : [];
   if (!docs.length) return '<span class="muted" style="font-size:11.5px">אין מסמכים משויכים לאירוע.</span>';
-  return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-    <span class="muted" style="font-size:11.5px">מסמכים משויכים:</span>
-    ${docs.map(d => `<span class="tag invoiced" style="font-size:11px;cursor:pointer;text-decoration:underline" title="לחץ לצפייה בתוך העורך" onclick="evPreviewDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join('')}
-    <span class="muted" style="font-size:11px">· לחיצה על מסמך מציגה אותו כאן בצד</span>
+  const bs = 'padding:2px 8px;font-size:10.5px;white-space:nowrap';
+  return `<div style="display:flex;flex-direction:column;gap:6px">
+    <span class="muted" style="font-size:11.5px">מסמכים משויכים (לחיצה על המסמך = צפייה בצד):</span>
+    ${docs.map(d => {
+      const tp = Number(d.type);
+      const acts = [];
+      if (FOLLOWUP_FOR[tp] && FOLLOWUP_FOR[tp].length) acts.push(`<button class="btn ghost" style="${bs}" onclick="evDocFollowup('${d.id}','${escAttr(String(d.number))}',${tp})">מסמך המשך ↪</button>`);
+      acts.push(`<button class="btn ghost" style="${bs}" onclick="evDocDuplicate('${d.id}','${escAttr(String(d.number))}',${tp})">שכפול ⧉</button>`);
+      if (tp === 305 || tp === 320) acts.push(`<button class="btn ghost" style="${bs};color:var(--danger)" onclick="evDocCredit('${d.id}','${escAttr(String(d.number))}',${tp})">זיכוי ⊖</button>`);
+      return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span class="tag invoiced" style="font-size:11px;cursor:pointer;text-decoration:underline" title="צפייה בתוך העורך" onclick="evPreviewDoc('${d.id}',this)">${DOC_TYPE_SHORT[tp] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>
+        ${acts.join('')}
+      </div>`;
+    }).join('')}
   </div>`;
 }
+// פעולות מסמך מתוך עורך האירוע — המודלים חייבים להופיע מעל מודל העריכה
+function evRaiseActionModals() {
+  setTimeout(() => { ['derModal', 'creditModal', 'docReadyModal'].forEach((id, i) => { const m = document.getElementById(id); if (m) m.style.zIndex = String(95 + i); }); }, 30);
+}
+// מסמך המשך ממסמך משוייך — מסמך ההמשך שייווצר יקושר אוטומטית לאותו אירוע
+window.evDocFollowup = (id, number, type) => { window._deriveEventLink = (_evEditing && _evEditing.id) || null; openDerive(id, number, type, 'followup'); evRaiseActionModals(); };
+// שכפול מסמך (עותק זהה, לא מקושר למקור)
+window.evDocDuplicate = (id, number, type) => { openDerive(id, number, type, 'duplicate'); evRaiseActionModals(); };
+// זיכוי (חשבונית מס → זיכוי; מס-קבלה → זיכוי + קבלה שלילית, מטופל ב-openCreditModal)
+window.evDocCredit = (id, number, type) => { openCreditModal(id, number, type); evRaiseActionModals(); };
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
   if (!ids.length) { alert('לא נבחרו אירועים לחיוב'); return; }
