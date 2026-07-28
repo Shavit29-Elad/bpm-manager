@@ -1935,7 +1935,9 @@ async function openEventEditor(ev) {
   m.classList.remove('hidden');
   const v = (x) => x == null ? '' : String(x).replace(/"/g, '&quot;');
   const fld = (lbl, inner, span) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted)${span ? ';grid-column:1/3' : ''}">${lbl}${inner}</label>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(700px,95vw);max-height:90vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" id="evModalCard" style="width:min(720px,95vw);max-height:90vh;overflow:hidden;padding:0;display:flex;flex-direction:row">
+    <div id="evDocPane" style="display:none;flex:1 1 52%;min-width:0;max-height:90vh;flex-direction:column;border-inline-end:1px solid var(--line);background:#f4f5fb"></div>
+    <div id="evFormPane" style="flex:1 1 100%;min-width:0;overflow:auto;max-height:90vh;padding:26px">
     <h3>עריכת אירוע${ev.gcalId && ev.source === 'calendar' ? ' <span class="muted" style="font-size:12px;font-weight:400">(מיומן גוגל)</span>' : ''}</h3>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">
       ${fld('תאריך', `<input id="evDate" type="date" value="${ev.date || ''}"/>`)}
@@ -1981,10 +1983,52 @@ async function openEventEditor(ev) {
         <button class="btn primary" onclick="saveEvent(this)">סגור</button>
       </div>
     </div>
+    </div>
   </div>`;
   const card = m.querySelector('.modal-card'); if (card) card.addEventListener('change', window.autoSaveEvent);
   m.onclick = (e) => { if (e.target === m) { saveEventCore(); m.classList.add('hidden'); renderCombined($('#content')); } };
 }
+// תצוגת מסמך משוייך בתוך העורך: מרחיב את החלונית ומציג את המסמך מימין, העריכה נשארת משמאל
+window.evPreviewDoc = async (docId, el) => {
+  const pane = document.getElementById('evDocPane'); const cardEl = document.getElementById('evModalCard');
+  if (!pane || !cardEl) return;
+  // הדגשת המסמך הפעיל
+  document.querySelectorAll('#evLinkedDocs .tag.doc-active').forEach(t => t.classList.remove('doc-active'));
+  if (el) { el.classList.add('doc-active'); el.style.outline = '2px solid var(--accent)'; }
+  cardEl.style.width = 'min(1180px,98vw)';
+  pane.style.display = 'flex';
+  pane.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);background:#fff">
+      <b style="font-size:13.5px">תצוגת מסמך</b>
+      <button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="evClosePreview()">✕ סגור תצוגה</button>
+    </div><div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען מסמך…</div>`;
+  try {
+    const r = await api(`/api/documents/${docId}/url`).catch(() => ({}));
+    const url = r && r.url;
+    if (!url) throw new Error('no url');
+    const resp = await fetch(url); const blob = await resp.blob();
+    const t = (blob.type || resp.headers.get('content-type') || '').toLowerCase();
+    if (_evDocBlobUrl) URL.revokeObjectURL(_evDocBlobUrl);
+    _evDocBlobUrl = URL.createObjectURL(blob);
+    const cur = document.getElementById('evDocPane'); if (!cur || cur.style.display === 'none') return;
+    const body = t.startsWith('image')
+      ? `<div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;background:#fff;padding:6px"><img src="${_evDocBlobUrl}" style="max-width:100%;max-height:100%;object-fit:contain" alt="מסמך"/></div>`
+      : `<iframe src="${_evDocBlobUrl}#toolbar=1" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
+    cur.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);background:#fff">
+        <b style="font-size:13.5px">תצוגת מסמך</b>
+        <div style="display:flex;gap:8px"><a href="${url}" target="_blank" class="btn ghost" style="padding:4px 11px;font-size:12px;text-decoration:none">הורדה ↓</a><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="evClosePreview()">✕ סגור תצוגה</button></div>
+      </div>${body}`;
+  } catch {
+    const cur = document.getElementById('evDocPane'); if (cur) cur.querySelector('.empty') && (cur.querySelector('.empty').textContent = 'לא ניתן להציג את המסמך כאן.');
+  }
+};
+window.evClosePreview = () => {
+  const pane = document.getElementById('evDocPane'); const cardEl = document.getElementById('evModalCard');
+  if (pane) { pane.style.display = 'none'; pane.innerHTML = ''; }
+  if (cardEl) cardEl.style.width = 'min(720px,95vw)';
+  document.querySelectorAll('#evLinkedDocs .tag.doc-active').forEach(t => { t.classList.remove('doc-active'); t.style.outline = ''; });
+  if (_evDocBlobUrl) { URL.revokeObjectURL(_evDocBlobUrl); _evDocBlobUrl = null; }
+};
+let _evDocBlobUrl = null;
 window.deleteEvent = async () => {
   if (!_evEditing) return;
   if (!confirm('למחוק את האירוע מרשימת האירועים שלך? (לא נמחק מיומן גוגל)')) return;
@@ -2385,7 +2429,8 @@ function evLinkedDocsHtml(ev) {
   if (!docs.length) return '<span class="muted" style="font-size:11.5px">אין מסמכים משויכים לאירוע.</span>';
   return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
     <span class="muted" style="font-size:11.5px">מסמכים משויכים:</span>
-    ${docs.map(d => `<span class="tag invoiced" style="font-size:11px;cursor:pointer;text-decoration:underline" title="צפייה במסמך" onclick="openLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join('')}
+    ${docs.map(d => `<span class="tag invoiced" style="font-size:11px;cursor:pointer;text-decoration:underline" title="לחץ לצפייה בתוך העורך" onclick="evPreviewDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join('')}
+    <span class="muted" style="font-size:11px">· לחיצה על מסמך מציגה אותו כאן בצד</span>
   </div>`;
 }
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {
