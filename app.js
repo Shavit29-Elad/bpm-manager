@@ -2390,11 +2390,12 @@ window.openEventDocLink = async (eventId, presetClient, presetClientId) => {
   const clientVal = presetClient || '';
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;overflow:auto">
     <div class="row-between"><h3>🔗 שיוך מסמך לאירוע</h3></div>
-    <p class="muted" style="font-size:12.5px">בחר לקוח — יוצגו רק מסמכים של אותו לקוח (הצעת מחיר / עסקה / מס / מס-קבלה / זיכוי) שאינם משוייכים לאף אירוע אחר. אפשר לשייך הצעת מחיר ולהפיק ממנה מסמך המשך (עסקה / מס / מס-קבלה).</p>
+    <p class="muted" style="font-size:12.5px">בחר לקוח — יוצגו מסמכים של אותו לקוח (הצעת מחיר / עסקה / מס / מס-קבלה / זיכוי). כברירת מחדל מוצגים רק פתוחים שאינם משויכים לאירוע אחר; אפשר לסמן להצגת סגורים ו/או מסמכים שכבר משויכים לאירוע אחר. אפשר לשייך הצעת מחיר ולהפיק ממנה מסמך המשך.</p>
     <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
       <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted);max-width:360px;flex:1;min-width:220px">לקוח
         <input id="evLinkClient" list="evLinkClientList" value="${escAttr(clientVal)}" placeholder="בחר / חפש לקוח…" onchange="evLinkLoadDocs()"/></label>
       <label id="evLinkClosedWrap" style="display:none;gap:7px;align-items:center;font-size:12.5px;color:var(--muted);padding-bottom:6px"><input type="checkbox" id="evLinkClosed" onchange="evLinkLoadDocs()"/> הצג גם מסמכים סגורים</label>
+      <label id="evLinkLinkedWrap" style="display:none;gap:7px;align-items:center;font-size:12.5px;color:var(--muted);padding-bottom:6px"><input type="checkbox" id="evLinkShowLinked" onchange="evLinkLoadDocs()"/> הצג גם מסמכים המשויכים לאירוע אחר</label>
     </div>
     <datalist id="evLinkClientList">${(_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('')}</datalist>
     <div id="evLinkBody" style="margin-top:12px"><div class="empty">בחר לקוח כדי לראות מסמכים ניתנים לשיוך.</div></div>
@@ -2415,17 +2416,24 @@ window.evLinkLoadDocs = async () => {
   _evLinkCtx.client = client; _evLinkCtx.clientId = cid;
   if (box) box.innerHTML = '<div class="empty">טוען מסמכים…</div>';
   const includeClosed = document.getElementById('evLinkClosed')?.checked ? '&includeClosed=1' : '';
-  const q = `clientName=${encodeURIComponent(client)}${cid ? `&clientId=${encodeURIComponent(cid)}` : ''}${_evLinkCtx.eventId ? `&excludeEventId=${encodeURIComponent(_evLinkCtx.eventId)}` : ''}${includeClosed}`;
+  const includeLinked = document.getElementById('evLinkShowLinked')?.checked ? '&includeLinked=1' : '';
+  const q = `clientName=${encodeURIComponent(client)}${cid ? `&clientId=${encodeURIComponent(cid)}` : ''}${_evLinkCtx.eventId ? `&excludeEventId=${encodeURIComponent(_evLinkCtx.eventId)}` : ''}${includeClosed}${includeLinked}`;
   const r = await api(`/api/invoicing/linkable-docs?${q}`).catch(() => ({ docs: [] }));
   const docs = r.docs || [];
   // חושפים את "הצג סגורים" רק אם יש מסמכים סגורים ללקוח (או כשהתיבה כבר מסומנת)
   const closedWrap = document.getElementById('evLinkClosedWrap');
   if (closedWrap) closedWrap.style.display = ((r.closedCount || 0) > 0 || document.getElementById('evLinkClosed')?.checked) ? 'flex' : 'none';
+  // חושפים את "הצג משויכים לאירוע אחר" רק אם יש כאלה (או כשהתיבה מסומנת)
+  const linkedWrap = document.getElementById('evLinkLinkedWrap');
+  if (linkedWrap) linkedWrap.style.display = ((r.linkedCount || 0) > 0 || document.getElementById('evLinkShowLinked')?.checked) ? 'flex' : 'none';
   if (!box) return;
-  const closedNote = document.getElementById('evLinkClosed')?.checked ? '' : ((r.closedCount || 0) > 0 ? ` <span class="muted">(${r.closedCount} מסמכים סגורים מוסתרים — סמן "הצג סגורים")</span>` : '');
+  const notes = [];
+  if (!document.getElementById('evLinkClosed')?.checked && (r.closedCount || 0) > 0) notes.push(`${r.closedCount} סגורים מוסתרים`);
+  if (!document.getElementById('evLinkShowLinked')?.checked && (r.linkedCount || 0) > 0) notes.push(`${r.linkedCount} משויכים לאירוע אחר מוסתרים`);
+  const note = notes.length ? ` <span class="muted">(${notes.join(' · ')})</span>` : '';
   box.innerHTML = docs.length
-    ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">סמן עד 4 מסמכים פתוחים לשיוך:${closedNote}</div><div style="display:flex;flex-direction:column;gap:8px">${docs.map(d => evLinkDocRow(d)).join('')}</div>`
-    : `<div class="empty">אין מסמכים פתוחים ניתנים לשיוך ללקוח זה${(r.closedCount || 0) > 0 ? ' (יש מסמכים סגורים — סמן "הצג גם מסמכים סגורים")' : ' (ייתכן שכולם כבר משוייכים לאירועים אחרים)'}.</div>`;
+    ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">סמן עד 4 מסמכים לשיוך:${note}</div><div style="display:flex;flex-direction:column;gap:8px">${docs.map(d => evLinkDocRow(d)).join('')}</div>`
+    : `<div class="empty">אין מסמכים ניתנים לשיוך ללקוח זה${(r.closedCount || 0) > 0 ? ' · יש סגורים (סמן "הצג גם מסמכים סגורים")' : ''}${(r.linkedCount || 0) > 0 ? ' · יש מסמכים המשויכים לאירוע אחר (סמן "הצג גם מסמכים המשויכים לאירוע אחר")' : ''}.</div>`;
 };
 function evLinkDocRow(d) {
   const isQuote = Number(d.type) === 10;
@@ -2438,6 +2446,7 @@ function evLinkDocRow(d) {
       <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}</span>
       <span style="white-space:nowrap">#${d.number}</span>
       ${closed ? '<span class="tag" style="background:rgba(120,120,120,.18);color:var(--muted)">סגור</span>' : ''}
+      ${(Array.isArray(d.linkedTo) && d.linkedTo.length) ? `<span class="tag" style="background:rgba(230,150,20,.18);color:var(--warn)" title="משויך כבר לאירוע: ${escAttr(d.linkedTo.join(', '))}">⚠ משויך: ${escapeHtml(d.linkedTo.join(', '))}</span>` : ''}
       <span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
       <span style="flex:1;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.description ? escapeHtml(d.description) : ''}</span>
       <span style="font-weight:600;white-space:nowrap">${money(d.amountDue != null ? d.amountDue : d.amount)}</span>

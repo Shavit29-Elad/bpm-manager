@@ -528,26 +528,34 @@ add('GET', /^\/api\/invoicing\/linkable-docs$/, async (req, res, _p, q) => {
     if (!clientId) return json(res, { docs: [] });
     const all = await greenInvoice.clientDocuments(clientId);   // כבר של הלקוח בלבד
     const types = [10, 300, 305, 320, 330]; // הצעת מחיר, עסקה, מס, מס-קבלה, זיכוי
-    // מסמכים שכבר משוייכים לאירוע אחר (מלבד האירוע הנוכחי) — נחסמים
+    // מיפוי מסמך → שמות האירועים שכבר משוייך אליהם (מלבד האירוע הנוכחי)
     const db = load();
     const excludeId = q.excludeEventId || null;
     const evs = q.companyId ? companyEvents(db, q.companyId) : (db.events || []);
-    const linkedElsewhere = new Set();
+    const evLabel = (e) => e.artist || e.title || e.clientName || e.date || e.id;
+    const linkedMap = new Map(); // docId → Set(labels)
+    const addLink = (docId, lbl) => { const k = String(docId); if (!linkedMap.has(k)) linkedMap.set(k, new Set()); linkedMap.get(k).add(lbl); };
     for (const e of evs) {
       if (excludeId && e.id === excludeId) continue;
-      for (const d of (e.linkedDocs || [])) if (d && d.id != null) linkedElsewhere.add(String(d.id));
-      if (e.invoiceId != null) linkedElsewhere.add(String(e.invoiceId));
+      const lbl = evLabel(e);
+      for (const d of (e.linkedDocs || [])) if (d && d.id != null) addLink(d.id, lbl);
+      if (e.invoiceId != null) addLink(e.invoiceId, lbl);
     }
     const includeClosed = q.includeClosed === '1' || q.includeClosed === 'true';
-    const relevant = all.filter(d => types.includes(Number(d.type)) && !linkedElsewhere.has(String(d.id)));
+    const includeLinked = q.includeLinked === '1' || q.includeLinked === 'true';
+    let pool = all.filter(d => types.includes(Number(d.type)));
+    // כמה מסמכים משוייכים כבר לאירוע אחר (לשם הצגת/הסתרת האפשרות)
+    const linkedCount = pool.filter(d => linkedMap.has(String(d.id))).length;
+    if (!includeLinked) pool = pool.filter(d => !linkedMap.has(String(d.id)));
+    // הוספת שמות האירועים שהמסמך כבר משויך אליהם (לתצוגה)
+    pool = pool.map(d => { const s = linkedMap.get(String(d.id)); return s ? { ...d, linkedTo: [...s] } : d; });
     // ברירת מחדל: רק מסמכים בסטטוס פתוח (status 0). "הצג סגורים" → כולל גם סגורים.
-    const openOnly = relevant.filter(d => Number(d.status) === 0);
-    const docs = (includeClosed ? relevant : openOnly)
+    const openOnly = pool.filter(d => Number(d.status) === 0);
+    const docs = (includeClosed ? pool : openOnly)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       .slice(0, 60);
-    // כמה מסמכים סגורים קיימים (כדי להציג/להסתיר את אפשרות "הצג סגורים")
-    const closedCount = relevant.length - openOnly.length;
-    json(res, { docs, clientId, closedCount });
+    const closedCount = pool.length - openOnly.length;
+    json(res, { docs, clientId, closedCount, linkedCount });
   } catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
