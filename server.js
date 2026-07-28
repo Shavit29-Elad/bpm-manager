@@ -482,7 +482,16 @@ add('GET', /^\/api\/invoicing\/linkable-docs$/, async (req, res, _p, q) => {
     const name = (q.clientName || '').trim();
     if (!clientId && name) {
       const clients = await greenInvoice.listClients();
-      const c = clients.find(cl => (cl.name || '').trim() === name);
+      // התאמה סלחנית: שם עסק לעיתים נשמר חתוך/עם בע"מ/מרכאות שונות. מנסים מדויק ואז מנורמל ואז תת-מחרוזת.
+      const norm = (s) => String(s || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[."'׳״,()\-]/g, ' ').replace(/\s+/g, ' ').trim();
+      const nn = norm(name);
+      let c = clients.find(cl => (cl.name || '').trim() === name);            // מדויק
+      if (!c) c = clients.find(cl => norm(cl.name) === nn);                    // מנורמל מדויק
+      if (!c && nn.length >= 4) {                                             // תת-מחרוזת (שם חתוך)
+        const cand = clients.filter(cl => { const cn = norm(cl.name); return cn && (cn.includes(nn) || nn.includes(cn)); });
+        if (cand.length === 1) c = cand[0];
+        else if (cand.length > 1) c = cand.sort((a, b) => Math.abs(norm(a.name).length - nn.length) - Math.abs(norm(b.name).length - nn.length))[0];
+      }
       clientId = c?.id || null;
     }
     if (!clientId) return json(res, { docs: [] });
