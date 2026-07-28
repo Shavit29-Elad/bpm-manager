@@ -2249,6 +2249,7 @@ window.openEventDocLink = async (eventId, presetClient, presetClientId) => {
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
   let m = document.getElementById('evLinkModal');
   if (!m) { m = document.createElement('div'); m.id = 'evLinkModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.style.zIndex = '90'; // מעל מודל עריכת האירוע (z-index:50)
   m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const clientVal = presetClient || '';
@@ -2323,6 +2324,8 @@ window.evLinkDeriveQuote = (quoteId, quoteNumber) => {
   window._deriveEventLink = (_evLinkCtx && _evLinkCtx.eventId) || null;
   const mm = document.getElementById('evLinkModal'); if (mm) mm.classList.add('hidden');
   openDerive(quoteId, quoteNumber, 10, 'followup');
+  // מודל העורך העשיר צריך להופיע מעל מודל עריכת האירוע שנשאר פתוח מאחור
+  setTimeout(() => { const dm = document.getElementById('derModal'); if (dm) dm.style.zIndex = '95'; const rm = document.getElementById('docReadyModal'); if (rm) rm.style.zIndex = '100'; }, 30);
 };
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
