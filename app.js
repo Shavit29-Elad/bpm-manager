@@ -1367,6 +1367,24 @@ function monthlyBreakdown(docs) {
 
 // ---- לקוחות (רשימה עם חיפוש; לחיצה מציגה את כל מסמכי הלקוח) ----
 const DOC_TYPE_NAMES = { 10: 'הצעת מחיר', 100: 'הזמנה', 200: 'תעודת משלוח', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 330: 'חשבונית זיכוי', 400: 'קבלה', 405: 'קבלה על תרומה' };
+// חיפוש חופשי בטבלת המסמכים (לפי התקופה שנבחרה) — לקוח / סוג / מספר / תיאור / תאריך / סכום
+let _clientDocsAll = [];
+let _clientDocsText = '';
+let _clientDocsOpts = {};
+function docMatchesText(d, qq) {
+  if (!qq) return true;
+  const hay = [d.clientName, DOC_TYPE_SHORT[d.type], DOC_TYPE_NAMES[d.type], d.number, d.date, d.description, d.amountIncVat, d.amountExVat, d.amount]
+    .map(x => String(x == null ? '' : x)).join(' ').toLowerCase();
+  return qq.toLowerCase().split(/\s+/).filter(Boolean).every(t => hay.includes(t));
+}
+window.clientDocsFilter = (v) => {
+  _clientDocsText = v;
+  const qq = (v || '').trim();
+  const filtered = _clientDocsAll.filter(d => docMatchesText(d, qq));
+  const w = document.getElementById('docsTableWrap'); if (w) w.innerHTML = docsTable(filtered, _clientDocsOpts);
+  const cnt = document.getElementById('docsCount');
+  if (cnt) cnt.textContent = `${filtered.length} מסמכים${qq ? ` (מתוך ${_clientDocsAll.length})` : ''} · סה"כ ${money(filtered.reduce((s, d) => s + (Number(d.amountIncVat) || 0), 0))}`;
+};
 async function renderClients(c) {
   initPeriod();
   c.innerHTML = `<div class="panel"><div class="empty">טוען מסמכים ולקוחות…</div></div>`;
@@ -1378,14 +1396,16 @@ async function renderClients(c) {
   }
   const docs = d.docs || [];
   const label = periodLabel();
+  _clientDocsAll = docs; _clientDocsText = ''; _clientDocsOpts = { showClient: true };
   c.innerHTML = `
     <div class="panel">
       <div class="row-between">
-        <div><h2>מסמכים — ${label}</h2><span class="muted">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
+        <div><h2>מסמכים — ${label}</h2><span class="muted" id="docsCount">${docs.length} מסמכים · סה"כ ${money(d.income)}</span></div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${docTypeSelect()}${periodControls()}</div>
       </div>
+      <div style="margin-top:10px"><input id="docsSearch" type="search" placeholder="🔎 חיפוש חופשי במסמכים — לקוח, מספר, תיאור, סוג, סכום…" oninput="clientDocsFilter(this.value)" style="width:100%;max-width:440px;padding:7px 10px;border:1px solid var(--line);border-radius:8px"></div>
       ${state.period !== 'month' ? `<div style="margin-top:12px">${monthlyBreakdown(docs)}</div>` : ''}
-      <div style="margin-top:12px">${docsTable(docs, { showClient: true })}</div>
+      <div id="docsTableWrap" style="margin-top:12px">${docsTable(docs, { showClient: true })}</div>
     </div>
     <div class="panel">
     <div class="row-between"><div><h2>לקוחות</h2><span class="muted">${state.clientsList.length} לקוחות</span></div>
@@ -2677,21 +2697,48 @@ function showInvoiceDoneDialog(typeName, number, url) {
 }
 
 // ---- הצעות מחיר ----
+let _quotesAll = [];
+let _quotesText = '';
+// התאמת הצעה לטקסט חיפוש חופשי (לקוח / מספר / תיאור / תאריך / סכום) — כל המילים חייבות להימצא
+function quoteMatchesText(d, qq) {
+  if (!qq) return true;
+  const hay = [d.clientName, d.description, d.number, d.date, d.amount, d.amountIncVat, d.amountExVat]
+    .map(x => String(x == null ? '' : x)).join(' ').toLowerCase();
+  return qq.toLowerCase().split(/\s+/).filter(Boolean).every(tok => hay.includes(tok));
+}
+function quotesTableAndSummary() {
+  const qq = (_quotesText || '').trim();
+  const docs = _quotesAll.filter(d => quoteMatchesText(d, qq));
+  const total = docs.reduce((s, d) => s + (Number(d.amountIncVat ?? d.amount) || 0), 0);
+  const totalEx = docs.reduce((s, d) => s + (Number(d.amountExVat ?? d.amount) || 0), 0);
+  const summary = `${docs.length} הצעות${qq ? ` (מתוך ${_quotesAll.length})` : ''} · ${money(totalEx)} ללא מע"מ · ${money(total)} כולל מע"מ. סמן הצעות וסגור אותן יחד, או הפק מכל אחת מסמך המשך.`;
+  const table = docs.length
+    ? `<div style="overflow-x:auto"><table><thead><tr><th style="width:34px"><input type="checkbox" onchange="quoteToggleAll(this.checked)"/></th><th>תאריך</th><th>מספר</th><th>לקוח</th><th>תיאור</th><th>סכום ללא מע"מ</th><th>סכום כולל מע"מ</th><th></th></tr></thead>
+      <tbody>${docs.map(quoteRow).join('')}</tbody>
+      <tfoot><tr style="background:var(--panel2)"><td colspan="5"><b>סה"כ</b></td><td><b>${money(totalEx)}</b></td><td><b>${money(total)}</b></td><td></td></tr></tfoot></table></div>`
+    : `<div class="empty">${qq ? 'אין הצעות התואמות את החיפוש' : 'אין הצעות מחיר פתוחות 👌'}</div>`;
+  return { summary, table };
+}
+// סינון חי לפי הקלדה — מעדכן רק את הטבלה והסיכום, בלי לטעון מחדש ובלי לאבד פוקוס בשדה החיפוש
+window.quoteFilter = (v) => {
+  _quotesText = v;
+  const { summary, table } = quotesTableAndSummary();
+  const s = document.getElementById('quotesSummary'); if (s) s.textContent = summary;
+  const w = document.getElementById('quotesTableWrap'); if (w) w.innerHTML = table;
+};
 async function renderQuotes(c) {
   c.innerHTML = `<div class="panel"><div class="empty">טוען הצעות מחיר…</div></div>`;
   const r = await api('/api/open-quotes').catch(() => ({ docs: [], error: 'שגיאת טעינה' }));
-  const docs = r.docs || [];
-  const total = docs.reduce((s, d) => s + (Number(d.amountIncVat ?? d.amount) || 0), 0);
-  const totalEx = docs.reduce((s, d) => s + (Number(d.amountExVat ?? d.amount) || 0), 0);
+  _quotesAll = r.docs || [];
+  _quotesText = '';
+  const { summary, table } = quotesTableAndSummary();
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>הצעות מחיר פתוחות</h2>
-      <span class="muted">${docs.length} הצעות · ${money(totalEx)} ללא מע"מ · ${money(total)} כולל מע"מ. סמן הצעות וסגור אותן יחד, או הפק מכל אחת מסמך המשך.</span></div>
+      <span class="muted" id="quotesSummary">${summary}</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" onclick="openNewQuote()">+ הצעת מחיר חדשה</button><button class="btn ghost" id="closeSelBtn" onclick="quoteCloseSelected()" disabled>🔒 סגור נבחרות</button></div></div>
     ${r.error ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(r.error)}</div>` : ''}
-    ${docs.length ? `<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th style="width:34px"><input type="checkbox" onchange="quoteToggleAll(this.checked)"/></th><th>תאריך</th><th>מספר</th><th>לקוח</th><th>תיאור</th><th>סכום ללא מע"מ</th><th>סכום כולל מע"מ</th><th></th></tr></thead>
-      <tbody>${docs.map(quoteRow).join('')}</tbody>
-      <tfoot><tr style="background:var(--panel2)"><td colspan="5"><b>סה"כ</b></td><td><b>${money(totalEx)}</b></td><td><b>${money(total)}</b></td><td></td></tr></tfoot></table></div>`
-      : `<div class="empty">אין הצעות מחיר פתוחות 👌</div>`}
+    <div style="margin-top:10px"><input id="quoteSearch" type="search" placeholder="🔎 חיפוש חופשי — לקוח, מספר, תיאור, סכום…" oninput="quoteFilter(this.value)" style="width:100%;max-width:440px;padding:7px 10px;border:1px solid var(--line);border-radius:8px"></div>
+    <div id="quotesTableWrap" style="margin-top:12px">${table}</div>
   </div>`;
 }
 // ---- הצעת מחיר חדשה ----
