@@ -1961,7 +1961,7 @@ async function openEventEditor(ev) {
       ${fld('מסך לד — מחיר למ׳ ₪', `<input id="evLedPrice" type="number" inputmode="decimal" value="${ev.ledPricePerMeter ?? ''}"/>`)}
       ${fld('מסך לד — כמות (מ׳)', `<input id="evLedMeters" type="number" inputmode="decimal" value="${ev.ledMeters ?? ''}"/>`)}
       ${fld('מחיר תוספות ₪', `<input id="evPriceExtras" type="number" inputmode="decimal" value="${ev.priceExtras ?? ''}"/>`)}
-      ${fld('שיוך ללקוח (לחיוב חודשי)', `<input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…"/>`)}
+      ${fld('שיוך ללקוח (לחיוב חודשי)', `<div style="display:flex;gap:6px;align-items:center"><input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…" style="flex:1"/><button type="button" class="btn ghost" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="openAddClientForEvent()">➕ לקוח חדש</button></div>`)}
       <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted);grid-column:1/3"><input id="evNoInvoice" type="checkbox" ${ev.noInvoice ? 'checked' : ''}/> לא צריך להוציא חשבונית על אירוע זה (שולם במזומן / ללא חיוב)</label>
       <div style="grid-column:1/3;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button type="button" class="btn ghost" style="padding:6px 12px;font-size:12.5px" onclick="openEventDocLink('${ev.id}', (document.getElementById('evClient')?.value||'').trim(), '')">🔗 שייך מסמך קיים</button>
@@ -2817,6 +2817,54 @@ window.saveNewClientForQuote = async (btn) => {
   if (_nq && newId) { _nq.clientId = String(newId); _nq.clientName = newName; if (email) _nq.email = email; }
   st.innerHTML = '<span style="color:var(--accent2)">✓ הלקוח נוסף ונבחר</span>';
   setTimeout(() => { document.getElementById('addClientModal').classList.add('hidden'); if (typeof renderNewQuote === 'function') renderNewQuote(); }, 700);
+};
+// הוספת לקוח חדש מתוך עורך האירוע — נוצר בחשבונית ירוקה ומשוייך לאירוע הנוכחי
+window.openAddClientForEvent = () => {
+  const m = document.getElementById('addClientEvModal') || (() => { const x = document.createElement('div'); x.id = 'addClientEvModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  m.style.zIndex = '95'; // מעל מודל עריכת האירוע
+  m.classList.remove('hidden');
+  const fld = (lbl, inner) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);margin-bottom:10px">${lbl}${inner}</label>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)">
+    <h3>הוספת לקוח חדש לחשבונית ירוקה</h3>
+    <p class="muted" style="font-size:12.5px;margin:4px 0 12px">הלקוח ייווצר בחשבונית ירוקה ויְשוּיֵּך אוטומטית לאירוע זה.</p>
+    ${fld('שם לקוח *', `<input id="ecName" placeholder="שם הלקוח / העסק"/>`)}
+    ${fld('מס\' עסק / ח.פ', `<input id="ecTax" dir="ltr" placeholder="ח.פ / ע.מ / ת\"ז"/>`)}
+    ${fld('מייל', `<input id="ecEmail" type="email" dir="ltr" placeholder="mail@example.com"/>`)}
+    ${fld('שם איש קשר', `<input id="ecContact" placeholder="שם איש קשר"/>`)}
+    ${fld('מספר פלאפון', `<input id="ecPhone" type="tel" dir="ltr" placeholder="050-0000000"/>`)}
+    <div id="ecStatus" style="font-size:13px;min-height:18px;margin:4px 0"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('addClientEvModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="saveNewClientForEvent(this)">שמור ושייך</button>
+    </div>
+  </div>`;
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  setTimeout(() => document.getElementById('ecName')?.focus(), 60);
+};
+window.saveNewClientForEvent = async (btn) => {
+  const g = (id) => document.getElementById(id);
+  const st = g('ecStatus');
+  const name = g('ecName').value.trim();
+  if (!name) { st.innerHTML = '<span style="color:var(--danger)">חובה להזין שם לקוח.</span>'; return; }
+  const email = g('ecEmail').value.trim();
+  const body = { name, taxId: g('ecTax').value.trim() || null, contactPerson: g('ecContact').value.trim() || null, phone: g('ecPhone').value.trim() || null, emails: [email].filter(Boolean) };
+  btn.disabled = true; btn.textContent = 'שומר…'; st.innerHTML = '<span class="muted">יוצר לקוח בחשבונית ירוקה…</span>';
+  const r = await fetch('/api/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false; btn.textContent = 'שמור ושייך';
+  if (!r.ok) { st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא נשמר'))}</span>`; return; }
+  const cl = r.client || {};
+  const newId = cl.id || cl.clientId || null;
+  const newName = cl.name || name;
+  _evClients = Array.isArray(_evClients) ? _evClients : [];
+  if (newId && !_evClients.some(c => String(c.id) === String(newId))) _evClients.push({ id: newId, name: newName, email: email || null });
+  state.clientsList = null; _linkClients = null; clearApiCache();
+  // שיוך הלקוח החדש לאירוע: עדכון השדה + הרשימה הנפתחת + שמירה (clientId ייפתר לפי השם)
+  const inp = g('evClient'); if (inp) inp.value = newName;
+  const dl = g('evClientList'); if (dl) dl.innerHTML = (_evClients || []).map(c => `<option value="${escapeHtml(c.name)}">`).join('');
+  if (_evEditing) { _evEditing.clientName = newName; _evEditing.clientId = newId; }
+  if (typeof saveEventCore === 'function') saveEventCore();
+  st.innerHTML = '<span style="color:var(--accent2)">✓ הלקוח נוסף ושוייך לאירוע</span>';
+  setTimeout(() => { document.getElementById('addClientEvModal').classList.add('hidden'); }, 800);
 };
 function quoteRow(d) {
   const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
@@ -4148,7 +4196,7 @@ function renderJobsReport() {
   const th = (t, w) => `<th style="border:1px solid #d8dced;padding:9px 10px;text-align:right;background:#eef0fb;font-size:13px;font-weight:700${w ? `;width:${w}` : ''}">${t}</th>`;
   const cell = (inner, opt = '', id = '') => `<td${id ? ` id="${id}"` : ''} style="border:1px solid #d8dced;padding:6px 9px;text-align:right;font-size:13.5px;${opt}">${inner}</td>`;
   const inTxt = (i, f) => `<input value="${String(_report.rows[i][f] || '').replace(/"/g, '&quot;')}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;width:100%;text-align:right;font:inherit;color:inherit;padding:2px 0"/>`;
-  const inNum = (i, f) => `<input type="number" inputmode="decimal" value="${_report.rows[i][f] || 0}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;width:100%;text-align:right;font:inherit;color:inherit;padding:2px 0"/>`;
+  const inNum = (i, f) => `<span style="display:inline-flex;align-items:center;gap:2px;width:100%"><input type="number" inputmode="decimal" value="${_report.rows[i][f] || 0}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;flex:1;min-width:0;text-align:right;font:inherit;color:inherit;padding:2px 0"/><span style="color:#8b93a7">₪</span></span>`;
   const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
   const grand = sum('payment') + sum('bonus') + sum('food') + sum('travel');
   const head = `<div style="font-size:16px;font-weight:800;margin-bottom:2px">${escapeHtml(_report.empName)}</div>
