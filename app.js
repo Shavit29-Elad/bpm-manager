@@ -881,6 +881,7 @@ function renderMonthDetail() {
   const r = _monthDetail; if (!r) return;
   const ov = document.getElementById('monthDetailModal'); if (!ov) return;
   const typeLbl = (t) => (DOC_TYPE_SHORT && DOC_TYPE_SHORT[t]) || (t ? '#' : '');
+  const viewBtn = (url) => url ? ` <button class="btn ghost" title="צפייה במסמך" style="padding:0 6px;font-size:12px;line-height:1.6" onclick="previewDoc('${String(url).replace(/'/g, '%27')}')">👁</button>` : '';
   const filt = (list) => _mdGroupFilter ? list.filter(x => x.group === _mdGroupFilter) : list;
   const inc = filt(r.income || []), exp = filt(r.expense || []);
   const sumOf = (a) => money(a.reduce((s, x) => s + (x.amount || 0), 0));
@@ -889,20 +890,20 @@ function renderMonthDetail() {
       <td style="white-space:nowrap">${fmtDate(x.date)}</td>
       <td style="font-weight:600;white-space:nowrap">${money(x.amount)}</td>
       <td>${escapeHtml(x.name || '')}</td>
-      <td style="white-space:nowrap">${x.taxNumber != null ? `${typeLbl(x.taxType)} ${x.taxNumber}` : '—'}</td>
-      <td style="white-space:nowrap">${x.receiptNumber != null ? x.receiptNumber : '—'}</td>
-      <td style="font-size:12px">${escapeHtml(x.notes || '')}</td>
+      <td style="white-space:nowrap">${x.taxNumber != null ? `${typeLbl(x.taxType)} ${x.taxNumber}${viewBtn(x.taxUrl)}` : '—'}</td>
+      <td style="white-space:nowrap">${x.receiptNumber != null ? `${x.receiptNumber}${viewBtn(x.receiptUrl)}` : '—'}</td>
+      <td style="font-size:12px;min-width:120px">${escapeHtml(x.notes || '')}</td>
       <td style="white-space:nowrap"><span class="tag" style="font-size:11px">${escapeHtml(x.groupName || '—')}</span></td>
     </tr>`).join('') : `<tr><td colspan="7" class="muted">אין תנועות</td></tr>`;
     const color = side === 'income' ? 'var(--accent2)' : 'var(--danger)';
-    return `<div style="flex:1;min-width:0">
+    return `<div style="flex:1;min-width:340px">
       <h3 style="margin:0 0 6px;color:${color}">${side === 'income' ? 'הכנסות' : 'הוצאות'} · ${sumOf(rows)}</h3>
-      <div style="overflow:auto;max-height:60vh"><table style="width:100%;font-size:12.5px"><thead><tr>
+      <div style="overflow:auto;max-height:66vh"><table style="width:100%;font-size:13px"><thead><tr>
         <th>תאריך</th><th>סכום</th><th>שם עסק</th><th>חשבונית מס/מס-קבלה</th><th>קבלה</th><th>הערות</th><th>קבוצה</th>
       </tr></thead><tbody>${body}</tbody></table></div></div>`;
   };
   const groupOpts = (r.groups || []).map(g => `<option value="${g.id}" ${_mdGroupFilter === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('');
-  ov.innerHTML = `<div class="modal-card" style="max-width:1150px;width:97%">
+  ov.innerHTML = `<div class="modal-card" style="max-width:1600px;width:98vw">
     <div class="row-between" style="margin:0"><h2 style="margin:0">📅 פירוט ${MONTHS_HE[r.month - 1]} ${r.year}</h2>
       <div style="display:flex;gap:8px;align-items:center">
         <label style="font-size:13px">קבוצה:
@@ -911,7 +912,7 @@ function renderMonthDetail() {
         <button class="btn ghost" onclick="closeMonthDetail()">✕ סגור</button>
       </div>
     </div>
-    <div style="display:flex;gap:18px;margin-top:14px;flex-wrap:wrap;align-items:flex-start">${tbl(inc, 'income')}${tbl(exp, 'expense')}</div>
+    <div style="display:flex;gap:22px;margin-top:14px;flex-wrap:wrap;align-items:flex-start">${tbl(inc, 'income')}${tbl(exp, 'expense')}</div>
   </div>`;
 }
 
@@ -1671,13 +1672,18 @@ async function ensureNamesSynced(onChange) {
     if (r && (r.clientsFixed || r.clientIdFixed || r.ctrFixed)) { clearApiCache(); if (typeof onChange === 'function' && state.company === co) onChange(); }
   } catch { /* לא חוסם */ }
 }
+// הוספה אוטומטית של אירועי יומן גוגל (עד אתמול) לרשימת האישור — פעם ביום. השרת מטפל באי-כפילות.
+async function autoAdoptCalendar() {
+  try {
+    const r = await fetch('/api/calendar/auto-adopt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => null);
+    if (r && r.adopted) clearApiCache(); // כדי שרשימת האירועים תיטען מחדש עם האירועים החדשים
+    return r;
+  } catch { return null; }
+}
 async function renderCombined(c) {
   ensureNamesSynced(() => { if (state.tab === 'combined' || state.tab === 'events') renderCombined($('#content')); }); // ברקע, פעם בחברה
-  const [events, m] = await Promise.all([
-    api(`/api/events?companyId=${state.company}`),
-    api(`/api/calendar/match?companyId=${state.company}`),
-  ]);
-  const misses = m.matched.filter(x => !x.calendar);
+  await autoAdoptCalendar();
+  const events = await api(`/api/events?companyId=${state.company}`);
   const monthsSet = [...new Set(events.map(e => (e.date || e.dateRaw || '').slice(0, 7)).filter(Boolean))].sort().reverse();
   const filtered = _evMonthFilter === 'all' ? events : events.filter(e => (e.date || e.dateRaw || '').slice(0, 7) === _evMonthFilter);
   const pending = filtered.filter(e => !e.confirmed);
@@ -1716,24 +1722,6 @@ async function renderCombined(c) {
         </div>
         ${approvedShown.length ? eventsByMonthHtml(approvedShown, 'approved') : `<div class="empty">${anyApprovedFilter ? 'אין אירועים מאושרים שתואמים לחיפוש/סינון' : 'עדיין אין אירועים מאושרים'}</div>`}`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
-    </div>
-
-    <div class="panel">
-      <h2>אי-התאמות מול יומן גוגל</h2>
-      <p class="muted">אירועים שנקלטו בווטסאפ אך חסרים ביומן (או להיפך). כאן נגדיר בהמשך את הטיפול בכל אחד.</p>
-      <div class="cards" style="margin:14px 0">
-        <div class="card"><div class="label">חסר ביומן (יש בווטסאפ)</div><div class="big" style="color:var(--danger)">${m.missingInCalendar.length}</div></div>
-        <div class="card"><div class="label">חסר בווטסאפ (יש ביומן)</div><div class="big" style="color:var(--warn)">${m.missingInWhatsappCount ?? (m.missingInWhatsapp?.length || 0)}</div></div>
-        <div class="card"><div class="label">הותאמו</div><div class="big" style="color:var(--accent2)">${m.matched.filter(x => x.calendar).length}</div></div>
-      </div>
-      ${misses.length ? `<table><thead><tr><th>תאריך</th><th>אירוע (ווטסאפ)</th><th>סטטוס</th><th></th></tr></thead>
-      <tbody>${misses.slice().sort((a, b) => (a.whatsapp.date || '').localeCompare(b.whatsapp.date || '')).map(x => `<tr>
-        <td style="white-space:nowrap">${ddmy(x.whatsapp.date)}</td>
-        <td>${x.whatsapp.artist || '—'}${x.whatsapp.location ? ` / ${x.whatsapp.location}` : ''}</td>
-        <td><span class="tag miss">חסר ביומן</span></td>
-        <td style="text-align:left"><button class="btn ghost" style="padding:3px 10px;font-size:12px;white-space:nowrap" onclick="markMatched('${x.whatsapp.id}',this)">✓ סמן כהותאם</button></td>
-      </tr>`).join('')}</tbody></table>`
-      : `<div class="empty">אין אי-התאמות כרגע 👌</div>`}
     </div>
 
     <div class="panel" id="calWrap"><div class="empty">טוען יומן…</div></div>`;

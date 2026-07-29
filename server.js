@@ -274,6 +274,53 @@ add('POST', /^\/api\/calendar\/mark-matched$/, (req, res, _p, _q, body) => {
   json(res, { ok: true, manualMatched: ev.manualMatched });
 });
 
+// POST /api/calendar/auto-adopt { companyId } — הוספה אוטומטית של אירועי יומן גוגל לרשימת "אירועים לאישור".
+// מוסיף רק אירועים עד אתמול (כולל) — לא אירועים עתידיים (עלולים להשתנות) ולא של היום.
+// רץ פעם ביום לכל חברה (שעון ישראל). מוסיף רק אירועי יומן שאין להם התאמה לאירוע קיים (מונע כפילויות מול קליטת ווטסאפ).
+add('POST', /^\/api\/calendar\/auto-adopt$/, async (req, res, _p, q, body) => {
+  const db = load();
+  const cid = (body && body.companyId) || q.companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
+  const todayIL = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date()); // YYYY-MM-DD בשעון ישראל
+  db.calendarAutoAdopt = db.calendarAutoAdopt || {};
+  if (db.calendarAutoAdopt[cid] === todayIL) return json(res, { ok: true, adopted: 0, skipped: true, today: todayIL });
+  if (!hasCalendar()) { db.calendarAutoAdopt[cid] = todayIL; save(db); return json(res, { ok: true, adopted: 0, noCalendar: true }); }
+  // אתמול = היום פחות יום
+  const dy = new Date(todayIL + 'T00:00:00Z'); dy.setUTCDate(dy.getUTCDate() - 1);
+  const yesterday = dy.toISOString().slice(0, 10);
+  try {
+    const ourEvents = (db.events || []).filter(e => e.companyId === cid && (e.date || '') >= MATCH_START);
+    const adoptedGcal = new Set(ourEvents.map(e => e.gcalId).filter(Boolean));
+    const cal = (await fetchCalendarEvents())
+      .filter(e => e.id && (e.date || '') >= MATCH_START && (e.date || '') <= yesterday && !adoptedGcal.has(e.id));
+    // רק אירועי יומן שאין להם התאמה לאירוע קיים אצלנו (missingInWhatsapp)
+    const { missingInWhatsapp } = matchEvents(ourEvents, cal);
+    let adopted = 0;
+    for (const ce of missingInWhatsapp) {
+      if (!ce.id || adoptedGcal.has(ce.id)) continue;
+      let clientId = null, clientName = null;
+      const mapped = mappedClientName(db, ce.title);
+      if (mapped) { const r = await resolveClientByName(mapped); clientId = r.clientId; clientName = r.clientName; }
+      const event = {
+        id: id('ev'), companyId: cid,
+        date: ce.date || null, dateRaw: ce.date || null,
+        artist: ce.title || null, location: ce.location || null,
+        sound: null, price: null, priceSound: null, priceLighting: null, priceBackline: null, priceExtras: null,
+        ledPricePerMeter: null, ledMeters: null,
+        employees: [], employeeBonusRaw: null, contractors: [], employeeDetails: [], contractorDetails: [],
+        clientId, clientName,
+        gcalId: ce.id, source: 'calendar', invoiceStatus: 'pending',
+        autoAdopted: true, createdAt: new Date().toISOString(),
+      };
+      upsertEvent(db, event); adoptedGcal.add(ce.id); adopted++;
+    }
+    db.calendarAutoAdopt[cid] = todayIL;
+    save(db);
+    json(res, { ok: true, adopted, yesterday, today: todayIL });
+  } catch (e) {
+    json(res, { ok: false, error: e.message });
+  }
+});
+
 // GET /api/calendar/events?companyId=&from=YYYY-MM-DD&to=YYYY-MM-DD  (טווח שבועי)
 //     או ?month=YYYY-MM  (תאימות לאחור)
 add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
@@ -2742,6 +2789,8 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   }
   const ungrouped = Array(12).fill(0);
   const ungroupedDocs = []; // מסמכי הכנסה שאין להם שיוך לקבוצה — להצגה בסוף הסיכום, לשיוך ידני
+  // חברות עם קבוצת ברירת מחדל להכנסות (BPM/אופק): כל הכנסה שלא סווגה נכנסת ל"הכנסות עסק" ולא ל"ללא שיוך"
+  const defIncomeId = (groups.find(g => g.isDefaultIncome) || {}).id || null;
   const ov = (db.docGroupOverrides && db.docGroupOverrides[cid]) || {}; // שיוך ידני מסמך→קבוצה (למסמכים בלי תנועת בנק); גובר
   let incomeError = null;
   if (greenInvoice.haveCredentials()) {
@@ -2753,7 +2802,7 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
         const mi = (parseInt(iso.slice(5, 7), 10) || 0) - 1;
         if (mi < 0 || mi > 11) continue;
         const amt = Number(d.amountIncVat != null ? d.amountIncVat : d.amount) || 0;
-        const gid = (d.number != null && ov[String(d.number)]) || docGroup.get('id:' + d.id) || (d.number != null ? docGroup.get('num:' + d.number) : null) || null;
+        const gid = (d.number != null && ov[String(d.number)]) || docGroup.get('id:' + d.id) || (d.number != null ? docGroup.get('num:' + d.number) : null) || defIncomeId || null;
         if (gid && gmap[gid]) gmap[gid].income[mi] += amt;
         else { ungrouped[mi] += amt; ungroupedDocs.push({ number: d.number, type: d.type, date: iso.slice(0, 10), clientName: d.clientName || '', amount: r2(amt) }); }
       }
@@ -2810,18 +2859,23 @@ add('GET', /^\/api\/month-detail$/, (req, res, _p, q) => {
     if (t.matchStatus !== 'manual' && t.matchStatus !== 'approved') continue;
     const invs = Array.isArray(t.matchedInvoices) ? t.matchedInvoices : [];
     // מסמך מס עיקרי (305/320/300) ומסמך קבלה (400 / receipt מקונן / 320)
-    const taxDoc = invs.find(x => [305, 320, 300, '305', '320', '300'].includes(x.type));
-    let receiptNum = null;
+    const taxDoc = invs.find(x => [305, 320, 300, '305', '320', '300'].includes(x.type)) || invs[0] || null;
+    let receiptNum = null, receiptUrl = null;
     for (const x of invs) {
-      if (x.receipt && x.receipt.number != null) { receiptNum = x.receipt.number; break; }
-      if ([400, 320, '400', '320'].includes(x.type)) { receiptNum = x.number; break; }
+      if (x.receipt && x.receipt.number != null) { receiptNum = x.receipt.number; receiptUrl = x.receipt.url || null; break; }
+      if ([400, 320, '400', '320'].includes(x.type)) { receiptNum = x.number; receiptUrl = x.url || null; break; }
     }
     const name = (invs.find(x => x.clientName && x.clientName !== '—') || {}).clientName || t.nameHint || '';
+    // כל המסמכים המשויכים עם URL — לצפייה/הורדה
+    const docs = invs.filter(x => x.url).map(x => ({ type: x.type, number: x.number, url: x.url }));
+    for (const x of invs) if (x.receipt && x.receipt.url) docs.push({ type: 400, number: x.receipt.number, url: x.receipt.url });
     const row = {
       id: t.id, date: t.date, amount: t.absAmount || 0, name,
-      taxNumber: taxDoc ? taxDoc.number : (invs[0] ? invs[0].number : null),
-      taxType: taxDoc ? taxDoc.type : (invs[0] ? invs[0].type : null),
-      receiptNumber: receiptNum, notes: t.notes || '',
+      taxNumber: taxDoc ? taxDoc.number : null,
+      taxType: taxDoc ? taxDoc.type : null,
+      taxUrl: taxDoc ? (taxDoc.url || null) : null,
+      receiptNumber: receiptNum, receiptUrl, notes: t.notes || '',
+      docs,
       group: t.group || null, groupName: t.group ? gname(t.group) : '',
     };
     (t.direction === 'credit' ? income : expense).push(row);
