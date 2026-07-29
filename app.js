@@ -828,10 +828,32 @@ function businessSummaryHtml(r) {
     return `<details ${hasData ? 'open' : ''} style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;font-size:15px">${bizGroupEmoji(g)} ${escapeHtml(g.name)} — ${year} · רווח ${money(g.totalProfit)}</summary>
       <div style="overflow-x:auto;margin-top:8px"><table style="min-width:440px;font-size:13px"><thead><tr><th>חודש</th><th>הכנסות</th><th>הוצאות</th><th>רווח</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="muted">אין נתונים משויכים לשנה זו.</td></tr>'}${totalRow}</tbody></table></div>${unlinked}</details>`;
   };
+  // ---- טבלת חודשים ראשית: חודש / הכנסות / הוצאות / רווח — לחיצה על חודש פותחת את הפירוט המלא ----
+  const monthTotals = Array.from({ length: 12 }, (_, i) => {
+    let inc = 0, exp = 0;
+    for (const g of groups) { inc += (g.months[i] && g.months[i].income) || 0; exp += (g.months[i] && g.months[i].expense) || 0; }
+    return { inc, exp, profit: inc - exp };
+  });
+  const monthRows = monthTotals.map((m, i) => (!m.inc && !m.exp) ? '' : `<tr class="mrow" style="cursor:pointer" onclick="openMonthDetail(${year},${i + 1})">
+      <td style="white-space:nowrap;color:var(--accent);font-weight:600">${MONTHS_HE[i]} ${year} <span style="font-size:11px;opacity:.7">↗</span></td>
+      <td style="color:var(--accent2);font-weight:600">${money(m.inc)}</td>
+      <td style="color:var(--danger);font-weight:600">${money(m.exp)}</td>
+      <td style="font-weight:700;color:${m.profit >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(m.profit)}</td></tr>`).join('');
+  const monthsTable = `<div style="overflow-x:auto;margin-top:16px"><table style="min-width:480px;font-size:13.5px"><thead><tr><th>חודש</th><th>הכנסות</th><th>הוצאות</th><th>רווח</th></tr></thead><tbody>
+      ${monthRows || '<tr><td colspan="4" class="muted">אין נתונים לשנה זו.</td></tr>'}
+      <tr style="border-top:2px solid var(--line);font-weight:800"><td>סה"כ ${year}</td><td style="color:var(--accent2)">${money(totIncome)}</td><td style="color:var(--danger)">${money(totExpense)}</td><td style="color:${totProfit >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(totProfit)}</td></tr>
+    </tbody></table></div>`;
+  // ---- חלוקה לפי קבוצות (בנפרד, נפתח לפי בחירה) ----
+  const groupsBreakdown = groups.length ? `<details style="margin-top:22px;border-top:2px solid var(--line);padding-top:12px">
+      <summary style="cursor:pointer;font-weight:700;font-size:15px">🗂️ חלוקה לפי קבוצות</summary>
+      <p class="muted" style="font-size:12.5px;margin:6px 0 2px">פירוט חודשי לכל קבוצה בנפרד. לחיצה על חודש פותחת גם כאן את הפירוט המלא.</p>
+      ${groups.map(section).join('')}
+    </details>` : '';
   return `<div class="panel">
-    <div class="row-between"><div><h2>📊 סיכום עסק — ${year}</h2><span class="muted">הכנסות: חשבוניות מס (305) ומס-קבלה (320) שיצאו — כולל מע"מ · הוצאות: לפי תנועות הבנק</span></div><div style="white-space:nowrap">שנה: ${yearSel}</div></div>
+    <div class="row-between"><div><h2>📊 סיכום עסק — ${year}</h2><span class="muted">לחיצה על חודש פותחת את כל ההכנסות וההוצאות לאותו חודש, עם פירוט וקבוצות</span></div><div style="white-space:nowrap">שנה: ${yearSel}</div></div>
     ${kpis}
-    ${groups.length ? groups.map(section).join('') : '<div class="empty">אין קטגוריות עדיין — אפשר להוסיף בקבוצות שיוך בפרטי העסק.</div>'}
+    ${monthsTable}
+    ${groupsBreakdown}
     ${(r.ungroupedDocs && r.ungroupedDocs.length) ? ungroupedDocsHtml(r) : ''}
   </div>`;
 }
