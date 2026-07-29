@@ -5400,10 +5400,25 @@ async function renderBank(c, soft) {
   </div>`;
 }
 // כיסוי שורת בנק: סכום ההקצאות של המסמכים המשויכים מול הסכום שבבנק (מדויק, או −5% ניכוי מס בהכנסות)
+// סכום ה"נטו" של המסמכים המשויכים לשורת בנק, לפי היחידות המקובצות:
+// חשבונית מס נטו (פחות זיכוי), וקבלה (400) שמקוננת/כפולה תחת חשבונית — לא נספרת פעם נוספת.
+// כך שקבלה שקושרה יחד עם החשבונית לא מנפחת את ה"חסר".
+function bankMatchedNet(t) {
+  const units = groupBankUnits(t.matchedInvoices || []);
+  const hasInvoiceUnit = units.some(u => u.inv && u.inv.kind !== 'expense' && [305, 300, 320].includes(Number(u.inv.type)));
+  return units.reduce((s, u) => {
+    const isReceipt = u.standaloneReceipt || (u.inv && u.inv.kind !== 'expense' && Number(u.inv.type) === 400);
+    if (isReceipt && hasInvoiceUnit) return s;   // קבלה כפולה כשיש חשבונית — לא מוסיפים לסכום
+    return s + (Number(u.net != null ? u.net : (u.inv ? u.inv.amount : 0)) || 0);
+  }, 0);
+}
 function bankRowCovered(t) {
   const invs = t.matchedInvoices || [];
   if (!invs.length) return false;
-  const sum = invs.reduce((s, inv) => s + (Number(inv.allocated != null ? inv.allocated : inv.amount) || 0), 0);
+  // אם יש הקצאות ידניות (allocated) — לפיהן; אחרת לפי סכום הנטו של היחידות (קבלה מקוננת לא נספרת פעמיים)
+  const sum = invs.some(i => i.allocated != null)
+    ? invs.reduce((s, inv) => s + (Number(inv.allocated != null ? inv.allocated : inv.amount) || 0), 0)
+    : bankMatchedNet(t);
   const bank = Math.abs(Number(t.absAmount) || 0);
   const tol = Math.max(3, bank * 0.004);
   return Math.abs(sum - bank) <= tol || (t.direction === 'credit' && whFactor() < 1 && Math.abs(sum * whFactor() - bank) <= tol);
@@ -5486,7 +5501,10 @@ function bankTr(t) {
     const whAmt = sumInv - t.absAmount;
     wh = (whRate() > 0 && whAmt > 1 && whAmt < sumInv * (whRate() + 0.03)) ? `<span style="color:var(--warn)">${money(whAmt)}</span>` : '—';
     const conf = bankConfidence(t);
-    const shortAmt = Math.abs(Number(t.absAmount) || 0) - mis.reduce((s, i) => s + (Number(i.allocated != null ? i.allocated : i.amount) || 0), 0);
+    const matchedTot = mis.some(i => i.allocated != null)
+      ? mis.reduce((s, i) => s + (Number(i.allocated != null ? i.allocated : i.amount) || 0), 0)
+      : bankMatchedNet(t);
+    const shortAmt = Math.abs(Number(t.absAmount) || 0) - matchedTot;
     const confBadge = !covered
       ? `<span class="tag miss" style="font-size:10px;margin-inline-end:4px">חסר ${money(shortAmt)}</span>`
       : (t.matchStatus === 'approved' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">מאושר</span>'
