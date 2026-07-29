@@ -4606,7 +4606,8 @@ async function renderBusiness(c) {
       <label>מס׳ עסק / ח.פ<input id="biz_number" value="${escapeHtml(p.businessNumber || '')}"></label>
       <label>מייל<input id="biz_email" value="${escapeHtml(p.email || '')}"></label>
       <label>כתובת עסק<input id="biz_address" value="${escapeHtml(p.address || '')}"></label>
-      <label>אימייל רו״ח (להעברת הוצאות)<input id="biz_acct" type="email" dir="ltr" placeholder="ריק = לא מעביר לאף אחד" value="${escapeHtml(p.accountantEmail || '')}"></label>
+      <label>אימייל רו״ח (למי נשלחות ההוצאות)<input id="biz_acct" type="email" dir="ltr" placeholder="ריק = לא מעביר לאף אחד" value="${escapeHtml(p.accountantEmail || '')}"></label>
+      <label>אימייל שולח (מאיזה מייל נשלח)<input id="biz_sender" type="email" dir="ltr" placeholder="ריק = ברירת המחדל של המערכת" value="${escapeHtml(p.senderEmail || '')}"></label>
       <label>ניכוי מס במקור (%)<input id="biz_wh" type="number" step="0.5" min="0" max="30" dir="ltr" placeholder="0" value="${(Number(p.withholdingRate) || 0) * 100}"></label>
     </div>
     <div class="muted" style="font-size:12px;margin-top:6px">שיעור ניכוי המס במקור של החברה. משפיע על כל חישובי ההתאמות בבנק, הפקת מסמכי המשך/קבלות, וסיווג ההכנסות. 0 = ללא ניכוי.</div>
@@ -4792,7 +4793,7 @@ window.bizSave = async () => {
   const g = (id) => (document.getElementById(id)?.value || '').trim();
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
-    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), docRemark: g('biz_docremark'),
+    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), senderEmail: g('biz_sender'), docRemark: g('biz_docremark'),
     withholdingPct: Number(g('biz_wh')) || 0,
     managers: [
       { name: g('mgr0_name'), idNumber: g('mgr0_id'), phone: g('mgr0_phone'), email: g('mgr0_email') },

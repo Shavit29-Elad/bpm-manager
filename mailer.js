@@ -37,11 +37,11 @@ async function transporter() {
   return _transporter;
 }
 
-export async function sendMail({ to, subject, text, html, attachments }) {
+export async function sendMail({ to, subject, text, html, attachments, from }) {
   if (!mailerConfigured()) throw new Error('שליחת מייל לא מוגדרת (חסר SMTP_USER/SMTP_PASS)');
   const t = await transporter();
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
-  return t.sendMail({ from, to, subject, text, html, attachments });
+  const fromAddr = from || process.env.SMTP_FROM || process.env.SMTP_USER;
+  return t.sendMail({ from: fromAddr, to, subject, text, html, attachments });
 }
 
 // בדיקת חיבור (לאימות שהאישורים תקינים)

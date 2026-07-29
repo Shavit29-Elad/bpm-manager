@@ -105,30 +105,36 @@ function icsCalendarName(text) {
   return m ? unescapeIcs(m[1]) : '';
 }
 
-// תומך בכמה יומנים: משתנים נפרדים GOOGLE_ICAL_URL / _URL_2 / _URL_3,
-// וגם כמה כתובות מופרדות בפסיק בתוך כל אחד (גמישות מלאה).
-function icalUrls() {
-  return [process.env.GOOGLE_ICAL_URL, process.env.GOOGLE_ICAL_URL_2, process.env.GOOGLE_ICAL_URL_3]
-    .filter(Boolean)
+// ריבוי חברות: לכל חברה קישורי iCal משלה (משתני סביבה נפרדים). כל חברה — היומנים שלה בלבד.
+// תומך בכמה יומנים לחברה (עד 3 משתנים) וגם כמה כתובות מופרדות בפסיק בתוך כל אחד.
+const ICAL_ENV = {
+  co_bpm:  ['GOOGLE_ICAL_URL',      'GOOGLE_ICAL_URL_2',      'GOOGLE_ICAL_URL_3'],
+  co_ofek: ['GOOGLE_OFEK_ICAL_URL', 'GOOGLE_OFEK_ICAL_URL_2', 'GOOGLE_OFEK_ICAL_URL_3'],
+};
+const DEFAULT_CO = 'co_bpm';
+function icalUrls(companyId = DEFAULT_CO) {
+  const envs = ICAL_ENV[companyId] || [];
+  return envs.map(e => process.env[e]).filter(Boolean)
     .flatMap(v => v.split(/[\s,]+/))
     .map(s => s.trim()).filter(Boolean);
 }
 
-// האם יומן כלשהו הוגדר
-export function hasCalendar() { return icalUrls().length > 0; }
+// האם ליומן של חברה זו הוגדר קישור
+export function hasCalendar(companyId = DEFAULT_CO) { return icalUrls(companyId).length > 0; }
+// רשימת החברות שיש להן יומן מוגדר (לאימות אוטומטי בעליית שרת)
+export function calendarCompanies() { return Object.keys(ICAL_ENV).filter(c => hasCalendar(c)); }
 
-// מטמון בזיכרון: מונע הורדה+ניתוח מחדש של אלפי אירועים בכל בקשה.
-let _cache = { at: 0, key: '', events: null };
+// מטמון בזיכרון פר-חברה: מונע הורדה+ניתוח מחדש של אלפי אירועים בכל בקשה.
+const _cache = {}; // companyId -> { at, key, events }
 const CACHE_TTL = 5 * 60 * 1000; // 5 דקות
 
-// שליפת אירועים מכל היומנים דרך קישורי ה-iCal (ממוזגים יחד, עם מטמון)
-export async function fetchCalendarEvents({ force = false } = {}) {
-  const urls = icalUrls();
-  if (!urls.length) throw new Error('לא הוגדר קישור iCal ליומן (GOOGLE_ICAL_URL)');
+// שליפת אירועים מכל היומנים של החברה דרך קישורי ה-iCal (ממוזגים יחד, עם מטמון פר-חברה)
+export async function fetchCalendarEvents({ force = false, companyId = DEFAULT_CO } = {}) {
+  const urls = icalUrls(companyId);
+  if (!urls.length) throw new Error('לא הוגדר קישור iCal ליומן');
   const key = urls.join('|');
-  if (!force && _cache.events && _cache.key === key && Date.now() - _cache.at < CACHE_TTL) {
-    return _cache.events;
-  }
+  const c = _cache[companyId];
+  if (!force && c && c.events && c.key === key && Date.now() - c.at < CACHE_TTL) return c.events;
   const all = [];
   for (let i = 0; i < urls.length; i++) {
     const res = await fetch(urls[i]);
@@ -137,13 +143,13 @@ export async function fetchCalendarEvents({ force = false } = {}) {
     const calName = icsCalendarName(text) || `יומן ${i + 1}`;
     parseIcs(text).forEach(e => all.push({ ...e, id: `c${i}_${e.id}`, calendarIndex: i, calendarName: calName }));
   }
-  _cache = { at: Date.now(), key, events: all };
+  _cache[companyId] = { at: Date.now(), key, events: all };
   return all;
 }
 
-// בדיקת חיבור: מושך את כל היומנים ומוודא שכולם תקינים
-export async function verify() {
-  const urls = icalUrls();
+// בדיקת חיבור: מושך את כל היומנים של החברה ומוודא שכולם תקינים
+export async function verify(companyId = DEFAULT_CO) {
+  const urls = icalUrls(companyId);
   if (!urls.length) return { ok: false, error: 'לא הוזן קישור iCal' };
   try {
     let count = 0;

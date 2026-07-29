@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 
 import { init as initStore, load, save, id, upsertEvent, companyEvents, saveFile, getFile, deleteFile } from './store.js';
 import { parseEventMessage, parseEventMessages } from './whatsappParser.js';
-import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar } from './googleCalendar.js';
+import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar, calendarCompanies } from './googleCalendar.js';
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
@@ -242,7 +242,7 @@ add('GET', /^\/api\/calendar\/match$/, async (req, res, _p, q) => {
     const dates = waEvents.map(e => e.date).filter(Boolean).sort();
     const timeMin = dates[0] ? `${dates[0]}T00:00:00Z` : undefined;
     const timeMax = dates.length ? `${dates[dates.length - 1]}T23:59:59Z` : undefined;
-    const cal = (await fetchCalendarEvents({ timeMin, timeMax })).filter(e => (e.date || '') >= MATCH_START);
+    const cal = (await fetchCalendarEvents({ companyId: q.companyId })).filter(e => (e.date || '') >= MATCH_START);
     const r = matchEvents(waEvents, cal);
     // אירועים שסומנו ידנית כ"הותאם" — מוציאים מרשימת חוסר-ההתאמה וסופרים כהותאמו
     for (const entry of r.matched) {
@@ -283,14 +283,14 @@ add('POST', /^\/api\/calendar\/auto-adopt$/, async (req, res, _p, q, body) => {
   const todayIL = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date()); // YYYY-MM-DD בשעון ישראל
   db.calendarAutoAdopt = db.calendarAutoAdopt || {};
   if (db.calendarAutoAdopt[cid] === todayIL) return json(res, { ok: true, adopted: 0, skipped: true, today: todayIL });
-  if (!hasCalendar()) { db.calendarAutoAdopt[cid] = todayIL; save(db); return json(res, { ok: true, adopted: 0, noCalendar: true }); }
+  if (!hasCalendar(cid)) { db.calendarAutoAdopt[cid] = todayIL; save(db); return json(res, { ok: true, adopted: 0, noCalendar: true }); }
   // אתמול = היום פחות יום
   const dy = new Date(todayIL + 'T00:00:00Z'); dy.setUTCDate(dy.getUTCDate() - 1);
   const yesterday = dy.toISOString().slice(0, 10);
   try {
     const ourEvents = (db.events || []).filter(e => e.companyId === cid && (e.date || '') >= MATCH_START);
     const adoptedGcal = new Set(ourEvents.map(e => e.gcalId).filter(Boolean));
-    const cal = (await fetchCalendarEvents())
+    const cal = (await fetchCalendarEvents({ companyId: cid }))
       .filter(e => e.id && (e.date || '') >= MATCH_START && (e.date || '') <= yesterday && !adoptedGcal.has(e.id));
     // רק אירועי יומן שאין להם התאמה לאירוע קיים אצלנו (missingInWhatsapp)
     const { missingInWhatsapp } = matchEvents(ourEvents, cal);
@@ -340,8 +340,8 @@ add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
   let cal = [];
   let calendarError = null;
   try {
-    if (hasCalendar()) {
-      cal = (await fetchCalendarEvents())
+    if (hasCalendar(q.companyId)) {
+      cal = (await fetchCalendarEvents({ companyId: q.companyId }))
         .filter(e => inRange(e.date) && !adoptedGcal.has(e.id))   // מסתירים אירועי יומן שכבר אומצו
         .map(e => ({ gcalId: e.id, date: e.date, title: e.title, location: e.location, source: 'calendar', calendarIndex: e.calendarIndex ?? 0, calendarName: e.calendarName || `יומן ${(e.calendarIndex ?? 0) + 1}` }));
     } else { calendarError = 'יומן גוגל לא מחובר'; }
@@ -748,7 +748,9 @@ function applyLinkedEvents(db, linkedEvents, invoiceNumber, payableId) {
 add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params, q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   const draftId = params[0];
-  const _acctEmail = bizProfile(load(), q.companyId || giCompanyId()).accountantEmail || '';   // רו"ח של החברה הפעילה בלבד
+  const _biz = bizProfile(load(), q.companyId || giCompanyId());
+  const _acctEmail = _biz.accountantEmail || '';   // רו"ח של החברה הפעילה בלבד
+  const _senderEmail = _biz.senderEmail || '';     // כתובת "מאת" של החברה (ריק = ברירת מחדל SMTP)
   try {
     const draft = await greenInvoice.getExpenseDraft(draftId);
     if (!draft) return json(res, { error: 'הטיוטה לא נמצאה (ייתכן שכבר טופלה)' }, 404);
@@ -882,6 +884,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       if (mailer.mailerConfigured() && fwd && fileBuf) {
         await mailer.sendMail({
           to: fwd,
+          from: _senderEmail || undefined,   // כתובת "מאת" פר-חברה (אם הוגדרה)
           subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
           text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
           attachments: [{ filename: `expense-${safeNum}.${fileExt}`, content: fileBuf, contentType: fileCt }],
@@ -1825,6 +1828,8 @@ function bizProfile(db, cid) {
   p.additionalDocs = Array.isArray(p.additionalDocs) ? p.additionalDocs : [];
   // כתובת רו"ח להעברת הוצאות — פר-חברה. BPM: ברירת המחדל ההיסטורית. חברות אחרות: ריק עד שמגדירים (לא מעבירים לאף אחד).
   if (p.accountantEmail === undefined) p.accountantEmail = (cid === 'co_bpm') ? (process.env.FORWARD_EXPENSE_EMAIL || '516942349@rivh.it') : '';
+  // כתובת "מאת" לשליחת מיילים (העברת הוצאות לרו"ח) — פר-חברה. ריק = ברירת המחדל של ה-SMTP.
+  if (p.senderEmail === undefined) p.senderEmail = '';
   // שיעור ניכוי מס במקור (fraction). BPM: 5% היסטורי. חברות אחרות: 0 עד שמגדירים. ניתן לשינוי בפרטי העסק.
   if (p.withholdingRate === undefined) p.withholdingRate = (cid === 'co_bpm') ? 0.05 : 0;
   p.withholdingRate = Math.min(0.3, Math.max(0, Number(p.withholdingRate) || 0));
@@ -1870,6 +1875,7 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   ['name', 'businessNumber', 'email', 'address'].forEach(k => { if (k in b) p[k] = String(b[k] || ''); });
   if ('docRemark' in b) p.docRemark = String(b.docRemark || ''); // הערה קבועה לכל המסמכים (פר-חברה)
   if ('accountantEmail' in b) p.accountantEmail = String(b.accountantEmail || '').trim();
+  if ('senderEmail' in b) p.senderEmail = String(b.senderEmail || '').trim();
   // שיעור ניכוי מס במקור — מתקבל באחוזים (0..30) ונשמר כ-fraction
   if ('withholdingPct' in b) p.withholdingRate = Math.min(0.3, Math.max(0, (Number(b.withholdingPct) || 0) / 100));
   else if ('withholdingRate' in b) p.withholdingRate = Math.min(0.3, Math.max(0, Number(b.withholdingRate) || 0));
@@ -2032,15 +2038,23 @@ function buildConnectionsView(companyId) {
   const db = load();
   const comp = companyId ? (db.companies || []).find(c => c.id === companyId) : null;
   const acct = comp ? (comp.accounting || 'greenInvoice') : 'greenInvoice';
-  const isGiOwner = !companyId || companyId === giCompanyId();
+  const cid = companyId || giCompanyId();
   const isPlOwner = !!companyId && companyId === paperlessCompanyId();
   const cards = [];
-  // מערכת חשבונאית — לפי סוג החברה
+  // מערכת חשבונאית — לפי סוג החברה. סטטוס לפי מפתחות של החברה הנוכחית בלבד (בידוד מלא בין החברות).
   if (acct === 'paperless') cards.push(connCard('paperless', isPlOwner));
-  else cards.push(connCard('greenInvoice', isGiOwner));
-  // יומן גוגל — כרגע גלובלי ושייך לחברת ה-GI. לשאר החברות: תצוגה בלבד, לא מחובר.
-  cards.push(connCard('googleCalendar', isGiOwner));
-  // בנק — בפיתוח (גלובלי)
+  else {
+    const gi = connCard('greenInvoice', true);
+    gi.status = giEnabled(cid) ? 'connected' : 'disconnected';  // מחובר רק אם לחברה זו יש מפתחות משלה
+    gi.perCompany = true;
+    cards.push(gi);
+  }
+  // יומן גוגל — פר-חברה: מחובר רק אם לחברה זו הוגדרו קישורי iCal משלה.
+  const cal = connCard('googleCalendar', true);
+  cal.status = hasCalendar(cid) ? 'connected' : 'disconnected';
+  cal.perCompany = true;
+  cards.push(cal);
+  // בנק — העלאת קובץ xlsx (פר-חברה, דרך לשונית הבנק)
   cards.push(connCard('bank', false));
   return cards;
 }
@@ -3170,11 +3184,12 @@ function seedIfEmpty() {
   console.log('נזרעו החברות (בלי אירוע דוגמה)');
 }
 
-// החברות + ספק חשבונאי לכל אחת. שתיהן חשבונית ירוקה (BPM + משה), כל אחת עם מפתחות משלה.
-// אופק (פייפרלס) הוסר זמנית — חיבור פייפרלס בעייתי; ייתכן שיחזור בהמשך (הקוד של פייפרלס נשאר רדום).
+// החברות + ספק חשבונאי לכל אחת. שלושתן חשבונית ירוקה (BPM + משה + אופק), כל אחת עם מפתחות + יומנים + בנק משלה.
+// לכל חברה הנתונים שלה בלבד — בידוד מלא (חשבונית ירוקה לפי מפתחות פר-חברה, יומנים לפי iCal פר-חברה, בנק לפי companyId).
 const COMPANY_SEED = [
   { id: 'co_bpm', name: 'בי פי אם הגברה ותאורה בע"מ', active: true, accounting: 'greenInvoice' },
   { id: 'co_moshe', name: 'משה כורסיה בע"מ', active: false, accounting: 'greenInvoice' },
+  { id: 'co_ofek', name: 'אופק ידעי הגברה ותאורה', active: false, accounting: 'greenInvoice' },
 ];
 // מזהה חברת ה-GI הראשית (ברירת מחדל BPM) — לשם תאימות לאחור בלבד
 function giCompanyId() { const c = (load().companies || []).find(x => x.accounting === 'greenInvoice'); return c ? c.id : 'co_bpm'; }
@@ -3280,14 +3295,8 @@ function runMigrations() {
     changed = true;
     console.log('מיגרציה: הוסר חשבון ההתחברות iris (מיותר — איריס היא סוכנת)');
   }
-  // הסרה זמנית של חברת אופק (פייפרלס בעייתי) — לפי בקשת המשתמש. אפשר להחזיר בהמשך ע"י הוספה חזרה ל-COMPANY_SEED.
   db.companies = db.companies || [];
-  if (db.companies.some(c => c.id === 'co_ofek')) {
-    db.companies = db.companies.filter(c => c.id !== 'co_ofek');
-    changed = true;
-    console.log('מיגרציה: הוסרה זמנית חברת אופק (co_ofek)');
-  }
-  // ודא שהחברות הנותרות קיימות ושלכל אחת מוגדר ספק חשבונאי (accounting)
+  // ודא שכל החברות (כולל אופק) קיימות ושלכל אחת מוגדר ספק חשבונאי (accounting)
   for (const seed of COMPANY_SEED) {
     let c = db.companies.find(x => x.id === seed.id);
     if (!c) { c = { id: seed.id, name: seed.name, active: seed.active }; db.companies.push(c); changed = true; console.log('מיגרציה: נוספה חברה ' + seed.name); }

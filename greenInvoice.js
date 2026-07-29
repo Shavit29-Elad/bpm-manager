@@ -18,6 +18,7 @@ const BASE = process.env.GREENINVOICE_BASE || 'https://api.greeninvoice.co.il/ap
 const CRED_ENV = {
   co_bpm:   ['GREENINVOICE_API_KEY_ID',       'GREENINVOICE_API_SECRET'],
   co_moshe: ['GREENINVOICE_MOSHE_API_KEY_ID', 'GREENINVOICE_MOSHE_API_SECRET'],
+  co_ofek:  ['GREENINVOICE_OFEK_API_KEY_ID',  'GREENINVOICE_OFEK_API_SECRET'],
 };
 const DEFAULT_CO = 'co_bpm';
 
