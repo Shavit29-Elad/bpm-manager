@@ -2779,7 +2779,8 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   // ===== בסיס מזומן: הכנסות והוצאות לפי תנועות הבנק שהותאמו (manual/approved), לפי חודש התנועה והקבוצה =====
   // כך שהסיכום החודשי, חלונית הפירוט וההוצאות מסתדרים לאותם מספרים בדיוק (סכום הבנק בפועל).
   const defIncomeId = (groups.find(g => g.isDefaultIncome) || {}).id || null;
-  const ungrouped = Array(12).fill(0);
+  const ungrouped = Array(12).fill(0);       // הכנסות ללא קבוצה (חברות בלי קבוצת ברירת מחדל)
+  const ungroupedExp = Array(12).fill(0);    // הוצאות ללא קבוצה — מוצגות ב"אחר" כדי שהסכומים יסתדרו עם הפירוט
   const ungroupedDocs = []; // אין עוד "הכנסות ללא שיוך" בבסיס מזומן — הכל לפי תנועות הבנק
   let incomeError = null;
   for (const t of (db.bankTx || [])) {
@@ -2796,6 +2797,7 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
       else ungrouped[mi] += amt;
     } else if (t.direction === 'debit') {
       if (t.group && gmap[t.group]) gmap[t.group].expense[mi] += amt;
+      else ungroupedExp[mi] += amt;   // הוצאה מאושרת ללא קבוצה — נספרת ב"אחר"
     }
   }
 
@@ -2811,6 +2813,7 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   };
   const out = groups.map(g => mkGroup(g.id, g.name, g.key, gmap[g.id].income, gmap[g.id].expense, gmap[g.id].unlinkedExpense));
   if (ungrouped.some(x => x)) out.push(mkGroup('ungrouped', 'הכנסות ללא שיוך לקטגוריה', null, ungrouped, Array(12).fill(0), 0));
+  if (ungroupedExp.some(x => x)) out.push(mkGroup('ungrouped_exp', 'הוצאות ללא קבוצה', null, Array(12).fill(0), ungroupedExp, 0));
   json(res, { ok: true, year, incomeBasis: 'issued-305-320-gross', incomeError, groups: out, ungroupedDocs: ungroupedDocs.sort((a, b) => String(a.date).localeCompare(String(b.date))), groupsList: groups.map(g => ({ id: g.id, name: g.name })) });
 });
 
