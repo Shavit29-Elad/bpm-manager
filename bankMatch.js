@@ -2,7 +2,7 @@
 // תומך ב: התאמה מדויקת, התאמה עם ניכוי מס במקור 5% (סכום נמוך ב-5%),
 // והתאמה של תנועה אחת למספר חשבוניות (צירוף שסכומן = ההעברה).
 
-const WH = 0.95;            // ניכוי מס במקור 5% → מתקבל 95% מהחשבונית
+// שיעור ניכוי מס במקור מוגדר פר-חברה (fraction, למשל 0.05). WH = 1 − rate = החלק שמתקבל בבנק.
 const tol = (base) => Math.max(3, base * 0.004);
 
 function normName(s) {
@@ -27,20 +27,20 @@ function parseDate(s) {
 }
 function daysBetween(a, b) { const da = parseDate(a), db = parseDate(b); return (!da || !db) ? 999 : Math.abs((da - db) / 86400000); }
 
-// סוג התאמת סכום בין תנועה לחשבונית בודדת: 'exact' | 'wh' (פחות 5%) | null
-function amountKind(bank, invAmt) {
+// סוג התאמת סכום בין תנועה לחשבונית בודדת: 'exact' | 'wh' (פחות ניכוי מס) | null. wh = 1 − שיעור הניכוי.
+function amountKind(bank, invAmt, wh) {
   if (bank == null || invAmt == null) return null;
   if (Math.abs(bank - invAmt) <= tol(invAmt)) return 'exact';
-  if (Math.abs(bank - invAmt * WH) <= tol(invAmt)) return 'wh';
+  if (wh > 0 && wh < 1 && Math.abs(bank - invAmt * wh) <= tol(invAmt)) return 'wh';
   return null;
 }
 
-export function scoreMatch(tx, inv) {
+export function scoreMatch(tx, inv, wh = 0.95) {
   let score = 0; const reasons = [];
   if (tx.invoiceNumber && inv.number != null && String(inv.number) === String(tx.invoiceNumber)) { score += 100; reasons.push('מספר חשבונית'); }
-  const ak = amountKind(tx.absAmount, inv.amountIncVat);
+  const ak = amountKind(tx.absAmount, inv.amountIncVat, wh);
   if (ak === 'exact') { score += 50; reasons.push('סכום זהה'); }
-  else if (ak === 'wh') { score += 45; reasons.push('סכום פחות 5% (ניכוי מס)'); }
+  else if (ak === 'wh') { score += 45; reasons.push(`סכום פחות ${Math.round((1 - wh) * 100)}% (ניכוי מס)`); }
   if (tx.nameHint && inv.clientName && nameMatch(tx.nameHint, inv.clientName)) { score += 40; reasons.push('שם לקוח'); }
   const dd = daysBetween(tx.date, inv.date);
   if (dd <= 7) score += 12; else if (dd <= 30) score += 6;
@@ -67,7 +67,8 @@ function findCombo(target, invs) {
 }
 
 // מתאים תנועות מול חשבוניות. חשבונית לא מותאמת פעמיים. תומך בצירוף חשבוניות.
-export function matchCredits(txns, invoices) {
+export function matchCredits(txns, invoices, whRate = 0.05) {
+  const wh = 1 - (Number(whRate) || 0);   // החלק שמתקבל בבנק אחרי ניכוי מס במקור
   const usedInv = new Set();
   const result = new Map();   // index -> {matchStatus, matchedInvoices, suggestions}
   const credits = [];
@@ -76,7 +77,7 @@ export function matchCredits(txns, invoices) {
   // שלב 1: התאמות בודדות חמדניות. חובה הסכמה על סכום (מדויק/5%) או מספר חשבונית — לא שם בלבד.
   const pairs = [];
   credits.forEach(({ t, i }) => invoices.forEach(inv => {
-    const s = scoreMatch(t, inv);
+    const s = scoreMatch(t, inv, wh);
     const strong = s.amountKind !== null || s.reasons.includes('מספר חשבונית');
     if (strong && s.score >= 45) pairs.push({ i, inv, ...s });
   }));
@@ -94,7 +95,7 @@ export function matchCredits(txns, invoices) {
     if (cand.length < 2) continue;
     let combo = findCombo(t.absAmount, cand);
     let reason = 'צירוף חשבוניות';
-    if (!combo) { combo = findCombo(t.absAmount / WH, cand); reason = 'צירוף חשבוניות פחות 5%'; }
+    if (!combo && wh > 0 && wh < 1) { combo = findCombo(t.absAmount / wh, cand); reason = `צירוף חשבוניות פחות ${Math.round((1 - wh) * 100)}%`; }
     if (combo) {
       combo.forEach(inv => usedInv.add(inv.id));
       result.set(i, { matchStatus: 'auto', matchedInvoices: combo.map(inv => toInv(inv, { reasons: [reason] })), suggestions: [] });
@@ -107,7 +108,7 @@ export function matchCredits(txns, invoices) {
     const r = result.get(i);
     if (r) return { ...t, ...r };
     // הצעות: חשבוניות בודדות עם ציון משמעותי שעדיין פנויות
-    const sugg = invoices.map(inv => ({ inv, ...scoreMatch(t, inv) }))
+    const sugg = invoices.map(inv => ({ inv, ...scoreMatch(t, inv, wh) }))
       .filter(s => s.score >= 40 && !usedInv.has(s.inv.id))
       .sort((a, b) => b.score - a.score).slice(0, 5).map(s => toInv(s.inv, { reasons: s.reasons, score: s.score }));
     return { ...t, matchStatus: 'unmatched', matchedInvoices: [], suggestions: sugg };

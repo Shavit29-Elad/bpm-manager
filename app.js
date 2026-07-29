@@ -112,7 +112,7 @@ async function startApp() {
   try { savedCompany = localStorage.getItem('bpm_company'); } catch { }
   state.company = (savedCompany && state.companies.some(c => c.id === savedCompany)) ? savedCompany : state.companies[0]?.id;
   sel.value = state.company || '';
-  sel.onchange = () => { state.company = sel.value; try { localStorage.setItem('bpm_company', state.company); } catch { } clearApiCache(); applyCompanyTabs(); renderStatus(); render(); };
+  sel.onchange = () => { state.company = sel.value; state.whRate = undefined; try { localStorage.setItem('bpm_company', state.company); } catch { } clearApiCache(); loadWhRate(); applyCompanyTabs(); renderStatus(); render(); };
   applyPermissions();
   applyCompanyTabs();
 
@@ -975,6 +975,7 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
   const [r, ld] = await Promise.all([
     api(`/api/documents/${id}/lines`).catch(() => ({ error: 'שגיאת רשת' })),
     api(`/api/documents/last-date?type=${Number(type)}`).catch(() => ({})),
+    (state.whRate === undefined ? loadWhRate() : Promise.resolve()),
   ]);
   if (!r || !r.ok) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת השורות: ${escapeHtml(String(r?.error || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">סגור</button></div></div>`; return; }
   const needsPay = DER_PAYMENT_DOCS.has(Number(type));
@@ -1051,8 +1052,8 @@ window.derToggleWithholding = (on) => {
   const total = derTotals().total;
   const d = e.date;
   if (on) {
-    const wh = +(total * 0.05).toFixed(2);      // ניכוי מס במקור 5% מהסכום המלא (כולל מע"מ)
-    const net = +(total - wh).toFixed(2);       // מה שנכנס בפועל = 95%
+    const wh = +(total * (whRate() || 0.05)).toFixed(2);   // ניכוי מס במקור לפי שיעור החברה (ברירת מחדל 5%)
+    const net = +(total - wh).toFixed(2);       // מה שנכנס בפועל בבנק
     e.payments = [
       { type: 4, price: net, date: d, chequeNum: '', bankName: '' },
       { type: 0, price: wh, date: d, chequeNum: '', bankName: '' },
@@ -1157,7 +1158,7 @@ function renderDeriveEditor() {
     ${e.needsPay ? `<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:10px">
       <div class="row-between" style="margin-bottom:4px"><div style="font-weight:600;font-size:13px">תקבולים</div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <label style="font-size:12px;display:flex;gap:5px;align-items:center;cursor:pointer" title="ממלא אוטומטית: העברה בנקאית על 95% + ניכוי מס במקור על 5% מהסכום המלא"><input type="checkbox" ${e.withholding ? 'checked' : ''} onchange="derToggleWithholding(this.checked)"> ניכוי מס במקור 5%</label>
+          ${whRate() > 0 ? `<label style="font-size:12px;display:flex;gap:5px;align-items:center;cursor:pointer" title="ממלא אוטומטית: העברה בנקאית על ${100 - whPct()}% + ניכוי מס במקור על ${whPct()}% מהסכום המלא"><input type="checkbox" ${e.withholding ? 'checked' : ''} onchange="derToggleWithholding(this.checked)"> ניכוי מס במקור ${whPct()}%</label>` : ''}
           <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="derFillBalance()">מלא יתרה בשורה 1</button>
         </div></div>
       <p class="muted" style="font-size:11.5px;margin:0 0 6px">סכום התקבולים צריך להשתוות לסה"כ המסמך. ניכוי מס במקור מוזן כשורת תקבול נפרדת על סכום הניכוי.</p>
@@ -4528,7 +4529,9 @@ async function renderBusiness(c) {
       <label>מייל<input id="biz_email" value="${escapeHtml(p.email || '')}"></label>
       <label>כתובת עסק<input id="biz_address" value="${escapeHtml(p.address || '')}"></label>
       <label>אימייל רו״ח (להעברת הוצאות)<input id="biz_acct" type="email" dir="ltr" placeholder="ריק = לא מעביר לאף אחד" value="${escapeHtml(p.accountantEmail || '')}"></label>
+      <label>ניכוי מס במקור (%)<input id="biz_wh" type="number" step="0.5" min="0" max="30" dir="ltr" placeholder="0" value="${(Number(p.withholdingRate) || 0) * 100}"></label>
     </div>
+    <div class="muted" style="font-size:12px;margin-top:6px">שיעור ניכוי המס במקור של החברה. משפיע על כל חישובי ההתאמות בבנק, הפקת מסמכי המשך/קבלות, וסיווג ההכנסות. 0 = ללא ניכוי.</div>
     <div class="muted" style="font-size:12px;margin-top:8px">כשמאשרים קליטת הוצאה, קובץ החשבונית נשלח אוטומטית לכתובת רו״ח <b>של החברה הזו בלבד</b>. אם ריק — לא נשלח מייל.</div>
     <label style="display:block;margin-top:14px">הערה קבועה לכל המסמכים (פרטי בנק להעברה וכו')
       <textarea id="biz_docremark" rows="5" style="width:100%;margin-top:4px;font-size:13px" placeholder="למשל שם מוטב, בנק, סניף ומספר חשבון…">${escapeHtml(p.docRemark || '')}</textarea>
@@ -4685,11 +4688,13 @@ window.bizSave = async () => {
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
     name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), docRemark: g('biz_docremark'),
+    withholdingPct: Number(g('biz_wh')) || 0,
     managers: [
       { name: g('mgr0_name'), idNumber: g('mgr0_id'), phone: g('mgr0_phone'), email: g('mgr0_email') },
       { name: g('mgr1_name'), idNumber: g('mgr1_id'), phone: g('mgr1_phone'), email: g('mgr1_email') },
     ],
   });
+  state.whRate = Math.min(0.3, Math.max(0, (Number(g('biz_wh')) || 0) / 100));   // רענון שיעור הניכוי בזיכרון מיד
   if (msg) { msg.textContent = 'נשמר ✓'; setTimeout(() => { if (msg) msg.textContent = ''; }, 2500); }
 };
 window.bizSaveTaxExpiry = async () => {
@@ -5159,7 +5164,8 @@ function bankSummaryHtml(rows) {
   const matchedCr = cr.filter(t => (t.matchedInvoices || []).length && (t.matchStatus === 'auto' || t.matchStatus === 'manual'));
   const invSum = (t) => (t.matchedInvoices || []).reduce((a, i) => a + (Number(i.amount) || 0), 0);
   const sumInv = matchedCr.reduce((s, t) => s + invSum(t), 0);
-  const sumWh = matchedCr.reduce((s, t) => { const si = invSum(t), w = si - t.absAmount; return s + ((w > 1 && w < si * 0.08) ? w : 0); }, 0);
+  const _wr = whRate();
+  const sumWh = _wr > 0 ? matchedCr.reduce((s, t) => { const si = invSum(t), w = si - t.absAmount; return s + ((w > 1 && w < si * (_wr + 0.03)) ? w : 0); }, 0) : 0;
   const unmatched = rows.filter(t => t.matchStatus === 'unmatched').length;
   const stat = (label, val, color) => `<div class="card" style="padding:11px 14px"><div class="label" style="font-size:12px">${label}</div><div style="font-size:18px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
   return `${stat('שורות מוצגות', rows.length)}${stat('סה"כ זכות', money(sumCredit), 'var(--accent2)')}${dir !== 'credit' ? stat('סה"כ חובה', money(sumDebit), 'var(--danger)') : ''}${stat('סה"כ סכום חשבוניות', money(sumInv))}${stat('סה"כ ניכוי במקור', money(sumWh), 'var(--warn)')}${stat('שורות לא מותאמות', unmatched, unmatched ? 'var(--danger)' : 'var(--accent2)')}`;
@@ -5241,6 +5247,7 @@ window.approveAllStrong = async (btn) => {
 
 async function renderBank(c, soft) {
   if (!soft) c.innerHTML = `<div class="panel"><div class="empty">טוען תנועות…</div></div>`;
+  await loadWhRate();   // שיעור ניכוי מס במקור של החברה — נחוץ לחישובי כיסוי/התאמה בתצוגה
   const all = await api(`/api/bank?companyId=${state.company}`);
   _bankList = all;
   _bankBalance = await api(`/api/bank/balance?companyId=${state.company}`).catch(() => null);
@@ -5283,8 +5290,13 @@ function bankRowCovered(t) {
   const sum = invs.reduce((s, inv) => s + (Number(inv.allocated != null ? inv.allocated : inv.amount) || 0), 0);
   const bank = Math.abs(Number(t.absAmount) || 0);
   const tol = Math.max(3, bank * 0.004);
-  return Math.abs(sum - bank) <= tol || (t.direction === 'credit' && Math.abs(sum * 0.95 - bank) <= tol);
+  return Math.abs(sum - bank) <= tol || (t.direction === 'credit' && whFactor() < 1 && Math.abs(sum * whFactor() - bank) <= tol);
 }
+// שיעור ניכוי מס במקור של החברה הפעילה (fraction) — נטען מפרטי העסק. משמש בכל חישובי הניכוי.
+function whRate() { return Math.min(0.3, Math.max(0, Number(state.whRate) || 0)); }
+function whFactor() { return 1 - whRate(); }          // החלק שמתקבל בבנק אחרי הניכוי
+function whPct() { return Math.round(whRate() * 100); }
+async function loadWhRate() { try { const p = await api('/api/business-profile'); state.whRate = Math.min(0.3, Math.max(0, Number(p.withholdingRate) || 0)); } catch { } }
 // קיבוץ מסמכי הכנסה בשורת בנק ליחידות: חשבונית מס כראשית, עם זיכוי (330) וקבלה (400) מקוננים תחתיה.
 // נטו = סכום החשבונית פחות הזיכויים — כך שהשורה מוצגת כיחידה אחת שמסתכמת לסכום שהתקבל בבנק.
 function groupBankUnits(mis) {
@@ -5356,7 +5368,7 @@ function bankTr(t) {
     }));
     const sumInv = units.reduce((s, u) => s + (Number(u.net != null ? u.net : u.inv.amount) || 0), 0);
     const whAmt = sumInv - t.absAmount;
-    wh = (whAmt > 1 && whAmt < sumInv * 0.08) ? `<span style="color:var(--warn)">${money(whAmt)}</span>` : '—';
+    wh = (whRate() > 0 && whAmt > 1 && whAmt < sumInv * (whRate() + 0.03)) ? `<span style="color:var(--warn)">${money(whAmt)}</span>` : '—';
     const conf = bankConfidence(t);
     const shortAmt = Math.abs(Number(t.absAmount) || 0) - mis.reduce((s, i) => s + (Number(i.allocated != null ? i.allocated : i.amount) || 0), 0);
     const confBadge = !covered
@@ -5455,8 +5467,8 @@ window.saveBankNotes = (id, val) => fetch(`/api/bank/${id}`, { method: 'PUT', he
 // ---- שיוך ידני של חשבונית/קבלה לתנועת בנק ----
 let _linkTxId = null, _linkSel = [], _linkClients = null, _linkSuppliers = null, _linkClientDocs = [], _linkClientName = '';
 let _linkMode = 'clients', _linkDocsKind = 'income', _linkQuery = '', _linkNumTimer = null, _linkNumResults = [], _linkIncludeCredits = false, _linkInclUsed = false;
-// התאמת סכום בין קבלה לחשבונית (מלא או פחות 5% ניכוי)
-const _amtClose = (a, b) => { const t = Math.max(3, (a || 0) * 0.004); return Math.min(Math.abs(a - b), Math.abs(a - b * 0.95)) <= t; };
+// התאמת סכום בין קבלה לחשבונית (מלא או פחות ניכוי מס במקור לפי שיעור החברה)
+const _amtClose = (a, b) => { const t = Math.max(3, (a || 0) * 0.004); return Math.min(Math.abs(a - b), Math.abs(a - b * whFactor())) <= t; };
 // #1 — לא מציגים לשיוך מסמכים ישנים מ-מאי 2026 (רק מאי 2026 והלאה)
 const _docFromMay26 = (d) => { const dt = String((d && d.date) || '').slice(0, 10); return !dt || dt >= '2026-05-01'; };
 function linkSelHtml() {
@@ -5738,7 +5750,7 @@ const incTargetFor = (srcType) => Number(srcType) === 300 ? 320 : 400; // עסק
 function incMatchKind(A, X) {
   if (!A || !X) return null;
   if (Math.abs(A - X) <= Math.max(2, A * 0.01)) return { kind: 'exact', withheld: 0 };
-  if (Math.abs(X - A * 0.95) <= Math.max(2, A * 0.012)) return { kind: 'wh', withheld: +(A - X).toFixed(2) };
+  if (whFactor() < 1 && Math.abs(X - A * whFactor()) <= Math.max(2, A * 0.012)) return { kind: 'wh', withheld: +(A - X).toFixed(2) };
   return null;
 }
 function txIsoDate(txId) { const d = (_bankList.find(t => t.id === txId) || {}).date || ''; return d.split('/').reverse().join('-'); }
@@ -5781,7 +5793,7 @@ function renderCreateIncome() {
     <p class="muted" style="font-size:12.5px;margin:2px 0 10px">בחר חשבונית עסקה/מס פתוחה כדי להפיק לה מסמך-המשך (מס-קבלה / קבלה), או צור מסמך חדש לגמרי. התקבול והתאריך ימולאו לפי התנועה.</p>
     ${matches.length ? `<div style="border:1px solid var(--accent);border-radius:10px;padding:8px 10px;background:var(--panel2);margin-bottom:10px">
       <b style="font-size:13px">🎯 התאמות מוצעות לסכום ${money(X)}</b>${matches.map(matchRow).join('')}</div>`
-      : `<div class="muted" style="font-size:12.5px;margin-bottom:10px">לא נמצאה חשבונית פתוחה בסכום ${money(X)} (או ${money(+(X / 0.95).toFixed(2))} עם ניכוי 5%). בחר ידנית מהרשימה או צור מסמך חדש.</div>`}
+      : `<div class="muted" style="font-size:12.5px;margin-bottom:10px">לא נמצאה חשבונית פתוחה בסכום ${money(X)}${whRate() > 0 ? ` (או ${money(+(X / whFactor()).toFixed(2))} עם ניכוי ${whPct()}%)` : ''}. בחר ידנית מהרשימה או צור מסמך חדש.</div>`}
     <details ${matches.length ? '' : 'open'}><summary style="cursor:pointer;font-weight:600;font-size:13px">📋 כל החשבוניות הפתוחות (${docs.length})</summary>
       <input placeholder="חפש לפי מספר / לקוח…" style="width:100%;margin:8px 0" oninput="incSearch(this.value)">
       <div id="incList">${listDocs.map(pickRow).join('') || '<span class="muted">אין.</span>'}</div>

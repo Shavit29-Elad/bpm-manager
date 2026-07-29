@@ -1778,6 +1778,9 @@ function bizProfile(db, cid) {
   p.additionalDocs = Array.isArray(p.additionalDocs) ? p.additionalDocs : [];
   // כתובת רו"ח להעברת הוצאות — פר-חברה. BPM: ברירת המחדל ההיסטורית. חברות אחרות: ריק עד שמגדירים (לא מעבירים לאף אחד).
   if (p.accountantEmail === undefined) p.accountantEmail = (cid === 'co_bpm') ? (process.env.FORWARD_EXPENSE_EMAIL || '516942349@rivh.it') : '';
+  // שיעור ניכוי מס במקור (fraction). BPM: 5% היסטורי. חברות אחרות: 0 עד שמגדירים. ניתן לשינוי בפרטי העסק.
+  if (p.withholdingRate === undefined) p.withholdingRate = (cid === 'co_bpm') ? 0.05 : 0;
+  p.withholdingRate = Math.min(0.3, Math.max(0, Number(p.withholdingRate) || 0));
   if (p.docRemark === undefined) p.docRemark = defaultDocRemark(cid);
   try { greenInvoice.setCompanyRemark(cid, p.docRemark); } catch { } // סנכרון: ההערה תוזרק לכל מסמך שנוצר בחברה
   return p;
@@ -1820,6 +1823,9 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   ['name', 'businessNumber', 'email', 'address'].forEach(k => { if (k in b) p[k] = String(b[k] || ''); });
   if ('docRemark' in b) p.docRemark = String(b.docRemark || ''); // הערה קבועה לכל המסמכים (פר-חברה)
   if ('accountantEmail' in b) p.accountantEmail = String(b.accountantEmail || '').trim();
+  // שיעור ניכוי מס במקור — מתקבל באחוזים (0..30) ונשמר כ-fraction
+  if ('withholdingPct' in b) p.withholdingRate = Math.min(0.3, Math.max(0, (Number(b.withholdingPct) || 0) / 100));
+  else if ('withholdingRate' in b) p.withholdingRate = Math.min(0.3, Math.max(0, Number(b.withholdingRate) || 0));
   if (Array.isArray(b.managers)) b.managers.slice(0, 2).forEach((m, i) => {
     p.managers[i] = p.managers[i] || {};
     ['name', 'idNumber', 'phone', 'email'].forEach(k => { if (k in m) p.managers[i][k] = String(m[k] || ''); });
@@ -2319,7 +2325,8 @@ async function runBankMatchBg(companyId) {
       try { expenses = await greenInvoice.expensesInRange(from, to); } catch { }
     });
     try { const _notes = snap.expenseNotes || {}; if (Object.keys(_notes).length) expenses.forEach(e => { if (_notes[e.id]) e.description = _notes[e.id]; }); } catch { }
-    const cmatched = attachReceipts(matchCredits(txns, invoices), receipts);  // תנועות זכות מסומנות במקום
+    const whRate = bizProfile(snap, companyId).withholdingRate || 0;   // שיעור ניכוי מס במקור של החברה
+    const cmatched = attachReceipts(matchCredits(txns, invoices, whRate), receipts);  // תנועות זכות מסומנות במקום
     const dmap = new Map();
     try { for (const dm of matchDebits(txns, expenses)) dmap.set(dm.i, dm); } catch { }
     // כותבים על ה-DB העדכני לפי id (למניעת דריסת שינויים מקבילים)
@@ -2557,10 +2564,12 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
   // (או שההעברה = יתרת החשבוניות פחות 5% ניכוי מס — ואז הן נסגרות במלואן). אחרת נשארת לא מתואמת עם חיווי החוסר.
   if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
     const bankAbs = Math.abs(Number(t.absAmount) || 0);
+    const whRate = bizProfile(db, t.companyId).withholdingRate || 0;   // שיעור ניכוי מס במקור של החברה
+    const whFactor = 1 - whRate;
     const rem = body.matchedInvoices.map(inv => ({ inv, r: Math.max(0, (Number(inv.amount) || 0) - allocatedElsewhere(inv.id)) }));
     const totalRem = rem.reduce((s, x) => s + x.r, 0);
     const tol = Math.max(3, bankAbs * 0.004);
-    if (totalRem > 0 && Math.abs(bankAbs - totalRem * 0.95) <= Math.max(3, totalRem * 0.004)) {
+    if (whRate > 0 && totalRem > 0 && Math.abs(bankAbs - totalRem * whFactor) <= Math.max(3, totalRem * 0.004)) {
       rem.forEach(x => { x.inv.allocated = +x.r.toFixed(2); });   // ניכוי מס במקור — החשבוניות נסגרות במלואן, הבנק קיבל 95%
     } else {
       let remaining = bankAbs;
@@ -2590,8 +2599,9 @@ add('GET', /^\/api\/bank\/coverage-audit$/, (req, res, _p, q) => {
     const allocSum = invs.reduce((s, inv) => s + (Number(inv.allocated != null ? inv.allocated : inv.amount) || 0), 0);
     const bankAbs = Math.abs(Number(t.absAmount) || 0);
     const tol = Math.max(3, bankAbs * 0.004);
-    // בהכנסות מותר גם "פחות 5%" (ניכוי מס במקור); בהוצאות רק סכום מדויק
-    const covered = Math.abs(allocSum - bankAbs) <= tol || (t.direction === 'credit' && Math.abs(allocSum * 0.95 - bankAbs) <= tol);
+    const whFactor = 1 - (bizProfile(db, t.companyId).withholdingRate || 0);
+    // בהכנסות מותר גם "פחות ניכוי מס במקור" (לפי שיעור החברה); בהוצאות רק סכום מדויק
+    const covered = Math.abs(allocSum - bankAbs) <= tol || (t.direction === 'credit' && whFactor < 1 && Math.abs(allocSum * whFactor - bankAbs) <= tol);
     if (!covered) flagged.push({ id: t.id, date: t.date, dir: t.direction, bankAmount: +bankAbs.toFixed(2), matchedSum: +allocSum.toFixed(2), shortfall: +(bankAbs - allocSum).toFixed(2), name: t.nameHint || t.description || '', numbers: invs.map(i => i.number).filter(Boolean) });
   }
   flagged.sort((a, b) => Math.abs(b.shortfall) - Math.abs(a.shortfall));
