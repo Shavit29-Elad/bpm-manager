@@ -4916,9 +4916,10 @@ function wireCard(x) {
   const post = async (path, extra) => {
     msg('בודק…');
     const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: x.key, ...extra }) }).then(r => r.json());
+      body: JSON.stringify({ key: x.key, companyId: state.company, ...extra }) }).then(r => r.json());
     await renderStatus();
-    if (r.error) { msg('❌ ' + r.error); return; }
+    if (r && r.error) { msg('❌ ' + r.error); return; }
+    if (r && r.ok) msg('✓ בוצע');
     renderConnections($('#content'));
   };
   const b = (sel, fn) => { const el = document.querySelector(sel); if (el) el.onclick = fn; };

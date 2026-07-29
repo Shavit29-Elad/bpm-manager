@@ -33,11 +33,18 @@ export function setCompanyRemark(companyId, text) { if (text && String(text).tri
 // רשימת מזהי החברות שיש להן מיפוי מפתחות (לאימות אוטומטי בעליית שרת)
 export function giCompanies() { return Object.keys(CRED_ENV); }
 
+// מפתחות פר-חברה שנשמרו דרך לשונית החיבורים (בבסיס הנתונים) — נטענים לזיכרון בעליית השרת ובכל חיבור.
+// עדיפות: משתני סביבה (Render) → ואם אין, המפתחות שהוזנו באתר. כך אין דריסה בין חברות.
+const _dbCreds = new Map(); // companyId -> { id, secret }
+export function setDbCreds(companyId, creds) {
+  if (creds && creds.id && creds.secret) _dbCreds.set(companyId, { id: String(creds.id), secret: String(creds.secret) });
+  else _dbCreds.delete(companyId);
+  resetToken(companyId);
+}
 function credsFor(companyId) {
   const pair = CRED_ENV[companyId];
-  if (!pair) return null;
-  const id = process.env[pair[0]], secret = process.env[pair[1]];
-  return (id && secret) ? { id, secret } : null;
+  if (pair) { const id = process.env[pair[0]], secret = process.env[pair[1]]; if (id && secret) return { id, secret }; }
+  return _dbCreds.get(companyId) || null;   // גיבוי: מפתחות שהוזנו באתר לחברה זו
 }
 function haveCredentials(companyId = curCompany()) { return Boolean(credsFor(companyId)); }
 
@@ -747,5 +754,5 @@ export async function updateSupplierDetails(id, data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, withCompany, setCompanyRemark, giCompanies, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, withCompany, setCompanyRemark, giCompanies, setDbCreds, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;

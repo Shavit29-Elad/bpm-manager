@@ -112,11 +112,18 @@ const ICAL_ENV = {
   co_ofek: ['GOOGLE_OFEK_ICAL_URL', 'GOOGLE_OFEK_ICAL_URL_2', 'GOOGLE_OFEK_ICAL_URL_3'],
 };
 const DEFAULT_CO = 'co_bpm';
+// קישורי iCal פר-חברה שהוזנו דרך לשונית החיבורים (נשמרים בבסיס הנתונים, נטענים לזיכרון בעלייה ובכל חיבור).
+// עדיפות: משתני סביבה → ואם אין, הקישורים שהוזנו באתר לאותה חברה.
+const _dbIcal = new Map(); // companyId -> [urls]
+export function setDbIcal(companyId, urls) {
+  const arr = (Array.isArray(urls) ? urls : [urls]).filter(Boolean).map(s => String(s).trim()).filter(Boolean);
+  if (arr.length) _dbIcal.set(companyId, arr); else _dbIcal.delete(companyId);
+  delete _cache[companyId]; // ביטול מטמון היומן של החברה
+}
 function icalUrls(companyId = DEFAULT_CO) {
-  const envs = ICAL_ENV[companyId] || [];
-  return envs.map(e => process.env[e]).filter(Boolean)
-    .flatMap(v => v.split(/[\s,]+/))
-    .map(s => s.trim()).filter(Boolean);
+  const envs = (ICAL_ENV[companyId] || []).map(e => process.env[e]).filter(Boolean);
+  const src = envs.length ? envs : (_dbIcal.get(companyId) || []);
+  return src.flatMap(v => String(v).split(/[\s,]+/)).map(s => s.trim()).filter(Boolean);
 }
 
 // האם ליומן של חברה זו הוגדר קישור

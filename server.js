@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 
 import { init as initStore, load, save, id, upsertEvent, companyEvents, saveFile, getFile, deleteFile } from './store.js';
 import { parseEventMessage, parseEventMessages } from './whatsappParser.js';
-import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar, calendarCompanies } from './googleCalendar.js';
+import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar, calendarCompanies, setDbIcal } from './googleCalendar.js';
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
@@ -2039,24 +2039,21 @@ function buildConnectionsView(companyId) {
   const comp = companyId ? (db.companies || []).find(c => c.id === companyId) : null;
   const acct = comp ? (comp.accounting || 'greenInvoice') : 'greenInvoice';
   const cid = companyId || giCompanyId();
-  const isPlOwner = !!companyId && companyId === paperlessCompanyId();
+  const ccreds = ((db.connCreds || {})[cid]) || {};
   const cards = [];
-  // מערכת חשבונאית — לפי סוג החברה. סטטוס לפי מפתחות של החברה הנוכחית בלבד (בידוד מלא בין החברות).
-  // הכרטיסים לקריאה-בלבד: המפתחות מוגדרים כמשתני סביבה נפרדים פר-חברה ב-Render, כדי שחיבור חברה אחת
-  // לא ידרוס בטעות חברה אחרת. אין טופס חיבור בתוך האפליקציה עבורם.
-  const envNote = 'החיבור מוגדר במשתני הסביבה ב-Render (נפרד לכל חברה) — כדי שלא ידרוס חברה אחרת.';
-  if (acct === 'paperless') cards.push(connCard('paperless', isPlOwner));
-  else {
-    const gi = connCard('greenInvoice', false);
-    gi.status = giEnabled(cid) ? 'connected' : 'disconnected';  // מחובר רק אם לחברה זו יש מפתחות משלה
-    gi.perCompany = true; gi.readonly = true; gi.message = envNote;
-    cards.push(gi);
-  }
-  // יומן גוגל — פר-חברה: מחובר רק אם לחברה זו הוגדרו קישורי iCal משלה.
-  const cal = connCard('googleCalendar', false);
-  cal.status = hasCalendar(cid) ? 'connected' : 'disconnected';
-  cal.perCompany = true; cal.readonly = true; cal.message = envNote;
-  cards.push(cal);
+  // חשבונית ירוקה + יומן — פר-חברה: טופס חיבור זמין, אך המפתחות נשמרים בבסיס הנתונים תחת מזהה החברה בלבד.
+  // כך חיבור/עדכון של חברה אחת אינו נוגע במפתחות של חברה אחרת (בידוד מלא, אין דריסה).
+  const perCompCard = (key, connected) => {
+    const c = connCard(key, true);              // isOwner=true → טופס חיבור מוצג
+    const stored = ccreds[key] || {};
+    c.status = connected ? 'connected' : 'disconnected';
+    c.fields = (c.fields || []).map(f => ({ ...f, set: connected || Boolean(stored[f.env]), hint: '' }));
+    c.perCompany = true; c.message = null;
+    return c;
+  };
+  if (acct === 'paperless') cards.push(connCard('paperless', companyId === paperlessCompanyId()));
+  else cards.push(perCompCard('greenInvoice', giEnabled(cid)));
+  cards.push(perCompCard('googleCalendar', hasCalendar(cid)));
   // בנק — העלאת קובץ xlsx (פר-חברה, דרך לשונית הבנק)
   cards.push(connCard('bank', false));
   return cards;
@@ -2065,50 +2062,87 @@ function buildConnectionsView(companyId) {
 // GET /api/connections?companyId=
 add('GET', /^\/api\/connections$/, (req, res, _p, q) => json(res, buildConnectionsView(q.companyId)));
 
-// POST /api/connections/connect  { key, values:{ENV:VAL,...} }
-add('POST', /^\/api\/connections\/connect$/, async (req, res, _p, _q, body) => {
+// טעינת מפתחות החיבורים פר-חברה מבסיס הנתונים לזיכרון (עליית שרת + אחרי כל חיבור)
+function hydrateConnCreds() {
+  const db = load();
+  const cc = db.connCreds || {};
+  for (const cid of Object.keys(cc)) {
+    const gi = cc[cid].greenInvoice;
+    if (gi && gi.GREENINVOICE_API_KEY_ID && gi.GREENINVOICE_API_SECRET) {
+      greenInvoice.setDbCreds(cid, { id: gi.GREENINVOICE_API_KEY_ID, secret: gi.GREENINVOICE_API_SECRET });
+    }
+    const cal = cc[cid].googleCalendar;
+    if (cal) setDbIcal(cid, [cal.GOOGLE_ICAL_URL, cal.GOOGLE_ICAL_URL_2, cal.GOOGLE_ICAL_URL_3].filter(Boolean));
+  }
+}
+
+// POST /api/connections/connect  { key, companyId, values:{ENV:VAL,...} }
+add('POST', /^\/api\/connections\/connect$/, async (req, res, _p, q, body) => {
   const { key, values = {} } = body || {};
+  const cid = (body && body.companyId) || q.companyId || giCompanyId();
   const def = CONN_DEFS[key];
   if (!def) return json(res, { error: 'חיבור לא מוכר' }, 404);
   if (def.soon) return json(res, { error: 'החיבור עדיין בפיתוח' }, 400);
 
-  // שמירת הערכים הרלוונטיים בלבד ל-.env
+  // חשבונית ירוקה / יומן — שמירה פר-חברה בבסיס הנתונים (בידוד מלא; לא נוגע בחברות אחרות)
+  if (key === 'greenInvoice' || key === 'googleCalendar') {
+    const db = load();
+    db.connCreds = db.connCreds || {};
+    db.connCreds[cid] = db.connCreds[cid] || {};
+    const stored = { ...(db.connCreds[cid][key] || {}) };
+    for (const f of (def.fields || [])) {
+      const v = values[f.env];
+      if (v !== undefined && String(v).trim() !== '') stored[f.env] = String(v).trim();  // ריק = משאירים ערך קיים
+    }
+    db.connCreds[cid][key] = stored;
+    save(db);
+    if (key === 'greenInvoice') greenInvoice.setDbCreds(cid, { id: stored.GREENINVOICE_API_KEY_ID, secret: stored.GREENINVOICE_API_SECRET });
+    else setDbIcal(cid, [stored.GOOGLE_ICAL_URL, stored.GOOGLE_ICAL_URL_2, stored.GOOGLE_ICAL_URL_3].filter(Boolean));
+    const r = key === 'greenInvoice' ? await greenInvoice.verify(cid) : await calendarVerify(cid);
+    return json(res, { ok: r.ok, error: r.ok ? null : r.error, connections: buildConnectionsView(cid) });
+  }
+
+  // שאר החיבורים (ווטסאפ וכו') — התנהגות גלובלית קיימת
   const allowed = def.toggle ? [def.toggle] : (def.fields || []).map(f => f.env);
   const updates = {};
   for (const k of allowed) if (values[k] !== undefined) updates[k] = values[k];
   saveSettings(updates);
-  if (key === 'greenInvoice') greenInvoice.resetToken();
   if (key === 'paperless') _plStatus = { at: 0, ok: false, msg: null };
-
   const now = new Date().toISOString();
   const r = await verifyConnection(key);
-  setRecord(key, r.ok
-    ? { status: 'connected', lastCheckedAt: now, message: null }
-    : { status: 'error', lastCheckedAt: now, message: r.error });
-  json(res, { ok: r.ok, connections: buildConnectionsView() });
+  setRecord(key, r.ok ? { status: 'connected', lastCheckedAt: now, message: null } : { status: 'error', lastCheckedAt: now, message: r.error });
+  json(res, { ok: r.ok, connections: buildConnectionsView(cid) });
 });
 
-// POST /api/connections/test  { key }
-add('POST', /^\/api\/connections\/test$/, async (req, res, _p, _q, body) => {
+// POST /api/connections/test  { key, companyId }
+add('POST', /^\/api\/connections\/test$/, async (req, res, _p, q, body) => {
   const key = body?.key;
+  const cid = (body && body.companyId) || q.companyId || giCompanyId();
   if (!CONN_DEFS[key]) return json(res, { error: 'חיבור לא מוכר' }, 404);
-  const now = new Date().toISOString();
-  const r = await verifyConnection(key);
-  setRecord(key, r.ok ? { status: 'connected', lastCheckedAt: now, message: null }
-    : { status: 'error', lastCheckedAt: now, message: r.error });
-  json(res, { ok: r.ok, connections: buildConnectionsView() });
+  let r;
+  if (key === 'greenInvoice') r = await greenInvoice.verify(cid);
+  else if (key === 'googleCalendar') r = await calendarVerify(cid);
+  else r = await verifyConnection(key);
+  json(res, { ok: r.ok, error: r.ok ? null : r.error, connections: buildConnectionsView(cid) });
 });
 
-// POST /api/connections/disconnect  { key }
-add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, _q, body) => {
+// POST /api/connections/disconnect  { key, companyId }
+add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, q, body) => {
   const key = body?.key;
+  const cid = (body && body.companyId) || q.companyId || giCompanyId();
   const def = CONN_DEFS[key];
   if (!def) return json(res, { error: 'חיבור לא מוכר' }, 404);
+  if (key === 'greenInvoice' || key === 'googleCalendar') {
+    const db = load();
+    if (db.connCreds && db.connCreds[cid]) { delete db.connCreds[cid][key]; save(db); }
+    if (key === 'greenInvoice') greenInvoice.setDbCreds(cid, null); else setDbIcal(cid, []);
+    return json(res, { ok: true, connections: buildConnectionsView(cid) });
+  }
   const clear = def.toggle ? { [def.toggle]: '' } : {};
   (def.fields || []).forEach(f => { clear[f.env] = ''; });
   saveSettings(clear);
   clearRecord(key);
-  json(res, { ok: true, connections: buildConnectionsView() });
+  json(res, { ok: true, connections: buildConnectionsView(cid) });
 });
 
 // ---- צוות (עובדים וירטואליים) + צ'אט ----
@@ -3209,9 +3243,8 @@ function giEmptyFor(pathname) {
   if (pathname === '/api/expense-drafts') return { drafts: [] };
   if (pathname === '/api/expenses/quick-search' || pathname === '/api/documents/quick-search') return { items: [] };
   if (/^\/api\/(clients|suppliers)\/[^/]+\/documents$/.test(pathname)) return [];
-  // יומן גוגל (המחובר ל-BPM) — לחברות אחרות ריק עד שיחוברו יומנים משלהן
-  if (pathname === '/api/calendar/match') return { matched: [], missingInCalendar: [], missingInWhatsappCount: 0 };
-  if (pathname === '/api/calendar/events') return { whatsapp: [], calendar: [] };
+  // הערה: אנדפוינטי היומן (calendar/match, calendar/events) אינם נחסמים כאן — הם פר-חברה לפי iCal
+  // ומטופלים ישירות (מחזירים יומן ריק אם לא הוגדר), כך שיומן עובד גם בלי חיבור חשבונית ירוקה.
   return undefined;
 }
 
@@ -3400,6 +3433,7 @@ server.listen(PORT, async () => {
   await initStore();          // מחבר ל-Postgres (Neon) לפני שמתחילים לקרוא/לכתוב נתונים
   seedIfEmpty();
   runMigrations();
+  hydrateConnCreds();         // טוען מפתחות חיבורים פר-חברה שהוזנו באתר (בסיס הנתונים) לזיכרון
   autoVerifyConnections();
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);
   startWhatsappBridge(async (text) => { try { const wc = process.env.WHATSAPP_COMPANY || 'co_bpm'; await greenInvoice.withCompany(wc, () => ingestText(text, wc)); } catch {} })
