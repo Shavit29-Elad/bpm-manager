@@ -2552,9 +2552,10 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
     }
   }
   if (body.group !== undefined) t.group = body.group || null;
-  // חובת שיוך לקבוצה לפני אישור תנועה — אך ורק אצל משה כורסיה
-  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && t.companyId === 'co_moshe' && !t.group) {
-    return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה (מוזיקה / דיגיטל / הוצאות שוטפות / אחר).' }, 400);
+  // חובת שיוך לקבוצה לפני אישור תנועה — לכל חברה שהגדירה קבוצות שיוך (BPM וכל חברה עתידית). חברה ללא קבוצות אינה נחסמת.
+  const companyHasGroups = (db.txGroups || []).some(g => g.companyId === t.companyId);
+  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && companyHasGroups && !t.group) {
+    return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה.' }, 400);
   }
   // #1 — קבלה (400) משויכת: משיכת חשבונית המס המקורית וקינון תחתיה (מונע ספירה כפולה)
   if (greenInvoice.haveCredentials() && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {

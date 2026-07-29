@@ -49,7 +49,20 @@ const api = (p) => {
   };
 })();
 
-const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'קבלנים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
+const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
+// לשוניות רלוונטיות לחברה מסוימת (לניהול הרשאות משתמשים) — נגזר מאותם כללים כמו applyCompanyTabs. "פרטי העסק" — הנהלה בלבד.
+function companyTabsFor(cid) {
+  const isBpm = cid === 'co_bpm', isMoshe = cid === 'co_moshe';
+  const out = [];
+  for (const k of Object.keys(TAB_LABELS)) {
+    if (k === 'business') continue;
+    if (k === 'team') { if (isBpm) out.push(k); continue; }
+    if (['events', 'payroll', 'connections'].includes(k)) { if (!isMoshe) out.push(k); continue; }
+    out.push(k);   // כולל 'summary' — סיכום עסק זמין לכל החברות
+  }
+  return out;
+}
+const currentCompanyName = () => ((state.companies || []).find(c => c.id === state.company) || {}).name || '';
 // התאמת שם לפי כל המילים בשאילתה (בכל מיקום) — עמיד לשמות עם תיאור באמצע, למשל "אורן מושייב" מול "אורן אירועים - אורן מושייב"
 const nameHas = (name, q) => { const toks = String(q || '').trim().split(/\s+/).filter(Boolean); const nm = String(name || ''); return !toks.length || toks.every(t => nm.includes(t)); };
 // קידוד אובייקט ל-onclick בצורה בטוחה: encodeURIComponent לא מקודד גרש ' — נחליף ל-%27 כדי שגרש בתיאור (למשל "מס' הקצאה") לא ישבור את מחרוזת ה-onclick. פענוח ב-decodeURIComponent מחזיר את הגרש.
@@ -185,14 +198,13 @@ function applyCompanyTabs() {
     document.querySelectorAll(`.tab[data-tab="${tab}"]`).forEach(t => { t.style.display = (!isMoshe && userAllows(tab)) ? '' : 'none'; });
   });
   if (isMoshe && MOSHE_HIDDEN_TABS.includes(state.tab)) goHome();
-  // "סיכום עסק" — אך ורק אצל משה כורסיה (סיכום כל הקטגוריות: חודשי + שנתי)
-  document.querySelectorAll('.tab[data-tab="summary"]').forEach(t => { t.style.display = (isMoshe && userAllows('summary')) ? '' : 'none'; });
-  if (!isMoshe && state.tab === 'summary') goHome();
+  // "סיכום עסק" — זמין לכל החברות (סיכום כל הקטגוריות/קבוצות: חודשי + שנתי), לפי הרשאות המשתמש
+  document.querySelectorAll('.tab[data-tab="summary"]').forEach(t => { t.style.display = userAllows('summary') ? '' : 'none'; });
 }
 
 // ---- ניהול משתמשים (מנהל בלבד) ----
 let _usersList = [];
-const _tabChecks = (cls, sel) => Object.entries(TAB_LABELS).map(([k, l]) => `<label style="display:inline-flex;gap:4px;align-items:center;font-size:12px;margin:2px 8px 2px 0"><input type="checkbox" class="${cls}" value="${k}" ${sel && sel.includes(k) ? 'checked' : ''}> ${l}</label>`).join('');
+const _tabChecks = (cls, sel) => { const allow = companyTabsFor(state.company); return Object.entries(TAB_LABELS).filter(([k]) => allow.includes(k)).map(([k, l]) => `<label style="display:inline-flex;gap:4px;align-items:center;font-size:12px;margin:2px 8px 2px 0"><input type="checkbox" class="${cls}" value="${k}" ${sel && sel.includes(k) ? 'checked' : ''}> ${l}</label>`).join(''); };
 const _compChecks = (cls, sel) => (state.companies || []).map(c => `<label style="display:inline-flex;gap:4px;align-items:center;font-size:12px;margin:2px 8px 2px 0"><input type="checkbox" class="${cls}" value="${c.id}" ${sel && sel.includes(c.id) ? 'checked' : ''}> ${escapeHtml(c.name)}</label>`).join('');
 window.openUsersModal = async () => {
   let m = document.getElementById('usersModal');
@@ -206,28 +218,28 @@ window.openUsersModal = async () => {
 };
 function renderUsersModal() {
   const m = document.getElementById('usersModal'); if (!m) return;
-  const comps = state.companies || [];
+  const cid = state.company; const compName = currentCompanyName();
   const admins = _usersList.filter(u => u.role === 'admin');
-  const viewers = _usersList.filter(u => u.role !== 'admin');
+  // רק משתמשי צפייה של החברה הפעילה (משתמש ששייך למספר חברות יופיע בכל אחת מהן)
+  const viewers = _usersList.filter(u => u.role !== 'admin' && (u.companies || []).includes(cid));
   const userRow = (u) => `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
     <div class="row-between"><div><b>${escapeHtml(u.username)}</b> <span class="muted" style="font-size:12px">· צפייה</span></div>
       <div style="display:flex;gap:6px"><button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="editUserRow('${u.id}')">✏️ ערוך</button><button class="btn ghost" style="padding:2px 9px;font-size:11.5px;color:var(--danger)" onclick="deleteUser('${u.id}')">מחק ✕</button></div></div>
-    <div class="muted" style="font-size:11.5px;margin-top:4px">לשוניות: ${(u.tabs || []).map(t => TAB_LABELS[t] || t).join(', ') || '—'} · עסקים: ${(u.companies || []).map(id => (comps.find(c => c.id === id) || {}).name || id).join(', ') || '—'}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:4px">לשוניות: ${(u.tabs || []).filter(t => companyTabsFor(cid).includes(t)).map(t => TAB_LABELS[t] || t).join(', ') || '—'}</div>
     <div id="edit-${u.id}"></div></div>`;
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;overflow:auto">
-    <div class="row-between"><h3>👥 ניהול משתמשים</h3><button class="btn ghost" onclick="document.getElementById('usersModal').classList.add('hidden')">סגור</button></div>
-    <div class="muted" style="font-size:12px;margin:2px 0 10px">משתמשי הנהלה רואים הכל. משתמשי צפייה רואים רק את הלשוניות והעסקים שתסמן, במצב קריאה בלבד.</div>
+    <div class="row-between"><h3>👥 ניהול משתמשים — ${escapeHtml(compName)}</h3><button class="btn ghost" onclick="document.getElementById('usersModal').classList.add('hidden')">סגור</button></div>
+    <div class="muted" style="font-size:12px;margin:2px 0 10px">משתמשי הנהלה רואים הכל. משתמשי הצפייה כאן שייכים ל<b>${escapeHtml(compName)}</b> בלבד, ורואים רק את הלשוניות שתסמן — במצב קריאה בלבד.</div>
     ${admins.map(a => `<div class="muted" style="font-size:12.5px">👑 הנהלה: <b>${escapeHtml(a.username)}</b></div>`).join('')}
-    <b style="font-size:13px;display:block;margin-top:10px">משתמשי צפייה (${viewers.length})</b>
-    <div style="margin-top:6px">${viewers.map(userRow).join('') || '<div class="muted" style="font-size:12.5px">אין עדיין משתמשי צפייה.</div>'}</div>
+    <b style="font-size:13px;display:block;margin-top:10px">משתמשי צפייה של ${escapeHtml(compName)} (${viewers.length})</b>
+    <div style="margin-top:6px">${viewers.map(userRow).join('') || '<div class="muted" style="font-size:12.5px">אין עדיין משתמשי צפייה לחברה זו.</div>'}</div>
     <div id="addUserForm" style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
-      <b style="font-size:13px">➕ הוסף משתמש צפייה</b>
+      <b style="font-size:13px">➕ הוסף משתמש צפייה ל${escapeHtml(compName)}</b>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
         <input id="nuUser" placeholder="שם משתמש" dir="ltr" style="flex:1;min-width:130px;padding:7px 9px">
         <input id="nuPass" type="text" placeholder="סיסמה (6+ תווים)" dir="ltr" style="flex:1;min-width:130px;padding:7px 9px">
       </div>
-      <div style="margin-top:8px;font-size:12px;font-weight:600">לשוניות מותרות:</div><div>${_tabChecks('nu-tab', [])}</div>
-      <div style="margin-top:8px;font-size:12px;font-weight:600">עסקים מותרים:</div><div>${_compChecks('nu-comp', [])}</div>
+      <div style="margin-top:8px;font-size:12px;font-weight:600">לשוניות מותרות (של ${escapeHtml(compName)}):</div><div>${_tabChecks('nu-tab', [])}</div>
       <div id="nuStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
       <button class="btn success" onclick="createUser(this)">צור משתמש</button>
     </div></div>`;
@@ -237,11 +249,10 @@ window.createUser = async (btn) => {
   const username = f.querySelector('#nuUser').value.trim();
   const password = f.querySelector('#nuPass').value;
   const tabs = [...f.querySelectorAll('.nu-tab:checked')].map(x => x.value);
-  const companies = [...f.querySelectorAll('.nu-comp:checked')].map(x => x.value);
+  const companies = [state.company];   // המשתמש משויך אוטומטית לחברה הפעילה
   const st = document.getElementById('nuStatus');
   if (!username || password.length < 6) { st.style.color = 'var(--danger)'; st.textContent = 'יש להזין שם משתמש וסיסמה (6+ תווים).'; return; }
   if (!tabs.length) { st.style.color = 'var(--danger)'; st.textContent = 'בחר לפחות לשונית אחת.'; return; }
-  if (!companies.length) { st.style.color = 'var(--danger)'; st.textContent = 'בחר לפחות עסק אחד.'; return; }
   if (btn) btn.disabled = true;
   const r = await fetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, tabs, companies }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
@@ -253,19 +264,23 @@ window.editUserRow = (id) => {
   const box = document.getElementById('edit-' + id); if (!box) return;
   if (box.innerHTML) { box.innerHTML = ''; return; }
   box.innerHTML = `<div style="border-top:1px dashed var(--line);margin-top:8px;padding-top:8px">
-    <div style="font-size:12px;font-weight:600">לשוניות:</div><div>${_tabChecks('eu-tab-' + id, u.tabs)}</div>
-    <div style="margin-top:6px;font-size:12px;font-weight:600">עסקים:</div><div>${_compChecks('eu-comp-' + id, u.companies)}</div>
+    <div style="font-size:12px;font-weight:600">לשוניות (של ${escapeHtml(currentCompanyName())}):</div><div>${_tabChecks('eu-tab-' + id, u.tabs)}</div>
     <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input id="eu-pass-${id}" type="text" placeholder="סיסמה חדשה (לא חובה)" dir="ltr" style="padding:6px 8px;font-size:12px">
       <button class="btn success" style="padding:3px 12px;font-size:12px" onclick="saveUserEdit('${id}',this)">💾 שמור</button>
     </div><div id="eu-st-${id}" style="font-size:12px;color:var(--danger);min-height:16px"></div></div>`;
 };
 window.saveUserEdit = async (id, btn) => {
-  const tabs = [...document.querySelectorAll('.eu-tab-' + id + ':checked')].map(x => x.value);
-  const companies = [...document.querySelectorAll('.eu-comp-' + id + ':checked')].map(x => x.value);
+  const u = _usersList.find(x => x.id === id) || {};
+  const checked = [...document.querySelectorAll('.eu-tab-' + id + ':checked')].map(x => x.value);
+  const compTabs = companyTabsFor(state.company);
+  // שומרים על לשוניות של חברות אחרות (שאינן מוצגות כאן) ומעדכנים רק את לשוניות החברה הנוכחית
+  const preserved = (u.tabs || []).filter(t => !compTabs.includes(t));
+  const tabs = [...new Set([...preserved, ...checked])];
+  const companies = [...new Set([...(u.companies || []), state.company])];   // משאירים שיוך לחברות אחרות, מוודאים שהנוכחית כלולה
   const pass = document.getElementById('eu-pass-' + id).value;
   const st = document.getElementById('eu-st-' + id);
-  if (!tabs.length || !companies.length) { st.textContent = 'בחר לפחות לשונית ועסק אחד.'; return; }
+  if (!checked.length) { st.textContent = 'בחר לפחות לשונית אחת.'; return; }
   const body = { tabs, companies }; if (pass) { if (pass.length < 6) { st.textContent = 'סיסמה קצרה מדי.'; return; } body.password = pass; }
   if (btn) btn.disabled = true;
   const r = await fetch('/api/users/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
@@ -708,10 +723,10 @@ async function renderHome(c) {
       </div>
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
     </div>
-    ${mosheBank() ? '<div class="panel" id="grpSummaryWrap"><div class="empty">טוען סיכום מוזיקה / דיגיטל…</div></div>' : ''}
+    ${state.company === 'co_moshe' ? '<div class="panel" id="grpSummaryWrap"><div class="empty">טוען סיכום מוזיקה / דיגיטל…</div></div>' : ''}
     <div class="panel" id="openInvWrap"><div class="empty">טוען חשבוניות פתוחות…</div></div>`;
   loadOpenInvoices();
-  if (mosheBank()) loadGroupSummary();
+  if (state.company === 'co_moshe') loadGroupSummary();
   // חלק "מסמכים" עבר ללשונית "מסמכים ולקוחות" (renderClients)
 }
 
@@ -5199,21 +5214,22 @@ async function bankAction(id, body) {
 }
 // ---- קבוצות שיוך (מוזיקה/דיגיטל/…) — אך ורק אצל משה כורסיה ----
 let _txGroups = [];
-const mosheBank = () => state.company === 'co_moshe';
+// קבוצות שיוך + סיכום עסק — זמינים לכל החברות. קבוצות מוגדרות פר-חברה בפרטי העסק.
+const mosheBank = () => true;
+const hasGroups = () => (_txGroups || []).length > 0;
 async function loadTxGroups() {
-  if (!mosheBank()) { _txGroups = []; return; }
   try { const r = await api('/api/tx-groups'); _txGroups = (r && r.groups) || []; } catch { _txGroups = []; }
 }
 function groupSelect(t) {
   const opts = (_txGroups || []).map(g => `<option value="${g.id}" ${t.group === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('');
-  const need = !t.group;
+  const need = hasGroups() && !t.group;   // אדום רק אם יש קבוצות מוגדרות וטרם שויכה קבוצה
   return `<select onchange="setBankGroup('${t.id}', this.value)" title="קבוצת שיוך" style="padding:4px 5px;font-size:12px;max-width:108px;${need ? 'border:1px solid var(--danger)' : ''}"><option value="">— קבוצה —</option>${opts}</select>`;
 }
-// חסימת אישור בלי שיוך לקבוצה (רק אצל משה) — בדיקה בצד הלקוח לפני שליחה לשרת
+// חסימת אישור בלי שיוך לקבוצה — רק אם החברה הגדירה קבוצות. בדיקה בצד הלקוח לפני שליחה לשרת.
 function bankGroupOk(id) {
-  if (!mosheBank()) return true;
+  if (!hasGroups()) return true;
   const t = (_bankList || []).find(x => x.id === id);
-  if (t && !t.group) { alert('יש לבחור קבוצה (מוזיקה / דיגיטל / הוצאות שוטפות / אחר) לפני אישור התנועה.'); return false; }
+  if (t && !t.group) { alert('יש לבחור קבוצת שיוך לפני אישור התנועה.'); return false; }
   return true;
 }
 window.setBankGroup = (id, val) => bankAction(id, { group: val });
@@ -5229,8 +5245,8 @@ window.rematchBank = async (btn) => {
 window.approveAllStrong = async (btn) => {
   let strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
   if (!strong.length) { alert('אין התאמות מדויקות שממתינות לאישור בתצוגה הנוכחית.'); return; }
-  // אצל משה — אי אפשר לאשר בלי שיוך לקבוצה; מדלגים על שורות ללא קבוצה ומתריעים
-  if (mosheBank()) {
+  // חברה עם קבוצות — אי אפשר לאשר בלי שיוך לקבוצה; מדלגים על שורות ללא קבוצה ומתריעים
+  if (hasGroups()) {
     const missing = strong.filter(t => !t.group).length;
     strong = strong.filter(t => t.group);
     if (!strong.length) { alert(`יש ${missing} התאמות מדויקות ללא שיוך לקבוצה — שייך קבוצה (מוזיקה/דיגיטל/…) לפני אישור.`); return; }
