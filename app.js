@@ -5285,6 +5285,32 @@ function bankRowCovered(t) {
   const tol = Math.max(3, bank * 0.004);
   return Math.abs(sum - bank) <= tol || (t.direction === 'credit' && Math.abs(sum * 0.95 - bank) <= tol);
 }
+// קיבוץ מסמכי הכנסה בשורת בנק ליחידות: חשבונית מס כראשית, עם זיכוי (330) וקבלה (400) מקוננים תחתיה.
+// נטו = סכום החשבונית פחות הזיכויים — כך שהשורה מוצגת כיחידה אחת שמסתכמת לסכום שהתקבל בבנק.
+function groupBankUnits(mis) {
+  const norm = (s) => String(s || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[."'׳״,()\-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const sameClient = (a, b) => { const na = norm(a), nb = norm(b); return !!na && !!nb && (na === nb || na.includes(nb) || nb.includes(na)); };
+  const list = (mis || []).map(x => ({ ...x }));
+  const isExp = (x) => x.kind === 'expense';
+  const invoices = list.filter(x => !isExp(x) && [305, 300, 320].includes(Number(x.type)));
+  const credits = list.filter(x => !isExp(x) && Number(x.type) === 330);
+  const receipts = list.filter(x => !isExp(x) && Number(x.type) === 400);
+  const others = list.filter(x => isExp(x) || ![305, 300, 320, 330, 400].includes(Number(x.type)));
+  const usedC = new Set(), usedR = new Set(), units = [];
+  const single = invoices.length === 1;
+  for (const inv of invoices) {
+    const u = { inv, credits: [], receipt: inv.receipt || null };
+    for (const c of credits) { const k = c.id ?? c.number; if (usedC.has(k)) continue; if (single || sameClient(c.clientName, inv.clientName)) { u.credits.push(c); usedC.add(k); } }
+    if (!u.receipt) { for (const r of receipts) { const k = r.id ?? r.number; if (usedR.has(k)) continue; if (single || sameClient(r.clientName, inv.clientName)) { u.receipt = { number: r.number, url: r.url || null, amount: r.amount, id: r.id }; usedR.add(k); break; } } }
+    const cs = u.credits.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+    u.net = (Number(inv.amount) || 0) - cs;
+    units.push(u);
+  }
+  for (const c of credits) { const k = c.id ?? c.number; if (!usedC.has(k)) units.push({ inv: c, credits: [], net: Number(c.amount) || 0 }); }
+  for (const r of receipts) { const k = r.id ?? r.number; if (!usedR.has(k)) units.push({ inv: r, credits: [], net: Number(r.amount) || 0, standaloneReceipt: true }); }
+  for (const o of others) units.push({ inv: o, credits: [], net: Number(o.amount) || 0 });
+  return units;
+}
 function bankTr(t) {
   const credit = t.direction === 'credit';
   const amt = `${credit ? '' : '−'}${money(t.absAmount)}`;
@@ -5300,24 +5326,35 @@ function bankTr(t) {
   let biz = '<span class="muted">—</span>', invNo = '—', recNo = '—', invAmt = '—', wh = '—', action = '';
 
   if (isMatched) {
-    biz = stack(mis.map(i => `<b>${escapeHtml(i.clientName || '')}</b>`));
+    // מקבצים: חשבונית מס ראשית + זיכוי + קבלה מקוננים תחתיה (נטו = חשבונית − זיכוי), במקום שורות שטוחות נפרדות.
+    const units = groupBankUnits(mis);
+    biz = stack(units.map(u => `<b>${escapeHtml(u.inv.clientName || '')}</b>`));
     // הוצאות (חובה): המסמך של הספק תמיד מוצג בעמודת החשבונית עם צפייה/הורדה — גם אם type=400.
-    // הכנסות: מסמך מסוג קבלה (400) תמיד בעמודת "קבלה". שאר הסוגים (מס/מס-קבלה/זיכוי) בעמודת החשבונית.
-    invNo = stack(mis.map(i => {
+    // הכנסות: מסמך מסוג קבלה (400) תמיד בעמודת "קבלה". שאר הסוגים (מס/מס-קבלה/זיכוי) בעמודת החשבונית — עם הזיכוי מקונן.
+    invNo = stack(units.map(u => {
+      const i = u.inv;
       if (i.kind === 'expense') return `<span style="white-space:nowrap">חשבונית #${i.number}${act(i.url)}</span>`;
-      return Number(i.type) === 400
-        ? '<span class="muted">—</span>'
-        : `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url)}</span>`;
+      if (Number(i.type) === 400) return '<span class="muted">—</span>';
+      const main = `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url)}</span>`;
+      const creditLines = (u.credits || []).map(c => `<div class="muted" style="font-size:11px;color:var(--warn);white-space:nowrap">➖ זיכוי #${c.number} · −${money(c.amount)}${act(c.url)}</div>`).join('');
+      return main + creditLines;
     }));
-    recNo = stack(mis.map(i => {
+    recNo = stack(units.map(u => {
+      const i = u.inv;
       if (i.kind === 'expense') return '—';
       if (Number(i.type) === 400) return `<span style="white-space:nowrap">קבלה #${i.number}${act(i.url)}</span>`;
-      if (i.receipt) return `<span style="white-space:nowrap">קבלה #${i.receipt.number}${act(i.receipt.url)}</span>`;
+      if (u.receipt) return `<span style="white-space:nowrap">קבלה #${u.receipt.number}${act(u.receipt.url)}</span>`;
       if (Number(i.type) === 320) return '<span class="muted" style="font-size:11px">כלול בחשבונית</span>';
       return '—';
     }));
-    invAmt = stack(mis.map(i => money(i.amount)));
-    const sumInv = mis.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+    invAmt = stack(units.map(u => {
+      if ((u.credits || []).length) {
+        const gross = Number(u.inv.amount) || 0, cs = u.credits.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+        return `<b>${money(u.net)}</b> <span class="muted" style="font-size:10px;white-space:nowrap">(${money(gross)}−${money(cs)})</span>`;
+      }
+      return money(u.net != null ? u.net : (Number(u.inv.amount) || 0));
+    }));
+    const sumInv = units.reduce((s, u) => s + (Number(u.net != null ? u.net : u.inv.amount) || 0), 0);
     const whAmt = sumInv - t.absAmount;
     wh = (whAmt > 1 && whAmt < sumInv * 0.08) ? `<span style="color:var(--warn)">${money(whAmt)}</span>` : '—';
     const conf = bankConfidence(t);
