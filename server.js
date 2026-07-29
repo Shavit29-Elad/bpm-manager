@@ -2552,10 +2552,14 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
     }
   }
   if (body.group !== undefined) t.group = body.group || null;
-  // חובת שיוך לקבוצה לפני אישור תנועה — לכל חברה שהגדירה קבוצות שיוך (BPM וכל חברה עתידית). חברה ללא קבוצות אינה נחסמת.
-  const companyHasGroups = (db.txGroups || []).some(g => g.companyId === t.companyId);
-  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && companyHasGroups && !t.group) {
-    return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה.' }, 400);
+  // חובת שיוך לקבוצה לפני אישור תנועה — לכל חברה שהגדירה קבוצות. הכנסה ללא קבוצה → ברירת מחדל "הכנסות עסק"; הוצאה → חובה לבחור.
+  const companyGroups = (db.txGroups || []).filter(g => g.companyId === t.companyId);
+  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && companyGroups.length && !t.group) {
+    if (t.direction === 'credit') {
+      const def = companyGroups.find(g => g.isDefaultIncome) || companyGroups.find(g => g.kind === 'income');
+      if (def) t.group = def.id;   // הכנסה — משויכת אוטומטית לקבוצת ברירת המחדל
+    }
+    if (!t.group) return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה.' }, 400);
   }
   // #1 — קבלה (400) משויכת: משיכת חשבונית המס המקורית וקינון תחתיה (מונע ספירה כפולה)
   if (greenInvoice.haveCredentials() && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
@@ -2642,6 +2646,7 @@ add('POST', /^\/api\/tx-groups$/, (req, res, _p, _q, body) => {
   const db = load();
   db.txGroups = db.txGroups || [];
   const g = { id: id('txg'), companyId: cid, name };
+  if (['income', 'expense'].includes(body?.kind)) g.kind = body.kind;   // קבוצת הכנסה / הוצאה
   db.txGroups.push(g);
   save(db);
   json(res, { ok: true, group: g });
@@ -2662,6 +2667,7 @@ add('DELETE', /^\/api\/tx-groups\/([^/]+)$/, (req, res, params) => {
   const g = (db.txGroups || []).find(x => x.id === params[0]);
   if (!g) return json(res, { ok: true });
   if (g.key === 'music' || g.key === 'digital') return json(res, { error: 'לא ניתן למחוק את קבוצת מוזיקה/דיגיטל' }, 400);
+  if (g.isDefaultIncome) return json(res, { error: 'לא ניתן למחוק את קבוצת "הכנסות עסק" (ברירת המחדל להכנסות)' }, 400);
   db.txGroups = (db.txGroups || []).filter(x => x.id !== params[0]);
   for (const t of (db.bankTx || [])) if (t.group === params[0]) t.group = null;
   save(db);
@@ -2783,6 +2789,52 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   const out = groups.map(g => mkGroup(g.id, g.name, g.key, gmap[g.id].income, gmap[g.id].expense, gmap[g.id].unlinkedExpense));
   if (ungrouped.some(x => x)) out.push(mkGroup('ungrouped', 'הכנסות ללא שיוך לקטגוריה', null, ungrouped, Array(12).fill(0), 0));
   json(res, { ok: true, year, incomeBasis: 'issued-305-320-gross', incomeError, groups: out, ungroupedDocs: ungroupedDocs.sort((a, b) => String(a.date).localeCompare(String(b.date))), groupsList: groups.map(g => ({ id: g.id, name: g.name })) });
+});
+
+// GET /api/month-detail?companyId=&year=YYYY&month=M (1-12)
+// פירוט חודשי: כל ההכנסות (זיכויים) מצד אחד וכל ההוצאות (חובה) מצד שני — הכל מתוך התאמות הבנק.
+// עמודות: תאריך, סכום, שם עסק, מס' חשבונית מס/מס-קבלה, מס' קבלה, הערות, קבוצה.
+add('GET', /^\/api\/month-detail$/, (req, res, _p, q) => {
+  const db = load();
+  if (ensureGroupsSeeded(db)) save(db);
+  const cid = q.companyId || null;
+  const year = String(q.year || new Date().getFullYear());
+  const month = parseInt(q.month, 10) || 0; // 1-12
+  const groups = (db.txGroups || []).filter(g => g.companyId === cid);
+  const gname = (gid) => { const g = groups.find(x => x.id === gid); return g ? g.name : ''; };
+  const income = [], expense = [];
+  for (const t of (db.bankTx || [])) {
+    if (cid && t.companyId !== cid) continue;
+    const m = String(t.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!m || m[3] !== year || (+m[2]) !== month) continue;
+    if (t.matchStatus !== 'manual' && t.matchStatus !== 'approved') continue;
+    const invs = Array.isArray(t.matchedInvoices) ? t.matchedInvoices : [];
+    // מסמך מס עיקרי (305/320/300) ומסמך קבלה (400 / receipt מקונן / 320)
+    const taxDoc = invs.find(x => [305, 320, 300, '305', '320', '300'].includes(x.type));
+    let receiptNum = null;
+    for (const x of invs) {
+      if (x.receipt && x.receipt.number != null) { receiptNum = x.receipt.number; break; }
+      if ([400, 320, '400', '320'].includes(x.type)) { receiptNum = x.number; break; }
+    }
+    const name = (invs.find(x => x.clientName && x.clientName !== '—') || {}).clientName || t.nameHint || '';
+    const row = {
+      id: t.id, date: t.date, amount: t.absAmount || 0, name,
+      taxNumber: taxDoc ? taxDoc.number : (invs[0] ? invs[0].number : null),
+      taxType: taxDoc ? taxDoc.type : (invs[0] ? invs[0].type : null),
+      receiptNumber: receiptNum, notes: t.notes || '',
+      group: t.group || null, groupName: t.group ? gname(t.group) : '',
+    };
+    (t.direction === 'credit' ? income : expense).push(row);
+  }
+  const byDate = (a, b) => String(a.date).split('/').reverse().join('').localeCompare(String(b.date).split('/').reverse().join(''));
+  income.sort(byDate); expense.sort(byDate);
+  json(res, {
+    ok: true, year, month,
+    income, expense,
+    totalIncome: Math.round(income.reduce((s, r) => s + (r.amount || 0), 0) * 100) / 100,
+    totalExpense: Math.round(expense.reduce((s, r) => s + (r.amount || 0), 0) * 100) / 100,
+    groups: groups.map(g => ({ id: g.id, name: g.name, kind: g.kind || null })),
+  });
 });
 
 // POST /api/doc-group { companyId, number, groupId } — שיוך ידני של מסמך הכנסה לקבוצה (למסמכים שאין להם תנועת בנק). groupId ריק = הסרה.
@@ -3122,11 +3174,32 @@ const MOSHE_DEFAULT_GROUPS = [
   { key: 'operating', name: 'הוצאות שוטפות' },
   { key: 'other', name: 'אחר' },
 ];
+// קבוצות ברירת-מחדל ל-BPM ואופק — מחולקות להכנסה/הוצאה. הכנסה מסומנת ב-kind:'income', הוצאה ב-'expense'.
+// "הכנסות עסק" היא ברירת המחדל לכל תנועת הכנסה (isDefaultIncome).
+const INCEXP_DEFAULT_GROUPS = [
+  { key: 'income_biz', name: 'הכנסות עסק', kind: 'income', isDefaultIncome: true },
+  { key: 'income_refund', name: 'החזר', kind: 'income' },
+  { key: 'exp_suppliers', name: 'ספקים', kind: 'expense' },
+  { key: 'exp_equipment', name: 'ציוד', kind: 'expense' },
+  { key: 'exp_vehicles', name: 'רכבים', kind: 'expense' },
+  { key: 'exp_loan', name: 'הלוואה', kind: 'expense' },
+  { key: 'exp_bankfees', name: 'עמלות בנקים', kind: 'expense' },
+  { key: 'exp_legal', name: 'עו״ד', kind: 'expense' },
+];
+const INCEXP_GROUP_COMPANIES = ['co_bpm', 'co_ofek'];
 function ensureGroupsSeeded(db) {
   db.txGroups = db.txGroups || [];
-  if (db.txGroups.some(g => g.companyId === 'co_moshe')) return false;
-  for (const g of MOSHE_DEFAULT_GROUPS) db.txGroups.push({ id: 'txg_' + g.key, companyId: 'co_moshe', name: g.name, key: g.key, builtin: true });
-  return true;
+  let changed = false;
+  if (!db.txGroups.some(g => g.companyId === 'co_moshe')) {
+    for (const g of MOSHE_DEFAULT_GROUPS) db.txGroups.push({ id: 'txg_' + g.key, companyId: 'co_moshe', name: g.name, key: g.key, builtin: true });
+    changed = true;
+  }
+  for (const cid of INCEXP_GROUP_COMPANIES) {
+    if (db.txGroups.some(g => g.companyId === cid)) continue;
+    for (const g of INCEXP_DEFAULT_GROUPS) db.txGroups.push({ id: `txg_${cid}_${g.key}`, companyId: cid, name: g.name, key: g.key, kind: g.kind, builtin: true, isDefaultIncome: !!g.isDefaultIncome });
+    changed = true;
+  }
+  return changed;
 }
 // כלל התחלתי: תנועות של "גלי בראון" משויכות אוטומטית ל"דיגיטל"
 function ensureRulesSeeded(db) {

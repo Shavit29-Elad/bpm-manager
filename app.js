@@ -815,7 +815,7 @@ function businessSummaryHtml(r) {
   const section = (g) => {
     const hasData = g.months.some(m => m.income || m.expense) || g.totalIncome || g.totalExpense;
     const rows = g.months.map((m, i) => (!m.income && !m.expense) ? '' : `<tr>
-      <td style="white-space:nowrap">${MONTHS_HE[i]} ${year}</td>
+      <td style="white-space:nowrap"><a href="#" onclick="openMonthDetail(${year},${i + 1});return false" style="color:var(--accent);text-decoration:none;font-weight:600" title="פירוט החודש — הכנסות והוצאות">${MONTHS_HE[i]} ${year}</a></td>
       <td style="color:var(--accent2);font-weight:600">${money(m.income)}</td>
       <td style="color:var(--danger);font-weight:600">${money(m.expense)}</td>
       <td style="font-weight:700;color:${m.profit >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(m.profit)}</td></tr>`).join('');
@@ -861,6 +861,59 @@ window.assignDocGroup = async (number) => {
   if (!r || r.error) { alert((r && r.error) || 'שגיאה בשיוך'); return; }
   renderBusinessSummary($('#content')); // ריענון — המסמך נכנס לקטגוריה ויורד מהרשימה
 };
+
+// ---- חלונית פירוט חודשי בסיכום עסק — הכנסות מצד אחד, הוצאות מנגד (מתוך התאמות הבנק) ----
+let _monthDetail = null, _mdGroupFilter = '';
+window.openMonthDetail = async (year, month) => {
+  _mdGroupFilter = '';
+  let ov = document.getElementById('monthDetailModal');
+  if (!ov) { ov = document.createElement('div'); ov.id = 'monthDetailModal'; ov.className = 'modal'; document.body.appendChild(ov); }
+  ov.classList.remove('hidden');
+  ov.innerHTML = `<div class="modal-card" style="max-width:1100px;width:96%"><div class="empty">טוען פירוט…</div></div>`;
+  const r = await api(`/api/month-detail?companyId=${state.company}&year=${year}&month=${month}`).catch(() => null);
+  if (!r || !r.ok) { ov.innerHTML = `<div class="modal-card"><div class="empty">שגיאה בטעינת הפירוט</div><div class="modal-actions"><button class="btn ghost" onclick="closeMonthDetail()">סגור</button></div></div>`; return; }
+  _monthDetail = r;
+  renderMonthDetail();
+};
+window.closeMonthDetail = () => { const ov = document.getElementById('monthDetailModal'); if (ov) ov.classList.add('hidden'); };
+window.setMdGroupFilter = (v) => { _mdGroupFilter = v; renderMonthDetail(); };
+function renderMonthDetail() {
+  const r = _monthDetail; if (!r) return;
+  const ov = document.getElementById('monthDetailModal'); if (!ov) return;
+  const typeLbl = (t) => (DOC_TYPE_SHORT && DOC_TYPE_SHORT[t]) || (t ? '#' : '');
+  const filt = (list) => _mdGroupFilter ? list.filter(x => x.group === _mdGroupFilter) : list;
+  const inc = filt(r.income || []), exp = filt(r.expense || []);
+  const sumOf = (a) => money(a.reduce((s, x) => s + (x.amount || 0), 0));
+  const tbl = (rows, side) => {
+    const body = rows.length ? rows.map(x => `<tr>
+      <td style="white-space:nowrap">${fmtDate(x.date)}</td>
+      <td style="font-weight:600;white-space:nowrap">${money(x.amount)}</td>
+      <td>${escapeHtml(x.name || '')}</td>
+      <td style="white-space:nowrap">${x.taxNumber != null ? `${typeLbl(x.taxType)} ${x.taxNumber}` : '—'}</td>
+      <td style="white-space:nowrap">${x.receiptNumber != null ? x.receiptNumber : '—'}</td>
+      <td style="font-size:12px">${escapeHtml(x.notes || '')}</td>
+      <td style="white-space:nowrap"><span class="tag" style="font-size:11px">${escapeHtml(x.groupName || '—')}</span></td>
+    </tr>`).join('') : `<tr><td colspan="7" class="muted">אין תנועות</td></tr>`;
+    const color = side === 'income' ? 'var(--accent2)' : 'var(--danger)';
+    return `<div style="flex:1;min-width:0">
+      <h3 style="margin:0 0 6px;color:${color}">${side === 'income' ? 'הכנסות' : 'הוצאות'} · ${sumOf(rows)}</h3>
+      <div style="overflow:auto;max-height:60vh"><table style="width:100%;font-size:12.5px"><thead><tr>
+        <th>תאריך</th><th>סכום</th><th>שם עסק</th><th>חשבונית מס/מס-קבלה</th><th>קבלה</th><th>הערות</th><th>קבוצה</th>
+      </tr></thead><tbody>${body}</tbody></table></div></div>`;
+  };
+  const groupOpts = (r.groups || []).map(g => `<option value="${g.id}" ${_mdGroupFilter === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('');
+  ov.innerHTML = `<div class="modal-card" style="max-width:1150px;width:97%">
+    <div class="row-between" style="margin:0"><h2 style="margin:0">📅 פירוט ${MONTHS_HE[r.month - 1]} ${r.year}</h2>
+      <div style="display:flex;gap:8px;align-items:center">
+        <label style="font-size:13px">קבוצה:
+          <select onchange="setMdGroupFilter(this.value)" style="padding:4px 8px;font-size:13px"><option value="">הכל</option>${groupOpts}</select>
+        </label>
+        <button class="btn ghost" onclick="closeMonthDetail()">✕ סגור</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:18px;margin-top:14px;flex-wrap:wrap;align-items:flex-start">${tbl(inc, 'income')}${tbl(exp, 'expense')}</div>
+  </div>`;
+}
 
 // ---- חשבוניות פתוחות בדף הבית (כמו "חיובים קרובים" בחשבונית ירוקה) ----
 let _openInv = null, _openInvErr = null, _openInvFilter = 'all', _openInvExpanded = false;
@@ -4649,20 +4702,44 @@ window.deleteRule = async (rid) => {
 };
 // ---- ניהול קבוצות שיוך (רק אצל משה) ----
 function groupsMgmtPanelHtml() {
-  const rows = (_txGroups || []).map(g => {
-    const locked = g.key === 'music' || g.key === 'digital';
+  const usesKind = (_txGroups || []).some(g => g.kind);   // חברות עם קבוצות הכנסה/הוצאה (BPM/אופק)
+  const kindTag = (g) => {
+    if (!usesKind) return '';
+    const t = g.kind === 'income' ? 'הכנסה' : g.kind === 'expense' ? 'הוצאה' : '—';
+    const c = g.kind === 'income' ? '#16a34a' : '#dc2626';
+    return `<span class="tag" style="font-size:11px;color:${c};border-color:${c}">${t}${g.isDefaultIncome ? ' · ברירת מחדל' : ''}</span>`;
+  };
+  const rowsFor = (list) => list.map(g => {
+    const locked = g.key === 'music' || g.key === 'digital' || g.isDefaultIncome;
     return `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
-      <input value="${escapeHtml(g.name)}" id="grpname_${g.id}" style="flex:1;max-width:240px;padding:5px 8px;font-size:13px">
+      <input value="${escapeHtml(g.name)}" id="grpname_${g.id}" style="flex:1;max-width:220px;padding:5px 8px;font-size:13px">
+      ${kindTag(g)}
       <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="saveGroupName('${g.id}')">שמור שם</button>
       ${locked ? '<span class="muted" style="font-size:11.5px">קבועה</span>' : `<button class="btn ghost" style="padding:3px 10px;font-size:12px;color:var(--danger)" onclick="deleteGroup('${g.id}','${escapeHtml(g.name).replace(/'/g, '')}')">מחק</button>`}
     </div>`;
   }).join('');
+  let body;
+  if (usesKind) {
+    const inc = (_txGroups || []).filter(g => g.kind === 'income');
+    const exp = (_txGroups || []).filter(g => g.kind === 'expense');
+    const other = (_txGroups || []).filter(g => !g.kind);
+    body = `<div style="font-weight:600;font-size:12.5px;margin:8px 0 2px;color:#16a34a">הכנסות</div>${rowsFor(inc) || '<div class="muted" style="font-size:12px">—</div>'}
+      <div style="font-weight:600;font-size:12.5px;margin:12px 0 2px;color:#dc2626">הוצאות</div>${rowsFor(exp) || '<div class="muted" style="font-size:12px">—</div>'}
+      ${other.length ? `<div style="font-weight:600;font-size:12.5px;margin:12px 0 2px">אחר</div>${rowsFor(other)}` : ''}`;
+  } else {
+    body = rowsFor(_txGroups || []) || '<div class="muted">אין קבוצות.</div>';
+  }
+  const kindSel = usesKind ? `<select id="newGroupKind" style="padding:6px 9px;font-size:13px"><option value="expense">הוצאה</option><option value="income">הכנסה</option></select>` : '';
+  const note = usesKind
+    ? 'קבוצות הכנסה/הוצאה לשיוך תנועות בנק. כל הכנסה משויכת כברירת מחדל ל«הכנסות עסק»; הוצאה מחייבת בחירה. אפשר להוסיף/לערוך/למחוק קבוצות (מלבד הקבועות).'
+    : 'קבוצות לשיוך תנועות בנק בהתאמת הבנק. «מוזיקה» ו«דיגיטל» קבועות (דף הבית מסתמך עליהן). אפשר להוסיף/לערוך/למחוק קבוצות נוספות.';
   return `<div class="panel">
     <div class="row-between" style="margin:0"><h3 style="margin:0">🗂️ קבוצות שיוך (בנק)</h3></div>
-    <p class="muted" style="font-size:12.5px;margin:8px 0">קבוצות לשיוך תנועות בנק בהתאמת הבנק. «מוזיקה» ו«דיגיטל» קבועות (דף הבית מסתמך עליהן). אפשר להוסיף/לערוך/למחוק קבוצות נוספות.</p>
-    <div style="margin-top:6px">${rows || '<div class="muted">אין קבוצות.</div>'}</div>
-    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
-      <input id="newGroupName" placeholder="שם קבוצה חדשה…" style="flex:1;max-width:240px;padding:6px 9px;font-size:13px">
+    <p class="muted" style="font-size:12.5px;margin:8px 0">${note}</p>
+    <div style="margin-top:6px">${body}</div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="newGroupName" placeholder="שם קבוצה חדשה…" style="flex:1;max-width:220px;padding:6px 9px;font-size:13px">
+      ${kindSel}
       <button class="btn primary" style="padding:5px 14px" onclick="addGroup()">＋ הוסף קבוצה</button>
     </div>
   </div>`;
@@ -4670,7 +4747,10 @@ function groupsMgmtPanelHtml() {
 window.addGroup = async () => {
   const name = (document.getElementById('newGroupName')?.value || '').trim();
   if (!name) return;
-  const r = await fetch('/api/tx-groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, name }) }).then(x => x.json()).catch(() => null);
+  const body = { companyId: state.company, name };
+  const kindEl = document.getElementById('newGroupKind');
+  if (kindEl && kindEl.value) body.kind = kindEl.value;
+  const r = await fetch('/api/tx-groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => null);
   if (r && r.error) { alert(r.error); return; }
   renderBusiness($('#content'));
 };
@@ -5220,17 +5300,25 @@ const hasGroups = () => (_txGroups || []).length > 0;
 async function loadTxGroups() {
   try { const r = await api('/api/tx-groups'); _txGroups = (r && r.groups) || []; } catch { _txGroups = []; }
 }
+// קבוצת ברירת המחדל להכנסות (אם החברה מגדירה קבוצות הכנסה/הוצאה)
+const defaultIncomeGroup = () => (_txGroups || []).find(g => g.isDefaultIncome) || (_txGroups || []).find(g => g.kind === 'income') || null;
 function groupSelect(t) {
-  const opts = (_txGroups || []).map(g => `<option value="${g.id}" ${t.group === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('');
-  const need = hasGroups() && !t.group;   // אדום רק אם יש קבוצות מוגדרות וטרם שויכה קבוצה
-  return `<select onchange="setBankGroup('${t.id}', this.value)" title="קבוצת שיוך" style="padding:4px 5px;font-size:12px;max-width:108px;${need ? 'border:1px solid var(--danger)' : ''}"><option value="">— קבוצה —</option>${opts}</select>`;
+  const kind = t.direction === 'credit' ? 'income' : 'expense';
+  // קבוצות ללא kind (משה) מוצגות לשני הכיוונים; קבוצות עם kind — רק לכיוון התואם
+  const list = (_txGroups || []).filter(g => !g.kind || g.kind === kind);
+  const defInc = kind === 'income' ? defaultIncomeGroup() : null;
+  const sel = t.group || (defInc ? defInc.id : '');   // הכנסה ללא קבוצה — מציג ברירת מחדל "הכנסות עסק"
+  const opts = list.map(g => `<option value="${g.id}" ${sel === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('');
+  const need = list.length && !t.group && !defInc;   // אדום רק כשצריך בחירה ידנית (הוצאה) וטרם שויכה קבוצה
+  return `<select onchange="setBankGroup('${t.id}', this.value)" title="קבוצת שיוך" style="padding:4px 5px;font-size:12px;max-width:120px;${need ? 'border:1px solid var(--danger)' : ''}"><option value="">— קבוצה —</option>${opts}</select>`;
 }
-// חסימת אישור בלי שיוך לקבוצה — רק אם החברה הגדירה קבוצות. בדיקה בצד הלקוח לפני שליחה לשרת.
+// חסימת אישור בלי שיוך לקבוצה. הכנסה עם קבוצת ברירת מחדל — תשוייך אוטומטית (לא חוסם); הוצאה — חובה לבחור.
 function bankGroupOk(id) {
   if (!hasGroups()) return true;
   const t = (_bankList || []).find(x => x.id === id);
-  if (t && !t.group) { alert('יש לבחור קבוצת שיוך לפני אישור התנועה.'); return false; }
-  return true;
+  if (!t || t.group) return true;
+  if (t.direction === 'credit' && defaultIncomeGroup()) return true;
+  alert('יש לבחור קבוצת שיוך לפני אישור התנועה.'); return false;
 }
 window.setBankGroup = (id, val) => bankAction(id, { group: val });
 window.rematchBank = async (btn) => {
@@ -5245,10 +5333,12 @@ window.rematchBank = async (btn) => {
 window.approveAllStrong = async (btn) => {
   let strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
   if (!strong.length) { alert('אין התאמות מדויקות שממתינות לאישור בתצוגה הנוכחית.'); return; }
-  // חברה עם קבוצות — אי אפשר לאשר בלי שיוך לקבוצה; מדלגים על שורות ללא קבוצה ומתריעים
+  // חברה עם קבוצות — אי אפשר לאשר בלי שיוך; הכנסה תשוייך אוטומטית לברירת המחדל, הוצאה חייבת קבוצה
   if (hasGroups()) {
-    const missing = strong.filter(t => !t.group).length;
-    strong = strong.filter(t => t.group);
+    const dInc = defaultIncomeGroup();
+    const needsGrp = (t) => !t.group && !(t.direction === 'credit' && dInc);
+    const missing = strong.filter(needsGrp).length;
+    strong = strong.filter(t => !needsGrp(t));
     if (!strong.length) { alert(`יש ${missing} התאמות מדויקות ללא שיוך לקבוצה — שייך קבוצה (מוזיקה/דיגיטל/…) לפני אישור.`); return; }
     if (missing && !confirm(`${missing} התאמות ללא קבוצה ידלגו (יש לשייך אותן ידנית). לאשר ${strong.length} שכבר משויכות?`)) return;
     else if (!missing && !confirm(`לאשר ${strong.length} התאמות מדויקות?`)) return;
