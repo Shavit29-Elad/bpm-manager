@@ -2042,17 +2042,20 @@ function buildConnectionsView(companyId) {
   const isPlOwner = !!companyId && companyId === paperlessCompanyId();
   const cards = [];
   // מערכת חשבונאית — לפי סוג החברה. סטטוס לפי מפתחות של החברה הנוכחית בלבד (בידוד מלא בין החברות).
+  // הכרטיסים לקריאה-בלבד: המפתחות מוגדרים כמשתני סביבה נפרדים פר-חברה ב-Render, כדי שחיבור חברה אחת
+  // לא ידרוס בטעות חברה אחרת. אין טופס חיבור בתוך האפליקציה עבורם.
+  const envNote = 'החיבור מוגדר במשתני הסביבה ב-Render (נפרד לכל חברה) — כדי שלא ידרוס חברה אחרת.';
   if (acct === 'paperless') cards.push(connCard('paperless', isPlOwner));
   else {
-    const gi = connCard('greenInvoice', true);
+    const gi = connCard('greenInvoice', false);
     gi.status = giEnabled(cid) ? 'connected' : 'disconnected';  // מחובר רק אם לחברה זו יש מפתחות משלה
-    gi.perCompany = true;
+    gi.perCompany = true; gi.readonly = true; gi.message = envNote;
     cards.push(gi);
   }
   // יומן גוגל — פר-חברה: מחובר רק אם לחברה זו הוגדרו קישורי iCal משלה.
-  const cal = connCard('googleCalendar', true);
+  const cal = connCard('googleCalendar', false);
   cal.status = hasCalendar(cid) ? 'connected' : 'disconnected';
-  cal.perCompany = true;
+  cal.perCompany = true; cal.readonly = true; cal.message = envNote;
   cards.push(cal);
   // בנק — העלאת קובץ xlsx (פר-חברה, דרך לשונית הבנק)
   cards.push(connCard('bank', false));
@@ -3007,9 +3010,9 @@ add('DELETE', /^\/api\/users\/([^/]+)$/, (req, res, params) => {
 // GET /api/health?companyId= — סטטוס חיבורים. חשבונית ירוקה/יומן מדווחים לפי החברה הנבחרת (בידוד).
 add('GET', /^\/api\/health$/, (req, res, _p, q) => {
   const cid = q.companyId || null;
-  // חשבונית ירוקה מחוברת = לחברה הזו יש מפתחות משלה. יומן גוגל שייך כרגע ל-BPM בלבד.
+  // חשבונית ירוקה + יומן — פר-חברה: לכל חברה המפתחות/היומנים שלה בלבד (בידוד מלא).
   const giConn = cid ? giEnabled(cid) : greenInvoice.haveCredentials();
-  const calConn = (!cid || cid === giCompanyId()) ? hasCalendar() : false;
+  const calConn = hasCalendar(cid || giCompanyId());
   json(res, {
     ok: true,
     greenInvoiceConnected: giConn,

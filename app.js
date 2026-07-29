@@ -300,17 +300,9 @@ async function renderStatus() {
   // מחווני החיבור הם לפי חברה — חיבורים נפרדים לכל עסק
   const co = state.company;
   const el = $('#statusPills'); if (!el) return;
-  let pills;
-  if (co === 'co_ofek') {
-    // אופק: המערכת החשבונאית היא Paperless (ממלא את תפקיד חשבונית ירוקה). בדיקת חיבור אמיתית מול ה-API.
-    let plOk = false;
-    try { const s = await api('/api/paperless/status'); plOk = !!(s && s.connected); } catch { }
-    pills = [pill('Paperless', plOk), pill('יומן גוגל', false)];
-  } else {
-    // BPM/משה: חשבונית ירוקה + יומן — מצב חיבור אמיתי מהשרת, לפי החברה הנבחרת (בידוד מלא)
-    const h = await api('/api/health?companyId=' + encodeURIComponent(co || ''));
-    pills = [pill('חשבונית ירוקה', h.greenInvoiceConnected), pill('יומן גוגל', h.calendarConnected)];
-  }
+  // כל החברות (כולל אופק) — חשבונית ירוקה + יומן, מצב חיבור אמיתי מהשרת לפי החברה הנבחרת (בידוד מלא, מפתחות נפרדים)
+  const h = await api('/api/health?companyId=' + encodeURIComponent(co || ''));
+  const pills = [pill('חשבונית ירוקה', h.greenInvoiceConnected), pill('יומן גוגל', h.calendarConnected)];
   el.innerHTML = pills.join('');
 }
 const pill = (label, ok, text) =>
@@ -4890,7 +4882,7 @@ function connCard(x) {
           <input type="password" id="in_${x.key}_${f.env}" placeholder="${f.set ? 'השאר ריק כדי לא לשנות' : 'הדבק כאן'}" style="width:100%"/>
         </div>`).join(''));
 
-  const actions = x.readonly ? `<span class="muted">חיבור זה מוגדר לעסק אחר — כרגע לא מחובר עבור עסק זה. הגדר חיבור משלו כשיהיה מוכן.</span>`
+  const actions = x.readonly ? `<span class="muted">${x.message || 'חיבור זה מוגדר לעסק אחר — כרגע לא מחובר עבור עסק זה. הגדר חיבור משלו כשיהיה מוכן.'}</span>`
     : x.soon ? `<span class="muted">בפיתוח — שלב הבא</span>` : `
     <button class="btn primary" data-connect="${x.key}">${x.status === 'connected' ? 'עדכן וחבר מחדש' : 'חבר'}</button>
     ${x.status !== 'disconnected' ? `<button class="btn ghost" data-test="${x.key}">בדוק חיבור</button>` : ''}
