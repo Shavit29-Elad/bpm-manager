@@ -3296,6 +3296,20 @@ function runMigrations() {
     console.log('מיגרציה: הוסר חשבון ההתחברות iris (מיותר — איריס היא סוכנת)');
   }
   db.companies = db.companies || [];
+  // ניקוי חד-פעמי של נתוני אופק שנותרו מהניסויים הקודמים (Paperless) — כדי שהחברה תתחיל נקייה לגמרי.
+  // מוגן בדגל _ofekDataCleared כך שירוץ פעם אחת בלבד ולא ימחק נתונים אמיתיים שיוזנו בעתיד.
+  if (!db._ofekDataCleared) {
+    db.bankTx = (db.bankTx || []).filter(t => t.companyId !== 'co_ofek');
+    db.events = (db.events || []).filter(e => e.companyId !== 'co_ofek');
+    db.supplierPayables = (db.supplierPayables || []).filter(p => (p.companyId || 'co_bpm') !== 'co_ofek');
+    db.artistClientMap = (db.artistClientMap || []).filter(m => (m.companyId || 'co_bpm') !== 'co_ofek');
+    db.txGroupRules = (db.txGroupRules || []).filter(r => r.companyId !== 'co_ofek');
+    if (db.docGroupOverrides) delete db.docGroupOverrides['co_ofek'];
+    if (db.calendarAutoAdopt) delete db.calendarAutoAdopt['co_ofek'];
+    db._ofekDataCleared = true;
+    changed = true;
+    console.log('מיגרציה: נוקו נתוני אופק הישנים (חברה נקייה) — פעם אחת בלבד');
+  }
   // ודא שכל החברות (כולל אופק) קיימות ושלכל אחת מוגדר ספק חשבונאי (accounting)
   for (const seed of COMPANY_SEED) {
     let c = db.companies.find(x => x.id === seed.id);
