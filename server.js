@@ -3346,6 +3346,13 @@ function runMigrations() {
     changed = true;
     console.log('מיגרציה: נוקו נתוני אופק הישנים (חברה נקייה) — פעם אחת בלבד');
   }
+  // ניקוי חד-פעמי נוסף: יתרת עו"ש ישנה של אופק (נשמרת בנפרד מהתנועות) — כדי שגם היתרה תתאפס.
+  if (!db._ofekBankBalanceCleared) {
+    db.bankBalance = (db.bankBalance || []).filter(b => b.companyId !== 'co_ofek');
+    db._ofekBankBalanceCleared = true;
+    changed = true;
+    console.log('מיגרציה: נוקתה יתרת עו"ש ישנה של אופק');
+  }
   // ודא שכל החברות (כולל אופק) קיימות ושלכל אחת מוגדר ספק חשבונאי (accounting)
   for (const seed of COMPANY_SEED) {
     let c = db.companies.find(x => x.id === seed.id);
