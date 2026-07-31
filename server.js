@@ -274,6 +274,28 @@ add('POST', /^\/api\/calendar\/mark-matched$/, (req, res, _p, _q, body) => {
   json(res, { ok: true, manualMatched: ev.manualMatched });
 });
 
+// --- זיהוי "אירוע יומן שכבר נקלט" לפי תאריך + שם האמן של אירוע מאושר ---
+// אותה הופעה מופיעה לעיתים בשני יומני גוגל (עובדים + הגברה ותאורה) בניסוח שונה. אם כבר יש אירוע
+// מאושר באותו תאריך ששם האמן שלו מופיע בכותרת/מיקום של אירוע היומן — לא קולטים אותו שוב לאישור.
+function _normHe(s) { return String(s || '').toLowerCase().replace(/["'’.,\-()\/|]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function _artistCoreWords(a) { return _normHe(a).split(' ').filter(w => w.length > 1).slice(0, 2); }
+// אינדקס: לכל תאריך — רשימת "ליבות שם אמן" של אירועים מאושרים (מילים משמעותיות)
+function confirmedArtistIndex(db, cid) {
+  const idx = {};
+  for (const e of (db.events || [])) {
+    if (e.companyId !== cid || !e.confirmed) continue;
+    const words = _artistCoreWords(e.artist);
+    if (words.length) (idx[e.date] = idx[e.date] || []).push(words);
+  }
+  return idx;
+}
+// האם אירוע יומן ce כבר מיוצג ע״י אירוע מאושר (אותו תאריך + כל מילות ליבת-האמן מופיעות בכותרת/מיקום)
+function calendarAlreadyCaptured(idx, ce) {
+  const list = idx[ce.date]; if (!list) return false;
+  const hay = _normHe(ce.title) + ' ' + _normHe(ce.location);
+  return list.some(words => words.every(w => hay.includes(w)));
+}
+
 // POST /api/calendar/auto-adopt { companyId } — הוספה אוטומטית של אירועי יומן גוגל לרשימת "אירועים לאישור".
 // מוסיף רק אירועים עד אתמול (כולל) — לא אירועים עתידיים (עלולים להשתנות) ולא של היום.
 // רץ פעם ביום לכל חברה (שעון ישראל). מוסיף רק אירועי יומן שאין להם התאמה לאירוע קיים (מונע כפילויות מול קליטת ווטסאפ).
@@ -290,13 +312,15 @@ add('POST', /^\/api\/calendar\/auto-adopt$/, async (req, res, _p, q, body) => {
   try {
     const ourEvents = (db.events || []).filter(e => e.companyId === cid && (e.date || '') >= MATCH_START);
     const adoptedGcal = new Set(ourEvents.map(e => e.gcalId).filter(Boolean));
+    const confIdx = confirmedArtistIndex(db, cid); // אירועים מאושרים לפי תאריך+שם אמן — למניעת קליטה כפולה
     const cal = (await fetchCalendarEvents({ companyId: cid }))
-      .filter(e => e.id && (e.date || '') >= MATCH_START && (e.date || '') <= yesterday && !adoptedGcal.has(e.id));
+      .filter(e => e.id && (e.date || '') >= MATCH_START && (e.date || '') <= yesterday
+        && !adoptedGcal.has(e.id) && !calendarAlreadyCaptured(confIdx, e));
     // רק אירועי יומן שאין להם התאמה לאירוע קיים אצלנו (missingInWhatsapp)
     const { missingInWhatsapp } = matchEvents(ourEvents, cal);
     let adopted = 0;
     for (const ce of missingInWhatsapp) {
-      if (!ce.id || adoptedGcal.has(ce.id)) continue;
+      if (!ce.id || adoptedGcal.has(ce.id) || calendarAlreadyCaptured(confIdx, ce)) continue;
       let clientId = null, clientName = null;
       const mapped = mappedClientName(db, ce.title);
       if (mapped) { const r = await resolveClientByName(mapped); clientId = r.clientId; clientName = r.clientName; }
