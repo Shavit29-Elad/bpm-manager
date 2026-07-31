@@ -1781,9 +1781,7 @@ function calLegend(data) {
   const item = (key, label, colors) => `<button onclick="toggleCalSrc('${key}')" title="לחץ להצגה/הסתרה" style="display:inline-flex;align-items:center;gap:5px;background:none;border:0;cursor:pointer;font-size:12px;color:var(--muted);opacity:${h[key] ? 0.45 : 1}"><span style="width:11px;height:11px;border-radius:3px;background:${colors[1]};display:inline-block"></span>${escapeHtml(label)}${h[key] ? ' (מוסתר)' : ''}</button>`;
   let out = '';
   [...cals.keys()].sort((a, b) => a - b).forEach(idx => { out += item('cal' + idx, cals.get(idx), CAL_COLORS[idx % CAL_COLORS.length]); });
-  // "ידני" — רק אם יש אירועים ישנים ללא שיוך ליומן גוגל (למשל שנקלטו מווטסאפ בעבר)
-  const hasManual = [...(data.whatsapp || []), ...(data.calendar || [])].some(e => e.calendarIndex == null);
-  if (hasManual) out += item('wa', 'ידני', WA_COLOR);
+  // לוח השנה מציג רק אירועי יומני גוגל (שיקוף) — אין עוד תווית "ידני"/"ווטסאפ"
   return `<span style="display:inline-flex;gap:12px;flex-wrap:wrap;align-items:center">${out}</span>`;
 }
 function setCalView(v) { state.calView = v; renderCalView(); }
@@ -1812,8 +1810,7 @@ async function renderWeekCalendar() {
   const data = await api(`/api/calendar/events?companyId=${state.company}&from=${from}&to=${to}`);
   const byDay = {};
   const add = (ev, cls) => { if (!ev.date) return; (byDay[ev.date] = byDay[ev.date] || []).push({ ...ev, cls }); };
-  (data.calendar || []).forEach(e => add(e, 'cal'));
-  (data.whatsapp || []).forEach(e => add(e, 'wa'));
+  (data.calendar || []).forEach(e => add(e, 'cal'));   // רק אירועי יומני גוגל — שיקוף מלא של היומנים
 
   const today = todayIso();
   const h = calHidden();
@@ -1868,8 +1865,7 @@ async function renderMonthCalendar() {
   const startDow = new Date(y, m - 1, 1).getDay();
   const byDay = {};
   const add = (ev, cls) => { if (!ev.date) return; (byDay[ev.date] = byDay[ev.date] || []).push({ ...ev, cls }); };
-  (data.calendar || []).forEach(e => add(e, 'cal'));
-  (data.whatsapp || []).forEach(e => add(e, 'wa'));
+  (data.calendar || []).forEach(e => add(e, 'cal'));   // רק אירועי יומני גוגל — שיקוף מלא של היומנים
 
   const today = todayIso();
   const h = calHidden();
