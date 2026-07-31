@@ -1898,7 +1898,7 @@ async function renderMonthCalendar() {
       ${cells}
     </div>`;
 }
-const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור (ללא מע"מ)</th><th>תמחור כולל מע"מ</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>אישור</th><th>עריכה</th></tr></thead>`;
+const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור (ללא מע"מ)</th><th>תמחור כולל מע"מ</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>אישור</th><th>פעולה</th></tr></thead>`;
 let _evMonthFilter = 'all';
 window.setEvMonth = (v) => { _evMonthFilter = v; renderCombined($('#content')); };
 let _evClientFilter = 'all';
@@ -2019,7 +2019,9 @@ function rowEvent(e) {
     <td>${(e.contractors || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td>${invoiceCell(e)}</td>
     <td>${confBtn}</td>
-    <td><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button></td></tr>`;
+    <td>${e.confirmed
+      ? `<button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button>`
+      : `<button class="btn ghost" style="padding:4px 11px;font-size:12px;color:var(--danger)" onclick="deleteEventRow('${e.id}')">🗑 מחק</button>`}</td></tr>`;
 }
 
 // ================= עורך אירוע (תבנית מלאה + מחירים + שיוך לקוח) =================
@@ -2153,6 +2155,14 @@ window.evClosePreview = () => {
   if (_evDocBlobUrl) { URL.revokeObjectURL(_evDocBlobUrl); _evDocBlobUrl = null; }
 };
 let _evDocBlobUrl = null;
+// מחיקת אירוע ישירות מהשורה (ברשימת "אירועים לאישור") — בלי לפתוח עורך. לא נמחק מיומן גוגל.
+window.deleteEventRow = async (id) => {
+  if (!id) return;
+  if (!confirm('למחוק את האירוע מרשימת האירועים שלך? (לא נמחק מיומן גוגל)')) return;
+  await fetch(`/api/events/${id}`, { method: 'DELETE' }).catch(() => {});
+  clearApiCache();
+  renderCombined($('#content'));
+};
 window.deleteEvent = async () => {
   if (!_evEditing) return;
   if (!confirm('למחוק את האירוע מרשימת האירועים שלך? (לא נמחק מיומן גוגל)')) return;
