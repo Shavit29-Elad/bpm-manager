@@ -1766,18 +1766,24 @@ function viewToggle() {
 // ---- מקורות יומן: צבעים, מקרא וסינון (ווטסאפ + כל יומני גוגל) ----
 const CAL_COLORS = [['var(--ev-cal-bg)', 'var(--ev-cal)'], ['#fce7f3', '#db2777'], ['#dcfce7', '#16a34a'], ['#fef9c3', '#ca8a04'], ['#e0f2fe', '#0284c7']];
 const WA_COLOR = ['var(--ev-wa-bg)', 'var(--ev-wa)'];
-function evSrcKey(e) { return (e.source === 'whatsapp' || e.cls === 'wa') ? 'wa' : 'cal' + (e.calendarIndex ?? 0); }
+// צבע/מקור לפי היומן שאליו האירוע שייך (calendarIndex). אירוע ללא שיוך ליומן (ידני/ישן) = 'wa'.
+function evSrcKey(e) { return (e.calendarIndex != null) ? ('cal' + e.calendarIndex) : 'wa'; }
 function evSrcColor(e) { return evSrcKey(e) === 'wa' ? WA_COLOR : CAL_COLORS[(e.calendarIndex ?? 0) % CAL_COLORS.length]; }
 function calHidden() { state.calHidden = state.calHidden || {}; return state.calHidden; }
 window.toggleCalSrc = (k) => { const h = calHidden(); h[k] = !h[k]; renderCalView(); };
 // מקרא לחיץ: לוחצים על מקור כדי להציג/להסתיר אותו ביומן
 function calLegend(data) {
+  // כל יומני גוגל המוגדרים (לפי שם) — גם אם כל האירועים שלהם כבר אומצו
   const cals = new Map();
-  (data.calendar || []).forEach(e => cals.set(e.calendarIndex ?? 0, e.calendarName || ('יומן ' + ((e.calendarIndex ?? 0) + 1))));
+  (data.calendars || []).forEach(c => cals.set(c.index, c.name));
+  (data.calendar || []).forEach(e => { const i = e.calendarIndex ?? 0; if (!cals.has(i)) cals.set(i, e.calendarName || ('יומן ' + (i + 1))); });
   const h = calHidden();
   const item = (key, label, colors) => `<button onclick="toggleCalSrc('${key}')" title="לחץ להצגה/הסתרה" style="display:inline-flex;align-items:center;gap:5px;background:none;border:0;cursor:pointer;font-size:12px;color:var(--muted);opacity:${h[key] ? 0.45 : 1}"><span style="width:11px;height:11px;border-radius:3px;background:${colors[1]};display:inline-block"></span>${escapeHtml(label)}${h[key] ? ' (מוסתר)' : ''}</button>`;
-  let out = item('wa', 'ווטסאפ', WA_COLOR);
+  let out = '';
   [...cals.keys()].sort((a, b) => a - b).forEach(idx => { out += item('cal' + idx, cals.get(idx), CAL_COLORS[idx % CAL_COLORS.length]); });
+  // "ידני" — רק אם יש אירועים ישנים ללא שיוך ליומן גוגל (למשל שנקלטו מווטסאפ בעבר)
+  const hasManual = [...(data.whatsapp || []), ...(data.calendar || [])].some(e => e.calendarIndex == null);
+  if (hasManual) out += item('wa', 'ידני', WA_COLOR);
   return `<span style="display:inline-flex;gap:12px;flex-wrap:wrap;align-items:center">${out}</span>`;
 }
 function setCalView(v) { state.calView = v; renderCalView(); }

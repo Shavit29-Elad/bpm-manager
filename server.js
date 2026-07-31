@@ -333,21 +333,31 @@ add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
   };
   const dbEvents = (q.companyId ? companyEvents(db, q.companyId) : db.events);
   const adoptedGcal = new Set(dbEvents.map(e => e.gcalId).filter(Boolean));
-  const wa = dbEvents
-    .filter(e => inRange(e.date))
-    .map(e => ({ eventId: e.id, date: e.date, title: e.artist || 'אירוע', location: e.location || '',
-      clientName: e.clientName || null, price: e.price ?? null, source: 'whatsapp' }));
+  // מפענח את מזהה היומן מתוך gcalId בפורמט 'c<index>_...' — כך שאירוע שאומץ מיומן נצבע לפי היומן שלו.
+  const calIdxOf = (gcalId) => { const m = String(gcalId || '').match(/^c(\d+)_/); return m ? +m[1] : null; };
   let cal = [];
   let calendarError = null;
+  const calNames = new Map();   // index -> שם היומן (מכל היומנים המוגדרים, גם אם כל האירועים כבר אומצו)
   try {
     if (hasCalendar(q.companyId)) {
-      cal = (await fetchCalendarEvents({ companyId: q.companyId }))
+      const raw = await fetchCalendarEvents({ companyId: q.companyId });
+      raw.forEach(e => calNames.set(e.calendarIndex ?? 0, e.calendarName || `יומן ${(e.calendarIndex ?? 0) + 1}`));
+      cal = raw
         .filter(e => inRange(e.date) && !adoptedGcal.has(e.id))   // מסתירים אירועי יומן שכבר אומצו
         .map(e => ({ gcalId: e.id, date: e.date, title: e.title, location: e.location, source: 'calendar', calendarIndex: e.calendarIndex ?? 0, calendarName: e.calendarName || `יומן ${(e.calendarIndex ?? 0) + 1}` }));
     } else { calendarError = 'יומן גוגל לא מחובר'; }
   } catch (e) { calendarError = e.message; }
+  // האירועים שלנו — נצבעים לפי היומן שממנו אומצו (calendarIndex מתוך gcalId). אירוע ללא שיוך ליומן = 'manual'.
+  const wa = dbEvents
+    .filter(e => inRange(e.date))
+    .map(e => { const idx = calIdxOf(e.gcalId);
+      return { eventId: e.id, date: e.date, title: e.artist || 'אירוע', location: e.location || '',
+        clientName: e.clientName || null, price: e.price ?? null,
+        calendarIndex: idx, calendarName: idx != null ? (calNames.get(idx) || `יומן ${idx + 1}`) : null,
+        source: idx != null ? 'calendar' : 'manual' }; });
+  const calendars = [...calNames.keys()].sort((a, b) => a - b).map(index => ({ index, name: calNames.get(index) }));
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify({ from: q.from, to: q.to, whatsapp: wa, calendar: cal, calendarError }));
+  res.end(JSON.stringify({ from: q.from, to: q.to, whatsapp: wa, calendar: cal, calendars, calendarError }));
 });
 
 // GET /api/invoicing/pending?companyId=
