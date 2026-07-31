@@ -1702,6 +1702,9 @@ async function renderCombined(c) {
   const filtered = _evMonthFilter === 'all' ? events : events.filter(e => (e.date || e.dateRaw || '').slice(0, 7) === _evMonthFilter);
   const pending = filtered.filter(e => !e.confirmed);
   const approved = filtered.filter(e => e.confirmed);
+  // סימון "אולי כבר קיים": אירוע לאישור שיש לו רמז להתאמה לאירוע מאושר (אותו תאריך + מקום/שם חלקי) — לא ודאי, רק לתשומת לב.
+  const _confAll = events.filter(e => e.confirmed);
+  for (const p of pending) p._possibleMatch = possibleApprovedMatch(p, _confAll);
   const overdue = events.filter(isOverdueUnbilled).length;
   const monthSel = `<select onchange="setEvMonth(this.value)" style="padding:6px 10px"><option value="all" ${_evMonthFilter === 'all' ? 'selected' : ''}>כל החודשים</option>${monthsSet.map(k => `<option value="${k}" ${_evMonthFilter === k ? 'selected' : ''}>${monthKeyLabel(k)}</option>`).join('')}</select>`;
   // סינון לפי לקוח וקבלן — בחלק של האירועים המאושרים בלבד
@@ -2004,15 +2007,40 @@ function eventsByMonthHtml(events, mode = 'approved') {
     </div>`;
   }).join('');
 }
+// נרמול פונטי עברי (זהה לשרת): סובלני לשגיאות ט/ת, ק/כ, א/ע/ה, ו/י שנשמטות.
+function hebPhon(s) {
+  return String(s || '').toLowerCase()
+    .replace(/[֑-ׇ]/g, '').replace(/["'’`׳״().,\-\/|:]/g, ' ')
+    .replace(/ך/g, 'כ').replace(/ם/g, 'מ').replace(/ן/g, 'נ').replace(/ף/g, 'פ').replace(/ץ/g, 'צ')
+    .replace(/ט/g, 'ת').replace(/ק/g, 'כ')
+    .replace(/[אעה]/g, '').replace(/[וי]/g, '')
+    .replace(/\s+/g, ' ').trim();
+}
+// מילים כלליות מדי שלא ייחשבו כרמז התאמה (בצורתן הפונטית)
+const _POSS_STOP = new Set(['ישראל', 'אולם', 'אולמי', 'אירועים', 'אירוע', 'גן', 'גני', 'מרכז', 'כפר', 'בית', 'חתונה', 'מצווה', 'בר', 'בת', 'דיגי', 'הגברה', 'תאורה', 'סאונד', 'חיבור', 'במקום', 'שעה', 'מופע', 'הופעה'].map(hebPhon));
+function _possTokens(s) { return hebPhon(s).split(' ').map(w => w.trim()).filter(w => w.length >= 3 && !_POSS_STOP.has(w)); }
+// מחזיר רמז להתאמה מול אירוע מאושר (אותו תאריך + מקום או שם חלקי שמופיע). לא ודאי — רק לצביעה/תשומת לב.
+function possibleApprovedMatch(p, confList) {
+  const hay = ' ' + hebPhon((p.artist || '') + ' ' + (p.location || '')) + ' ';
+  for (const f of confList) {
+    if ((f.date || '') !== (p.date || '')) continue;
+    const venueHit = _possTokens(f.location).find(t => hay.includes(t));
+    const nameHit = _possTokens(f.artist).find(t => hay.includes(t));
+    if (venueHit || nameHit) return { artist: f.artist, client: f.clientName || '', why: venueHit ? ('מקום: ' + f.location) : ('שם: ' + f.artist) };
+  }
+  return null;
+}
 function rowEvent(e) {
   // אישור נעשה רק דרך העריכה (כדי לוודא פרטים) — בשורה לא מאושרת יש כפתור שפותח עריכה
   const confBtn = e.confirmed
     ? `<button class="btn success" style="padding:4px 12px;font-size:12px" onclick="confirmEventRow('${e.id}',false)">מאושר ✓</button>`
     : `<button class="btn ghost" style="padding:4px 12px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">ערוך ואשר →</button>`;
-  const rowBg = isOverdueUnbilled(e) ? 'background:rgba(225,29,72,.06)' : (e.confirmed ? 'background:rgba(14,164,114,.05)' : '');
+  const rowBg = isOverdueUnbilled(e) ? 'background:rgba(225,29,72,.06)'
+    : (!e.confirmed && e._possibleMatch) ? 'background:rgba(245,158,11,.14)'
+    : (e.confirmed ? 'background:rgba(14,164,114,.05)' : '');
   return `<tr${rowBg ? ` style="${rowBg}"` : ''}>
     <td style="white-space:nowrap">${ddmy(e.date || e.dateRaw)}</td>
-    <td>${e.artist || '—'}</td>
+    <td>${e.artist || '—'}${(!e.confirmed && e._possibleMatch) ? `<div style="font-size:11px;color:#b45309;margin-top:2px">🟡 אולי כבר קיים במאושרים · ${escapeHtml(e._possibleMatch.why)}${e._possibleMatch.client ? ` · ${escapeHtml(e._possibleMatch.client)}` : ''}</div>` : ''}</td>
     <td>${e.location || '—'}</td>
     <td>${e.clientName ? escapeHtml(e.clientName) : '<span class="muted">—</span>'}</td>
     <td>${money(e.price)}${(e.priceLighting || e.priceSound || e.priceBackline || (e.ledMeters && e.ledPricePerMeter) || e.priceExtras) ? `<div class="muted" style="font-size:11px">${e.priceLighting ? `תאורה ${money(e.priceLighting)} · ` : ''}${e.priceSound ? `סאונד ${money(e.priceSound)}` : ''}${e.priceBackline ? ` · בקליין ${money(e.priceBackline)}` : ''}${(e.ledMeters && e.ledPricePerMeter) ? ` · לד ${e.ledMeters}מ׳×${money(e.ledPricePerMeter)}` : ''}${e.priceExtras ? ` · תוספות ${money(e.priceExtras)}` : ''}</div>` : ''}</td>
