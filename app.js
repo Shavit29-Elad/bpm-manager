@@ -1225,10 +1225,13 @@ function renderDeriveEditor() {
   }).join('') : '';
   const m = document.getElementById('derModal');
   // מסמך המקור מוצג מצד ימין (בעורך מסמך המשך) כדי שיהיה קל לערוך את מסמך ההמשך מולו
+  const srcBody = e.srcBlobUrl
+    ? (e.srcIsImage ? `<img src="${e.srcBlobUrl}" style="max-width:100%;max-height:100%;object-fit:contain">` : `<iframe src="${e.srcBlobUrl}#toolbar=1" style="flex:1;width:100%;border:none;background:#fff"></iframe>`)
+    : `<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען מסמך מקור…</div>`;
   const srcPane = (e.linked && e.srcUrl) ? `<div style="flex:0 0 44%;min-width:0;display:flex;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
       <div class="row-between" style="margin-bottom:6px"><b style="font-size:13px">מסמך מקור${e.srcLabel ? ' — ' + escapeHtml(e.srcLabel) : ''}</b>
         <a href="${e.srcUrl}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none">פתח ↗</a></div>
-      <iframe src="${e.srcUrl}" title="מסמך מקור" style="flex:1;width:100%;min-height:62vh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+      <div id="derSrcBody" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:62vh;border:1px solid var(--line);border-radius:8px;background:#fff">${srcBody}</div>
     </div>` : '';
   m.innerHTML = `<div class="modal-card" style="width:${srcPane ? 'min(1160px,97vw)' : 'min(720px,96vw)'};max-height:92vh;overflow:auto">
     <div style="display:flex;gap:14px;align-items:stretch">
@@ -1282,6 +1285,27 @@ function renderDeriveEditor() {
   </div>`;
   m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
   derRecalc();
+  derLoadSrcPreview();
+}
+// טעינת מסמך המקור לתצוגה מצד ימין — מובא כ-blob (כמו בתצוגה המקדימה) כדי שיוצג inline ולא יורד.
+let _derSrcBlobUrl = null;
+async function derLoadSrcPreview() {
+  const e = _derEdit; if (!e || !e.linked || !e.srcUrl || e.srcBlobUrl) return;
+  try {
+    const r = await fetch(e.srcUrl);
+    const blob = await r.blob();
+    const t = (blob.type || r.headers.get('content-type') || '').toLowerCase();
+    if (_derSrcBlobUrl) URL.revokeObjectURL(_derSrcBlobUrl);
+    _derSrcBlobUrl = URL.createObjectURL(blob);
+    e.srcBlobUrl = _derSrcBlobUrl; e.srcIsImage = t.startsWith('image');
+    const pane = document.getElementById('derSrcBody');
+    if (pane) pane.innerHTML = e.srcIsImage
+      ? `<img src="${e.srcBlobUrl}" style="max-width:100%;max-height:100%;object-fit:contain">`
+      : `<iframe src="${e.srcBlobUrl}#toolbar=1" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
+  } catch {
+    const pane = document.getElementById('derSrcBody');
+    if (pane) pane.innerHTML = `<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center"><a href="${e.srcUrl}" target="_blank" rel="noopener" class="btn ghost" style="text-decoration:none">פתח מסמך מקור ↗</a></div>`;
+  }
 }
 window.derPreviewPdf = async (btn) => {
   derSyncFromDom(); const e = _derEdit; if (!e) return;
