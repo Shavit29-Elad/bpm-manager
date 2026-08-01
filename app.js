@@ -1694,6 +1694,15 @@ async function autoAdoptCalendar() {
     return r;
   } catch { return null; }
 }
+// רענון ידני יזום — מושך מהיומן מיד (כולל אירועי היום), עוקף את מנגנון "פעם ביום"
+window.forceAdoptCalendar = async (btn) => {
+  if (btn) { btn.disabled = true; btn.dataset.orig = btn.textContent; btn.textContent = '⏳ מרענן…'; }
+  const r = await fetch('/api/calendar/auto-adopt?force=1', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, force: true }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  clearApiCache();
+  if (r && r.error) alert('רענון נכשל: ' + r.error);
+  else alert(`✓ הרענון הושלם — נקלטו ${r && r.adopted || 0} אירועים חדשים מהיומן.`);
+  renderCombined($('#content'));
+};
 async function renderCombined(c) {
   ensureNamesSynced(() => { if (state.tab === 'combined' || state.tab === 'events') renderCombined($('#content')); }); // ברקע, פעם בחברה
   await autoAdoptCalendar();
@@ -1724,6 +1733,7 @@ async function renderCombined(c) {
         <div><h2>אירועים</h2><span class="muted">${events.length} אירועים${overdue ? ` · <span style="color:var(--danger)">${overdue} ללא חשבונית מחודש שעבר</span>` : ''}</span></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <span class="muted" style="font-size:13px">חודש:</span>${monthSel}
+          <button class="btn ghost" onclick="forceAdoptCalendar(this)" title="מושך מיד את אירועי היומן, כולל של היום">🔄 רענן מהיומן</button>
           <button class="btn primary" id="addEvent">+ הדבק הודעת ווטסאפ</button>
           <button class="btn ghost" id="addEventManual">+ הוסף אירוע</button>
         </div>
