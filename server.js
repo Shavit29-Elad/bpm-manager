@@ -2041,6 +2041,8 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
     const anyKnownNear = (kwFn) => [...knownNames].some(nm => kwFn(nm));
     const globalDouble = /כפולה/.test(note) && !anyKnownNear(nameDouble);
     const globalHalf = /יומית\s*וחצי/.test(note) && !anyKnownNear(nameHalf);
+    // "בונוס לכולם" / "בונוס לשניהם" — מילת בונוס ללא שם עובד מוכר צמוד → כל עובד מקבל את הבונוס הקבוע שלו
+    const globalBonus = /בונוס|תוספת/.test(note) && !anyKnownNear(nameBonus);
     for (const r of result) {
       const nm = String(r.name || '').trim();
       const base = baseMap[nm];
@@ -2056,8 +2058,8 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
         if (base != null) { r.bonus = Math.round(base / 2); r.bonusFactor = null; r.halfAsBonus = true; }
         continue;
       }
-      // "בונוס"/"תוספת" ליד שם העובד → הבונוס הקבוע שהוגדר לו (בונוס = עבד יום + בונוס)
-      if (nameBonus(nm)) {
+      // "בונוס"/"תוספת" ליד שם העובד או כללי ("לכולם") → הבונוס הקבוע שהוגדר לעובד
+      if (nameBonus(nm) || globalBonus) {
         const def = defMap[nm];
         if (def != null) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; if (r.factor == null || r.factor === '') r.factor = '1'; }
       }
