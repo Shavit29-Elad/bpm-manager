@@ -2361,11 +2361,11 @@ let _invClients = [];
 async function renderInvoicing(c) {
   c.innerHTML = `<div class="panel"><div class="empty">טוען אירועים…</div></div>`;
   _invClients = await api(`/api/invoicing/clients?companyId=${state.company}`) || [];
-  // מציגים רק לקוחות עם יתרה פתוחה (יש אירועים בלי קבלה/מס-קבלה). כשכל האירועים שולמו — הלקוח יורד מהרשימה.
-  const shown = _invClients.filter(g => (g.unpaidCount || 0) > 0);
+  // מציגים רק לקוחות שיש להם אירועים שטרם הופקה להם חשבונית. אירוע שהופקה לו עסקה/מס/מס-קבלה/קבלה — יורד מכאן.
+  const shown = _invClients.filter(g => (g.unissuedCount || 0) > 0);
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>הפקת חשבוניות ללקוחות</h2>
-      <span class="muted">בחר אירועים והפק חשבון עסקה / מס / מס-קבלה / קבלה, או שייך למסמך קיים. אירוע נסגר ויורד מהרשימה רק כשמשויכת אליו קבלה או מס-קבלה. שיוך מסמכים נוסף אפשרי גם מלשונית האירועים (עמודת חיוב).</span></div></div>
+      <span class="muted">בחר אירועים שטרם הופקה להם חשבונית והפק חשבון עסקה / מס / מס-קבלה / קבלה, או שייך למסמך קיים. ברגע שהופקה חשבונית (עסקה/מס/מס-קבלה/קבלה) האירוע יורד מכאן, והמעקב אחר התשלום נמשך ב"חשבוניות פתוחות" בדף הבית. הצעת מחיר בלבד אינה נחשבת הפקה.</span></div></div>
     ${shown.length ? shown.map(invClientCard).join('') : `<div class="empty">אין יתרות פתוחות — כל האירועים חויבו ושולמו. 👌</div>`}
   </div>`;
 }
@@ -2373,8 +2373,8 @@ function invClientCard(g) {
   const safe = 'c' + (g.clientId || g.client).replace(/[^a-zA-Z0-9֐-׿]/g, '_');
   const bodyId = 'invbody_' + safe;
   const cEnc = encodeURIComponent(g.client);
-  // מציגים אירועים שטרם "שולמו" (אין להם קבלה/מס-קבלה). אירוע עם קבלה מוסר לגמרי.
-  const openEvents = g.events.filter(ev => !ev.paid);
+  // מציגים אירועים שטרם הופקה להם חשבונית. אירוע שהופקה לו עסקה/מס/מס-קבלה/קבלה מוסר לגמרי (עובר ל"חשבוניות פתוחות").
+  const openEvents = g.events.filter(ev => !ev.issued);
   const rows = openEvents.map(ev => {
     const tags = (ev.linkedDocs || []).map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה / הורדה" onclick="previewLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ');
     return `<tr>
@@ -2387,11 +2387,11 @@ function invClientCard(g) {
         <button class="btn ghost" style="padding:2px 8px;font-size:11px;white-space:nowrap;margin-inline-start:4px" onclick="linkOneEvent('${ev.id}','${cEnc}','${g.clientId || ''}')">🔗 שייך</button></td>
     </tr>`;
   }).join('');
-  const collapsed = g.unpaidCount === 0;
+  const collapsed = g.unissuedCount === 0;
   return `<div class="card" style="margin-top:12px;padding:0;overflow:hidden">
     <div class="row-between" style="margin:0;padding:12px 14px;cursor:pointer" onclick="document.getElementById('${bodyId}').classList.toggle('hidden')">
-      <div><b>${escapeHtml(g.client)}</b> <span class="muted">· ${g.unpaidCount} פתוחים · יתרה ${money(g.unpaidTotal)}</span></div>
-      <div style="font-weight:700">${money(g.unpaidTotal)}</div>
+      <div><b>${escapeHtml(g.client)}</b> <span class="muted">· ${g.unissuedCount} להפקה · סכום ${money(g.unissuedTotal)}</span></div>
+      <div style="font-weight:700">${money(g.unissuedTotal)}</div>
     </div>
     <div id="${bodyId}" class="${collapsed ? 'hidden' : ''}">
       <table style="margin:0"><thead><tr><th style="width:56px">בחר</th><th>תאריך</th><th>אמן</th><th>מיקום</th><th>סכום</th><th>מסמכים</th></tr></thead>

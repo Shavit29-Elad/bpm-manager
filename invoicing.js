@@ -71,7 +71,7 @@ export function eventsByClient(events) {
   for (const ev of events || []) {
     if (isNoInvoice(ev)) continue; // אירועים שלא צריך להוציא עליהם חשבונית — לא מוצגים לחיוב
     const client = (ev.clientName || ev.client || 'ללא לקוח').trim();
-    if (!groups[client]) groups[client] = { client, clientId: ev.clientId || null, events: [], total: 0, unbilledTotal: 0, unbilledCount: 0, unpaidTotal: 0, unpaidCount: 0 };
+    if (!groups[client]) groups[client] = { client, clientId: ev.clientId || null, events: [], total: 0, unbilledTotal: 0, unbilledCount: 0, unpaidTotal: 0, unpaidCount: 0, unissuedTotal: 0, unissuedCount: 0 };
     const g = groups[client];
     if (ev.clientId && !g.clientId) g.clientId = ev.clientId;
     const t = eventTotal(ev);
@@ -79,18 +79,23 @@ export function eventsByClient(events) {
     const linkedDocs = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
     // "שולם/הושלם" רק כשיש מסמך מסוג קבלה או מס-קבלה (320/400) — עסקה/מס בלבד = חויב אך פתוח
     const paid = linkedDocs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(ev.invoiceType));
+    // "הופק" — הופקה/שויכה חשבונית כלשהי: עסקה(300)/מס(305)/מס-קבלה(320)/קבלה(400). הצעת מחיר(10) אינה נחשבת.
+    // אירוע שהופק יורד ממסך "הפקת חשבוניות" — המעקב אחריו נמשך ב"חשבוניות פתוחות" עד לתשלום.
+    const issued = billed || linkedDocs.some(d => [300, 305, 320, 400].includes(Number(d.type))) || [300, 305, 320, 400].includes(Number(ev.invoiceType));
     g.events.push({
       id: ev.id, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '',
       price: num(ev.price), priceLighting: num(ev.priceLighting), priceSound: num(ev.priceSound), priceBackline: num(ev.priceBackline), ledMeters: num(ev.ledMeters), ledPricePerMeter: num(ev.ledPricePerMeter), priceExtras: num(ev.priceExtras), total: t,
-      billed, paid, invoiceId: ev.invoiceId || null, invoiceNumber: ev.invoiceNumber || null, invoiceType: ev.invoiceType || null,
+      billed, paid, issued, invoiceId: ev.invoiceId || null, invoiceNumber: ev.invoiceNumber || null, invoiceType: ev.invoiceType || null,
       linkedDocs,
     });
     g.total += t;
     if (!billed) { g.unbilledTotal += t; g.unbilledCount++; }
     if (!paid) { g.unpaidTotal += t; g.unpaidCount++; }
+    if (!issued) { g.unissuedTotal += t; g.unissuedCount++; }
   }
   for (const g of Object.values(groups)) g.events.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  return Object.values(groups).sort((a, b) => b.unpaidTotal - a.unpaidTotal || a.client.localeCompare(b.client));
+  // מיון לפי הסכום שעדיין צריך להפיק (המטרה של מסך "הפקת חשבוניות")
+  return Object.values(groups).sort((a, b) => b.unissuedTotal - a.unissuedTotal || a.client.localeCompare(b.client));
 }
 
 // ---- תאימות לאחור: קיבוץ לפי לקוח+חודש (המסך הישן של "חיוב") ----
