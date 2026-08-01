@@ -2033,10 +2033,10 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
         if (base != null) { r.bonus = base; r.bonusFactor = null; r.doubleAsBonus = true; }
         continue;
       }
-      // "בונוס"/"תוספת" ליד שם העובד → הבונוס הקבוע שהוגדר לו
+      // "בונוס"/"תוספת" ליד שם העובד → הבונוס הקבוע שהוגדר לו (בונוס = עבד יום + בונוס)
       if (nameBonus(nm)) {
         const def = defMap[nm];
-        if (def != null) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; }
+        if (def != null) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; if (r.factor == null || r.factor === '') r.factor = '1'; }
       }
     }
     // רשת ביטחון: עובד שמופיע בתיאור עם "כפולה"/"בונוס"/"תוספת" אך ה-AI לא זיהה — נוסיף אותו ידנית
