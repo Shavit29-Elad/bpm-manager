@@ -2029,6 +2029,20 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
         if (def != null && (r.bonus != null || r.bonusFactor != null)) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; }
       }
     }
+    // רשת ביטחון: עובד שמופיע בתיאור עם "כפולה"/"בונוס"/"תוספת" אך ה-AI לא זיהה — נוסיף אותו ידנית
+    const present = new Set(result.map(r => String(r.name || '').trim()));
+    const knownNames = new Set([...Object.keys(baseMap), ...Object.keys(defMap)]);
+    for (const nm of knownNames) {
+      if (present.has(nm)) continue;
+      if (nameDouble(nm)) {
+        const base = baseMap[nm];
+        result.push({ name: nm, factor: '1', bonus: base != null ? base : null, bonusFactor: null, doubleAsBonus: true });
+        present.add(nm);
+      } else if (new RegExp(esc(nm) + '\\s*[-:]?\\s*(בונוס|תוספת)').test(note)) {
+        const def = defMap[nm];
+        if (def != null) { result.push({ name: nm, factor: '1', bonus: def, bonusFactor: null, defaultBonus: true }); present.add(nm); }
+      }
+    }
     json(res, result);
   } catch (e) { json(res, { error: e.message }, 200); }
 });
