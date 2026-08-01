@@ -2035,16 +2035,25 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
           || new RegExp('(?:' + kw + ')\\s*(?:ל)?\\s*[-:]?\\s*' + n).test(note);
     };
     const nameDouble = (nm) => kwNear(nm, 'כפולה');
+    const nameHalf = (nm) => kwNear(nm, 'יומית\\s*וחצי');
     const nameBonus = (nm) => kwNear(nm, 'בונוס|תוספת');
-    // "כפולה" ללא שם צמוד (משני הצדדים) → חל על כל העובדים באירוע
-    const globalDouble = /כפולה/.test(note) && !/[א-ת]+\s*[-:]?\s*כפולה|כפולה\s*(?:ל)?\s*[-:]?\s*[א-ת]+/.test(note);
+    // מילת-מפתח ללא שם עובד מוכר צמוד אליה (למשל "יומית וחצי שניהם", "כפולה לכולם") → חל על כל העובדים באירוע
+    const anyKnownNear = (kwFn) => [...knownNames].some(nm => kwFn(nm));
+    const globalDouble = /כפולה/.test(note) && !anyKnownNear(nameDouble);
+    const globalHalf = /יומית\s*וחצי/.test(note) && !anyKnownNear(nameHalf);
     for (const r of result) {
       const nm = String(r.name || '').trim();
+      const base = baseMap[nm];
       // "כפולה" = יומית (פקטור 1) + בונוס בגובה היומית של אותו עובד. גובר על בונוס קבוע.
       if (Number(r.factor) === 2 || nameDouble(nm) || globalDouble) {
         r.factor = '1';
-        const base = baseMap[nm];
         if (base != null) { r.bonus = base; r.bonusFactor = null; r.doubleAsBonus = true; }
+        continue;
+      }
+      // "יומית וחצי" = יומית (פקטור 1) + בונוס בגובה חצי מהיומית של אותו עובד. גובר על בונוס קבוע.
+      if (Number(r.factor) === 1.5 || nameHalf(nm) || globalHalf) {
+        r.factor = '1';
+        if (base != null) { r.bonus = Math.round(base / 2); r.bonusFactor = null; r.halfAsBonus = true; }
         continue;
       }
       // "בונוס"/"תוספת" ליד שם העובד → הבונוס הקבוע שהוגדר לו (בונוס = עבד יום + בונוס)
@@ -2060,6 +2069,10 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
       if (nameDouble(nm)) {
         const base = baseMap[nm];
         result.push({ name: nm, factor: '1', bonus: base != null ? base : null, bonusFactor: null, doubleAsBonus: true });
+        present.add(nm);
+      } else if (nameHalf(nm)) {
+        const base = baseMap[nm];
+        result.push({ name: nm, factor: '1', bonus: base != null ? Math.round(base / 2) : null, bonusFactor: null, halfAsBonus: true });
         present.add(nm);
       } else if (nameBonus(nm)) {
         const def = defMap[nm];
