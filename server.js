@@ -691,6 +691,51 @@ add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
   json(res, { ok: true, linked: n, docs: docs.length });
 });
 
+// POST /api/events/:id/attach-doc — צירוף קובץ מסמך חיצוני (חשבונית ישנה ממערכת קודמת) לאירוע קיים.
+// { type, number, date, amount, filename, mime, data(base64) }. עסקה/מס → פתוח עד קבלה/מס-קבלה.
+add('POST', /^\/api\/events\/([^/]+)\/attach-doc$/, async (req, res, params, _q, body) => {
+  const db = load();
+  const ev = db.events.find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  if (!body || !body.data) return json(res, { error: 'חסר קובץ' }, 400);
+  const type = Number(body.type) || null;
+  const saved = await saveFile({ employeeId: 'evdoc:' + ev.id, kind: 'event-doc', filename: body.filename || 'document', mime: body.mime || 'application/octet-stream', data: body.data });
+  const doc = { id: saved.id, number: (body.number != null && String(body.number).trim() !== '') ? String(body.number).trim() : null, type, date: body.date || null, amount: (body.amount != null && body.amount !== '') ? Number(body.amount) : null, url: '/api/files/' + saved.id, uploaded: true };
+  const merged = Array.isArray(ev.linkedDocs) ? ev.linkedDocs.slice() : [];
+  merged.push(doc);
+  ev.linkedDocs = merged.slice(0, 8);
+  // עדכון סטטוס לפי חשבוניות אמיתיות (זהה ללוגיקת /api/invoicing/link) — הצעת מחיר אינה חיוב
+  const REAL = [300, 305, 320, 400];
+  const realDocs = ev.linkedDocs.filter(d => REAL.includes(Number(d.type)));
+  if (realDocs.length) {
+    ev.invoiceStatus = 'invoiced';
+    let primary = realDocs[0];
+    for (const t of [305, 320, 300, 400]) { const d = realDocs.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+    ev.invoiceId = primary.id; ev.invoiceNumber = primary.number; ev.invoiceType = primary.type;
+  }
+  save(db);
+  json(res, { ok: true, doc });
+});
+
+// DELETE /api/events/:id/attach-doc/:docId — הסרת מסמך שהועלה מאירוע + עדכון סטטוס
+add('DELETE', /^\/api\/events\/([^/]+)\/attach-doc\/([^/]+)$/, async (req, res, params) => {
+  const db = load();
+  const ev = db.events.find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  ev.linkedDocs = (ev.linkedDocs || []).filter(d => String(d.id) !== String(params[1]));
+  try { await deleteFile(params[1]); } catch {}
+  const REAL = [300, 305, 320, 400];
+  const realDocs = (ev.linkedDocs || []).filter(d => REAL.includes(Number(d.type)));
+  if (realDocs.length) {
+    ev.invoiceStatus = 'invoiced';
+    let primary = realDocs[0];
+    for (const t of [305, 320, 300, 400]) { const d = realDocs.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+    ev.invoiceId = primary.id; ev.invoiceNumber = primary.number; ev.invoiceType = primary.type;
+  } else { ev.invoiceStatus = 'pending'; ev.invoiceId = null; ev.invoiceNumber = null; ev.invoiceType = null; }
+  save(db);
+  json(res, { ok: true });
+});
+
 // GET /api/open-quotes — הצעות מחיר פתוחות
 add('GET', /^\/api\/open-quotes$/, async (req, res) => {
   if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
@@ -1480,6 +1525,8 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
 
 // GET /api/documents/:id/url — קישור לקובץ המסמך (PDF) בחשבונית ירוקה, לפתיחה/הורדה
 add('GET', /^\/api\/documents\/([^/]+)\/url$/, async (req, res, params) => {
+  // מסמך שהועלה ידנית (חשבונית ישנה) — מוגש מהאחסון המקומי, ולא מחשבונית ירוקה
+  try { const f = await getFile(params[0]); if (f) return json(res, { ok: true, url: '/api/files/' + params[0], status: 1, type: null, uploaded: true }); } catch {}
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
     const raw = await greenInvoice.getDocument(params[0]);
@@ -1564,11 +1611,36 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
   }
 });
 
-// GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה
-add('GET', /^\/api\/open-invoices$/, async (req, res) => {
-  if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
-  try { json(res, { docs: await greenInvoice.openDocuments() }); }
-  catch (e) { json(res, { docs: [], error: e.message }, 500); }
+// GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה,
+// בתוספת חשבוניות ישנות שהועלו ידנית לאירועים (עסקה/מס) שטרם נסגרו בקבלה/מס-קבלה.
+add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
+  const cid = q.companyId;
+  let docs = [], giErr = null;
+  if (greenInvoice.haveCredentials()) {
+    try { docs = await greenInvoice.openDocuments(); } catch (e) { giErr = e.message; }
+  }
+  // חשבוניות ישנות שהועלו ידנית לאירוע (עסקה/מס) — פתוחות עד שמצורפת קבלה/מס-קבלה לאותו אירוע
+  try {
+    const db = load();
+    for (const ev of (db.events || [])) {
+      if (cid && ev.companyId && ev.companyId !== cid) continue;
+      const linked = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+      if (linked.some(d => [320, 400].includes(Number(d.type)))) continue; // נסגר בקבלה/מס-קבלה
+      for (const d of linked) {
+        if (!d.uploaded || ![300, 305].includes(Number(d.type))) continue;
+        docs.push({
+          id: d.id, number: d.number, type: Number(d.type),
+          date: d.date || ev.date || ev.dateRaw || null,
+          clientName: (ev.clientName || ev.client || '—'),
+          amount: d.amount != null ? Number(d.amount) : null,
+          amountDue: d.amount != null ? Number(d.amount) : null,
+          description: [(ev.artist || ''), (ev.location || '')].filter(Boolean).join(' · '),
+          url: d.url, uploaded: true, eventId: ev.id,
+        });
+      }
+    }
+  } catch {}
+  json(res, { docs, error: (docs.length ? null : giErr) });
 });
 
 // GET /api/contractors/payables?companyId=
