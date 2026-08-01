@@ -979,7 +979,8 @@ function openInvClientHtml(cl) {
     ${d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
     <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : ''}
     ${d.uploaded
-      ? `<button class="btn success" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openAttachDoc('${d.eventId}',320)" title="צרף מס-קבלה/קבלה כדי לסגור את החשבונית">✓ צרף קבלה</button>`
+      ? `${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number || ''))}',${Number(d.type)},'followup')" title="הפקת מסמך המשך בחשבונית ירוקה">מסמך המשך ↪</button>` : ''}
+    <button class="btn success" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openAttachDoc('${d.eventId}',320)" title="צרף מס-קבלה/קבלה כדי לסגור את החשבונית">✓ צרף קבלה</button>`
       : `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number))}','${escAttr(DOC_TYPE_NAMES[d.type] || 'מסמך')}','${encodeURIComponent(cl.name || '')}')">✉️ שלח</button>
     ${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'followup')">מסמך המשך ↪</button>` : ''}
     <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'duplicate')">שכפול ⧉</button>`}
@@ -1057,10 +1058,11 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען שורות מהמסמך…</div></div>`;
   // שולפים במקביל: שורות המקור + התאריך של המסמך האחרון *מסוג היעד* (כמו שחשבונית ירוקה בודקת לכל סוג בנפרד)
-  const [r, ld] = await Promise.all([
+  const [r, ld, , su] = await Promise.all([
     api(`/api/documents/${id}/lines`).catch(() => ({ error: 'שגיאת רשת' })),
     api(`/api/documents/last-date?type=${Number(type)}`).catch(() => ({})),
     (state.whRate === undefined ? loadWhRate() : Promise.resolve()),
+    api(`/api/documents/${id}/url`).catch(() => ({})),
   ]);
   if (!r || !r.ok) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת השורות: ${escapeHtml(String(r?.error || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">סגור</button></div></div>`; return; }
   const needsPay = DER_PAYMENT_DOCS.has(Number(type));
@@ -1076,6 +1078,10 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
     description: r.description || '', remarks,
     items,
     payments: [], needsPay,
+    // מסמך המקור (להצגה מצד ימין בעורך מסמך המשך) + מקור שהועלה (חשבונית ישנה → הפקה בחשבונית ירוקה)
+    srcUrl: (su && su.url) || null,
+    srcLabel: `${DOC_TYPE_SHORT[r.srcType] || 'מסמך'}${r.srcNumber ? ' #' + r.srcNumber : ''}`,
+    uploadedSource: r.uploaded ? { eventId: r.eventId, uploadedDocId: id } : null,
   };
   if (!_derEdit.items.length) _derEdit.items.push({ description: '', quantity: 1, price: 0 });
   // תקבולים: אם הגיע סכום שהתקבל בבנק — נבנה תקבול העברה בנקאית, ובניכוי מס במקור נוסיף שורת ניכוי
@@ -1218,7 +1224,16 @@ function renderDeriveEditor() {
     </div>`;
   }).join('') : '';
   const m = document.getElementById('derModal');
-  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;overflow:auto">
+  // מסמך המקור מוצג מצד ימין (בעורך מסמך המשך) כדי שיהיה קל לערוך את מסמך ההמשך מולו
+  const srcPane = (e.linked && e.srcUrl) ? `<div style="flex:0 0 44%;min-width:0;display:flex;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
+      <div class="row-between" style="margin-bottom:6px"><b style="font-size:13px">מסמך מקור${e.srcLabel ? ' — ' + escapeHtml(e.srcLabel) : ''}</b>
+        <a href="${e.srcUrl}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none">פתח ↗</a></div>
+      <iframe src="${e.srcUrl}" title="מסמך מקור" style="flex:1;width:100%;min-height:62vh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+    </div>` : '';
+  m.innerHTML = `<div class="modal-card" style="width:${srcPane ? 'min(1160px,97vw)' : 'min(720px,96vw)'};max-height:92vh;overflow:auto">
+    <div style="display:flex;gap:14px;align-items:stretch">
+    ${srcPane}
+    <div style="flex:1;min-width:0">
     <div class="row-between"><h3>${e.linked ? 'מסמך המשך' : 'שכפול'} — ${typeName}</h3><span class="muted">${escapeHtml(e.clientName)}</span></div>
 
     <div style="margin:8px 0 4px">
@@ -1262,6 +1277,8 @@ function renderDeriveEditor() {
       <button class="btn primary" onclick="derPreviewPdf(this)">👁 תצוגה מקדימה מעוצבת</button>
       <button class="btn success" id="derConfirmBtn" onclick="derConfirm()">✓ הפק ${typeName}</button>
     </div>
+    </div>
+    </div>
   </div>`;
   m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
   derRecalc();
@@ -1292,9 +1309,20 @@ window.derConfirm = async () => {
   if (!confirm(`להפיק ${typeName} על סך ${money(t.total)}?\nהמסמך ייווצר בחשבונית ירוקה${e.linked ? ' ויקושר למקור' : ''} ולא ניתן למחיקה (רק לזכות).`)) return;
   const btn = document.getElementById('derConfirmBtn'); if (btn) { btn.disabled = true; }
   const st = document.getElementById('derEditStatus'); if (st) st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
-  const r = await fetch(`/api/documents/${e.id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: e.type, linked: e.linked, items, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const r = e.uploadedSource
+    ? await fetch(`/api/events/${e.uploadedSource.eventId}/create-followup`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uploadedDocId: e.uploadedSource.uploadedDocId, type: e.type, items, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate, clientName: e.clientName }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }))
+    : await fetch(`/api/documents/${e.id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: e.type, linked: e.linked, items, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
+    // מסמך המשך שנוצר ממסמך שהועלה — השרת כבר קישר וסימן את הישן כ"הומר"; נעדכן את עורך האירוע אם פתוח
+    if (e.uploadedSource && _evEditing && _evEditing.id === e.uploadedSource.eventId && r.doc) {
+      const ld = _evEditing.linkedDocs || [];
+      const s = ld.find(x => String(x.id) === String(e.uploadedSource.uploadedDocId)); if (s) s.converted = true;
+      if (!ld.some(x => String(x.id) === String(r.doc.id))) ld.push({ id: r.doc.id, number: r.doc.number, type: e.type });
+      _evEditing.linkedDocs = ld;
+      const box = document.getElementById('evLinkedDocs'); if (box) box.innerHTML = evLinkedDocsHtml(_evEditing);
+    }
     if (_derBankLink && r.doc) {
       // הופק מתוך "צור הכנסה" בבנק — קישור לתנועה + הורדה + סגירה (התנהגות קיימת)
       if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
@@ -2620,9 +2648,14 @@ function evLinkedDocsHtml(ev) {
       const tp = Number(d.type);
       const acts = [];
       if (d.uploaded) {
-        // מסמך שהועלה ידנית (חשבונית ישנה) — אין פעולות חשבונית ירוקה, רק צפייה + הסרה
-        acts.push(`<span class="muted" style="font-size:10.5px">📎 הועלה${d.amount != null ? ' · ' + money(d.amount) : ''}</span>`);
-        acts.push(`<button class="btn ghost" style="${bs};color:var(--danger)" onclick="evRemoveUploadedDoc('${ev.id}','${d.id}')">הסר ✕</button>`);
+        // מסמך שהועלה ידנית (חשבונית ישנה)
+        if (d.converted) {
+          acts.push(`<span class="muted" style="font-size:10.5px">↪ הומר למסמך המשך בחשבונית ירוקה</span>`);
+        } else {
+          acts.push(`<span class="muted" style="font-size:10.5px">📎 הועלה${d.amount != null ? ' · ' + money(d.amount) : ''}</span>`);
+          if (FOLLOWUP_FOR[tp] && FOLLOWUP_FOR[tp].length) acts.push(`<button class="btn ghost" style="${bs}" onclick="evUploadedFollowup('${d.id}','${escAttr(String(d.number || ''))}',${tp})" title="הפקת מסמך המשך בחשבונית ירוקה לפי הכללים">מסמך המשך ↪</button>`);
+          acts.push(`<button class="btn ghost" style="${bs};color:var(--danger)" onclick="evRemoveUploadedDoc('${ev.id}','${d.id}')">הסר ✕</button>`);
+        }
       } else {
         if (FOLLOWUP_FOR[tp] && FOLLOWUP_FOR[tp].length) acts.push(`<button class="btn ghost" style="${bs}" onclick="evDocFollowup('${d.id}','${escAttr(String(d.number))}',${tp})">מסמך המשך ↪</button>`);
         acts.push(`<button class="btn ghost" style="${bs}" onclick="evDocDuplicate('${d.id}','${escAttr(String(d.number))}',${tp})">שכפול ⧉</button>`);
@@ -2702,6 +2735,8 @@ function evRaiseActionModals() {
 }
 // מסמך המשך ממסמך משוייך — מסמך ההמשך שייווצר יקושר אוטומטית לאותו אירוע
 window.evDocFollowup = (id, number, type) => { window._deriveEventLink = (_evEditing && _evEditing.id) || null; openDerive(id, number, type, 'followup'); evRaiseActionModals(); };
+// מסמך המשך ממסמך שהועלה ידנית — נוצר בחשבונית ירוקה. הקישור והסימון "הומר" נעשים בשרת (לא דרך _deriveEventLink).
+window.evUploadedFollowup = (id, number, type) => { window._deriveEventLink = null; openDerive(id, number, type, 'followup'); evRaiseActionModals(); };
 // שכפול מסמך (עותק זהה, לא מקושר למקור)
 window.evDocDuplicate = (id, number, type) => { openDerive(id, number, type, 'duplicate'); evRaiseActionModals(); };
 // זיכוי (חשבונית מס → זיכוי; מס-קבלה → זיכוי + קבלה שלילית, מטופל ב-openCreditModal)

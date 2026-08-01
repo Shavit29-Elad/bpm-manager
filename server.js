@@ -736,6 +736,50 @@ add('DELETE', /^\/api\/events\/([^/]+)\/attach-doc\/([^/]+)$/, async (req, res, 
   json(res, { ok: true });
 });
 
+// POST /api/events/:id/create-followup — הפקת מסמך המשך בחשבונית ירוקה ממסמך ישן שהועלה, לפי אותם כללי המשך.
+// { uploadedDocId, type, items, date, description, remarks, payment, skipDateValidation, clientName }
+add('POST', /^\/api\/events\/([^/]+)\/create-followup$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const db = load();
+  const ev = db.events.find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  try {
+    const type = Number(body.type);
+    const items = (Array.isArray(body.items) ? body.items : [])
+      .map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }))
+      .filter(it => it.description);
+    if (!type || !items.length) return json(res, { error: 'חסרים נתונים למסמך' }, 400);
+    const client = ev.clientId ? { id: ev.clientId } : { name: String(body.clientName || ev.clientName || ev.client || 'לקוח').trim(), add: true };
+    const opts = { type, client, items, description: body.description || '', remarks: body.remarks || null };
+    if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true;
+    if (Array.isArray(body.payment) && body.payment.length) {
+      opts.payment = body.payment.map(p => {
+        const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
+        if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum);
+        if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName);
+        return row;
+      }).filter(p => Math.abs(p.price) > 0);
+    }
+    const doc = await greenInvoice.createDocument(opts);
+    // קישור המסמך החדש (חשבונית ירוקה) לאירוע + סימון המסמך הישן שממנו נגזר כ"הומר" (יורד מחשבוניות פתוחות)
+    const merged = Array.isArray(ev.linkedDocs) ? ev.linkedDocs.slice() : [];
+    merged.push({ id: doc.id, number: doc.number, type, uploaded: false });
+    if (body.uploadedDocId) { const s = merged.find(d => String(d.id) === String(body.uploadedDocId)); if (s) s.converted = true; }
+    ev.linkedDocs = merged.slice(0, 10);
+    const REAL = [300, 305, 320, 400];
+    const realDocs = ev.linkedDocs.filter(d => REAL.includes(Number(d.type)) && !d.converted);
+    if (realDocs.length) {
+      ev.invoiceStatus = 'invoiced';
+      let primary = realDocs[0];
+      for (const t of [305, 320, 300, 400]) { const d = realDocs.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+      ev.invoiceId = primary.id; ev.invoiceNumber = primary.number; ev.invoiceType = primary.type;
+    }
+    save(db);
+    json(res, { ok: true, doc });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // GET /api/open-quotes — הצעות מחיר פתוחות
 add('GET', /^\/api\/open-quotes$/, async (req, res) => {
   if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
@@ -1426,6 +1470,25 @@ add('POST', /^\/api\/quotes\/([^/]+)\/followup$/, async (req, res, params, _q, b
 
 // GET /api/documents/:id/lines — שורות + פרטי מסמך מקור, לעריכה לפני הפקת מסמך המשך
 add('GET', /^\/api\/documents\/([^/]+)\/lines$/, async (req, res, params) => {
+  // מסמך שהועלה ידנית (חשבונית ישנה) — אין מקור בחשבונית ירוקה, בונים שורות מהאירוע המשויך
+  try {
+    const f = await getFile(params[0]);
+    if (f) {
+      const db = load();
+      let ev = null, srcDoc = null;
+      for (const e of (db.events || [])) {
+        const d = (e.linkedDocs || []).find(x => String(x.id) === String(params[0]) && x.uploaded);
+        if (d) { ev = e; srcDoc = d; break; }
+      }
+      if (ev) {
+        let items = invoiceItemsFromEvents([ev]).map(it => ({ description: it.description, quantity: it.quantity ?? 1, price: it.price ?? 0 })).filter(it => it.description);
+        if (!items.length) items = [{ description: [(ev.artist || ''), (ev.location || '')].filter(Boolean).join(' · ') || 'שירות', quantity: 1, price: srcDoc.amount != null ? +(Number(srcDoc.amount) / 1.18).toFixed(2) : 0 }];
+        let lastDocDate = null;
+        try { if (greenInvoice.haveCredentials()) lastDocDate = await greenInvoice.latestDocumentDate(); } catch { /* לא חוסם */ }
+        return json(res, { ok: true, items, client: { id: ev.clientId || null, name: ev.clientName || ev.client || '' }, description: '', remarks: '', srcType: Number(srcDoc.type), srcNumber: srcDoc.number, uploaded: true, eventId: ev.id, lastDocDate });
+      }
+    }
+  } catch { /* לא חוסם — ננסה כמסמך חשבונית ירוקה */ }
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
     const src = await greenInvoice.getDocument(params[0]);
@@ -1625,9 +1688,9 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
     for (const ev of (db.events || [])) {
       if (cid && ev.companyId && ev.companyId !== cid) continue;
       const linked = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
-      if (linked.some(d => [320, 400].includes(Number(d.type)))) continue; // נסגר בקבלה/מס-קבלה
+      if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue; // נסגר בקבלה/מס-קבלה
       for (const d of linked) {
-        if (!d.uploaded || ![300, 305].includes(Number(d.type))) continue;
+        if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
         docs.push({
           id: d.id, number: d.number, type: Number(d.type),
           date: d.date || ev.date || ev.dateRaw || null,
