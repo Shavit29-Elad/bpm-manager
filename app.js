@@ -3202,7 +3202,10 @@ async function renderContractors(c) {
   <div class="panel">
     <div class="row-between"><div><h2>רשימת קבלנים</h2>
       <span class="muted">${_suppliers.length} קבלנים · מתוך הספקים בחשבונית ירוקה. לחיצה על קבלן מציגה את כל המסמכים שלו.</span></div>
-      <button class="btn ghost" onclick="refreshSuppliers(this)">↻ רענן מחשבונית ירוקה</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק</button>
+        <button class="btn ghost" onclick="refreshSuppliers(this)">↻ רענן מחשבונית ירוקה</button>
+      </div></div>
     <div style="display:flex;gap:16px;align-items:stretch;min-height:56vh;margin-top:12px">
       <div style="flex:0 0 300px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden">
         <input id="supSearch" placeholder="חיפוש לפי שם קבלן / מספר מסמך / תיאור…" style="border:none;border-bottom:1px solid var(--line);border-radius:0"/>
