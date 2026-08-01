@@ -1996,9 +1996,26 @@ add('GET', /^\/api\/employees\/([^/]+)\/jobs$/, (req, res, params, q) => {
 });
 
 // POST /api/interpret-bonuses  { note, employees:[names] } — מפרש הוראת בונוס להחלה על עובדים
-add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, _q, body) => {
-  try { json(res, await interpretBonuses(body?.note || '', body?.employees || [])); }
-  catch (e) { json(res, { error: e.message }, 200); }
+add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
+  try {
+    const note = body?.note || '';
+    const result = await interpretBonuses(note, body?.employees || []);
+    if (!Array.isArray(result)) return json(res, result);
+    // בונוס קבוע פר-עובד: כשמזוהה "בונוס"/"תוספת" בתיאור — מחילים את הסכום הקבוע שהוגדר לעובד במסך העובדים (בלי קשר לניחוש).
+    if (/בונוס|תוספת/.test(note)) {
+      const cid = q.companyId || body?.companyId;
+      const db = load();
+      const defMap = {};
+      for (const e of (db.employees || [])) {
+        if ((!e.companyId || e.companyId === cid) && e.bonus != null && e.bonus !== '') defMap[String(e.name).trim()] = Number(e.bonus);
+      }
+      for (const r of result) {
+        const def = defMap[String(r.name || '').trim()];
+        if (def != null && (r.bonus != null || r.bonusFactor != null)) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; }
+      }
+    }
+    json(res, result);
+  } catch (e) { json(res, { error: e.message }, 200); }
 });
 
 // GET /api/suppliers — ספקים מחשבונית ירוקה (fresh=1 מרענן)

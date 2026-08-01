@@ -4401,17 +4401,26 @@ let _report = null;
 function openEmpJobsModal(name, r) {
   const emp = r.employee || {};
   const shifts = (r.pay && r.pay.shifts) || [];
+  const allManual = (emp.manualLines && typeof emp.manualLines === 'object') ? JSON.parse(JSON.stringify(emp.manualLines)) : {};
+  const monthManual = Array.isArray(allManual[state.payMonth]) ? allManual[state.payMonth] : [];
   _report = {
     empId: emp.id, empName: name, month: state.payMonth,
     salaryType: emp.salaryType || 'gross',
-    rows: shifts.map(s => ({ eventId: s.eventId, artist: s.artist || '', date: s.date, location: s.location || '', payment: Number(s.base) || 0, bonus: Number(s.bonus) || 0, food: Number(s.food) || 0, travel: Number(s.travel) || 0, note: s.note || '' })),
+    allManual,
+    rows: [
+      ...shifts.map(s => ({ eventId: s.eventId, artist: s.artist || '', date: s.date, location: s.location || '', payment: Number(s.base) || 0, bonus: Number(s.bonus) || 0, food: Number(s.food) || 0, travel: Number(s.travel) || 0, note: s.note || '' })),
+      ...monthManual.map(ml => ({ manual: true, mlId: ml.id || ('ml_' + Math.random().toString(36).slice(2, 8)), eventId: null, artist: ml.artist || '', date: ml.date || '', location: ml.location || '', payment: Number(ml.payment) || 0, bonus: Number(ml.bonus) || 0, food: Number(ml.food) || 0, travel: Number(ml.travel) || 0, note: ml.note || '' })),
+    ],
   };
   let m = document.getElementById('jobsModal'); if (!m) { m = document.createElement('div'); m.id = 'jobsModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:90vh;overflow:auto">
     <div class="row-between" style="align-items:center">
       <div><h3 style="margin:0">${escapeHtml(name)}</h3><span class="muted" style="font-size:13.5px">דוח עבודות · ${monthLabelFromKey(_report.month)} · ${_report.salaryType === 'net' ? 'נטו' : 'ברוטו'} · לחיצה על תא לעריכה</span></div>
-      <button class="btn ghost" style="padding:6px 13px" onclick="printJobsReport()">🖨 הדפס / PDF</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost" style="padding:6px 13px" onclick="addManualLine()">+ הוסף שורה ידנית</button>
+        <button class="btn ghost" style="padding:6px 13px" onclick="printJobsReport()">🖨 הדפס / PDF</button>
+      </div>
     </div>
     <div id="jobsReport" style="margin-top:14px;background:#fff;border-radius:10px;padding:16px"></div>
     <div class="modal-actions" style="margin-top:14px"><button class="btn primary" onclick="document.getElementById('jobsModal').classList.add('hidden')">סגור</button></div>
@@ -4436,7 +4445,12 @@ function renderJobsReport() {
   el.innerHTML = head + `<div style="overflow-x:auto"><table style="width:100%;min-width:960px;border-collapse:collapse;background:#fff;table-layout:fixed">
       <thead><tr>${th('#', '30px')}${th('אמן', '19%')}${th('תאריך', '78px')}${th('מיקום', '22%')}${th('תשלום', '68px')}${th('בונוס', '62px')}${th('אוכל', '60px')}${th('נסיעות', '66px')}${th('הערות', '15%')}</tr></thead>
       <tbody>
-        ${rows.map((r, i) => `<tr${i % 2 ? ' style="background:#fafbff"' : ''}>${cell(i + 1)}${cell(inTxt(i, 'artist'))}${cell(dmy(r.date), 'white-space:nowrap')}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${cell(inNum(i, 'travel'))}${cell(inTxt(i, 'note'))}</tr>`).join('')}
+        ${rows.map((r, i) => {
+          const first = r.manual ? `<button title="מחק שורה ידנית" onclick="delManualLine(${i})" style="border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>` : (i + 1);
+          const dateC = r.manual ? cell(inTxt(i, 'date')) : cell(dmy(r.date), 'white-space:nowrap');
+          const artistC = cell(inTxt(i, 'artist') + (r.manual ? ' <span style="font-size:9px;background:#fde68a;color:#92400e;border-radius:4px;padding:1px 4px;white-space:nowrap">ידני</span>' : ''));
+          return `<tr style="${r.manual ? 'background:#fff7ed' : (i % 2 ? 'background:#fafbff' : '')}">${cell(first)}${artistC}${dateC}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${cell(inNum(i, 'travel'))}${cell(inTxt(i, 'note'))}</tr>`;
+        }).join('')}
         <tr>${cell('<b>סה"כ</b>', 'border-top:2px solid #c7cce0;text-align:center')}<td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0', 'sumPay')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0', 'sumBonus')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0', 'sumFood')}${cell('<b>' + _nisFmt(sum('travel')) + '</b>', 'border-top:2px solid #c7cce0', 'sumTravel')}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
         <tr style="background:#eef0fb"><td colspan="4" style="border:1px solid #d8dced;padding:8px 10px;text-align:start;white-space:nowrap"><b>סה"כ כולל הכל (${label})</b></td><td colspan="5" id="grandTotal" style="border:1px solid #d8dced;padding:8px 10px;text-align:right"><b style="color:#4338ca;font-size:15.5px">${_nisFmt(grand)}</b></td></tr>
       </tbody>
@@ -4451,6 +4465,7 @@ window.editReport = async (i, f, val) => {
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.innerHTML = v; };
   set('sumPay', '<b>' + _nisFmt(sum('payment')) + '</b>'); set('sumBonus', '<b>' + _nisFmt(sum('bonus')) + '</b>'); set('sumFood', '<b>' + _nisFmt(sum('food')) + '</b>'); set('sumTravel', '<b>' + _nisFmt(sum('travel')) + '</b>');
   set('grandTotal', '<b style="color:#4338ca;font-size:15px">' + _nisFmt(grand) + '</b>');
+  if (row.manual) { saveManualLines(); return; } // שורה ידנית — נשמרת על העובד, לא על אירוע
   // שמירה לשרת: שדות משותפים על האירוע, שדות עובד על employeeDetails
   const ev = await fetchEventById(row.eventId); if (!ev) return;
   if (f === 'artist' || f === 'location') { ev[f] = val; }
@@ -4465,6 +4480,23 @@ window.editReport = async (i, f, val) => {
     else if (f === 'note') d.note = val;
   }
   await fetch(`/api/events/${row.eventId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ev) }).catch(() => {});
+};
+// שורות ידניות בדוח העובד — נשמרות על רשומת העובד לפי חודש (לא קשורות לאירוע)
+function saveManualLines() {
+  if (!_report || !_report.empId) return;
+  const arr = _report.rows.filter(r => r.manual).map(r => ({ id: r.mlId, artist: r.artist || '', date: r.date || '', location: r.location || '', payment: Number(r.payment) || 0, bonus: Number(r.bonus) || 0, food: Number(r.food) || 0, travel: Number(r.travel) || 0, note: r.note || '' }));
+  _report.allManual = _report.allManual || {};
+  if (arr.length) _report.allManual[_report.month] = arr; else delete _report.allManual[_report.month];
+  return fetch(`/api/employees/${_report.empId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manualLines: _report.allManual }) }).catch(() => {});
+}
+window.addManualLine = () => {
+  if (!_report) return;
+  _report.rows.push({ manual: true, mlId: 'ml_' + Math.random().toString(36).slice(2, 8), eventId: null, artist: 'תוספת ידנית', date: '', location: '', payment: 0, bonus: 0, food: 0, travel: 0, note: '' });
+  renderJobsReport(); saveManualLines();
+};
+window.delManualLine = (i) => {
+  if (!_report || !_report.rows[i] || !_report.rows[i].manual) return;
+  _report.rows.splice(i, 1); renderJobsReport(); saveManualLines();
 };
 window.printJobsReport = () => {
   const el = document.getElementById('jobsReport'); if (!el) return;
@@ -4491,6 +4523,7 @@ function empRow(e) {
     <td><div style="display:flex;gap:4px;align-items:center"><input value="${val('name')}" placeholder="שם פרטי" onchange="saveEmp('${e.id}',{name:this.value})" style="width:105px"/><button class="btn ghost" style="padding:4px 7px;font-size:13px" title="ראה עבודות לחודש" onclick="empJobs('${e.id}','${encodeURIComponent(e.name || '')}')">📋</button></div></td>
     <td><input value="${val('lastName')}" placeholder="שם משפחה" onchange="saveEmp('${e.id}',{lastName:this.value})" style="width:110px"/></td>
     <td><input type="number" value="${e.baseRate ?? ''}" placeholder="₪ ליום" onchange="saveEmp('${e.id}',{baseRate:this.value===''?null:+this.value})" style="width:95px"/></td>
+    <td><input type="number" value="${e.bonus ?? ''}" placeholder="₪ בונוס" title="בונוס קבוע — יוחל אוטומטית כשמזוהה 'בונוס'/'תוספת' בתיאור" onchange="saveEmp('${e.id}',{bonus:this.value===''?null:+this.value})" style="width:95px"/></td>
     <td><select onchange="saveEmp('${e.id}',{salaryType:this.value})" style="width:88px"><option value="gross"${(e.salaryType || 'gross') === 'gross' ? ' selected' : ''}>ברוטו</option><option value="net"${e.salaryType === 'net' ? ' selected' : ''}>נטו</option></select></td>
     <td><input type="number" value="${e.travel ?? ''}" placeholder="₪" onchange="saveEmp('${e.id}',{travel:this.value===''?null:+this.value})" style="width:85px"/></td>
     <td><input value="${val('idNumber')}" placeholder="מספר זהות" onchange="saveEmp('${e.id}',{idNumber:this.value})" style="width:120px" dir="ltr"/></td>
@@ -4552,8 +4585,8 @@ async function renderPayroll(c) {
         </div>
       </div>
       <div style="overflow-x:auto"><table style="min-width:820px"><thead><tr>
-        <th>שם פרטי</th><th>שם משפחה</th><th>שכר בסיס</th><th>סוג שכר</th><th>החזר נסיעות</th><th>מס ת"ז</th><th>מייל</th><th>תיקיית דרייב</th><th></th></tr></thead>
-        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="9"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
+        <th>שם פרטי</th><th>שם משפחה</th><th>שכר בסיס</th><th>בונוס קבוע</th><th>סוג שכר</th><th>החזר נסיעות</th><th>מס ת"ז</th><th>מייל</th><th>תיקיית דרייב</th><th></th></tr></thead>
+        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="10"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
     </div>`;
 }
 
