@@ -2010,10 +2010,20 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
       if (e.baseRate != null && e.baseRate !== '') baseMap[nm] = Number(e.baseRate);
       if (e.bonus != null && e.bonus !== '') defMap[nm] = Number(e.bonus);
     }
-    const hasBonusWord = /בונוס|תוספת/.test(note);
     const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const nameDouble = (nm) => nm && new RegExp(esc(nm) + '\\s*[-:]?\\s*כפולה').test(note);
-    const globalDouble = /כפולה/.test(note) && !/[א-ת]+\s*[-:]?\s*כפולה/.test(note); // "כפולה" בלי שם → לכולם
+    const knownNames = new Set([...Object.keys(baseMap), ...Object.keys(defMap)]);
+    // התאמה דו-כיוונית: השם לפני מילת-המפתח או אחריה, כולל "ל"/"-"/":" מפרידים.
+    // תופס גם "אליאל בונוס" וגם "בונוס לאליאל", גם "מתן כפולה" וגם "כפולה למתן".
+    const kwNear = (nm, kw) => {
+      if (!nm) return false;
+      const n = esc(nm);
+      return new RegExp(n + '\\s*[-:]?\\s*(?:' + kw + ')').test(note)
+          || new RegExp('(?:' + kw + ')\\s*(?:ל)?\\s*[-:]?\\s*' + n).test(note);
+    };
+    const nameDouble = (nm) => kwNear(nm, 'כפולה');
+    const nameBonus = (nm) => kwNear(nm, 'בונוס|תוספת');
+    // "כפולה" ללא שם צמוד (משני הצדדים) → חל על כל העובדים באירוע
+    const globalDouble = /כפולה/.test(note) && !/[א-ת]+\s*[-:]?\s*כפולה|כפולה\s*(?:ל)?\s*[-:]?\s*[א-ת]+/.test(note);
     for (const r of result) {
       const nm = String(r.name || '').trim();
       // "כפולה" = יומית (פקטור 1) + בונוס בגובה היומית של אותו עובד. גובר על בונוס קבוע.
@@ -2023,22 +2033,21 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
         if (base != null) { r.bonus = base; r.bonusFactor = null; r.doubleAsBonus = true; }
         continue;
       }
-      // "בונוס"/"תוספת" → הבונוס הקבוע שהוגדר לעובד
-      if (hasBonusWord) {
+      // "בונוס"/"תוספת" ליד שם העובד → הבונוס הקבוע שהוגדר לו
+      if (nameBonus(nm)) {
         const def = defMap[nm];
-        if (def != null && (r.bonus != null || r.bonusFactor != null)) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; }
+        if (def != null) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; }
       }
     }
     // רשת ביטחון: עובד שמופיע בתיאור עם "כפולה"/"בונוס"/"תוספת" אך ה-AI לא זיהה — נוסיף אותו ידנית
     const present = new Set(result.map(r => String(r.name || '').trim()));
-    const knownNames = new Set([...Object.keys(baseMap), ...Object.keys(defMap)]);
     for (const nm of knownNames) {
       if (present.has(nm)) continue;
       if (nameDouble(nm)) {
         const base = baseMap[nm];
         result.push({ name: nm, factor: '1', bonus: base != null ? base : null, bonusFactor: null, doubleAsBonus: true });
         present.add(nm);
-      } else if (new RegExp(esc(nm) + '\\s*[-:]?\\s*(בונוס|תוספת)').test(note)) {
+      } else if (nameBonus(nm)) {
         const def = defMap[nm];
         if (def != null) { result.push({ name: nm, factor: '1', bonus: def, bonusFactor: null, defaultBonus: true }); present.add(nm); }
       }
