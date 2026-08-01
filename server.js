@@ -674,11 +674,17 @@ add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
     const merged = Array.isArray(e.linkedDocs) ? e.linkedDocs.slice() : [];
     for (const d of docs) if (!merged.some(x => String(x.id) === String(d.id))) merged.push(d);
     e.linkedDocs = merged.slice(0, 6);
-    e.invoiceStatus = 'invoiced';
-    // מסמך ראשי לתצוגה: חשבונית מס/מס-קבלה > חשבון עסקה > קבלה > הצעת מחיר
-    let primary = e.linkedDocs[0];
-    for (const t of [305, 320, 300, 400, 10]) { const d = e.linkedDocs.find(x => x.type === t); if (d) { primary = d; break; } }
-    e.invoiceId = primary.id; e.invoiceNumber = primary.number; e.invoiceType = primary.type;
+    // הצעת מחיר (10) אינה חיוב: קושרת מסמך אך אינה מסמנת "חויב"/"שולם".
+    // רק חשבונית אמיתית (עסקה 300 / מס 305 / מס-קבלה 320 / קבלה 400) מחייבת את האירוע.
+    const REAL = [300, 305, 320, 400];
+    const realDocs = e.linkedDocs.filter(d => REAL.includes(Number(d.type)));
+    if (realDocs.length) {
+      e.invoiceStatus = 'invoiced';
+      // מסמך ראשי לתצוגה מבין החשבוניות האמיתיות: מס > מס-קבלה > עסקה > קבלה
+      let primary = realDocs[0];
+      for (const t of [305, 320, 300, 400]) { const d = realDocs.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+      e.invoiceId = primary.id; e.invoiceNumber = primary.number; e.invoiceType = primary.type;
+    }
     n++;
   }
   save(db);
@@ -1593,16 +1599,28 @@ add('GET', /^\/api\/contractors\/payables$/, async (req, res, _p, q) => {
 function eventClientPaid(e, bankPaid, openNums) {
   if (!e) return { status: 'unknown' };
   if (e.noInvoice) return { status: 'noinvoice' };
-  if (e.invoiceStatus !== 'invoiced') return { status: 'uninvoiced' };
-  const num = e.invoiceNumber != null ? String(e.invoiceNumber) : null;
-  const id = e.invoiceId != null ? String(e.invoiceId) : null;
+  const REAL = [300, 305, 320, 400]; // הצעת מחיר (10) אינה חיוב ואינה נחשבת
+  // אסוף את החשבוניות האמיתיות המקושרות לאירוע (מ-linkedDocs, ובתאימות לאחור גם מ-invoiceType)
+  let docs = Array.isArray(e.linkedDocs) ? e.linkedDocs.filter(d => d && REAL.includes(Number(d.type))) : [];
+  if (!docs.length && e.invoiceStatus === 'invoiced' && REAL.includes(Number(e.invoiceType))) {
+    docs = [{ type: Number(e.invoiceType), number: e.invoiceNumber, id: e.invoiceId }];
+  }
+  // אין חשבונית אמיתית (רק הצעת מחיר / כלום) → טרם חויב, ובוודאי טרם שולם
+  if (!docs.length) return { status: 'uninvoiced' };
   // בנק — הכסף נכנס בפועל (האות החזק ביותר)
-  const key = (num && bankPaid.has('num:' + num)) ? 'num:' + num : (id && bankPaid.has('id:' + id)) ? 'id:' + id : null;
-  if (key) return { status: 'paid', via: 'bank', date: bankPaid.get(key) || null };
-  // חשבונית ירוקה — מס-קבלה (320) שולמה מעצם הגדרתה
-  if (Number(e.invoiceType) === 320) return { status: 'paid', via: 'greeninvoice' };
-  // פתוח/סגור לפי רשימת המסמכים הפתוחים בחשבונית ירוקה
-  if (openNums != null && num != null) return openNums.has(num) ? { status: 'pending' } : { status: 'paid', via: 'greeninvoice' };
+  for (const d of docs) {
+    const num = d.number != null ? String(d.number) : null;
+    const id = d.id != null ? String(d.id) : null;
+    const key = (num && bankPaid.has('num:' + num)) ? 'num:' + num : (id && bankPaid.has('id:' + id)) ? 'id:' + id : null;
+    if (key) return { status: 'paid', via: 'bank', date: bankPaid.get(key) || null };
+  }
+  // מס-קבלה (320) / קבלה (400) — שולם מעצם הגדרתו
+  if (docs.some(d => [320, 400].includes(Number(d.type)))) return { status: 'paid', via: 'greeninvoice' };
+  // עסקה/מס (300/305) — פתוח/סגור לפי רשימת המסמכים הפתוחים בחשבונית ירוקה
+  if (openNums != null) {
+    const anyOpen = docs.some(d => d.number != null && openNums.has(String(d.number)));
+    return anyOpen ? { status: 'pending' } : { status: 'paid', via: 'greeninvoice' };
+  }
   return { status: 'pending' };
 }
 
