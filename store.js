@@ -20,6 +20,7 @@ const EMPTY = {
   employees: [],   // עובדים (מידע פנימי, לא חשוף ביניהם)
   contractors: [], // קבלנים
   invoices: [],    // חשבוניות/קבלות שהופקו
+  oldInvoices: [], // חשבוניות ישנות (עסקה/מס) שהועלו ידנית ואינן קשורות לאירוע — למעקב ב"חשבוניות פתוחות" (אופק): { id, companyId, clientName, description, linkedDocs:[], createdAt }
   bankTx: [],      // תנועות בנק להתאמה
   txGroups: [],    // קבוצות שיוך לתנועות בנק (מוזיקה/דיגיטל/שוטפות/אחר): { id, companyId, name, key?, builtin? }
   txGroupRules: [],// כללי שיוך-אוטומטי לפי שם לקוח: { id, companyId, name, groupId } — מציב קבוצה על תנועה תואמת שאין לה קבוצה

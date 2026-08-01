@@ -782,6 +782,68 @@ add('POST', /^\/api\/events\/([^/]+)\/create-followup$/, async (req, res, params
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// ===== חשבוניות ישנות שהועלו ידנית (אופק) — עומדות בפני עצמן (לא קשורות לאירוע), למעקב ב"חשבוניות פתוחות" =====
+// POST /api/old-invoices — יצירה + צירוף קובץ. { type, number, date, amount, clientName, description, filename, mime, data }
+add('POST', /^\/api\/old-invoices$/, async (req, res, _p, q, body) => {
+  if (!body || !body.data) return json(res, { error: 'חסר קובץ' }, 400);
+  const cid = q.companyId || body.companyId;
+  const db = load(); db.oldInvoices = db.oldInvoices || [];
+  const type = Number(body.type) || null;
+  const saved = await saveFile({ employeeId: 'oldinv', kind: 'old-invoice', filename: body.filename || 'document', mime: body.mime || 'application/octet-stream', data: body.data });
+  const doc = { id: saved.id, number: (body.number != null && String(body.number).trim() !== '') ? String(body.number).trim() : null, type, date: body.date || null, amount: (body.amount != null && body.amount !== '') ? Number(body.amount) : null, url: '/api/files/' + saved.id, uploaded: true };
+  const rec = { id: id('oinv'), companyId: cid, clientName: String(body.clientName || '').trim() || '—', description: String(body.description || '').trim(), linkedDocs: [doc], createdAt: new Date().toISOString() };
+  db.oldInvoices.push(rec);
+  save(db);
+  json(res, { ok: true, id: rec.id, doc });
+});
+// POST /api/old-invoices/:id/attach-doc — צירוף קבלה/מס-קבלה (או מסמך נוסף) לחשבונית ישנה
+add('POST', /^\/api\/old-invoices\/([^/]+)\/attach-doc$/, async (req, res, params, _q, body) => {
+  const db = load(); db.oldInvoices = db.oldInvoices || [];
+  const rec = db.oldInvoices.find(r => r.id === params[0]);
+  if (!rec) return json(res, { error: 'לא נמצא' }, 404);
+  if (!body || !body.data) return json(res, { error: 'חסר קובץ' }, 400);
+  const type = Number(body.type) || null;
+  const saved = await saveFile({ employeeId: 'oldinv', kind: 'old-invoice', filename: body.filename || 'document', mime: body.mime || 'application/octet-stream', data: body.data });
+  rec.linkedDocs = (rec.linkedDocs || []).concat([{ id: saved.id, number: (body.number != null && String(body.number).trim() !== '') ? String(body.number).trim() : null, type, date: body.date || null, amount: (body.amount != null && body.amount !== '') ? Number(body.amount) : null, url: '/api/files/' + saved.id, uploaded: true }]).slice(0, 8);
+  save(db);
+  json(res, { ok: true });
+});
+// DELETE /api/old-invoices/:id — מחיקה + קבצים
+add('DELETE', /^\/api\/old-invoices\/([^/]+)$/, async (req, res, params) => {
+  const db = load(); db.oldInvoices = db.oldInvoices || [];
+  const rec = db.oldInvoices.find(r => r.id === params[0]);
+  if (rec) { for (const d of (rec.linkedDocs || [])) { try { await deleteFile(d.id); } catch {} } }
+  db.oldInvoices = db.oldInvoices.filter(r => r.id !== params[0]);
+  save(db);
+  json(res, { ok: true });
+});
+// POST /api/old-invoices/:id/create-followup — הפקת מסמך המשך בחשבונית ירוקה מחשבונית ישנה
+add('POST', /^\/api\/old-invoices\/([^/]+)\/create-followup$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const db = load(); db.oldInvoices = db.oldInvoices || [];
+  const rec = db.oldInvoices.find(r => r.id === params[0]);
+  if (!rec) return json(res, { error: 'לא נמצא' }, 404);
+  try {
+    const type = Number(body.type);
+    const items = (Array.isArray(body.items) ? body.items : []).map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
+    if (!type || !items.length) return json(res, { error: 'חסרים נתונים למסמך' }, 400);
+    const client = rec.clientId ? { id: rec.clientId } : { name: String(body.clientName || rec.clientName || 'לקוח').trim(), add: true };
+    const opts = { type, client, items, description: body.description || '', remarks: body.remarks || null };
+    if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true;
+    if (Array.isArray(body.payment) && body.payment.length) {
+      opts.payment = body.payment.map(p => { const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' }; if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum); if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName); return row; }).filter(p => Math.abs(p.price) > 0);
+    }
+    const doc = await greenInvoice.createDocument(opts);
+    const merged = (rec.linkedDocs || []).slice();
+    merged.push({ id: doc.id, number: doc.number, type, uploaded: false });
+    if (body.uploadedDocId) { const s = merged.find(d => String(d.id) === String(body.uploadedDocId)); if (s) s.converted = true; }
+    rec.linkedDocs = merged.slice(0, 10);
+    save(db);
+    json(res, { ok: true, doc });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // GET /api/open-quotes — הצעות מחיר פתוחות
 add('GET', /^\/api\/open-quotes$/, async (req, res) => {
   if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
@@ -1490,6 +1552,19 @@ add('GET', /^\/api\/documents\/([^/]+)\/lines$/, async (req, res, params) => {
         try { if (greenInvoice.haveCredentials()) lastDocDate = await greenInvoice.latestDocumentDate(); } catch { /* לא חוסם */ }
         return json(res, { ok: true, items, client: { id: ev.clientId || null, name: ev.clientName || ev.client || '' }, description: '', remarks: '', srcType: Number(srcDoc.type), srcNumber: srcDoc.number, uploaded: true, eventId: ev.id, lastDocDate });
       }
+      // חשבונית ישנה עצמאית (לא אירוע)
+      let rec = null, rDoc = null;
+      for (const r of (db.oldInvoices || [])) {
+        const d = (r.linkedDocs || []).find(x => String(x.id) === String(params[0]) && x.uploaded);
+        if (d) { rec = r; rDoc = d; break; }
+      }
+      if (rec) {
+        const amt = rDoc.amount != null ? +(Number(rDoc.amount) / 1.18).toFixed(2) : 0;
+        const items = [{ description: rec.description || rec.clientName || 'שירות', quantity: 1, price: amt }];
+        let lastDocDate = null;
+        try { if (greenInvoice.haveCredentials()) lastDocDate = await greenInvoice.latestDocumentDate(); } catch { /* לא חוסם */ }
+        return json(res, { ok: true, items, client: { id: rec.clientId || null, name: rec.clientName || '' }, description: rec.description || '', remarks: '', srcType: Number(rDoc.type), srcNumber: rDoc.number, uploaded: true, oldInvoiceId: rec.id, lastDocDate });
+      }
     }
   } catch { /* לא חוסם — ננסה כמסמך חשבונית ירוקה */ }
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
@@ -1702,6 +1777,24 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
           amountDue: d.amount != null ? Number(d.amount) : null,
           description: [(ev.artist || ''), (ev.location || '')].filter(Boolean).join(' · '),
           url: d.url, uploaded: true, eventId: ev.id,
+        });
+      }
+    }
+    // חשבוניות ישנות עצמאיות שהועלו ידנית (אופק) — פתוחות עד קבלה/מס-קבלה או המרה למסמך המשך
+    for (const rec of (db.oldInvoices || [])) {
+      if (cid && rec.companyId && rec.companyId !== cid) continue;
+      const linked = Array.isArray(rec.linkedDocs) ? rec.linkedDocs : [];
+      if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue;
+      for (const d of linked) {
+        if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
+        docs.push({
+          id: d.id, number: d.number, type: Number(d.type),
+          date: d.date || rec.createdAt || null,
+          clientName: rec.clientName || '—',
+          amount: d.amount != null ? Number(d.amount) : null,
+          amountDue: d.amount != null ? Number(d.amount) : null,
+          description: rec.description || '',
+          url: d.url, uploaded: true, oldInvoiceId: rec.id,
         });
       }
     }

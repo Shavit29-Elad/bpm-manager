@@ -943,6 +943,7 @@ async function loadOpenInvoices() {
 window.setOpenInvFilter = (v) => { _openInvFilter = v; renderOpenInvoices(); };
 function renderOpenInvoices() {
   const wrap = document.getElementById('openInvWrap'); if (!wrap) return;
+  _openInvClients = [...new Set((_openInv || []).map(d => d.clientName).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he'));
   const openAmt = (d) => (d.amountDue != null ? Number(d.amountDue) : Number(d.amount) || 0);
   const docs = (_openInv || []).filter(d => _openInvFilter === 'all' ? true
     : _openInvFilter === 'proforma' ? Number(d.type) === 300 : Number(d.type) === 305);
@@ -956,7 +957,7 @@ function renderOpenInvoices() {
   wrap.innerHTML = `
     <div class="row-between"><div><h2>חשבוניות פתוחות</h2>
       <span class="muted">${docs.length} מסמכים · ${money(totalAll)} · מקובץ לפי לקוח</span></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${state.company === 'co_ofek' ? `<button class="btn primary" style="padding:4px 12px;font-size:13px" onclick="openOldInvoice('create','',300)" title="העלאת חשבונית עסקה/מס ישנה (לפני יולי) שאינה במערכת">➕ העלה חשבונית ישנה</button>` : ''}${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
     </div>
     ${_openInvErr ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(_openInvErr)}</div>` : ''}
     ${clients.length ? (() => {
@@ -980,7 +981,7 @@ function openInvClientHtml(cl) {
     <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : ''}
     ${d.uploaded
       ? `${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number || ''))}',${Number(d.type)},'followup')" title="הפקת מסמך המשך בחשבונית ירוקה">מסמך המשך ↪</button>` : ''}
-    <button class="btn success" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openAttachDoc('${d.eventId}',320)" title="צרף מס-קבלה/קבלה כדי לסגור את החשבונית">✓ צרף קבלה</button>`
+    <button class="btn success" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="${d.oldInvoiceId ? `openOldInvoice('receipt','${d.oldInvoiceId}',320)` : `openAttachDoc('${d.eventId}',320)`}" title="צרף מס-קבלה/קבלה כדי לסגור את החשבונית">✓ צרף קבלה</button>${d.oldInvoiceId ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="delOldInvoice('${d.oldInvoiceId}')" title="מחק חשבונית ישנה">✕</button>` : ''}`
       : `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number))}','${escAttr(DOC_TYPE_NAMES[d.type] || 'מסמך')}','${encodeURIComponent(cl.name || '')}')">✉️ שלח</button>
     ${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'followup')">מסמך המשך ↪</button>` : ''}
     <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'duplicate')">שכפול ⧉</button>`}
@@ -1081,7 +1082,7 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
     // מסמך המקור (להצגה מצד ימין בעורך מסמך המשך) + מקור שהועלה (חשבונית ישנה → הפקה בחשבונית ירוקה)
     srcUrl: (su && su.url) || null,
     srcLabel: `${DOC_TYPE_SHORT[r.srcType] || 'מסמך'}${r.srcNumber ? ' #' + r.srcNumber : ''}`,
-    uploadedSource: r.uploaded ? { eventId: r.eventId, uploadedDocId: id } : null,
+    uploadedSource: r.uploaded ? { eventId: r.eventId || null, oldInvoiceId: r.oldInvoiceId || null, uploadedDocId: id } : null,
   };
   if (!_derEdit.items.length) _derEdit.items.push({ description: '', quantity: 1, price: 0 });
   // תקבולים: אם הגיע סכום שהתקבל בבנק — נבנה תקבול העברה בנקאית, ובניכוי מס במקור נוסיף שורת ניכוי
@@ -1333,9 +1334,10 @@ window.derConfirm = async () => {
   if (!confirm(`להפיק ${typeName} על סך ${money(t.total)}?\nהמסמך ייווצר בחשבונית ירוקה${e.linked ? ' ויקושר למקור' : ''} ולא ניתן למחיקה (רק לזכות).`)) return;
   const btn = document.getElementById('derConfirmBtn'); if (btn) { btn.disabled = true; }
   const st = document.getElementById('derEditStatus'); if (st) st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
+  const usBody = e.uploadedSource ? JSON.stringify({ uploadedDocId: e.uploadedSource.uploadedDocId, type: e.type, items, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate, clientName: e.clientName }) : null;
+  const usUrl = e.uploadedSource ? (e.uploadedSource.oldInvoiceId ? `/api/old-invoices/${e.uploadedSource.oldInvoiceId}/create-followup` : `/api/events/${e.uploadedSource.eventId}/create-followup`) : null;
   const r = e.uploadedSource
-    ? await fetch(`/api/events/${e.uploadedSource.eventId}/create-followup`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uploadedDocId: e.uploadedSource.uploadedDocId, type: e.type, items, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate, clientName: e.clientName }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }))
+    ? await fetch(usUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: usBody }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }))
     : await fetch(`/api/documents/${e.id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: e.type, linked: e.linked, items, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
@@ -2751,6 +2753,69 @@ window.evRemoveUploadedDoc = async (eventId, docId) => {
     _evEditing.linkedDocs = (_evEditing.linkedDocs || []).filter(d => String(d.id) !== String(docId));
     const box = document.getElementById('evLinkedDocs'); if (box) box.innerHTML = evLinkedDocsHtml(_evEditing);
   }
+  if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices();
+};
+// ===== חשבוניות ישנות עצמאיות (אופק) — העלאה למעקב ב"חשבוניות פתוחות", ללא קשר לאירוע =====
+// mode='create' — העלאת חשבונית עסקה/מס ישנה חדשה · mode='receipt' — צירוף קבלה/מס-קבלה לסגירה
+window.openOldInvoice = (mode, oldInvoiceId, presetType) => {
+  let m = document.getElementById('oldInvModal');
+  if (!m) { m = document.createElement('div'); m.id = 'oldInvModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.style.zIndex = '210'; m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  const today = new Date().toISOString().slice(0, 10);
+  const isReceipt = mode === 'receipt';
+  const opt = (v, l) => `<option value="${v}" ${String(presetType) === String(v) ? 'selected' : ''}>${l}</option>`;
+  const typeOpts = isReceipt ? `${opt(320, 'חשבונית מס-קבלה')}${opt(400, 'קבלה')}` : `${opt(300, 'חשבון עסקה')}${opt(305, 'חשבונית מס')}`;
+  m.innerHTML = `<div class="modal-card" style="width:min(480px,95vw)">
+    <div class="row-between"><h3>${isReceipt ? '✓ צירוף קבלה לחשבונית ישנה' : '➕ העלאת חשבונית ישנה (עסקה/מס)'}</h3></div>
+    <p class="muted" style="font-size:12.5px">${isReceipt ? 'צרף מס-קבלה/קבלה שהופקה — החשבונית תיסגר ותרד מ״חשבוניות פתוחות״.' : 'חשבונית פתוחה מאירוע ישן (לפני יולי) שאינו במערכת — תופיע ב״חשבוניות פתוחות״ למעקב, עד שתצרף קבלה או תפיק מסמך המשך בחשבונית ירוקה.'}</p>
+    <label style="display:block;font-size:13px;margin-top:8px">סוג מסמך
+      <select id="oiType" style="width:100%;padding:7px 8px;margin-top:3px">${typeOpts}</select></label>
+    ${isReceipt ? '' : `<label style="display:block;font-size:13px;margin-top:8px">שם הלקוח<input id="oiClient" list="oiClients" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="שם הלקוח בחשבונית ירוקה"></label>
+    <label style="display:block;font-size:13px;margin-top:8px">תיאור (זמר/אירוע — לא חובה)<input id="oiDesc" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל: הגברה - אירוע נובמבר"></label>`}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+      <label style="font-size:13px">מספר מסמך<input id="oiNumber" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 1024"></label>
+      <label style="font-size:13px">תאריך<input id="oiDate" type="date" value="${today}" style="width:100%;padding:7px 8px;margin-top:3px"></label>
+      <label style="font-size:13px">סכום (כולל מע״מ) ₪<input id="oiAmount" type="number" inputmode="decimal" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 5850"></label>
+      <label style="font-size:13px">קובץ (PDF/תמונה)<input id="oiFile" type="file" accept=".pdf,image/*" style="width:100%;padding:5px 0;margin-top:3px"></label>
+    </div>
+    <datalist id="oiClients">${(_openInvClients || []).map(c => `<option value="${escAttr(c)}">`).join('')}</datalist>
+    <div id="oiStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('oldInvModal').classList.add('hidden')">ביטול</button>
+      <button class="btn success" onclick="submitOldInvoice('${mode}','${oldInvoiceId || ''}',this)">✓ ${isReceipt ? 'צרף וסגור' : 'העלה'}</button>
+    </div></div>`;
+};
+let _openInvClients = [];
+window.submitOldInvoice = async (mode, oldInvoiceId, btn) => {
+  const fileEl = document.getElementById('oiFile');
+  const f = fileEl && fileEl.files && fileEl.files[0];
+  const st = document.getElementById('oiStatus');
+  if (!f) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש לבחור קובץ</span>'; return; }
+  if (f.size > 9 * 1024 * 1024) { if (st) st.innerHTML = '<span style="color:var(--danger)">הקובץ גדול מדי (עד 9MB)</span>'; return; }
+  const type = document.getElementById('oiType').value;
+  const number = document.getElementById('oiNumber').value;
+  const date = document.getElementById('oiDate').value;
+  const amount = document.getElementById('oiAmount').value;
+  const clientName = document.getElementById('oiClient') ? document.getElementById('oiClient').value : '';
+  const description = document.getElementById('oiDesc') ? document.getElementById('oiDesc').value : '';
+  if (mode === 'create' && !String(clientName).trim()) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש להזין שם לקוח</span>'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'מעלה…'; }
+  if (st) st.innerHTML = '<span class="muted">מעלה…</span>';
+  const data = await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1] || ''); r.onerror = () => resolve(''); r.readAsDataURL(f); });
+  const url = mode === 'receipt' ? `/api/old-invoices/${oldInvoiceId}/attach-doc` : '/api/old-invoices';
+  const body = { type, number, date, amount, filename: f.name, mime: f.type || 'application/octet-stream', data };
+  if (mode === 'create') { body.clientName = clientName; body.description = description; }
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) { btn.disabled = false; btn.textContent = '✓'; }
+  if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${(r && r.error) || 'שגיאה'}</span>`; return; }
+  document.getElementById('oldInvModal').classList.add('hidden');
+  if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices();
+};
+window.delOldInvoice = async (oldInvoiceId) => {
+  if (!confirm('למחוק את החשבונית הישנה הזו לגמרי?')) return;
+  const r = await fetch(`/api/old-invoices/${oldInvoiceId}`, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || r.error) { alert((r && r.error) || 'שגיאה'); return; }
   if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices();
 };
 // פעולות מסמך מתוך עורך האירוע — המודלים חייבים להופיע מעל מודל העריכה
