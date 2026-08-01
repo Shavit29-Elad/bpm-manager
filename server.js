@@ -2001,16 +2001,31 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
     const note = body?.note || '';
     const result = await interpretBonuses(note, body?.employees || []);
     if (!Array.isArray(result)) return json(res, result);
-    // בונוס קבוע פר-עובד: כשמזוהה "בונוס"/"תוספת" בתיאור — מחילים את הסכום הקבוע שהוגדר לעובד במסך העובדים (בלי קשר לניחוש).
-    if (/בונוס|תוספת/.test(note)) {
-      const cid = q.companyId || body?.companyId;
-      const db = load();
-      const defMap = {};
-      for (const e of (db.employees || [])) {
-        if ((!e.companyId || e.companyId === cid) && e.bonus != null && e.bonus !== '') defMap[String(e.name).trim()] = Number(e.bonus);
+    const cid = q.companyId || body?.companyId;
+    const db = load();
+    const baseMap = {}, defMap = {};
+    for (const e of (db.employees || [])) {
+      if (e.companyId && e.companyId !== cid) continue;
+      const nm = String(e.name).trim();
+      if (e.baseRate != null && e.baseRate !== '') baseMap[nm] = Number(e.baseRate);
+      if (e.bonus != null && e.bonus !== '') defMap[nm] = Number(e.bonus);
+    }
+    const hasBonusWord = /בונוס|תוספת/.test(note);
+    const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const nameDouble = (nm) => nm && new RegExp(esc(nm) + '\\s*[-:]?\\s*כפולה').test(note);
+    const globalDouble = /כפולה/.test(note) && !/[א-ת]+\s*[-:]?\s*כפולה/.test(note); // "כפולה" בלי שם → לכולם
+    for (const r of result) {
+      const nm = String(r.name || '').trim();
+      // "כפולה" = יומית (פקטור 1) + בונוס בגובה היומית של אותו עובד. גובר על בונוס קבוע.
+      if (Number(r.factor) === 2 || nameDouble(nm) || globalDouble) {
+        r.factor = '1';
+        const base = baseMap[nm];
+        if (base != null) { r.bonus = base; r.bonusFactor = null; r.doubleAsBonus = true; }
+        continue;
       }
-      for (const r of result) {
-        const def = defMap[String(r.name || '').trim()];
+      // "בונוס"/"תוספת" → הבונוס הקבוע שהוגדר לעובד
+      if (hasBonusWord) {
+        const def = defMap[nm];
         if (def != null && (r.bonus != null || r.bonusFactor != null)) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; }
       }
     }

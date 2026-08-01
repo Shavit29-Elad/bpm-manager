@@ -4406,6 +4406,7 @@ function openEmpJobsModal(name, r) {
   _report = {
     empId: emp.id, empName: name, month: state.payMonth,
     salaryType: emp.salaryType || 'gross',
+    empTravel: Number(emp.travel) || 0,
     allManual,
     rows: [
       ...shifts.map(s => ({ eventId: s.eventId, artist: s.artist || '', date: s.date, location: s.location || '', payment: Number(s.base) || 0, bonus: Number(s.bonus) || 0, food: Number(s.food) || 0, travel: Number(s.travel) || 0, note: s.note || '' })),
@@ -4438,21 +4439,22 @@ function renderJobsReport() {
   const inTxt = (i, f) => `<input value="${String(_report.rows[i][f] || '').replace(/"/g, '&quot;')}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;width:100%;text-align:right;font:inherit;color:inherit;padding:2px 0"/>`;
   const inNum = (i, f) => `<span style="display:inline-flex;align-items:center;gap:2px;width:100%"><input type="number" inputmode="decimal" value="${_report.rows[i][f] || 0}" onchange="editReport(${i},'${f}',this.value)" style="border:none;background:transparent;flex:1;min-width:0;text-align:right;font:inherit;color:inherit;padding:2px 0;-webkit-appearance:none;-moz-appearance:textfield;appearance:textfield;margin:0"/><span style="color:#8b93a7;flex:none">₪</span></span>`;
   const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
-  const grand = sum('payment') + sum('bonus') + sum('food') + sum('travel');
+  const showTravel = (Number(_report.empTravel) || 0) > 0; // "נסיעות" מופיע רק אם מוגדר לעובד החזר נסיעות > 0
+  const grand = sum('payment') + sum('bonus') + sum('food') + (showTravel ? sum('travel') : 0);
   const head = `<div style="font-size:16px;font-weight:800;margin-bottom:2px">${escapeHtml(_report.empName)}</div>
     <div style="color:#6b7488;font-size:13px;margin-bottom:12px">דוח עבודות חודשי · ${monthLabelFromKey(_report.month)} · ${label}</div>`;
   if (!rows.length) { el.innerHTML = head + `<div class="empty">אין עבודות לחודש זה.</div>`; return; }
   el.innerHTML = head + `<div style="overflow-x:auto"><table style="width:100%;min-width:960px;border-collapse:collapse;background:#fff;table-layout:fixed">
-      <thead><tr>${th('#', '30px')}${th('אמן', '19%')}${th('תאריך', '78px')}${th('מיקום', '22%')}${th('תשלום', '68px')}${th('בונוס', '62px')}${th('אוכל', '60px')}${th('נסיעות', '66px')}${th('הערות', '15%')}</tr></thead>
+      <thead><tr>${th('#', '30px')}${th('אמן', '19%')}${th('תאריך', '78px')}${th('מיקום', '22%')}${th('תשלום', '68px')}${th('בונוס', '62px')}${th('אוכל', '60px')}${showTravel ? th('נסיעות', '66px') : ''}${th('הערות', '15%')}</tr></thead>
       <tbody>
         ${rows.map((r, i) => {
           const first = r.manual ? `<button title="מחק שורה ידנית" onclick="delManualLine(${i})" style="border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>` : (i + 1);
           const dateC = r.manual ? cell(inTxt(i, 'date')) : cell(dmy(r.date), 'white-space:nowrap');
           const artistC = cell(inTxt(i, 'artist') + (r.manual ? ' <span style="font-size:9px;background:#fde68a;color:#92400e;border-radius:4px;padding:1px 4px;white-space:nowrap">ידני</span>' : ''));
-          return `<tr style="${r.manual ? 'background:#fff7ed' : (i % 2 ? 'background:#fafbff' : '')}">${cell(first)}${artistC}${dateC}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${cell(inNum(i, 'travel'))}${cell(inTxt(i, 'note'))}</tr>`;
+          return `<tr style="${r.manual ? 'background:#fff7ed' : (i % 2 ? 'background:#fafbff' : '')}">${cell(first)}${artistC}${dateC}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${showTravel ? cell(inNum(i, 'travel')) : ''}${cell(inTxt(i, 'note'))}</tr>`;
         }).join('')}
-        <tr>${cell('<b>סה"כ</b>', 'border-top:2px solid #c7cce0;text-align:center')}<td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0', 'sumPay')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0', 'sumBonus')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0', 'sumFood')}${cell('<b>' + _nisFmt(sum('travel')) + '</b>', 'border-top:2px solid #c7cce0', 'sumTravel')}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
-        <tr style="background:#eef0fb"><td colspan="4" style="border:1px solid #d8dced;padding:8px 10px;text-align:start;white-space:nowrap"><b>סה"כ כולל הכל (${label})</b></td><td colspan="5" id="grandTotal" style="border:1px solid #d8dced;padding:8px 10px;text-align:right"><b style="color:#4338ca;font-size:15.5px">${_nisFmt(grand)}</b></td></tr>
+        <tr>${cell('<b>סה"כ</b>', 'border-top:2px solid #c7cce0;text-align:center')}<td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0', 'sumPay')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0', 'sumBonus')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0', 'sumFood')}${showTravel ? cell('<b>' + _nisFmt(sum('travel')) + '</b>', 'border-top:2px solid #c7cce0', 'sumTravel') : ''}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
+        <tr style="background:#eef0fb"><td colspan="4" style="border:1px solid #d8dced;padding:8px 10px;text-align:start;white-space:nowrap"><b>סה"כ כולל הכל (${label})</b></td><td colspan="${showTravel ? 5 : 4}" id="grandTotal" style="border:1px solid #d8dced;padding:8px 10px;text-align:right"><b style="color:#4338ca;font-size:15.5px">${_nisFmt(grand)}</b></td></tr>
       </tbody>
     </table></div>`;
 }
@@ -4461,7 +4463,8 @@ window.editReport = async (i, f, val) => {
   if (['payment', 'bonus', 'food', 'travel'].includes(f)) row[f] = val === '' ? 0 : +val; else row[f] = val;
   // עדכון הסכומים בלבד (שומר על הפוקוס)
   const sum = (k) => _report.rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
-  const grand = sum('payment') + sum('bonus') + sum('food') + sum('travel');
+  const showTravel = (Number(_report.empTravel) || 0) > 0;
+  const grand = sum('payment') + sum('bonus') + sum('food') + (showTravel ? sum('travel') : 0);
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.innerHTML = v; };
   set('sumPay', '<b>' + _nisFmt(sum('payment')) + '</b>'); set('sumBonus', '<b>' + _nisFmt(sum('bonus')) + '</b>'); set('sumFood', '<b>' + _nisFmt(sum('food')) + '</b>'); set('sumTravel', '<b>' + _nisFmt(sum('travel')) + '</b>');
   set('grandTotal', '<b style="color:#4338ca;font-size:15px">' + _nisFmt(grand) + '</b>');
@@ -4525,7 +4528,7 @@ function empRow(e) {
     <td><input type="number" value="${e.baseRate ?? ''}" placeholder="₪ ליום" onchange="saveEmp('${e.id}',{baseRate:this.value===''?null:+this.value})" style="width:95px"/></td>
     <td><input type="number" value="${e.bonus ?? ''}" placeholder="₪ בונוס" title="בונוס קבוע — יוחל אוטומטית כשמזוהה 'בונוס'/'תוספת' בתיאור" onchange="saveEmp('${e.id}',{bonus:this.value===''?null:+this.value})" style="width:95px"/></td>
     <td><select onchange="saveEmp('${e.id}',{salaryType:this.value})" style="width:88px"><option value="gross"${(e.salaryType || 'gross') === 'gross' ? ' selected' : ''}>ברוטו</option><option value="net"${e.salaryType === 'net' ? ' selected' : ''}>נטו</option></select></td>
-    <td><input type="number" value="${e.travel ?? ''}" placeholder="₪" onchange="saveEmp('${e.id}',{travel:this.value===''?null:+this.value})" style="width:85px"/></td>
+    ${state.company === 'co_ofek' ? '' : `<td><input type="number" value="${e.travel ?? ''}" placeholder="₪" onchange="saveEmp('${e.id}',{travel:this.value===''?null:+this.value})" style="width:85px"/></td>`}
     <td><input value="${val('idNumber')}" placeholder="מספר זהות" onchange="saveEmp('${e.id}',{idNumber:this.value})" style="width:120px" dir="ltr"/></td>
     <td><input type="email" value="${val('email')}" placeholder="מייל" onchange="saveEmp('${e.id}',{email:this.value})" style="width:150px" dir="ltr"/></td>
     <td>${driveFolderCell(e)}</td>
@@ -4585,8 +4588,8 @@ async function renderPayroll(c) {
         </div>
       </div>
       <div style="overflow-x:auto"><table style="min-width:820px"><thead><tr>
-        <th>שם פרטי</th><th>שם משפחה</th><th>שכר בסיס</th><th>בונוס קבוע</th><th>סוג שכר</th><th>החזר נסיעות</th><th>מס ת"ז</th><th>מייל</th><th>תיקיית דרייב</th><th></th></tr></thead>
-        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="10"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
+        <th>שם פרטי</th><th>שם משפחה</th><th>שכר בסיס</th><th>בונוס קבוע</th><th>סוג שכר</th>${state.company === 'co_ofek' ? '' : '<th>החזר נסיעות</th>'}<th>מס ת"ז</th><th>מייל</th><th>תיקיית דרייב</th><th></th></tr></thead>
+        <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="${state.company === 'co_ofek' ? 9 : 10}"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
     </div>`;
 }
 
