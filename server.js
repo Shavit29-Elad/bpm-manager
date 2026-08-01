@@ -122,6 +122,8 @@ const json = (res, data, code = 200) => {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(data));
 };
+// שגיאת חשבונית ירוקה "לא ניתן לסגור מסמך שאינו פתוח" (errorCode 2400) — המסמך כבר סגור/הומר, אין צורך לסגור שוב
+const isAlreadyClosedErr = (e) => /2400|שאינו פתוח/.test(String((e && e.message) || e || ''));
 
 // GET /api/companies — משתמש צפייה רואה רק את העסקים שהורשה אליהם
 add('GET', /^\/api\/companies$/, (req, res) => {
@@ -844,7 +846,7 @@ add('POST', /^\/api\/quotes\/close-bulk$/, async (req, res, _p, _q, body) => {
   const results = [];
   for (const id of ids) {
     try { await greenInvoice.closeDocument(id); results.push({ id, ok: true }); }
-    catch (e) { results.push({ id, ok: false, error: e.message }); }
+    catch (e) { if (isAlreadyClosedErr(e)) results.push({ id, ok: true, alreadyClosed: true }); else results.push({ id, ok: false, error: e.message }); }
   }
   json(res, { ok: true, closed: results.filter(r => r.ok).length, results });
 });
@@ -1437,7 +1439,8 @@ add('POST', /^\/api\/contractors\/([^/]+)\/expense$/, async (req, res, params, _
 add('POST', /^\/api\/quotes\/([^/]+)\/close$/, async (req, res, params) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try { json(res, { ok: true, result: await greenInvoice.closeDocument(params[0]) }); }
-  catch (e) { json(res, { error: e.message }, 500); }
+  // מסמך שכבר אינו פתוח (הומר/נסגר) — נחשב כסגירה מוצלחת כדי שיירד מהרשימה בלי שגיאה
+  catch (e) { if (isAlreadyClosedErr(e)) return json(res, { ok: true, alreadyClosed: true }); json(res, { error: e.message }, 500); }
 });
 
 // פרטי חשבון להעברה בנקאית + שורת התייחסות למקור — נכנסים להערות של כל מסמך המשך
@@ -1532,7 +1535,7 @@ add('GET', /^\/api\/documents\/last-date$/, async (req, res, _p, q) => {
 add('POST', /^\/api\/documents\/([^/]+)\/close$/, async (req, res, params) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try { json(res, { ok: true, result: await greenInvoice.closeDocument(params[0]) }); }
-  catch (e) { json(res, { error: e.message }, 500); }
+  catch (e) { if (isAlreadyClosedErr(e)) return json(res, { ok: true, alreadyClosed: true }); json(res, { error: e.message }, 500); }
 });
 
 // POST /api/documents/:id/open — פתיחה מחדש של מסמך סגור
