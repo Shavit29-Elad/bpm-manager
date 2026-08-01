@@ -5,11 +5,12 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 import { init as initStore, load, save, id, upsertEvent, companyEvents, saveFile, getFile, deleteFile } from './store.js';
 import { parseEventMessage, parseEventMessages } from './whatsappParser.js';
-import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar } from './googleCalendar.js';
+import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar, calendarCompanies, setDbIcal } from './googleCalendar.js';
 import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
@@ -122,6 +123,8 @@ const json = (res, data, code = 200) => {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(data));
 };
+// שגיאת חשבונית ירוקה "לא ניתן לסגור מסמך שאינו פתוח" (errorCode 2400) — המסמך כבר סגור/הומר, אין צורך לסגור שוב
+const isAlreadyClosedErr = (e) => /2400|שאינו פתוח/.test(String((e && e.message) || e || ''));
 
 // GET /api/companies — משתמש צפייה רואה רק את העסקים שהורשה אליהם
 add('GET', /^\/api\/companies$/, (req, res) => {
@@ -225,9 +228,15 @@ add('PUT', /^\/api\/events\/([^/]+)$/, (req, res, params, _q, body) => {
 // DELETE /api/events/:id — מוחק רק מרשימת האירועים שלנו (לא מיומן גוגל)
 add('DELETE', /^\/api\/events\/([^/]+)$/, (req, res, params) => {
   const db = load();
-  const before = db.events.length;
+  const ev = db.events.find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  // אם האירוע הגיע מיומן גוגל — נרשום את מזהה-היומן ברשימת "מודחקים", כדי שרענון/אימוץ יומי לא יקלוט אותו שוב.
+  if (ev.gcalId && ev.companyId) {
+    db.calendarDismissed = db.calendarDismissed || {};
+    const arr = db.calendarDismissed[ev.companyId] = db.calendarDismissed[ev.companyId] || [];
+    if (!arr.includes(ev.gcalId)) arr.push(ev.gcalId);
+  }
   db.events = db.events.filter(e => e.id !== params[0]);
-  if (db.events.length === before) return json(res, { error: 'אירוע לא נמצא' }, 404);
   save(db); json(res, { ok: true });
 });
 
@@ -242,7 +251,7 @@ add('GET', /^\/api\/calendar\/match$/, async (req, res, _p, q) => {
     const dates = waEvents.map(e => e.date).filter(Boolean).sort();
     const timeMin = dates[0] ? `${dates[0]}T00:00:00Z` : undefined;
     const timeMax = dates.length ? `${dates[dates.length - 1]}T23:59:59Z` : undefined;
-    const cal = (await fetchCalendarEvents({ timeMin, timeMax })).filter(e => (e.date || '') >= MATCH_START);
+    const cal = (await fetchCalendarEvents({ companyId: q.companyId })).filter(e => (e.date || '') >= MATCH_START);
     const r = matchEvents(waEvents, cal);
     // אירועים שסומנו ידנית כ"הותאם" — מוציאים מרשימת חוסר-ההתאמה וסופרים כהותאמו
     for (const entry of r.matched) {
@@ -274,6 +283,88 @@ add('POST', /^\/api\/calendar\/mark-matched$/, (req, res, _p, _q, body) => {
   json(res, { ok: true, manualMatched: ev.manualMatched });
 });
 
+// --- זיהוי "אירוע יומן שכבר נקלט" לפי תאריך + שם האמן של אירוע מאושר ---
+// אותה הופעה מופיעה לעיתים בשני יומני גוגל (עובדים + הגברה ותאורה) בניסוח שונה. אם כבר יש אירוע
+// מאושר באותו תאריך ששם האמן שלו מופיע בכותרת/מיקום של אירוע היומן — לא קולטים אותו שוב לאישור.
+// נרמול פונטי עברי — סובלני לשגיאות כתיב נפוצות: ט↔ת, ק↔כ, אותיות גרוניות/שקטות א/ע/ה מתחלפות,
+// ואימות קריאה ו/י שנשמטות (למשל "שאולב" מול "שאולוב", "טרין" מול "תרין"). כך מקשרים אירועים חרף טעויות.
+function _normHe(s) {
+  return String(s || '').toLowerCase()
+    .replace(/[֑-ׇ]/g, '')                                             // ניקוד/טעמים
+    .replace(/["'’`׳״().,\-\/|]/g, ' ')
+    .replace(/ך/g, 'כ').replace(/ם/g, 'מ').replace(/ן/g, 'נ').replace(/ף/g, 'פ').replace(/ץ/g, 'צ') // סופיות
+    .replace(/ט/g, 'ת').replace(/ק/g, 'כ')                                       // ט=ת · ק=כ
+    .replace(/[אעה]/g, '')                                                       // א/ע/ה — גרוניות/שקטות מתחלפות
+    .replace(/[וי]/g, '')                                                        // ו/י אימות קריאה שנשמטות
+    .replace(/\s+/g, ' ').trim();
+}
+function _artistCoreWords(a) { return _normHe(a).split(' ').filter(w => w.length > 1).slice(0, 2); }
+// אינדקס: לכל תאריך — רשימת "ליבות שם אמן" של אירועים מאושרים (מילים משמעותיות)
+function confirmedArtistIndex(db, cid) {
+  const idx = {};
+  for (const e of (db.events || [])) {
+    if (e.companyId !== cid || !e.confirmed) continue;
+    const words = _artistCoreWords(e.artist);
+    if (words.length) (idx[e.date] = idx[e.date] || []).push(words);
+  }
+  return idx;
+}
+// האם אירוע יומן ce כבר מיוצג ע״י אירוע מאושר (אותו תאריך + כל מילות ליבת-האמן מופיעות בכותרת/מיקום)
+function calendarAlreadyCaptured(idx, ce) {
+  const list = idx[ce.date]; if (!list) return false;
+  const hay = _normHe(ce.title) + ' ' + _normHe(ce.location);
+  return list.some(words => words.every(w => hay.includes(w)));
+}
+
+// POST /api/calendar/auto-adopt { companyId } — הוספה אוטומטית של אירועי יומן גוגל לרשימת "אירועים לאישור".
+// מוסיף אירועים עד היום (כולל) — כך שבבוקר כבר נקלטים אירועי אותו יום. לא קולט אירועים עתידיים (מעבר להיום).
+// רץ פעם ביום לכל חברה (שעון ישראל). מוסיף רק אירועי יומן שאין להם התאמה לאירוע קיים (מונע כפילויות מול קליטת ווטסאפ).
+add('POST', /^\/api\/calendar\/auto-adopt$/, async (req, res, _p, q, body) => {
+  const db = load();
+  const cid = (body && body.companyId) || q.companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
+  const todayIL = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date()); // YYYY-MM-DD בשעון ישראל
+  db.calendarAutoAdopt = db.calendarAutoAdopt || {};
+  const force = q.force === '1' || (body && body.force); // רענון ידני יזום — מדלג על מנגנון "פעם ביום"
+  if (!force && db.calendarAutoAdopt[cid] === todayIL) return json(res, { ok: true, adopted: 0, skipped: true, today: todayIL });
+  if (!hasCalendar(cid)) { db.calendarAutoAdopt[cid] = todayIL; save(db); return json(res, { ok: true, adopted: 0, noCalendar: true }); }
+  try {
+    const ourEvents = (db.events || []).filter(e => e.companyId === cid && (e.date || '') >= MATCH_START);
+    const adoptedGcal = new Set(ourEvents.map(e => e.gcalId).filter(Boolean));
+    const confIdx = confirmedArtistIndex(db, cid); // אירועים מאושרים לפי תאריך+שם אמן — למניעת קליטה כפולה
+    const dismissed = new Set(((db.calendarDismissed || {})[cid]) || []); // אירועי יומן שנמחקו ידנית — לא לקלוט שוב
+    // עד היום (כולל) — קולט את אירועי היום כבר בבוקר; לא מעבר להיום (בלי אירועים עתידיים).
+    const cal = (await fetchCalendarEvents({ companyId: cid }))
+      .filter(e => e.id && (e.date || '') >= MATCH_START && (e.date || '') <= todayIL
+        && !adoptedGcal.has(e.id) && !dismissed.has(e.id) && !calendarAlreadyCaptured(confIdx, e));
+    // רק אירועי יומן שאין להם התאמה לאירוע קיים אצלנו (missingInWhatsapp)
+    const { missingInWhatsapp } = matchEvents(ourEvents, cal);
+    let adopted = 0;
+    for (const ce of missingInWhatsapp) {
+      if (!ce.id || adoptedGcal.has(ce.id) || dismissed.has(ce.id) || calendarAlreadyCaptured(confIdx, ce)) continue;
+      let clientId = null, clientName = null;
+      const mapped = mappedClientName(db, ce.title);
+      if (mapped) { const r = await resolveClientByName(mapped); clientId = r.clientId; clientName = r.clientName; }
+      const event = {
+        id: id('ev'), companyId: cid,
+        date: ce.date || null, dateRaw: ce.date || null,
+        artist: ce.title || null, location: ce.location || null,
+        sound: null, price: null, priceSound: null, priceLighting: null, priceBackline: null, priceExtras: null,
+        ledPricePerMeter: null, ledMeters: null,
+        employees: [], employeeBonusRaw: null, contractors: [], employeeDetails: [], contractorDetails: [],
+        clientId, clientName,
+        gcalId: ce.id, source: 'calendar', invoiceStatus: 'pending',
+        autoAdopted: true, createdAt: new Date().toISOString(),
+      };
+      upsertEvent(db, event); adoptedGcal.add(ce.id); adopted++;
+    }
+    db.calendarAutoAdopt[cid] = todayIL;
+    save(db);
+    json(res, { ok: true, adopted, today: todayIL });
+  } catch (e) {
+    json(res, { ok: false, error: e.message });
+  }
+});
+
 // GET /api/calendar/events?companyId=&from=YYYY-MM-DD&to=YYYY-MM-DD  (טווח שבועי)
 //     או ?month=YYYY-MM  (תאימות לאחור)
 add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
@@ -286,21 +377,31 @@ add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
   };
   const dbEvents = (q.companyId ? companyEvents(db, q.companyId) : db.events);
   const adoptedGcal = new Set(dbEvents.map(e => e.gcalId).filter(Boolean));
-  const wa = dbEvents
-    .filter(e => inRange(e.date))
-    .map(e => ({ eventId: e.id, date: e.date, title: e.artist || 'אירוע', location: e.location || '',
-      clientName: e.clientName || null, price: e.price ?? null, source: 'whatsapp' }));
+  // מפענח את מזהה היומן מתוך gcalId בפורמט 'c<index>_...' — כך שאירוע שאומץ מיומן נצבע לפי היומן שלו.
+  const calIdxOf = (gcalId) => { const m = String(gcalId || '').match(/^c(\d+)_/); return m ? +m[1] : null; };
   let cal = [];
   let calendarError = null;
+  const calNames = new Map();   // index -> שם היומן (מכל היומנים המוגדרים, גם אם כל האירועים כבר אומצו)
   try {
-    if (hasCalendar()) {
-      cal = (await fetchCalendarEvents())
-        .filter(e => inRange(e.date) && !adoptedGcal.has(e.id))   // מסתירים אירועי יומן שכבר אומצו
+    if (hasCalendar(q.companyId)) {
+      const raw = await fetchCalendarEvents({ companyId: q.companyId });
+      raw.forEach(e => calNames.set(e.calendarIndex ?? 0, e.calendarName || `יומן ${(e.calendarIndex ?? 0) + 1}`));
+      cal = raw
+        .filter(e => inRange(e.date))   // כל אירועי היומן — לוח השנה הוא שיקוף מלא של יומני גוגל (כולל אירועים שכבר אומצו)
         .map(e => ({ gcalId: e.id, date: e.date, title: e.title, location: e.location, source: 'calendar', calendarIndex: e.calendarIndex ?? 0, calendarName: e.calendarName || `יומן ${(e.calendarIndex ?? 0) + 1}` }));
     } else { calendarError = 'יומן גוגל לא מחובר'; }
   } catch (e) { calendarError = e.message; }
+  // האירועים שלנו — נצבעים לפי היומן שממנו אומצו (calendarIndex מתוך gcalId). אירוע ללא שיוך ליומן = 'manual'.
+  const wa = dbEvents
+    .filter(e => inRange(e.date))
+    .map(e => { const idx = calIdxOf(e.gcalId);
+      return { eventId: e.id, date: e.date, title: e.artist || 'אירוע', location: e.location || '',
+        clientName: e.clientName || null, price: e.price ?? null,
+        calendarIndex: idx, calendarName: idx != null ? (calNames.get(idx) || `יומן ${idx + 1}`) : null,
+        source: idx != null ? 'calendar' : 'manual' }; });
+  const calendars = [...calNames.keys()].sort((a, b) => a - b).map(index => ({ index, name: calNames.get(index) }));
   res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify({ from: q.from, to: q.to, whatsapp: wa, calendar: cal, calendarError }));
+  res.end(JSON.stringify({ from: q.from, to: q.to, whatsapp: wa, calendar: cal, calendars, calendarError }));
 });
 
 // GET /api/invoicing/pending?companyId=
@@ -365,14 +466,27 @@ add('POST', /^\/api\/invoicing\/preview-pdf$/, async (req, res, _p, _q, body) =>
       remarks: body.remarks || null,
       date: body.date || undefined,
     };
-    const pv = await greenInvoice.previewDocument(opts);
+    if (body.skipDateValidation) opts.skipDateValidation = true; // אישור הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
+    // חשבונית ירוקה מאפשרת תאריך עבר, אך לא מוקדם מהמסמך האחרון מסוגו (רצף) — אם נדחה, מרנדרים עם התאריך המותר הקרוב.
+    let pv, dateAdjusted = false; const requestedDate = opts.date || null; let usedDate = opts.date || null; let minDate = null;
+    try { pv = await greenInvoice.previewDocument(opts); }
+    catch (e) {
+      if (!opts.skipDateValidation && /2405|עתידי|מוקדם|תאריך|\bdate\b/i.test(String(e.message || ''))) {
+        const today = new Date().toISOString().slice(0, 10);
+        try { minDate = await greenInvoice.latestDocumentDate(type); } catch { /* לא חוסם */ }
+        const fallback = (minDate && (!requestedDate || minDate > requestedDate)) ? minDate : today;
+        dateAdjusted = Boolean(requestedDate && requestedDate !== fallback);
+        usedDate = fallback; opts.date = fallback;
+        pv = await greenInvoice.previewDocument(opts);
+      } else throw e;
+    }
     let pdfBase64 = pv.pdfBase64 || null;
     if (!pdfBase64 && pv.url) {
       const fr = await fetch(pv.url, { redirect: 'follow' }).catch(() => null);
       if (fr && fr.ok) pdfBase64 = Buffer.from(await fr.arrayBuffer()).toString('base64');
     }
     if (!pdfBase64) return json(res, { error: 'לא התקבלה תצוגה מקדימה', debug: pv.raw || null });
-    json(res, { ok: true, pdfBase64 });
+    json(res, { ok: true, pdfBase64, dateAdjusted, requestedDate, usedDate, minDate });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -388,6 +502,7 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim() };
     const opts = { type, client, items, description: body.description || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true; // אישור הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
         const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
@@ -396,11 +511,27 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
         return row;
       }).filter(p => Math.abs(p.price) > 0);
     }
-    const pv = await greenInvoice.previewDocument(opts);
+    // התצוגה המקדימה היא ויזואלית בלבד. אם חשבונית ירוקה דוחה את התאריך (עתידי/מוקדם מדי לסוג המסמך — שגיאה 2405,
+    // למשל מסמך המשך שתאריכו מוקדם מהמסמך האחרון) — מנסים שוב עם תאריך היום כדי שהתצוגה תרונדר. התאריך האמיתי נבחר בהפקה.
+    // חשבונית ירוקה מאפשרת תאריך עבר, אך לא מוקדם מהמסמך האחרון *מאותו סוג* (רצף כרונולוגי — שגיאה 2405).
+    // אם התאריך שנבחר מוקדם מדי, מרנדרים את התצוגה עם התאריך המוקדם ביותר המותר = תאריך המסמך האחרון מסוגו (לא "היום").
+    let pv, dateAdjusted = false; const requestedDate = opts.date || null; let usedDate = opts.date || null; let minDate = null;
+    try { pv = await greenInvoice.previewDocument(opts); }
+    catch (e) {
+      if (/2405|עתידי|מוקדם|תאריך|\bdate\b/i.test(String(e.message || ''))) {
+        const today = new Date().toISOString().slice(0, 10);
+        try { minDate = await greenInvoice.latestDocumentDate(type); } catch { /* לא חוסם */ }
+        const fallback = (minDate && (!requestedDate || minDate > requestedDate)) ? minDate : today;
+        dateAdjusted = Boolean(requestedDate && requestedDate !== fallback);
+        usedDate = fallback; opts.date = fallback;
+        if (Array.isArray(opts.payment)) opts.payment = opts.payment.map(p => ({ ...p, date: (!p.date || p.date < fallback) ? fallback : p.date }));
+        pv = await greenInvoice.previewDocument(opts);
+      } else throw e;
+    }
     let pdfBase64 = pv.pdfBase64 || null;
     if (!pdfBase64 && pv.url) { const fr = await fetch(pv.url, { redirect: 'follow' }).catch(() => null); if (fr && fr.ok) pdfBase64 = Buffer.from(await fr.arrayBuffer()).toString('base64'); }
     if (!pdfBase64) return json(res, { error: 'לא התקבלה תצוגה מקדימה', debug: pv.raw || null });
-    json(res, { ok: true, pdfBase64 });
+    json(res, { ok: true, pdfBase64, dateAdjusted, requestedDate, usedDate, minDate });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -430,6 +561,7 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
       description: body.description || subjectForEvents(evs),
       remarks: body.remarks || null,
       date: body.date || undefined,   // תאריך המסמך שהמשתמש בחר (ברירת מחדל: היום)
+      skipDateValidation: Boolean(body.skipDateValidation), // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
       sendEmail: Boolean(body.sendEmail), email: body.email || null,
     });
     for (const ev of evs) {
@@ -473,6 +605,61 @@ add('GET', /^\/api\/invoicing\/recent-for-client$/, async (req, res, _p, q) => {
   } catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
+// GET /api/invoicing/linkable-docs?clientId=&clientName=&excludeEventId=&companyId=
+// מסמכים של הלקוח הנבחר בלבד (הצעת מחיר/עסקה/מס/מס-קבלה/זיכוי) שלא משוייכים לאף אירוע אחר — לשיוך לאירוע.
+add('GET', /^\/api\/invoicing\/linkable-docs$/, async (req, res, _p, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
+  try {
+    let clientId = q.clientId || null;
+    const name = (q.clientName || '').trim();
+    if (!clientId && name) {
+      const clients = await greenInvoice.listClients();
+      // התאמה סלחנית: שם עסק לעיתים נשמר חתוך/עם בע"מ/מרכאות שונות. מנסים מדויק ואז מנורמל ואז תת-מחרוזת.
+      const norm = (s) => String(s || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[."'׳״,()\-]/g, ' ').replace(/\s+/g, ' ').trim();
+      const nn = norm(name);
+      let c = clients.find(cl => (cl.name || '').trim() === name);            // מדויק
+      if (!c) c = clients.find(cl => norm(cl.name) === nn);                    // מנורמל מדויק
+      if (!c && nn.length >= 4) {                                             // תת-מחרוזת (שם חתוך)
+        const cand = clients.filter(cl => { const cn = norm(cl.name); return cn && (cn.includes(nn) || nn.includes(cn)); });
+        if (cand.length === 1) c = cand[0];
+        else if (cand.length > 1) c = cand.sort((a, b) => Math.abs(norm(a.name).length - nn.length) - Math.abs(norm(b.name).length - nn.length))[0];
+      }
+      clientId = c?.id || null;
+    }
+    if (!clientId) return json(res, { docs: [] });
+    const all = await greenInvoice.clientDocuments(clientId);   // כבר של הלקוח בלבד
+    const types = [10, 300, 305, 320, 330]; // הצעת מחיר, עסקה, מס, מס-קבלה, זיכוי
+    // מיפוי מסמך → שמות האירועים שכבר משוייך אליהם (מלבד האירוע הנוכחי)
+    const db = load();
+    const excludeId = q.excludeEventId || null;
+    const evs = q.companyId ? companyEvents(db, q.companyId) : (db.events || []);
+    const evLabel = (e) => e.artist || e.title || e.clientName || e.date || e.id;
+    const linkedMap = new Map(); // docId → Set(labels)
+    const addLink = (docId, lbl) => { const k = String(docId); if (!linkedMap.has(k)) linkedMap.set(k, new Set()); linkedMap.get(k).add(lbl); };
+    for (const e of evs) {
+      if (excludeId && e.id === excludeId) continue;
+      const lbl = evLabel(e);
+      for (const d of (e.linkedDocs || [])) if (d && d.id != null) addLink(d.id, lbl);
+      if (e.invoiceId != null) addLink(e.invoiceId, lbl);
+    }
+    const includeClosed = q.includeClosed === '1' || q.includeClosed === 'true';
+    const includeLinked = q.includeLinked === '1' || q.includeLinked === 'true';
+    let pool = all.filter(d => types.includes(Number(d.type)));
+    // כמה מסמכים משוייכים כבר לאירוע אחר (לשם הצגת/הסתרת האפשרות)
+    const linkedCount = pool.filter(d => linkedMap.has(String(d.id))).length;
+    if (!includeLinked) pool = pool.filter(d => !linkedMap.has(String(d.id)));
+    // הוספת שמות האירועים שהמסמך כבר משויך אליהם (לתצוגה)
+    pool = pool.map(d => { const s = linkedMap.get(String(d.id)); return s ? { ...d, linkedTo: [...s] } : d; });
+    // ברירת מחדל: רק מסמכים בסטטוס פתוח (status 0). "הצג סגורים" → כולל גם סגורים.
+    const openOnly = pool.filter(d => Number(d.status) === 0);
+    const docs = (includeClosed ? pool : openOnly)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      .slice(0, 60);
+    const closedCount = pool.length - openOnly.length;
+    json(res, { docs, clientId, closedCount, linkedCount });
+  } catch (e) { json(res, { docs: [], error: e.message }, 500); }
+});
+
 // POST /api/invoicing/link { eventIds, docs:[{id,number,type}] } — שיוך אירועים לעד 4 מסמכים קיימים וסגירת האירוע
 add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
   const db = load();
@@ -490,15 +677,179 @@ add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
     const merged = Array.isArray(e.linkedDocs) ? e.linkedDocs.slice() : [];
     for (const d of docs) if (!merged.some(x => String(x.id) === String(d.id))) merged.push(d);
     e.linkedDocs = merged.slice(0, 6);
-    e.invoiceStatus = 'invoiced';
-    // מסמך ראשי לתצוגה: חשבונית מס/מס-קבלה > חשבון עסקה > קבלה > הצעת מחיר
-    let primary = e.linkedDocs[0];
-    for (const t of [305, 320, 300, 400, 10]) { const d = e.linkedDocs.find(x => x.type === t); if (d) { primary = d; break; } }
-    e.invoiceId = primary.id; e.invoiceNumber = primary.number; e.invoiceType = primary.type;
+    // הצעת מחיר (10) אינה חיוב: קושרת מסמך אך אינה מסמנת "חויב"/"שולם".
+    // רק חשבונית אמיתית (עסקה 300 / מס 305 / מס-קבלה 320 / קבלה 400) מחייבת את האירוע.
+    const REAL = [300, 305, 320, 400];
+    const realDocs = e.linkedDocs.filter(d => REAL.includes(Number(d.type)));
+    if (realDocs.length) {
+      e.invoiceStatus = 'invoiced';
+      // מסמך ראשי לתצוגה מבין החשבוניות האמיתיות: מס > מס-קבלה > עסקה > קבלה
+      let primary = realDocs[0];
+      for (const t of [305, 320, 300, 400]) { const d = realDocs.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+      e.invoiceId = primary.id; e.invoiceNumber = primary.number; e.invoiceType = primary.type;
+    }
     n++;
   }
   save(db);
   json(res, { ok: true, linked: n, docs: docs.length });
+});
+
+// POST /api/events/:id/attach-doc — צירוף קובץ מסמך חיצוני (חשבונית ישנה ממערכת קודמת) לאירוע קיים.
+// { type, number, date, amount, filename, mime, data(base64) }. עסקה/מס → פתוח עד קבלה/מס-קבלה.
+add('POST', /^\/api\/events\/([^/]+)\/attach-doc$/, async (req, res, params, _q, body) => {
+  const db = load();
+  const ev = db.events.find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  if (!body || !body.data) return json(res, { error: 'חסר קובץ' }, 400);
+  const type = Number(body.type) || null;
+  const saved = await saveFile({ employeeId: 'evdoc:' + ev.id, kind: 'event-doc', filename: body.filename || 'document', mime: body.mime || 'application/octet-stream', data: body.data });
+  const doc = { id: saved.id, number: (body.number != null && String(body.number).trim() !== '') ? String(body.number).trim() : null, type, date: body.date || null, amount: (body.amount != null && body.amount !== '') ? Number(body.amount) : null, url: '/api/files/' + saved.id, uploaded: true };
+  const merged = Array.isArray(ev.linkedDocs) ? ev.linkedDocs.slice() : [];
+  merged.push(doc);
+  ev.linkedDocs = merged.slice(0, 8);
+  // עדכון סטטוס לפי חשבוניות אמיתיות (זהה ללוגיקת /api/invoicing/link) — הצעת מחיר אינה חיוב
+  const REAL = [300, 305, 320, 400];
+  const realDocs = ev.linkedDocs.filter(d => REAL.includes(Number(d.type)));
+  if (realDocs.length) {
+    ev.invoiceStatus = 'invoiced';
+    let primary = realDocs[0];
+    for (const t of [305, 320, 300, 400]) { const d = realDocs.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+    ev.invoiceId = primary.id; ev.invoiceNumber = primary.number; ev.invoiceType = primary.type;
+  }
+  save(db);
+  json(res, { ok: true, doc });
+});
+
+// DELETE /api/events/:id/attach-doc/:docId — הסרת מסמך שהועלה מאירוע + עדכון סטטוס
+add('DELETE', /^\/api\/events\/([^/]+)\/attach-doc\/([^/]+)$/, async (req, res, params) => {
+  const db = load();
+  const ev = db.events.find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  ev.linkedDocs = (ev.linkedDocs || []).filter(d => String(d.id) !== String(params[1]));
+  try { await deleteFile(params[1]); } catch {}
+  const REAL = [300, 305, 320, 400];
+  const realDocs = (ev.linkedDocs || []).filter(d => REAL.includes(Number(d.type)));
+  if (realDocs.length) {
+    ev.invoiceStatus = 'invoiced';
+    let primary = realDocs[0];
+    for (const t of [305, 320, 300, 400]) { const d = realDocs.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+    ev.invoiceId = primary.id; ev.invoiceNumber = primary.number; ev.invoiceType = primary.type;
+  } else { ev.invoiceStatus = 'pending'; ev.invoiceId = null; ev.invoiceNumber = null; ev.invoiceType = null; }
+  save(db);
+  json(res, { ok: true });
+});
+
+// POST /api/events/:id/create-followup — הפקת מסמך המשך בחשבונית ירוקה ממסמך ישן שהועלה, לפי אותם כללי המשך.
+// { uploadedDocId, type, items, date, description, remarks, payment, skipDateValidation, clientName }
+add('POST', /^\/api\/events\/([^/]+)\/create-followup$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const db = load();
+  const ev = db.events.find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  try {
+    const type = Number(body.type);
+    const items = (Array.isArray(body.items) ? body.items : [])
+      .map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }))
+      .filter(it => it.description);
+    if (!type || !items.length) return json(res, { error: 'חסרים נתונים למסמך' }, 400);
+    const client = ev.clientId ? { id: ev.clientId } : { name: String(body.clientName || ev.clientName || ev.client || 'לקוח').trim(), add: true };
+    const opts = { type, client, items, description: body.description || '', remarks: body.remarks || null };
+    if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true;
+    if (Array.isArray(body.payment) && body.payment.length) {
+      opts.payment = body.payment.map(p => {
+        const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
+        if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum);
+        if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName);
+        return row;
+      }).filter(p => Math.abs(p.price) > 0);
+    }
+    const doc = await greenInvoice.createDocument(opts);
+    // קישור המסמך החדש (חשבונית ירוקה) לאירוע + סימון המסמך הישן שממנו נגזר כ"הומר" (יורד מחשבוניות פתוחות)
+    const merged = Array.isArray(ev.linkedDocs) ? ev.linkedDocs.slice() : [];
+    merged.push({ id: doc.id, number: doc.number, type, uploaded: false });
+    if (body.uploadedDocId) { const s = merged.find(d => String(d.id) === String(body.uploadedDocId)); if (s) s.converted = true; }
+    ev.linkedDocs = merged.slice(0, 10);
+    const REAL = [300, 305, 320, 400];
+    const realDocs = ev.linkedDocs.filter(d => REAL.includes(Number(d.type)) && !d.converted);
+    if (realDocs.length) {
+      ev.invoiceStatus = 'invoiced';
+      let primary = realDocs[0];
+      for (const t of [305, 320, 300, 400]) { const d = realDocs.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+      ev.invoiceId = primary.id; ev.invoiceNumber = primary.number; ev.invoiceType = primary.type;
+    }
+    save(db);
+    json(res, { ok: true, doc });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// ===== חשבוניות ישנות שהועלו ידנית (אופק) — עומדות בפני עצמן (לא קשורות לאירוע), למעקב ב"חשבוניות פתוחות" =====
+// POST /api/old-invoices — יצירה + צירוף קובץ. { type, number, date, amount, clientName, description, filename, mime, data }
+add('POST', /^\/api\/old-invoices$/, async (req, res, _p, q, body) => {
+  if (!body || !body.data) return json(res, { error: 'חסר קובץ' }, 400);
+  const cid = q.companyId || body.companyId;
+  const db = load(); db.oldInvoices = db.oldInvoices || [];
+  const type = Number(body.type) || null;
+  const numStr = (body.number != null && String(body.number).trim() !== '') ? String(body.number).trim() : null;
+  // מניעת כפילות (אך ורק לחשבוניות ישנות של אופק): אותו קובץ, או אותו מספר+סוג מסמך, לא ייקלטו פעמיים
+  const contentHash = crypto.createHash('sha256').update(String(body.data || '')).digest('hex');
+  const dupe = (db.oldInvoices || []).find(r => r.companyId === cid && (r.linkedDocs || []).some(d =>
+    (d.contentHash && d.contentHash === contentHash) ||
+    (numStr && d.number && String(d.number) === numStr && Number(d.type || 0) === Number(type || 0))));
+  if (dupe) return json(res, { error: 'המסמך הזה כבר קיים בחשבוניות פתוחות (אותו קובץ או אותו מספר מסמך) — לא נקלט שוב.', duplicate: true }, 409);
+  const saved = await saveFile({ employeeId: 'oldinv', kind: 'old-invoice', filename: body.filename || 'document', mime: body.mime || 'application/octet-stream', data: body.data });
+  const doc = { id: saved.id, number: numStr, type, date: body.date || null, amount: (body.amount != null && body.amount !== '') ? Number(body.amount) : null, url: '/api/files/' + saved.id, uploaded: true, contentHash };
+  const rec = { id: id('oinv'), companyId: cid, clientName: String(body.clientName || '').trim() || '—', description: String(body.description || '').trim(), linkedDocs: [doc], createdAt: new Date().toISOString() };
+  db.oldInvoices.push(rec);
+  save(db);
+  json(res, { ok: true, id: rec.id, doc });
+});
+// POST /api/old-invoices/:id/attach-doc — צירוף קבלה/מס-קבלה (או מסמך נוסף) לחשבונית ישנה
+add('POST', /^\/api\/old-invoices\/([^/]+)\/attach-doc$/, async (req, res, params, _q, body) => {
+  const db = load(); db.oldInvoices = db.oldInvoices || [];
+  const rec = db.oldInvoices.find(r => r.id === params[0]);
+  if (!rec) return json(res, { error: 'לא נמצא' }, 404);
+  if (!body || !body.data) return json(res, { error: 'חסר קובץ' }, 400);
+  const type = Number(body.type) || null;
+  const saved = await saveFile({ employeeId: 'oldinv', kind: 'old-invoice', filename: body.filename || 'document', mime: body.mime || 'application/octet-stream', data: body.data });
+  rec.linkedDocs = (rec.linkedDocs || []).concat([{ id: saved.id, number: (body.number != null && String(body.number).trim() !== '') ? String(body.number).trim() : null, type, date: body.date || null, amount: (body.amount != null && body.amount !== '') ? Number(body.amount) : null, url: '/api/files/' + saved.id, uploaded: true }]).slice(0, 8);
+  save(db);
+  json(res, { ok: true });
+});
+// DELETE /api/old-invoices/:id — מחיקה + קבצים
+add('DELETE', /^\/api\/old-invoices\/([^/]+)$/, async (req, res, params) => {
+  const db = load(); db.oldInvoices = db.oldInvoices || [];
+  const rec = db.oldInvoices.find(r => r.id === params[0]);
+  if (rec) { for (const d of (rec.linkedDocs || [])) { try { await deleteFile(d.id); } catch {} } }
+  db.oldInvoices = db.oldInvoices.filter(r => r.id !== params[0]);
+  save(db);
+  json(res, { ok: true });
+});
+// POST /api/old-invoices/:id/create-followup — הפקת מסמך המשך בחשבונית ירוקה מחשבונית ישנה
+add('POST', /^\/api\/old-invoices\/([^/]+)\/create-followup$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const db = load(); db.oldInvoices = db.oldInvoices || [];
+  const rec = db.oldInvoices.find(r => r.id === params[0]);
+  if (!rec) return json(res, { error: 'לא נמצא' }, 404);
+  try {
+    const type = Number(body.type);
+    const items = (Array.isArray(body.items) ? body.items : []).map(it => ({ description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description);
+    if (!type || !items.length) return json(res, { error: 'חסרים נתונים למסמך' }, 400);
+    const client = rec.clientId ? { id: rec.clientId } : { name: String(body.clientName || rec.clientName || 'לקוח').trim(), add: true };
+    const opts = { type, client, items, description: body.description || '', remarks: body.remarks || null };
+    if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true;
+    if (Array.isArray(body.payment) && body.payment.length) {
+      opts.payment = body.payment.map(p => { const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' }; if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum); if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName); return row; }).filter(p => Math.abs(p.price) > 0);
+    }
+    const doc = await greenInvoice.createDocument(opts);
+    const merged = (rec.linkedDocs || []).slice();
+    merged.push({ id: doc.id, number: doc.number, type, uploaded: false });
+    if (body.uploadedDocId) { const s = merged.find(d => String(d.id) === String(body.uploadedDocId)); if (s) s.converted = true; }
+    rec.linkedDocs = merged.slice(0, 10);
+    save(db);
+    json(res, { ok: true, doc });
+  } catch (e) { json(res, { error: e.message }, 500); }
 });
 
 // GET /api/open-quotes — הצעות מחיר פתוחות
@@ -521,6 +872,7 @@ add('POST', /^\/api\/quotes\/create$/, async (req, res, _p, _q, body) => {
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim(), add: true };
     const opts = { type: 10, client, items, description: body.subject || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
     const doc = await greenInvoice.createDocument(opts);
     json(res, { ok: true, doc });
@@ -543,6 +895,7 @@ add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim(), add: true };
     const opts = { type, client, items, description: body.subject || body.description || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
         const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
@@ -563,7 +916,7 @@ add('POST', /^\/api\/quotes\/close-bulk$/, async (req, res, _p, _q, body) => {
   const results = [];
   for (const id of ids) {
     try { await greenInvoice.closeDocument(id); results.push({ id, ok: true }); }
-    catch (e) { results.push({ id, ok: false, error: e.message }); }
+    catch (e) { if (isAlreadyClosedErr(e)) results.push({ id, ok: true, alreadyClosed: true }); else results.push({ id, ok: false, error: e.message }); }
   }
   json(res, { ok: true, closed: results.filter(r => r.ok).length, results });
 });
@@ -574,7 +927,7 @@ add('POST', /^\/api\/expenses\/upload-file$/, async (req, res, _p, _q, body) => 
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   if (!body?.fileBase64) return json(res, { error: 'חסר קובץ' }, 400);
   try { json(res, await greenInvoice.uploadExpenseFile(body.fileBase64, body.fileName, body.mime)); }
-  catch (e) { json(res, { error: e.message }, 500); }
+  catch (e) { console.error('upload-file failed:', body.fileName, e.message); json(res, { error: e.message }, 500); }
 });
 
 // GET /api/expense-drafts — טיוטות הוצאה שהעלינו (OCR) שממתינות לאישור, ללא כאלה שכבר אושרו/נדחו אצלנו
@@ -613,7 +966,9 @@ function applyLinkedEvents(db, linkedEvents, invoiceNumber, payableId) {
 add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params, q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   const draftId = params[0];
-  const _acctEmail = bizProfile(load(), q.companyId || giCompanyId()).accountantEmail || '';   // רו"ח של החברה הפעילה בלבד
+  const _biz = bizProfile(load(), q.companyId || giCompanyId());
+  const _acctEmail = _biz.accountantEmail || '';   // רו"ח של החברה הפעילה בלבד
+  const _senderEmail = _biz.senderEmail || '';     // כתובת "מאת" של החברה (ריק = ברירת מחדל SMTP)
   try {
     const draft = await greenInvoice.getExpenseDraft(draftId);
     if (!draft) return json(res, { error: 'הטיוטה לא נמצאה (ייתכן שכבר טופלה)' }, 404);
@@ -667,16 +1022,33 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
 
     // ===== חשבון עסקה — רישום פנימי בלבד (לא בחשבונית ירוקה, לא לרו"ח) =====
     if (isBusiness) {
+      // מורידים עותק מקומי של קובץ החשבונית לפני מחיקת הטיוטה — כדי לשמור צפייה/הורדה אצלנו גם אחרי המחיקה
+      let localFileId = null;
+      try {
+        if (draft.url) {
+          const fr = await fetch(draft.url, { redirect: 'follow' });
+          if (fr.ok) {
+            const buf = Buffer.from(await fr.arrayBuffer());
+            const ct = fr.headers.get('content-type') || 'application/pdf';
+            const ext = /pdf/i.test(ct) ? 'pdf' : (/png/i.test(ct) ? 'png' : (/jpe?g/i.test(ct) ? 'jpg' : 'pdf'));
+            const saved = await saveFile({ employeeId: 'payable', kind: 'expense', filename: `expense-${String(number).replace(/[^\w.-]/g, '_')}.${ext}`, mime: ct, data: buf.toString('base64') });
+            localFileId = saved.id;
+          }
+        }
+      } catch { }
+      // מוחקים את הטיוטה מחשבונית ירוקה — כדי שלא תישאר ב"הוצאות לקליטה" גם שם (רישום פנימי בלבד)
+      let draftDeleted = false;
+      try { await greenInvoice.deleteExpenseDraft(draftId); draftDeleted = true; } catch { }
       const db = load();
       db.supplierPayables = db.supplierPayables || [];
-      // שומרים את draftId (הקובץ נשאר בחשבונית ירוקה כטיוטה מוסתרת) כדי שתהיה צפייה/הורדה — לא נוצר כהוצאה
-      const payable = newPayable({ isBusinessDoc: true, giExpenseId: null, draftId });
+      // אם המחיקה הצליחה — הקובץ מוגש מהעותק המקומי (localFileId); אם נכשלה — נשארת הפניה לטיוטה כגיבוי
+      const payable = newPayable({ isBusinessDoc: true, giExpenseId: null, draftId: draftDeleted ? null : draftId, localFileId });
       db.supplierPayables.push(payable);
       const linked = applyLinkedEvents(db, linkedEvents, number, payable.id);
       db.approvedDrafts = db.approvedDrafts || {};
-      db.approvedDrafts[draftId] = { businessPayableId: payable.id, at: new Date().toISOString() };
-      save(db); // הטיוטה מוסתרת מרשימת הטיוטות (approvedDrafts) אך נשמרת כדי לשמור על הקובץ
-      return json(res, { ok: true, businessDoc: true, payableId: payable.id, linkedCount: linked });
+      db.approvedDrafts[draftId] = { businessPayableId: payable.id, at: new Date().toISOString(), draftDeleted };
+      save(db);
+      return json(res, { ok: true, businessDoc: true, payableId: payable.id, linkedCount: linked, draftDeleted });
     }
 
     // ===== מסמך מס אמיתי — נוצר בחשבונית ירוקה =====
@@ -730,6 +1102,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       if (mailer.mailerConfigured() && fwd && fileBuf) {
         await mailer.sendMail({
           to: fwd,
+          from: _senderEmail || undefined,   // כתובת "מאת" פר-חברה (אם הוגדרה)
           subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
           text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
           attachments: [{ filename: `expense-${safeNum}.${fileExt}`, content: fileBuf, contentType: fileCt }],
@@ -851,7 +1224,7 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
   };
   const out = (q.all ? list : list.filter(p => !p.paid)).slice()
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
-    .map(p => { const cov = coveredFor(p); return { ...p, hasFile: !!(p.giExpenseId || p.draftId), coveredEvents: cov, readiness: readinessOf(cov) }; });
+    .map(p => { const cov = coveredFor(p); return { ...p, hasFile: !!(p.giExpenseId || p.draftId || p.localFileId), coveredEvents: cov, readiness: readinessOf(cov) }; });
   json(res, { ok: true, payables: out });
 });
 
@@ -899,7 +1272,7 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/detail$/, async (req, res, param
     try { const e = await greenInvoice.getExpense(p.giExpenseId); return json(res, { ok: true, ...pick(e) }); }
     catch (err) { return json(res, { ok: false, error: err.message, description: p.description || '', remarks: '', classification: '', rows: [], ocrTexts: [], hasFile: !!p.giExpenseId }); }
   }
-  json(res, { ok: true, description: p.description || '', remarks: '', classification: '', rows: [], ocrTexts: [], hasFile: !!(p.giExpenseId || p.draftId) });
+  json(res, { ok: true, description: p.description || '', remarks: '', classification: '', rows: [], ocrTexts: [], hasFile: !!(p.giExpenseId || p.draftId || p.localFileId) });
 });
 
 // GET /api/supplier-payables/:id/file — צפייה/הורדה של קובץ החשבונית (מההוצאה בחשבונית ירוקה או מהטיוטה)
@@ -909,6 +1282,18 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params)
     const db = load();
     const p = (db.supplierPayables || []).find(x => x.id === params[0]);
     if (!p) return json(res, { error: 'לא נמצא' }, 404);
+    // עותק מקומי (חשבון עסקה פנימי שהטיוטה שלו נמחקה מחשבונית ירוקה) — מוגש ישירות
+    if (p.localFileId) {
+      try {
+        const f = await getFile(p.localFileId);
+        if (f && f.data) {
+          let ct = f.mime || 'application/pdf';
+          if (/image\/jpg/i.test(ct)) ct = 'image/jpeg';
+          res.writeHead(200, { 'Content-Type': ct, 'Content-Disposition': 'inline', 'Cache-Control': 'private, max-age=300' });
+          return res.end(Buffer.from(f.data, 'base64'));
+        }
+      } catch { }
+    }
     let fileUrl = null;
     if (p.giExpenseId) { try { const e = await greenInvoice.getExpense(p.giExpenseId); fileUrl = (e?.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e?.url === 'string' ? e.url : null); } catch { } }
     if (!fileUrl && p.draftId) { try { const d = await greenInvoice.getExpenseDraft(p.draftId); fileUrl = d?.url || null; } catch { } }
@@ -1124,15 +1509,16 @@ add('POST', /^\/api\/contractors\/([^/]+)\/expense$/, async (req, res, params, _
 add('POST', /^\/api\/quotes\/([^/]+)\/close$/, async (req, res, params) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try { json(res, { ok: true, result: await greenInvoice.closeDocument(params[0]) }); }
-  catch (e) { json(res, { error: e.message }, 500); }
+  // מסמך שכבר אינו פתוח (הומר/נסגר) — נחשב כסגירה מוצלחת כדי שיירד מהרשימה בלי שגיאה
+  catch (e) { if (isAlreadyClosedErr(e)) return json(res, { ok: true, alreadyClosed: true }); json(res, { error: e.message }, 500); }
 });
 
 // פרטי חשבון להעברה בנקאית + שורת התייחסות למקור — נכנסים להערות של כל מסמך המשך
 const DOC_NAMES_HE = { 10: 'הצעת מחיר', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 330: 'חשבונית זיכוי' };
-const PAYMENT_BENEFICIARY = `שם מוטב: בי פי אם הגברה ותאורה בע"מ\nמספר חשבון: 347346\nמס' סניף: 521 (מודיעין)\nמזרחי טפחות (20)`;
+// שורת מקור למסמך המשך (תמיד מופיעה). פרטי הבנק מגיעים מההערה הקבועה של העסק (documentBody מזריק אותה).
 function followupRemarks(srcType, srcNumber) {
   const nm = DOC_NAMES_HE[Number(srcType)] || 'מסמך';
-  return `מסמך המשך ל${nm}${srcNumber ? ` מס' ${srcNumber}` : ''}\n\n${PAYMENT_BENEFICIARY}`;
+  return `מסמך המשך ל${nm}${srcNumber ? ` מס' ${srcNumber}` : ''}`;
 }
 
 // POST /api/quotes/:id/followup { type } — יצירת מסמך המשך מהצעת מחיר (אותן שורות, מקושר)
@@ -1157,6 +1543,38 @@ add('POST', /^\/api\/quotes\/([^/]+)\/followup$/, async (req, res, params, _q, b
 
 // GET /api/documents/:id/lines — שורות + פרטי מסמך מקור, לעריכה לפני הפקת מסמך המשך
 add('GET', /^\/api\/documents\/([^/]+)\/lines$/, async (req, res, params) => {
+  // מסמך שהועלה ידנית (חשבונית ישנה) — אין מקור בחשבונית ירוקה, בונים שורות מהאירוע המשויך
+  try {
+    const f = await getFile(params[0]);
+    if (f) {
+      const db = load();
+      let ev = null, srcDoc = null;
+      for (const e of (db.events || [])) {
+        const d = (e.linkedDocs || []).find(x => String(x.id) === String(params[0]) && x.uploaded);
+        if (d) { ev = e; srcDoc = d; break; }
+      }
+      if (ev) {
+        let items = invoiceItemsFromEvents([ev]).map(it => ({ description: it.description, quantity: it.quantity ?? 1, price: it.price ?? 0 })).filter(it => it.description);
+        if (!items.length) items = [{ description: [(ev.artist || ''), (ev.location || '')].filter(Boolean).join(' · ') || 'שירות', quantity: 1, price: srcDoc.amount != null ? +(Number(srcDoc.amount) / 1.18).toFixed(2) : 0 }];
+        let lastDocDate = null;
+        try { if (greenInvoice.haveCredentials()) lastDocDate = await greenInvoice.latestDocumentDate(); } catch { /* לא חוסם */ }
+        return json(res, { ok: true, items, client: { id: ev.clientId || null, name: ev.clientName || ev.client || '' }, description: '', remarks: '', srcType: Number(srcDoc.type), srcNumber: srcDoc.number, uploaded: true, eventId: ev.id, lastDocDate });
+      }
+      // חשבונית ישנה עצמאית (לא אירוע)
+      let rec = null, rDoc = null;
+      for (const r of (db.oldInvoices || [])) {
+        const d = (r.linkedDocs || []).find(x => String(x.id) === String(params[0]) && x.uploaded);
+        if (d) { rec = r; rDoc = d; break; }
+      }
+      if (rec) {
+        const amt = rDoc.amount != null ? +(Number(rDoc.amount) / 1.18).toFixed(2) : 0;
+        const items = [{ description: rec.description || rec.clientName || 'שירות', quantity: 1, price: amt }];
+        let lastDocDate = null;
+        try { if (greenInvoice.haveCredentials()) lastDocDate = await greenInvoice.latestDocumentDate(); } catch { /* לא חוסם */ }
+        return json(res, { ok: true, items, client: { id: rec.clientId || null, name: rec.clientName || '' }, description: rec.description || '', remarks: '', srcType: Number(rDoc.type), srcNumber: rDoc.number, uploaded: true, oldInvoiceId: rec.id, lastDocDate });
+      }
+    }
+  } catch { /* לא חוסם — ננסה כמסמך חשבונית ירוקה */ }
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
     const src = await greenInvoice.getDocument(params[0]);
@@ -1200,7 +1618,7 @@ add('GET', /^\/api\/documents\/last-date$/, async (req, res, _p, q) => {
 add('POST', /^\/api\/documents\/([^/]+)\/close$/, async (req, res, params) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try { json(res, { ok: true, result: await greenInvoice.closeDocument(params[0]) }); }
-  catch (e) { json(res, { error: e.message }, 500); }
+  catch (e) { if (isAlreadyClosedErr(e)) return json(res, { ok: true, alreadyClosed: true }); json(res, { error: e.message }, 500); }
 });
 
 // POST /api/documents/:id/open — פתיחה מחדש של מסמך סגור
@@ -1226,11 +1644,12 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
     })).filter(it => it.description && String(it.description).trim());
     if (!items.length) return json(res, { error: 'אין שורות במסמך המקור' }, 400);
     const date = body && body.date ? String(body.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const skipDateValidation = Boolean(body && body.skipDateValidation); // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     const baseDesc = `זיכוי עבור ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`;
 
     // שלב 1 — חשבונית זיכוי (330), מקושרת כביטול המסמך המקורי
     const credit = await greenInvoice.createDocument({
-      type: 330, client, items, date,
+      type: 330, client, items, date, skipDateValidation,
       description: src.description ? `${baseDesc} — ${src.description}` : baseDesc,
       linkedDocumentIds: [params[0]], linkType: 'cancel',
     });
@@ -1246,7 +1665,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
       return row;
     }).filter(p => Math.abs(p.price) > 0);
     const negativeReceipt = await greenInvoice.createDocument({
-      type: 400, client, items: [], payment: negPayment, date,
+      type: 400, client, items: [], payment: negPayment, date, skipDateValidation,
       description: `ביטול קבלה — חשבונית מס-קבלה #${src.number}`,
     });
     json(res, { ok: true, mode: 'two-stage', credit, negativeReceipt });
@@ -1255,12 +1674,15 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
 
 // GET /api/documents/:id/url — קישור לקובץ המסמך (PDF) בחשבונית ירוקה, לפתיחה/הורדה
 add('GET', /^\/api\/documents\/([^/]+)\/url$/, async (req, res, params) => {
+  // מסמך שהועלה ידנית (חשבונית ישנה) — מוגש מהאחסון המקומי, ולא מחשבונית ירוקה
+  try { const f = await getFile(params[0]); if (f) return json(res, { ok: true, url: '/api/files/' + params[0], status: 1, type: null, uploaded: true }); } catch {}
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
     const raw = await greenInvoice.getDocument(params[0]);
     const url = (raw.url && (raw.url.he || raw.url.origin || raw.url.pdf)) || (typeof raw.url === 'string' ? raw.url : null);
     if (!url) return json(res, { error: 'לא נמצא קובץ למסמך זה' }, 404);
-    json(res, { ok: true, url });
+    // status: 0=פתוח, 1=סגור/הומר, ... — משמש להצגת אופציית "מסמך המשך" רק כשהמסמך פתוח
+    json(res, { ok: true, url, status: Number(raw.status), type: Number(raw.type), number: raw.number });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -1303,6 +1725,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
       remarks: body.remarks != null ? body.remarks : (src.remarks || null),
     };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true; // אישור הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון מסוגו)
     // תקבולים ערוכים (למסמכי מס-קבלה/קבלה) — סוג + סכום + תאריך + פרטים
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
@@ -1317,17 +1740,74 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
         return row;
       }).filter(p => Math.abs(p.price) > 0); // מתעלמים משורות תקבול ריקות
     }
-    if (body.linked) opts.linkedDocumentIds = [params[0]]; // מסמך המשך — קישור למקור
+    if (body.linked) {
+      opts.linkedDocumentIds = [params[0]]; // מסמך המשך — קישור למקור
+      // שורת "מסמך המשך ל..." תמיד מופיעה. פרטי הבנק/ההערה הקבועה נוספים ע"י documentBody.
+      const ref = followupRemarks(src.type, src.number);
+      const cur = (body.remarks != null) ? String(body.remarks).trim() : '';
+      opts.remarks = cur.includes(ref) ? cur : (cur ? `${ref}\n\n${cur}` : ref);
+    }
     const doc = await greenInvoice.createDocument(opts);
     json(res, { ok: true, doc });
-  } catch (e) { json(res, { error: e.message }, 500); }
+  } catch (e) {
+    const msg = String(e.message || '');
+    if (/2405|עתידי|מוקדם/i.test(msg)) {
+      let minDate = null; try { minDate = await greenInvoice.latestDocumentDate(Number(body.type)); } catch { /* לא חוסם */ }
+      const dmy = minDate ? minDate.split('-').reverse().join('/') : '';
+      return json(res, { error: `חשבונית ירוקה חוסמת תאריך מוקדם מהמסמך האחרון מסוג זה${minDate ? ` (${dmy})` : ''}. בחר תאריך זה או מאוחר יותר, או סמן "אפשר תאריך מוקדם מזה (הפקה מחוץ לרצף)" כדי להפיק בכל זאת.`, minDate }, 400);
+    }
+    json(res, { error: msg }, 500);
+  }
 });
 
-// GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה
-add('GET', /^\/api\/open-invoices$/, async (req, res) => {
-  if (!greenInvoice.haveCredentials()) return json(res, { docs: [], error: 'חשבונית ירוקה לא מחוברת' });
-  try { json(res, { docs: await greenInvoice.openDocuments() }); }
-  catch (e) { json(res, { docs: [], error: e.message }, 500); }
+// GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה,
+// בתוספת חשבוניות ישנות שהועלו ידנית לאירועים (עסקה/מס) שטרם נסגרו בקבלה/מס-קבלה.
+add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
+  const cid = q.companyId;
+  let docs = [], giErr = null;
+  if (greenInvoice.haveCredentials()) {
+    try { docs = await greenInvoice.openDocuments(); } catch (e) { giErr = e.message; }
+  }
+  // חשבוניות ישנות שהועלו ידנית לאירוע (עסקה/מס) — פתוחות עד שמצורפת קבלה/מס-קבלה לאותו אירוע
+  try {
+    const db = load();
+    for (const ev of (db.events || [])) {
+      if (cid && ev.companyId && ev.companyId !== cid) continue;
+      const linked = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+      if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue; // נסגר בקבלה/מס-קבלה
+      for (const d of linked) {
+        if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
+        docs.push({
+          id: d.id, number: d.number, type: Number(d.type),
+          date: d.date || ev.date || ev.dateRaw || null,
+          clientName: (ev.clientName || ev.client || '—'),
+          amount: d.amount != null ? Number(d.amount) : null,
+          amountDue: d.amount != null ? Number(d.amount) : null,
+          description: [(ev.artist || ''), (ev.location || '')].filter(Boolean).join(' · '),
+          url: d.url, uploaded: true, eventId: ev.id,
+        });
+      }
+    }
+    // חשבוניות ישנות עצמאיות שהועלו ידנית (אופק) — פתוחות עד קבלה/מס-קבלה או המרה למסמך המשך
+    for (const rec of (db.oldInvoices || [])) {
+      if (cid && rec.companyId && rec.companyId !== cid) continue;
+      const linked = Array.isArray(rec.linkedDocs) ? rec.linkedDocs : [];
+      if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue;
+      for (const d of linked) {
+        if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
+        docs.push({
+          id: d.id, number: d.number, type: Number(d.type),
+          date: d.date || rec.createdAt || null,
+          clientName: rec.clientName || '—',
+          amount: d.amount != null ? Number(d.amount) : null,
+          amountDue: d.amount != null ? Number(d.amount) : null,
+          description: rec.description || '',
+          url: d.url, uploaded: true, oldInvoiceId: rec.id,
+        });
+      }
+    }
+  } catch {}
+  json(res, { docs, error: (docs.length ? null : giErr) });
 });
 
 // GET /api/contractors/payables?companyId=
@@ -1358,17 +1838,25 @@ add('GET', /^\/api\/contractors\/payables$/, async (req, res, _p, q) => {
 function eventClientPaid(e, bankPaid, openNums) {
   if (!e) return { status: 'unknown' };
   if (e.noInvoice) return { status: 'noinvoice' };
-  if (e.invoiceStatus !== 'invoiced') return { status: 'uninvoiced' };
-  const num = e.invoiceNumber != null ? String(e.invoiceNumber) : null;
-  const id = e.invoiceId != null ? String(e.invoiceId) : null;
-  // בנק — הכסף נכנס בפועל (האות החזק ביותר)
-  const key = (num && bankPaid.has('num:' + num)) ? 'num:' + num : (id && bankPaid.has('id:' + id)) ? 'id:' + id : null;
-  if (key) return { status: 'paid', via: 'bank', date: bankPaid.get(key) || null };
-  // חשבונית ירוקה — מס-קבלה (320) שולמה מעצם הגדרתה
-  if (Number(e.invoiceType) === 320) return { status: 'paid', via: 'greeninvoice' };
-  // פתוח/סגור לפי רשימת המסמכים הפתוחים בחשבונית ירוקה
-  if (openNums != null && num != null) return openNums.has(num) ? { status: 'pending' } : { status: 'paid', via: 'greeninvoice' };
-  return { status: 'pending' };
+  const REAL = [300, 305, 320, 400]; // הצעת מחיר (10) אינה חיוב ואינה נחשבת
+  // אסוף את החשבוניות האמיתיות המקושרות לאירוע (מ-linkedDocs, ובתאימות לאחור גם מ-invoiceType)
+  let docs = Array.isArray(e.linkedDocs) ? e.linkedDocs.filter(d => d && REAL.includes(Number(d.type))) : [];
+  if (!docs.length && e.invoiceStatus === 'invoiced' && REAL.includes(Number(e.invoiceType))) {
+    docs = [{ type: Number(e.invoiceType), number: e.invoiceNumber, id: e.invoiceId }];
+  }
+  // אין חשבונית אמיתית (רק הצעת מחיר / כלום) → טרם חויב (אדום)
+  if (!docs.length) return { status: 'uninvoiced' };
+  // בנק — הכסף נכנס בפועל → שולם (האות החזק ביותר, גובר על סוג המסמך)
+  for (const d of docs) {
+    const num = d.number != null ? String(d.number) : null;
+    const id = d.id != null ? String(d.id) : null;
+    const key = (num && bankPaid.has('num:' + num)) ? 'num:' + num : (id && bankPaid.has('id:' + id)) ? 'id:' + id : null;
+    if (key) return { status: 'paid', via: 'bank', date: bankPaid.get(key) || null };
+  }
+  // מס-קבלה (320) / קבלה (400) → שולם (ירוק)
+  if (docs.some(d => [320, 400].includes(Number(d.type)))) return { status: 'paid', via: 'greeninvoice' };
+  // עסקה (300) / מס (305) בלבד → הלקוח חויב אך טרם שילם (צהוב)
+  return { status: 'charged' };
 }
 
 // POST /api/contractors/toggle-paid — סימון תשלום לקבלן על אירוע מסוים
@@ -1485,6 +1973,51 @@ add('POST', /^\/api\/contractors\/auto-sync-names$/, async (req, res) => {
   json(res, { ok: true, changed, applied });
 });
 
+// POST /api/sync-names?companyId= — יישור אוטומטי של שמות לקוחות/ספקים באירועים לפי חשבונית ירוקה,
+// כולל תיקון מזהה שגוי (clientId/supplierId) כשיש התאמת שם ודאית יחידה. מונע תקלות משמות חתוכים/וריאציות.
+// פר-חברה: רץ בהקשר החברה (withCompany מהראוטר) ומעדכן רק את אירועי אותה חברה.
+add('POST', /^\/api\/sync-names$/, async (req, res, _p, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { ok: false, error: 'חשבונית ירוקה לא מחוברת' });
+  let clients = [], suppliers = [];
+  try { clients = await greenInvoice.listClients(); } catch (e) { return json(res, { ok: false, error: e.message }); }
+  try { suppliers = await greenInvoice.listSuppliers(); } catch { suppliers = []; }
+  const norm = (s) => String(s || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[."'׳״,()\-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const clById = new Map(clients.map(c => [String(c.id), c]));
+  // התאמת שם ודאית: מדויק > מנורמל-מדויק > תת-מחרוזת יחידה. מחזיר ישות אחת או null (לא נוגעים בעמימות).
+  const resolveBy = (arr, name) => {
+    const raw = (name || '').trim(); if (!raw) return null;
+    let c = arr.find(x => (x.name || '').trim() === raw); if (c) return c;
+    const nn = norm(raw); if (nn.length < 3) return null;
+    c = arr.find(x => norm(x.name) === nn); if (c) return c;
+    const cand = arr.filter(x => { const xn = norm(x.name); return xn && (xn.includes(nn) || nn.includes(xn)); });
+    return cand.length === 1 ? cand[0] : null;
+  };
+  const db = load();
+  const evs = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  let clientsFixed = 0, clientIdFixed = 0, ctrFixed = 0;
+  const applied = { clients: {}, contractors: {} };
+  for (const ev of evs) {
+    // ---- לקוח האירוע ----
+    const name = (ev.clientName || '').trim();
+    if (name) {
+      const byName = resolveBy(clients, name);
+      const byId = ev.clientId ? clById.get(String(ev.clientId)) : null;
+      // שם הלקוח הוא מקור האמת ל"מי הלקוח"; אם אין התאמת שם ודאית אבל יש מזהה תקין ושם ריק — משלימים מהמזהה.
+      const canonical = byName || (byId && !name ? byId : null);
+      if (canonical) {
+        if (ev.clientName !== canonical.name) { applied.clients[name] = canonical.name; ev.clientName = canonical.name; clientsFixed++; }
+        if (String(ev.clientId || '') !== String(canonical.id)) { ev.clientId = canonical.id; clientIdFixed++; }
+      }
+    }
+    // ---- קבלנים/ספקים של האירוע ----
+    const fixName = (n) => { const nm = (n || '').trim(); if (!nm) return n; const s = resolveBy(suppliers, nm); if (s && s.name !== nm) { applied.contractors[nm] = s.name; ctrFixed++; return s.name; } return n; };
+    if (Array.isArray(ev.contractorDetails)) for (const c of ev.contractorDetails) { const nn = fixName(c.name); if (nn !== c.name) c.name = nn; }
+    if (Array.isArray(ev.contractors)) ev.contractors = ev.contractors.map(n => fixName(n));
+  }
+  if (clientsFixed || clientIdFixed || ctrFixed) save(db);
+  json(res, { ok: true, clientsFixed, clientIdFixed, ctrFixed, applied });
+});
+
 // GET /api/contractors/:id/documents — מסמכי הוצאה של קבלן/ספק מחשבונית ירוקה
 add('GET', /^\/api\/contractors\/([^/]+)\/documents$/, async (req, res, params) => {
   try { json(res, await greenInvoice.supplierExpenses(params[0])); }
@@ -1582,6 +2115,12 @@ add('DELETE', /^\/api\/files\/([^/]+)$/, async (req, res, params) => {
 });
 
 // ===== פרטי העסק (Business Profile) — פר-חברה, עם מסמכים בטבלה נפרדת =====
+// הערת ברירת מחדל שנוספת לכל המסמכים (ניתנת לעריכה בפרטי העסק פר-חברה). כוללת פרטי בנק להעברה.
+function defaultDocRemark(cid) {
+  if (cid === 'co_bpm') return 'שם מוטב: בי פי אם הגברה ותאורה בע"מ\nמספר חשבון: 347346\nמס\' סניף: 521 (מודיעין)\nמזרחי טפחות (20)';
+  if (cid === 'co_moshe') return 'משה כורסיה בע"מ\nדיסקונט (11)\nסניף 152\nמספר חשבון: 0215130040';
+  return '';
+}
 function bizProfile(db, cid) {
   db.businessProfiles = db.businessProfiles || {};
   if (!db.businessProfiles[cid]) {
@@ -1593,6 +2132,13 @@ function bizProfile(db, cid) {
   p.additionalDocs = Array.isArray(p.additionalDocs) ? p.additionalDocs : [];
   // כתובת רו"ח להעברת הוצאות — פר-חברה. BPM: ברירת המחדל ההיסטורית. חברות אחרות: ריק עד שמגדירים (לא מעבירים לאף אחד).
   if (p.accountantEmail === undefined) p.accountantEmail = (cid === 'co_bpm') ? (process.env.FORWARD_EXPENSE_EMAIL || '516942349@rivh.it') : '';
+  // כתובת "מאת" לשליחת מיילים (העברת הוצאות לרו"ח) — פר-חברה. ריק = ברירת המחדל של ה-SMTP.
+  if (p.senderEmail === undefined) p.senderEmail = '';
+  // שיעור ניכוי מס במקור (fraction). BPM: 5% היסטורי. חברות אחרות: 0 עד שמגדירים. ניתן לשינוי בפרטי העסק.
+  if (p.withholdingRate === undefined) p.withholdingRate = (cid === 'co_bpm') ? 0.05 : 0;
+  p.withholdingRate = Math.min(0.3, Math.max(0, Number(p.withholdingRate) || 0));
+  if (p.docRemark === undefined) p.docRemark = defaultDocRemark(cid);
+  try { greenInvoice.setCompanyRemark(cid, p.docRemark); } catch { } // סנכרון: ההערה תוזרק לכל מסמך שנוצר בחברה
   return p;
 }
 // GET /api/business-profile?companyId=
@@ -1627,10 +2173,16 @@ add('GET', /^\/api\/business-profile\/alerts$/, (req, res) => {
 // PUT /api/business-profile?companyId= — שמירת שדות טקסט
 add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   const db = load();
-  const p = bizProfile(db, q.companyId || giCompanyId());
+  const cid = q.companyId || giCompanyId();
+  const p = bizProfile(db, cid);
   const b = body || {};
   ['name', 'businessNumber', 'email', 'address'].forEach(k => { if (k in b) p[k] = String(b[k] || ''); });
+  if ('docRemark' in b) p.docRemark = String(b.docRemark || ''); // הערה קבועה לכל המסמכים (פר-חברה)
   if ('accountantEmail' in b) p.accountantEmail = String(b.accountantEmail || '').trim();
+  if ('senderEmail' in b) p.senderEmail = String(b.senderEmail || '').trim();
+  // שיעור ניכוי מס במקור — מתקבל באחוזים (0..30) ונשמר כ-fraction
+  if ('withholdingPct' in b) p.withholdingRate = Math.min(0.3, Math.max(0, (Number(b.withholdingPct) || 0) / 100));
+  else if ('withholdingRate' in b) p.withholdingRate = Math.min(0.3, Math.max(0, Number(b.withholdingRate) || 0));
   if (Array.isArray(b.managers)) b.managers.slice(0, 2).forEach((m, i) => {
     p.managers[i] = p.managers[i] || {};
     ['name', 'idNumber', 'phone', 'email'].forEach(k => { if (k in m) p.managers[i][k] = String(m[k] || ''); });
@@ -1697,9 +2249,79 @@ add('GET', /^\/api\/employees\/([^/]+)\/jobs$/, (req, res, params, q) => {
 });
 
 // POST /api/interpret-bonuses  { note, employees:[names] } — מפרש הוראת בונוס להחלה על עובדים
-add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, _q, body) => {
-  try { json(res, await interpretBonuses(body?.note || '', body?.employees || [])); }
-  catch (e) { json(res, { error: e.message }, 200); }
+add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
+  try {
+    const note = body?.note || '';
+    const result = await interpretBonuses(note, body?.employees || []);
+    if (!Array.isArray(result)) return json(res, result);
+    const cid = q.companyId || body?.companyId;
+    const db = load();
+    const baseMap = {}, defMap = {};
+    for (const e of (db.employees || [])) {
+      if (e.companyId && e.companyId !== cid) continue;
+      const nm = String(e.name).trim();
+      if (e.baseRate != null && e.baseRate !== '') baseMap[nm] = Number(e.baseRate);
+      if (e.bonus != null && e.bonus !== '') defMap[nm] = Number(e.bonus);
+    }
+    const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const knownNames = new Set([...Object.keys(baseMap), ...Object.keys(defMap)]);
+    // התאמה דו-כיוונית: השם לפני מילת-המפתח או אחריה, כולל "ל"/"-"/":" מפרידים.
+    // תופס גם "אליאל בונוס" וגם "בונוס לאליאל", גם "מתן כפולה" וגם "כפולה למתן".
+    const kwNear = (nm, kw) => {
+      if (!nm) return false;
+      const n = esc(nm);
+      return new RegExp(n + '\\s*[-:]?\\s*(?:' + kw + ')').test(note)
+          || new RegExp('(?:' + kw + ')\\s*(?:ל)?\\s*[-:]?\\s*' + n).test(note);
+    };
+    const nameDouble = (nm) => kwNear(nm, 'כפולה');
+    const nameHalf = (nm) => kwNear(nm, 'יומית\\s*וחצי');
+    const nameBonus = (nm) => kwNear(nm, 'בונוס|תוספת');
+    // מילת-מפתח ללא שם עובד מוכר צמוד אליה (למשל "יומית וחצי שניהם", "כפולה לכולם") → חל על כל העובדים באירוע
+    const anyKnownNear = (kwFn) => [...knownNames].some(nm => kwFn(nm));
+    const globalDouble = /כפולה/.test(note) && !anyKnownNear(nameDouble);
+    const globalHalf = /יומית\s*וחצי/.test(note) && !anyKnownNear(nameHalf);
+    // "בונוס לכולם" / "בונוס לשניהם" — מילת בונוס ללא שם עובד מוכר צמוד → כל עובד מקבל את הבונוס הקבוע שלו
+    const globalBonus = /בונוס|תוספת/.test(note) && !anyKnownNear(nameBonus);
+    for (const r of result) {
+      const nm = String(r.name || '').trim();
+      const base = baseMap[nm];
+      // "כפולה" = יומית (פקטור 1) + בונוס בגובה היומית של אותו עובד. גובר על בונוס קבוע.
+      if (Number(r.factor) === 2 || nameDouble(nm) || globalDouble) {
+        r.factor = '1';
+        if (base != null) { r.bonus = base; r.bonusFactor = null; r.doubleAsBonus = true; }
+        continue;
+      }
+      // "יומית וחצי" = יומית (פקטור 1) + בונוס בגובה חצי מהיומית של אותו עובד. גובר על בונוס קבוע.
+      if (Number(r.factor) === 1.5 || nameHalf(nm) || globalHalf) {
+        r.factor = '1';
+        if (base != null) { r.bonus = Math.round(base / 2); r.bonusFactor = null; r.halfAsBonus = true; }
+        continue;
+      }
+      // "בונוס"/"תוספת" ליד שם העובד או כללי ("לכולם") → הבונוס הקבוע שהוגדר לעובד
+      if (nameBonus(nm) || globalBonus) {
+        const def = defMap[nm];
+        if (def != null) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; if (r.factor == null || r.factor === '') r.factor = '1'; }
+      }
+    }
+    // רשת ביטחון: עובד שמופיע בתיאור עם "כפולה"/"בונוס"/"תוספת" אך ה-AI לא זיהה — נוסיף אותו ידנית
+    const present = new Set(result.map(r => String(r.name || '').trim()));
+    for (const nm of knownNames) {
+      if (present.has(nm)) continue;
+      if (nameDouble(nm)) {
+        const base = baseMap[nm];
+        result.push({ name: nm, factor: '1', bonus: base != null ? base : null, bonusFactor: null, doubleAsBonus: true });
+        present.add(nm);
+      } else if (nameHalf(nm)) {
+        const base = baseMap[nm];
+        result.push({ name: nm, factor: '1', bonus: base != null ? Math.round(base / 2) : null, bonusFactor: null, halfAsBonus: true });
+        present.add(nm);
+      } else if (nameBonus(nm)) {
+        const def = defMap[nm];
+        if (def != null) { result.push({ name: nm, factor: '1', bonus: def, bonusFactor: null, defaultBonus: true }); present.add(nm); }
+      }
+    }
+    json(res, result);
+  } catch (e) { json(res, { error: e.message }, 200); }
 });
 
 // GET /api/suppliers — ספקים מחשבונית ירוקה (fresh=1 מרענן)
@@ -1722,7 +2344,16 @@ add('POST', /^\/api\/clients$/, async (req, res, _p, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   if (!body?.name) return json(res, { error: 'חסר שם' }, 400);
   try { json(res, { ok: true, client: await greenInvoice.createClient(body) }); }
-  catch (e) { json(res, { error: e.message }, 500); }
+  catch (e) {
+    // errorCode 1010 — לקוח עם אותו ח.פ כבר קיים בחשבונית ירוקה. errorMessage מכיל את מזהה הלקוח הקיים; נחזיר אותו כהצלחה.
+    const msg = String(e.message || '');
+    const uuid = (msg.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i) || [])[0];
+    if (/1010/.test(msg) && uuid) {
+      try { return json(res, { ok: true, existed: true, client: await greenInvoice.getClient(uuid) }); }
+      catch { return json(res, { ok: true, existed: true, client: { id: uuid, name: body.name } }); }
+    }
+    json(res, { error: e.message }, 500);
+  }
 });
 
 // POST /api/suppliers — יצירת ספק חדש בחשבונית ירוקה
@@ -1730,7 +2361,13 @@ add('POST', /^\/api\/suppliers$/, async (req, res, _p, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   if (!body?.name) return json(res, { error: 'חסר שם' }, 400);
   try { json(res, { ok: true, supplier: await greenInvoice.createSupplier(body) }); }
-  catch (e) { json(res, { error: e.message }, 500); }
+  catch (e) {
+    // errorCode 1010 — ספק עם אותו ח.פ כבר קיים; נחזיר את המזהה הקיים כהצלחה
+    const msg = String(e.message || '');
+    const uuid = (msg.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i) || [])[0];
+    if (/1010/.test(msg) && uuid) return json(res, { ok: true, existed: true, supplier: { id: uuid, name: body.name } });
+    json(res, { error: e.message }, 500);
+  }
 });
 
 // PUT /api/clients/:id/details — עריכת פרטי לקוח (שם, מייל, טלפון, ח.פ) בחשבונית ירוקה
@@ -1790,15 +2427,23 @@ function buildConnectionsView(companyId) {
   const db = load();
   const comp = companyId ? (db.companies || []).find(c => c.id === companyId) : null;
   const acct = comp ? (comp.accounting || 'greenInvoice') : 'greenInvoice';
-  const isGiOwner = !companyId || companyId === giCompanyId();
-  const isPlOwner = !!companyId && companyId === paperlessCompanyId();
+  const cid = companyId || giCompanyId();
+  const ccreds = ((db.connCreds || {})[cid]) || {};
   const cards = [];
-  // מערכת חשבונאית — לפי סוג החברה
-  if (acct === 'paperless') cards.push(connCard('paperless', isPlOwner));
-  else cards.push(connCard('greenInvoice', isGiOwner));
-  // יומן גוגל — כרגע גלובלי ושייך לחברת ה-GI. לשאר החברות: תצוגה בלבד, לא מחובר.
-  cards.push(connCard('googleCalendar', isGiOwner));
-  // בנק — בפיתוח (גלובלי)
+  // חשבונית ירוקה + יומן — פר-חברה: טופס חיבור זמין, אך המפתחות נשמרים בבסיס הנתונים תחת מזהה החברה בלבד.
+  // כך חיבור/עדכון של חברה אחת אינו נוגע במפתחות של חברה אחרת (בידוד מלא, אין דריסה).
+  const perCompCard = (key, connected) => {
+    const c = connCard(key, true);              // isOwner=true → טופס חיבור מוצג
+    const stored = ccreds[key] || {};
+    c.status = connected ? 'connected' : 'disconnected';
+    c.fields = (c.fields || []).map(f => ({ ...f, set: connected || Boolean(stored[f.env]), hint: '' }));
+    c.perCompany = true; c.message = null;
+    return c;
+  };
+  if (acct === 'paperless') cards.push(connCard('paperless', companyId === paperlessCompanyId()));
+  else cards.push(perCompCard('greenInvoice', giEnabled(cid)));
+  cards.push(perCompCard('googleCalendar', hasCalendar(cid)));
+  // בנק — העלאת קובץ xlsx (פר-חברה, דרך לשונית הבנק)
   cards.push(connCard('bank', false));
   return cards;
 }
@@ -1806,50 +2451,87 @@ function buildConnectionsView(companyId) {
 // GET /api/connections?companyId=
 add('GET', /^\/api\/connections$/, (req, res, _p, q) => json(res, buildConnectionsView(q.companyId)));
 
-// POST /api/connections/connect  { key, values:{ENV:VAL,...} }
-add('POST', /^\/api\/connections\/connect$/, async (req, res, _p, _q, body) => {
+// טעינת מפתחות החיבורים פר-חברה מבסיס הנתונים לזיכרון (עליית שרת + אחרי כל חיבור)
+function hydrateConnCreds() {
+  const db = load();
+  const cc = db.connCreds || {};
+  for (const cid of Object.keys(cc)) {
+    const gi = cc[cid].greenInvoice;
+    if (gi && gi.GREENINVOICE_API_KEY_ID && gi.GREENINVOICE_API_SECRET) {
+      greenInvoice.setDbCreds(cid, { id: gi.GREENINVOICE_API_KEY_ID, secret: gi.GREENINVOICE_API_SECRET });
+    }
+    const cal = cc[cid].googleCalendar;
+    if (cal) setDbIcal(cid, [cal.GOOGLE_ICAL_URL, cal.GOOGLE_ICAL_URL_2, cal.GOOGLE_ICAL_URL_3].filter(Boolean));
+  }
+}
+
+// POST /api/connections/connect  { key, companyId, values:{ENV:VAL,...} }
+add('POST', /^\/api\/connections\/connect$/, async (req, res, _p, q, body) => {
   const { key, values = {} } = body || {};
+  const cid = (body && body.companyId) || q.companyId || giCompanyId();
   const def = CONN_DEFS[key];
   if (!def) return json(res, { error: 'חיבור לא מוכר' }, 404);
   if (def.soon) return json(res, { error: 'החיבור עדיין בפיתוח' }, 400);
 
-  // שמירת הערכים הרלוונטיים בלבד ל-.env
+  // חשבונית ירוקה / יומן — שמירה פר-חברה בבסיס הנתונים (בידוד מלא; לא נוגע בחברות אחרות)
+  if (key === 'greenInvoice' || key === 'googleCalendar') {
+    const db = load();
+    db.connCreds = db.connCreds || {};
+    db.connCreds[cid] = db.connCreds[cid] || {};
+    const stored = { ...(db.connCreds[cid][key] || {}) };
+    for (const f of (def.fields || [])) {
+      const v = values[f.env];
+      if (v !== undefined && String(v).trim() !== '') stored[f.env] = String(v).trim();  // ריק = משאירים ערך קיים
+    }
+    db.connCreds[cid][key] = stored;
+    save(db);
+    if (key === 'greenInvoice') greenInvoice.setDbCreds(cid, { id: stored.GREENINVOICE_API_KEY_ID, secret: stored.GREENINVOICE_API_SECRET });
+    else setDbIcal(cid, [stored.GOOGLE_ICAL_URL, stored.GOOGLE_ICAL_URL_2, stored.GOOGLE_ICAL_URL_3].filter(Boolean));
+    const r = key === 'greenInvoice' ? await greenInvoice.verify(cid) : await calendarVerify(cid);
+    return json(res, { ok: r.ok, error: r.ok ? null : r.error, connections: buildConnectionsView(cid) });
+  }
+
+  // שאר החיבורים (ווטסאפ וכו') — התנהגות גלובלית קיימת
   const allowed = def.toggle ? [def.toggle] : (def.fields || []).map(f => f.env);
   const updates = {};
   for (const k of allowed) if (values[k] !== undefined) updates[k] = values[k];
   saveSettings(updates);
-  if (key === 'greenInvoice') greenInvoice.resetToken();
   if (key === 'paperless') _plStatus = { at: 0, ok: false, msg: null };
-
   const now = new Date().toISOString();
   const r = await verifyConnection(key);
-  setRecord(key, r.ok
-    ? { status: 'connected', lastCheckedAt: now, message: null }
-    : { status: 'error', lastCheckedAt: now, message: r.error });
-  json(res, { ok: r.ok, connections: buildConnectionsView() });
+  setRecord(key, r.ok ? { status: 'connected', lastCheckedAt: now, message: null } : { status: 'error', lastCheckedAt: now, message: r.error });
+  json(res, { ok: r.ok, connections: buildConnectionsView(cid) });
 });
 
-// POST /api/connections/test  { key }
-add('POST', /^\/api\/connections\/test$/, async (req, res, _p, _q, body) => {
+// POST /api/connections/test  { key, companyId }
+add('POST', /^\/api\/connections\/test$/, async (req, res, _p, q, body) => {
   const key = body?.key;
+  const cid = (body && body.companyId) || q.companyId || giCompanyId();
   if (!CONN_DEFS[key]) return json(res, { error: 'חיבור לא מוכר' }, 404);
-  const now = new Date().toISOString();
-  const r = await verifyConnection(key);
-  setRecord(key, r.ok ? { status: 'connected', lastCheckedAt: now, message: null }
-    : { status: 'error', lastCheckedAt: now, message: r.error });
-  json(res, { ok: r.ok, connections: buildConnectionsView() });
+  let r;
+  if (key === 'greenInvoice') r = await greenInvoice.verify(cid);
+  else if (key === 'googleCalendar') r = await calendarVerify(cid);
+  else r = await verifyConnection(key);
+  json(res, { ok: r.ok, error: r.ok ? null : r.error, connections: buildConnectionsView(cid) });
 });
 
-// POST /api/connections/disconnect  { key }
-add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, _q, body) => {
+// POST /api/connections/disconnect  { key, companyId }
+add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, q, body) => {
   const key = body?.key;
+  const cid = (body && body.companyId) || q.companyId || giCompanyId();
   const def = CONN_DEFS[key];
   if (!def) return json(res, { error: 'חיבור לא מוכר' }, 404);
+  if (key === 'greenInvoice' || key === 'googleCalendar') {
+    const db = load();
+    if (db.connCreds && db.connCreds[cid]) { delete db.connCreds[cid][key]; save(db); }
+    if (key === 'greenInvoice') greenInvoice.setDbCreds(cid, null); else setDbIcal(cid, []);
+    return json(res, { ok: true, connections: buildConnectionsView(cid) });
+  }
   const clear = def.toggle ? { [def.toggle]: '' } : {};
   (def.fields || []).forEach(f => { clear[f.env] = ''; });
   saveSettings(clear);
   clearRecord(key);
-  json(res, { ok: true, connections: buildConnectionsView() });
+  json(res, { ok: true, connections: buildConnectionsView(cid) });
 });
 
 // ---- צוות (עובדים וירטואליים) + צ'אט ----
@@ -2130,7 +2812,8 @@ async function runBankMatchBg(companyId) {
       try { expenses = await greenInvoice.expensesInRange(from, to); } catch { }
     });
     try { const _notes = snap.expenseNotes || {}; if (Object.keys(_notes).length) expenses.forEach(e => { if (_notes[e.id]) e.description = _notes[e.id]; }); } catch { }
-    const cmatched = attachReceipts(matchCredits(txns, invoices), receipts);  // תנועות זכות מסומנות במקום
+    const whRate = bizProfile(snap, companyId).withholdingRate || 0;   // שיעור ניכוי מס במקור של החברה
+    const cmatched = attachReceipts(matchCredits(txns, invoices, whRate), receipts);  // תנועות זכות מסומנות במקום
     const dmap = new Map();
     try { for (const dm of matchDebits(txns, expenses)) dmap.set(dm.i, dm); } catch { }
     // כותבים על ה-DB העדכני לפי id (למניעת דריסת שינויים מקבילים)
@@ -2286,6 +2969,31 @@ async function enrichMatchedUrl(inv) {
   return false;
 }
 
+// #1 — לכל קבלה (400) שמשויכת לשורת בנק: שולף את חשבונית המס המקורית (300/305) שממנה נגזרה,
+// ומקנן אותה תחת הקבלה (inv.sourceInvoice). אם המשתמש בחר גם את חשבונית המקור כשורה נפרדת — מסירים אותה
+// כדי לא לספור את אותו הכסף פעמיים בבדיקת כיסוי הסכום.
+async function attachSourceInvoices(matched) {
+  for (const inv of matched.slice()) {
+    if (!inv || Number(inv.type) !== 400 || inv.sourceInvoice || /^(exp_|pay_)/.test(String(inv.id))) continue;
+    let ids = [];
+    try { const raw = await greenInvoice.getDocument(inv.id); ids = Array.isArray(raw && raw.linkedDocumentIds) ? raw.linkedDocumentIds : []; } catch { continue; }
+    for (const sid of ids) {
+      try {
+        const s = await greenInvoice.getDocument(sid);
+        const st = Number(s && s.type);
+        if (st === 305 || st === 300) {
+          const amount = Number(s.amount ?? s.total ?? s.sum) || 0;
+          const url = (s.url && (s.url.he || s.url.origin || s.url.pdf)) || (typeof s.url === 'string' ? s.url : null);
+          inv.sourceInvoice = { id: s.id, number: s.number, type: st, amount, clientName: (s.client && s.client.name) || inv.clientName || '', url };
+          const dupIdx = matched.findIndex(x => String(x.id) === String(s.id));
+          if (dupIdx >= 0) matched.splice(dupIdx, 1);
+          break;
+        }
+      } catch { }
+    }
+  }
+}
+
 // GET /api/bank?companyId=
 add('GET', /^\/api\/bank$/, async (req, res, _p, q) => {
   const db = load();
@@ -2313,24 +3021,53 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
   const db = load();
   const t = (db.bankTx || []).find(x => x.id === params[0]);
   if (!t) return json(res, { error: 'לא נמצא' }, 404);
-  // חסימת שיוך כפול: חשבונית שכבר משויכת לתנועת בנק אחרת לא ניתנת לשיוך שוב — אלא אם נשלח allowDup (סימון מפורש)
-  if (!body.allowDup && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
-    const usedBy = new Map();
+  // כמה מחשבונית מסוימת כבר הוקצה בשורות בנק אחרות (מאושרות/מותאמות) — בסיס לתשלום בפעימות
+  const allocatedElsewhere = (invId) => {
+    let s = 0;
     for (const o of (db.bankTx || [])) {
-      if (o.id === t.id) continue;
-      if (o.matchStatus !== 'manual' && o.matchStatus !== 'auto') continue;
-      for (const inv of (o.matchedInvoices || [])) usedBy.set(String(inv.id), o);
+      if (o.id === t.id || !['manual', 'auto', 'approved'].includes(o.matchStatus)) continue;
+      for (const mi of (o.matchedInvoices || [])) if (String(mi.id) === String(invId)) s += (Number(mi.allocated != null ? mi.allocated : mi.amount) || 0);
     }
-    const clash = body.matchedInvoices.find(inv => inv && usedBy.has(String(inv.id)));
-    if (clash) {
-      const o = usedBy.get(String(clash.id));
-      return json(res, { error: `החשבונית #${clash.number || ''} כבר משויכת לתנועת בנק אחרת (${o.date} · ${o.absAmount}). כדי לשייך בכל זאת, סמן "אפשר לבחור גם חשבוניות שכבר משויכות".` }, 409);
+    return s;
+  };
+  // חסימת שיוך-כפול — רק אם החשבונית כבר שולמה במלואה בשורות אחרות. אם נשארה יתרה — מותר (תשלום בפעימות).
+  if (!body.allowDup && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
+    for (const inv of body.matchedInvoices) {
+      const amt = Number(inv.amount) || 0; if (amt <= 0) continue;
+      const used = allocatedElsewhere(inv.id);
+      if (used >= amt - Math.max(3, amt * 0.004)) return json(res, { error: `החשבונית #${inv.number || ''} כבר שולמה במלואה בשורות בנק אחרות (₪${Math.round(used)} מתוך ₪${Math.round(amt)}). כדי לשייך בכל זאת, סמן "אפשר לבחור גם חשבוניות שכבר משויכות".` }, 409);
     }
   }
   if (body.group !== undefined) t.group = body.group || null;
-  // חובת שיוך לקבוצה לפני אישור תנועה (התאמה למסמך או אישור-ללא-מסמך) — אך ורק אצל משה כורסיה
-  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && t.companyId === 'co_moshe' && !t.group) {
-    return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה (מוזיקה / דיגיטל / הוצאות שוטפות / אחר).' }, 400);
+  // חובת שיוך לקבוצה לפני אישור תנועה — לכל חברה שהגדירה קבוצות. הכנסה ללא קבוצה → ברירת מחדל "הכנסות עסק"; הוצאה → חובה לבחור.
+  const companyGroups = (db.txGroups || []).filter(g => g.companyId === t.companyId);
+  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && companyGroups.length && !t.group) {
+    if (t.direction === 'credit') {
+      const def = companyGroups.find(g => g.isDefaultIncome) || companyGroups.find(g => g.kind === 'income');
+      if (def) t.group = def.id;   // הכנסה — משויכת אוטומטית לקבוצת ברירת המחדל
+    }
+    if (!t.group) return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה.' }, 400);
+  }
+  // #1 — קבלה (400) משויכת: משיכת חשבונית המס המקורית וקינון תחתיה (מונע ספירה כפולה)
+  if (greenInvoice.haveCredentials() && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
+    try { await attachSourceInvoices(body.matchedInvoices); } catch { }
+  }
+  // #2 + תשלום בפעימות — הקצאה אוטומטית: כל העברה נזקפת ליתרת החשבונית. השורה נסגרת רק אם כל סכום ההעברה הוקצה
+  // (או שההעברה = יתרת החשבוניות פחות 5% ניכוי מס — ואז הן נסגרות במלואן). אחרת נשארת לא מתואמת עם חיווי החוסר.
+  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
+    const bankAbs = Math.abs(Number(t.absAmount) || 0);
+    const whRate = bizProfile(db, t.companyId).withholdingRate || 0;   // שיעור ניכוי מס במקור של החברה
+    const whFactor = 1 - whRate;
+    const rem = body.matchedInvoices.map(inv => ({ inv, r: Math.max(0, (Number(inv.amount) || 0) - allocatedElsewhere(inv.id)) }));
+    const totalRem = rem.reduce((s, x) => s + x.r, 0);
+    const tol = Math.max(3, bankAbs * 0.004);
+    if (whRate > 0 && totalRem > 0 && Math.abs(bankAbs - totalRem * whFactor) <= Math.max(3, totalRem * 0.004)) {
+      rem.forEach(x => { x.inv.allocated = +x.r.toFixed(2); });   // ניכוי מס במקור — החשבוניות נסגרות במלואן, הבנק קיבל 95%
+    } else {
+      let remaining = bankAbs;
+      for (const x of rem) { const a = Math.min(x.r, remaining); x.inv.allocated = +a.toFixed(2); remaining = +(remaining - a).toFixed(2); }
+      // אם לא מכוסה — לא חוסמים; השיוך נשמר, והשורה תוצג אדומה בממשק (לא מאושרת) עד השלמה או אישור ידני.
+    }
   }
   if (body.matchStatus) t.matchStatus = body.matchStatus;
   if (body.matchedInvoices !== undefined) t.matchedInvoices = body.matchedInvoices;
@@ -2339,6 +3076,28 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
   if (greenInvoice.haveCredentials()) { for (const inv of (t.matchedInvoices || [])) await enrichMatchedUrl(inv); }
   save(db);
   json(res, { ok: true, tx: t });
+});
+
+// GET /api/bank/coverage-audit?companyId= — שורות זכות מאושרות שהמסמכים המשויכים לא מכסים את הסכום שהועבר
+add('GET', /^\/api\/bank\/coverage-audit$/, (req, res, _p, q) => {
+  const db = load();
+  const cid = q.companyId;
+  const flagged = [];
+  for (const t of (db.bankTx || [])) {
+    if (cid && t.companyId !== cid) continue;
+    if (!['manual', 'approved', 'auto'].includes(t.matchStatus)) continue; // גם זכות (הכנסות) וגם חובה (הוצאות)
+    const invs = t.matchedInvoices || [];
+    if (!invs.length) continue; // אושר ללא מסמך — לא נכלל
+    const allocSum = invs.reduce((s, inv) => s + (Number(inv.allocated != null ? inv.allocated : inv.amount) || 0), 0);
+    const bankAbs = Math.abs(Number(t.absAmount) || 0);
+    const tol = Math.max(3, bankAbs * 0.004);
+    const whFactor = 1 - (bizProfile(db, t.companyId).withholdingRate || 0);
+    // בהכנסות מותר גם "פחות ניכוי מס במקור" (לפי שיעור החברה); בהוצאות רק סכום מדויק
+    const covered = Math.abs(allocSum - bankAbs) <= tol || (t.direction === 'credit' && whFactor < 1 && Math.abs(allocSum * whFactor - bankAbs) <= tol);
+    if (!covered) flagged.push({ id: t.id, date: t.date, dir: t.direction, bankAmount: +bankAbs.toFixed(2), matchedSum: +allocSum.toFixed(2), shortfall: +(bankAbs - allocSum).toFixed(2), name: t.nameHint || t.description || '', numbers: invs.map(i => i.number).filter(Boolean) });
+  }
+  flagged.sort((a, b) => Math.abs(b.shortfall) - Math.abs(a.shortfall));
+  json(res, { flagged, count: flagged.length });
 });
 
 // DELETE /api/bank/:id
@@ -2374,6 +3133,7 @@ add('POST', /^\/api\/tx-groups$/, (req, res, _p, _q, body) => {
   const db = load();
   db.txGroups = db.txGroups || [];
   const g = { id: id('txg'), companyId: cid, name };
+  if (['income', 'expense'].includes(body?.kind)) g.kind = body.kind;   // קבוצת הכנסה / הוצאה
   db.txGroups.push(g);
   save(db);
   json(res, { ok: true, group: g });
@@ -2394,6 +3154,7 @@ add('DELETE', /^\/api\/tx-groups\/([^/]+)$/, (req, res, params) => {
   const g = (db.txGroups || []).find(x => x.id === params[0]);
   if (!g) return json(res, { ok: true });
   if (g.key === 'music' || g.key === 'digital') return json(res, { error: 'לא ניתן למחוק את קבוצת מוזיקה/דיגיטל' }, 400);
+  if (g.isDefaultIncome) return json(res, { error: 'לא ניתן למחוק את קבוצת "הכנסות עסק" (ברירת המחדל להכנסות)' }, 400);
   db.txGroups = (db.txGroups || []).filter(x => x.id !== params[0]);
   for (const t of (db.bankTx || [])) if (t.group === params[0]) t.group = null;
   save(db);
@@ -2455,48 +3216,29 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   const gmap = {};
   for (const g of groups) gmap[g.id] = { income: Array(12).fill(0), expense: Array(12).fill(0), unlinkedExpense: 0 };
 
-  // ===== הכנסות = חשבוניות מס (305) + מס-קבלה (320) שיצאו בפועל השנה, ברוטו (כולל מע"מ) =====
-  // כל מסמך משויך לקטגוריה לפי תנועת הבנק שאליה הוא הותאם (אם לתנועה יש קבוצה). מסמך שטרם הותאם/סווג → "ללא שיוך".
-  const docGroup = new Map(); // 'id:'+docId / 'num:'+number  →  groupId
-  for (const t of (db.bankTx || [])) {
-    if (cid && t.companyId !== cid) continue;
-    if (!t.group || !gmap[t.group]) continue;
-    for (const inv of (t.matchedInvoices || [])) {
-      if (inv && inv.id != null) docGroup.set('id:' + inv.id, t.group);
-      if (inv && inv.number != null) docGroup.set('num:' + inv.number, t.group);
-    }
-  }
-  const ungrouped = Array(12).fill(0);
+  // ===== בסיס מזומן: הכנסות והוצאות לפי תנועות הבנק שהותאמו (manual/approved), לפי חודש התנועה והקבוצה =====
+  // כך שהסיכום החודשי, חלונית הפירוט וההוצאות מסתדרים לאותם מספרים בדיוק (סכום הבנק בפועל).
+  const defIncomeId = (groups.find(g => g.isDefaultIncome) || {}).id || null;
+  const ungrouped = Array(12).fill(0);       // הכנסות ללא קבוצה (חברות בלי קבוצת ברירת מחדל)
+  const ungroupedExp = Array(12).fill(0);    // הוצאות ללא קבוצה — מוצגות ב"אחר" כדי שהסכומים יסתדרו עם הפירוט
+  const ungroupedDocs = []; // אין עוד "הכנסות ללא שיוך" בבסיס מזומן — הכל לפי תנועות הבנק
   let incomeError = null;
-  if (greenInvoice.haveCredentials()) {
-    try {
-      const inc = await greenInvoice.incomeForRange(`${year}-01-01`, `${year}-12-31`, [305, 320]);
-      for (const d of (inc.docs || [])) {
-        const iso = String(d.date || '');
-        if (iso.slice(0, 4) !== year) continue;
-        const mi = (parseInt(iso.slice(5, 7), 10) || 0) - 1;
-        if (mi < 0 || mi > 11) continue;
-        const amt = Number(d.amountIncVat != null ? d.amountIncVat : d.amount) || 0;
-        const gid = docGroup.get('id:' + d.id) || (d.number != null ? docGroup.get('num:' + d.number) : null) || null;
-        if (gid && gmap[gid]) gmap[gid].income[mi] += amt; else ungrouped[mi] += amt;
-      }
-    } catch (e) { incomeError = e.message; }
-  } else { incomeError = 'חשבונית ירוקה לא מחוברת'; }
-
-  // ===== הוצאות = תנועות חובה בבנק לפי קבוצה. עם מסמך → נטו (ללא מע"מ); בלי מסמך (מיסים/מע"מ/עמלות) → סכום הבנק =====
   for (const t of (db.bankTx || [])) {
     if (cid && t.companyId !== cid) continue;
-    if (!t.group || !gmap[t.group]) continue;
-    if (t.direction !== 'debit') continue;
+    if (t.matchStatus !== 'manual' && t.matchStatus !== 'approved') continue;
     const m = String(t.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
     if (!m || m[3] !== year) continue;
     const mi = (+m[2]) - 1;
-    const invs = Array.isArray(t.matchedInvoices) ? t.matchedInvoices : [];
-    const net = invs.reduce((s, inv) => s + netOf(inv), 0);
-    const b = gmap[t.group];
-    const val = invs.length ? net : (t.absAmount || 0);
-    b.expense[mi] += val;
-    if (!invs.length) b.unlinkedExpense += (t.absAmount || 0);
+    const amt = Math.abs(Number(t.absAmount) || 0);
+    if (t.direction === 'credit') {
+      // הכנסה — אם אין קבוצה, ברירת מחדל "הכנסות עסק" (לחברות עם קבוצת ברירת מחדל)
+      const gid = (t.group && gmap[t.group]) ? t.group : defIncomeId;
+      if (gid && gmap[gid]) gmap[gid].income[mi] += amt;
+      else ungrouped[mi] += amt;
+    } else if (t.direction === 'debit') {
+      if (t.group && gmap[t.group]) gmap[t.group].expense[mi] += amt;
+      else ungroupedExp[mi] += amt;   // הוצאה מאושרת ללא קבוצה — נספרת ב"אחר"
+    }
   }
 
   const mkGroup = (id, name, key, inc, exp, unlinkedExp) => {
@@ -2511,7 +3253,73 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   };
   const out = groups.map(g => mkGroup(g.id, g.name, g.key, gmap[g.id].income, gmap[g.id].expense, gmap[g.id].unlinkedExpense));
   if (ungrouped.some(x => x)) out.push(mkGroup('ungrouped', 'הכנסות ללא שיוך לקטגוריה', null, ungrouped, Array(12).fill(0), 0));
-  json(res, { ok: true, year, incomeBasis: 'issued-305-320-gross', incomeError, groups: out });
+  if (ungroupedExp.some(x => x)) out.push(mkGroup('ungrouped_exp', 'הוצאות ללא קבוצה', null, Array(12).fill(0), ungroupedExp, 0));
+  json(res, { ok: true, year, incomeBasis: 'issued-305-320-gross', incomeError, groups: out, ungroupedDocs: ungroupedDocs.sort((a, b) => String(a.date).localeCompare(String(b.date))), groupsList: groups.map(g => ({ id: g.id, name: g.name })) });
+});
+
+// GET /api/month-detail?companyId=&year=YYYY&month=M (1-12)
+// פירוט חודשי: כל ההכנסות (זיכויים) מצד אחד וכל ההוצאות (חובה) מצד שני — הכל מתוך התאמות הבנק.
+// עמודות: תאריך, סכום, שם עסק, מס' חשבונית מס/מס-קבלה, מס' קבלה, הערות, קבוצה.
+add('GET', /^\/api\/month-detail$/, (req, res, _p, q) => {
+  const db = load();
+  if (ensureGroupsSeeded(db)) save(db);
+  const cid = q.companyId || null;
+  const year = String(q.year || new Date().getFullYear());
+  const month = parseInt(q.month, 10) || 0; // 1-12
+  const groups = (db.txGroups || []).filter(g => g.companyId === cid);
+  const gname = (gid) => { const g = groups.find(x => x.id === gid); return g ? g.name : ''; };
+  const income = [], expense = [];
+  for (const t of (db.bankTx || [])) {
+    if (cid && t.companyId !== cid) continue;
+    const m = String(t.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!m || m[3] !== year || (+m[2]) !== month) continue;
+    if (t.matchStatus !== 'manual' && t.matchStatus !== 'approved') continue;
+    const invs = Array.isArray(t.matchedInvoices) ? t.matchedInvoices : [];
+    // מסמך מס עיקרי (305/320/300) ומסמך קבלה (400 / receipt מקונן / 320)
+    const taxDoc = invs.find(x => [305, 320, 300, '305', '320', '300'].includes(x.type)) || invs[0] || null;
+    let receiptNum = null, receiptUrl = null;
+    for (const x of invs) {
+      if (x.receipt && x.receipt.number != null) { receiptNum = x.receipt.number; receiptUrl = x.receipt.url || null; break; }
+      if ([400, 320, '400', '320'].includes(x.type)) { receiptNum = x.number; receiptUrl = x.url || null; break; }
+    }
+    const name = (invs.find(x => x.clientName && x.clientName !== '—') || {}).clientName || t.nameHint || '';
+    // כל המסמכים המשויכים עם URL — לצפייה/הורדה
+    const docs = invs.filter(x => x.url).map(x => ({ type: x.type, number: x.number, url: x.url }));
+    for (const x of invs) if (x.receipt && x.receipt.url) docs.push({ type: 400, number: x.receipt.number, url: x.receipt.url });
+    const row = {
+      id: t.id, date: t.date, amount: t.absAmount || 0, name,
+      taxNumber: taxDoc ? taxDoc.number : null,
+      taxType: taxDoc ? taxDoc.type : null,
+      taxUrl: taxDoc ? (taxDoc.url || null) : null,
+      receiptNumber: receiptNum, receiptUrl, notes: t.notes || '',
+      docs,
+      group: t.group || null, groupName: t.group ? gname(t.group) : '',
+    };
+    (t.direction === 'credit' ? income : expense).push(row);
+  }
+  const byDate = (a, b) => String(a.date).split('/').reverse().join('').localeCompare(String(b.date).split('/').reverse().join(''));
+  income.sort(byDate); expense.sort(byDate);
+  json(res, {
+    ok: true, year, month,
+    income, expense,
+    totalIncome: Math.round(income.reduce((s, r) => s + (r.amount || 0), 0) * 100) / 100,
+    totalExpense: Math.round(expense.reduce((s, r) => s + (r.amount || 0), 0) * 100) / 100,
+    groups: groups.map(g => ({ id: g.id, name: g.name, kind: g.kind || null })),
+  });
+});
+
+// POST /api/doc-group { companyId, number, groupId } — שיוך ידני של מסמך הכנסה לקבוצה (למסמכים שאין להם תנועת בנק). groupId ריק = הסרה.
+add('POST', /^\/api\/doc-group$/, (req, res, _p, q, body) => {
+  const cid = (body && body.companyId) || q.companyId;
+  const num = String((body && body.number) != null ? body.number : '').trim();
+  if (!cid || !num) return json(res, { error: 'חסר מזהה חברה או מספר מסמך' }, 400);
+  const db = load();
+  db.docGroupOverrides = db.docGroupOverrides || {};
+  db.docGroupOverrides[cid] = db.docGroupOverrides[cid] || {};
+  if (body && body.groupId) db.docGroupOverrides[cid][num] = String(body.groupId);
+  else delete db.docGroupOverrides[cid][num];
+  save(db);
+  json(res, { ok: true, number: num, groupId: (body && body.groupId) || null });
 });
 
 // ================= התחברות והרשאות =================
@@ -2625,9 +3433,9 @@ add('DELETE', /^\/api\/users\/([^/]+)$/, (req, res, params) => {
 // GET /api/health?companyId= — סטטוס חיבורים. חשבונית ירוקה/יומן מדווחים לפי החברה הנבחרת (בידוד).
 add('GET', /^\/api\/health$/, (req, res, _p, q) => {
   const cid = q.companyId || null;
-  // חשבונית ירוקה מחוברת = לחברה הזו יש מפתחות משלה. יומן גוגל שייך כרגע ל-BPM בלבד.
+  // חשבונית ירוקה + יומן — פר-חברה: לכל חברה המפתחות/היומנים שלה בלבד (בידוד מלא).
   const giConn = cid ? giEnabled(cid) : greenInvoice.haveCredentials();
-  const calConn = (!cid || cid === giCompanyId()) ? hasCalendar() : false;
+  const calConn = hasCalendar(cid || giCompanyId());
   json(res, {
     ok: true,
     greenInvoiceConnected: giConn,
@@ -2802,11 +3610,12 @@ function seedIfEmpty() {
   console.log('נזרעו החברות (בלי אירוע דוגמה)');
 }
 
-// החברות + ספק חשבונאי לכל אחת. שתיהן חשבונית ירוקה (BPM + משה), כל אחת עם מפתחות משלה.
-// אופק (פייפרלס) הוסר זמנית — חיבור פייפרלס בעייתי; ייתכן שיחזור בהמשך (הקוד של פייפרלס נשאר רדום).
+// החברות + ספק חשבונאי לכל אחת. שלושתן חשבונית ירוקה (BPM + משה + אופק), כל אחת עם מפתחות + יומנים + בנק משלה.
+// לכל חברה הנתונים שלה בלבד — בידוד מלא (חשבונית ירוקה לפי מפתחות פר-חברה, יומנים לפי iCal פר-חברה, בנק לפי companyId).
 const COMPANY_SEED = [
   { id: 'co_bpm', name: 'בי פי אם הגברה ותאורה בע"מ', active: true, accounting: 'greenInvoice' },
   { id: 'co_moshe', name: 'משה כורסיה בע"מ', active: false, accounting: 'greenInvoice' },
+  { id: 'co_ofek', name: 'אופק ידעי הגברה ותאורה', active: false, accounting: 'greenInvoice' },
 ];
 // מזהה חברת ה-GI הראשית (ברירת מחדל BPM) — לשם תאימות לאחור בלבד
 function giCompanyId() { const c = (load().companies || []).find(x => x.accounting === 'greenInvoice'); return c ? c.id : 'co_bpm'; }
@@ -2823,9 +3632,8 @@ function giEmptyFor(pathname) {
   if (pathname === '/api/expense-drafts') return { drafts: [] };
   if (pathname === '/api/expenses/quick-search' || pathname === '/api/documents/quick-search') return { items: [] };
   if (/^\/api\/(clients|suppliers)\/[^/]+\/documents$/.test(pathname)) return [];
-  // יומן גוגל (המחובר ל-BPM) — לחברות אחרות ריק עד שיחוברו יומנים משלהן
-  if (pathname === '/api/calendar/match') return { matched: [], missingInCalendar: [], missingInWhatsappCount: 0 };
-  if (pathname === '/api/calendar/events') return { whatsapp: [], calendar: [] };
+  // הערה: אנדפוינטי היומן (calendar/match, calendar/events) אינם נחסמים כאן — הם פר-חברה לפי iCal
+  // ומטופלים ישירות (מחזירים יומן ריק אם לא הוגדר), כך שיומן עובד גם בלי חיבור חשבונית ירוקה.
   return undefined;
 }
 
@@ -2837,11 +3645,32 @@ const MOSHE_DEFAULT_GROUPS = [
   { key: 'operating', name: 'הוצאות שוטפות' },
   { key: 'other', name: 'אחר' },
 ];
+// קבוצות ברירת-מחדל ל-BPM ואופק — מחולקות להכנסה/הוצאה. הכנסה מסומנת ב-kind:'income', הוצאה ב-'expense'.
+// "הכנסות עסק" היא ברירת המחדל לכל תנועת הכנסה (isDefaultIncome).
+const INCEXP_DEFAULT_GROUPS = [
+  { key: 'income_biz', name: 'הכנסות עסק', kind: 'income', isDefaultIncome: true },
+  { key: 'income_refund', name: 'החזר', kind: 'income' },
+  { key: 'exp_suppliers', name: 'ספקים', kind: 'expense' },
+  { key: 'exp_equipment', name: 'ציוד', kind: 'expense' },
+  { key: 'exp_vehicles', name: 'רכבים', kind: 'expense' },
+  { key: 'exp_loan', name: 'הלוואה', kind: 'expense' },
+  { key: 'exp_bankfees', name: 'עמלות בנקים', kind: 'expense' },
+  { key: 'exp_legal', name: 'עו״ד', kind: 'expense' },
+];
+const INCEXP_GROUP_COMPANIES = ['co_bpm', 'co_ofek'];
 function ensureGroupsSeeded(db) {
   db.txGroups = db.txGroups || [];
-  if (db.txGroups.some(g => g.companyId === 'co_moshe')) return false;
-  for (const g of MOSHE_DEFAULT_GROUPS) db.txGroups.push({ id: 'txg_' + g.key, companyId: 'co_moshe', name: g.name, key: g.key, builtin: true });
-  return true;
+  let changed = false;
+  if (!db.txGroups.some(g => g.companyId === 'co_moshe')) {
+    for (const g of MOSHE_DEFAULT_GROUPS) db.txGroups.push({ id: 'txg_' + g.key, companyId: 'co_moshe', name: g.name, key: g.key, builtin: true });
+    changed = true;
+  }
+  for (const cid of INCEXP_GROUP_COMPANIES) {
+    if (db.txGroups.some(g => g.companyId === cid)) continue;
+    for (const g of INCEXP_DEFAULT_GROUPS) db.txGroups.push({ id: `txg_${cid}_${g.key}`, companyId: cid, name: g.name, key: g.key, kind: g.kind, builtin: true, isDefaultIncome: !!g.isDefaultIncome });
+    changed = true;
+  }
+  return changed;
 }
 // כלל התחלתי: תנועות של "גלי בראון" משויכות אוטומטית ל"דיגיטל"
 function ensureRulesSeeded(db) {
@@ -2891,14 +3720,29 @@ function runMigrations() {
     changed = true;
     console.log('מיגרציה: הוסר חשבון ההתחברות iris (מיותר — איריס היא סוכנת)');
   }
-  // הסרה זמנית של חברת אופק (פייפרלס בעייתי) — לפי בקשת המשתמש. אפשר להחזיר בהמשך ע"י הוספה חזרה ל-COMPANY_SEED.
   db.companies = db.companies || [];
-  if (db.companies.some(c => c.id === 'co_ofek')) {
-    db.companies = db.companies.filter(c => c.id !== 'co_ofek');
+  // ניקוי חד-פעמי של נתוני אופק שנותרו מהניסויים הקודמים (Paperless) — כדי שהחברה תתחיל נקייה לגמרי.
+  // מוגן בדגל _ofekDataCleared כך שירוץ פעם אחת בלבד ולא ימחק נתונים אמיתיים שיוזנו בעתיד.
+  if (!db._ofekDataCleared) {
+    db.bankTx = (db.bankTx || []).filter(t => t.companyId !== 'co_ofek');
+    db.events = (db.events || []).filter(e => e.companyId !== 'co_ofek');
+    db.supplierPayables = (db.supplierPayables || []).filter(p => (p.companyId || 'co_bpm') !== 'co_ofek');
+    db.artistClientMap = (db.artistClientMap || []).filter(m => (m.companyId || 'co_bpm') !== 'co_ofek');
+    db.txGroupRules = (db.txGroupRules || []).filter(r => r.companyId !== 'co_ofek');
+    if (db.docGroupOverrides) delete db.docGroupOverrides['co_ofek'];
+    if (db.calendarAutoAdopt) delete db.calendarAutoAdopt['co_ofek'];
+    db._ofekDataCleared = true;
     changed = true;
-    console.log('מיגרציה: הוסרה זמנית חברת אופק (co_ofek)');
+    console.log('מיגרציה: נוקו נתוני אופק הישנים (חברה נקייה) — פעם אחת בלבד');
   }
-  // ודא שהחברות הנותרות קיימות ושלכל אחת מוגדר ספק חשבונאי (accounting)
+  // ניקוי חד-פעמי נוסף: יתרת עו"ש ישנה של אופק (נשמרת בנפרד מהתנועות) — כדי שגם היתרה תתאפס.
+  if (!db._ofekBankBalanceCleared) {
+    db.bankBalance = (db.bankBalance || []).filter(b => b.companyId !== 'co_ofek');
+    db._ofekBankBalanceCleared = true;
+    changed = true;
+    console.log('מיגרציה: נוקתה יתרת עו"ש ישנה של אופק');
+  }
+  // ודא שכל החברות (כולל אופק) קיימות ושלכל אחת מוגדר ספק חשבונאי (accounting)
   for (const seed of COMPANY_SEED) {
     let c = db.companies.find(x => x.id === seed.id);
     if (!c) { c = { id: seed.id, name: seed.name, active: seed.active }; db.companies.push(c); changed = true; console.log('מיגרציה: נוספה חברה ' + seed.name); }
@@ -2985,6 +3829,7 @@ server.listen(PORT, async () => {
   await initStore();          // מחבר ל-Postgres (Neon) לפני שמתחילים לקרוא/לכתוב נתונים
   seedIfEmpty();
   runMigrations();
+  hydrateConnCreds();         // טוען מפתחות חיבורים פר-חברה שהוזנו באתר (בסיס הנתונים) לזיכרון
   autoVerifyConnections();
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);
   startWhatsappBridge(async (text) => { try { const wc = process.env.WHATSAPP_COMPANY || 'co_bpm'; await greenInvoice.withCompany(wc, () => ingestText(text, wc)); } catch {} })
