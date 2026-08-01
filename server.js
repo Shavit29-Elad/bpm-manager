@@ -2336,7 +2336,16 @@ add('POST', /^\/api\/clients$/, async (req, res, _p, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   if (!body?.name) return json(res, { error: 'חסר שם' }, 400);
   try { json(res, { ok: true, client: await greenInvoice.createClient(body) }); }
-  catch (e) { json(res, { error: e.message }, 500); }
+  catch (e) {
+    // errorCode 1010 — לקוח עם אותו ח.פ כבר קיים בחשבונית ירוקה. errorMessage מכיל את מזהה הלקוח הקיים; נחזיר אותו כהצלחה.
+    const msg = String(e.message || '');
+    const uuid = (msg.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i) || [])[0];
+    if (/1010/.test(msg) && uuid) {
+      try { return json(res, { ok: true, existed: true, client: await greenInvoice.getClient(uuid) }); }
+      catch { return json(res, { ok: true, existed: true, client: { id: uuid, name: body.name } }); }
+    }
+    json(res, { error: e.message }, 500);
+  }
 });
 
 // POST /api/suppliers — יצירת ספק חדש בחשבונית ירוקה
@@ -2344,7 +2353,13 @@ add('POST', /^\/api\/suppliers$/, async (req, res, _p, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   if (!body?.name) return json(res, { error: 'חסר שם' }, 400);
   try { json(res, { ok: true, supplier: await greenInvoice.createSupplier(body) }); }
-  catch (e) { json(res, { error: e.message }, 500); }
+  catch (e) {
+    // errorCode 1010 — ספק עם אותו ח.פ כבר קיים; נחזיר את המזהה הקיים כהצלחה
+    const msg = String(e.message || '');
+    const uuid = (msg.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i) || [])[0];
+    if (/1010/.test(msg) && uuid) return json(res, { ok: true, existed: true, supplier: { id: uuid, name: body.name } });
+    json(res, { error: e.message }, 500);
+  }
 });
 
 // PUT /api/clients/:id/details — עריכת פרטי לקוח (שם, מייל, טלפון, ח.פ) בחשבונית ירוקה
