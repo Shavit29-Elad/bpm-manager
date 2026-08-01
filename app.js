@@ -3256,14 +3256,16 @@ function clientPaidBadge(cp) {
   if (cp.status === 'noinvoice') return `<span class="muted" style="font-size:11px;white-space:nowrap">ללא חשבונית</span>`;
   return '';
 }
-// סינון "מוכן לתשלום לספק" — מציג רק אירועים שהלקוח שילם עליהם (והספק עדיין לא שולם)
+// סינון "מוכן לתשלום לספק" — מציג רק אירועים שהלקוח שילם עליהם (ירוק), והספק עדיין לא שולם
 window.filterReadyToPay = (on) => {
-  document.querySelectorAll('.ctr-ev-row').forEach(r => { r.style.display = (!on || r.dataset.cp === 'paid') ? '' : 'none'; });
+  // כיבוי הסינון — רענון מלא שמחזיר את המסך בדיוק כמו שהיה (כולל כרטיסים מכווצים)
+  if (!on) { renderContractors($('#content')); return; }
+  document.querySelectorAll('.ctr-ev-row').forEach(r => { r.style.display = (r.dataset.cp === 'paid') ? '' : 'none'; });
   document.querySelectorAll('.ctr-card').forEach(card => {
     const rows = [...card.querySelectorAll('.ctr-ev-row')];
     const anyVisible = rows.some(r => r.style.display !== 'none');
     card.style.display = anyVisible ? '' : 'none';
-    if (on && anyVisible) { const body = card.querySelector('.ctr-body'); if (body) body.classList.remove('hidden'); }
+    if (anyVisible) { const body = card.querySelector('.ctr-body'); if (body) body.classList.remove('hidden'); }
   });
 };
 function contractorCard(x) {
