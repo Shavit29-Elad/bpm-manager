@@ -308,24 +308,23 @@ function calendarAlreadyCaptured(idx, ce) {
 }
 
 // POST /api/calendar/auto-adopt { companyId } — הוספה אוטומטית של אירועי יומן גוגל לרשימת "אירועים לאישור".
-// מוסיף רק אירועים עד אתמול (כולל) — לא אירועים עתידיים (עלולים להשתנות) ולא של היום.
+// מוסיף אירועים עד היום (כולל) — כך שבבוקר כבר נקלטים אירועי אותו יום. לא קולט אירועים עתידיים (מעבר להיום).
 // רץ פעם ביום לכל חברה (שעון ישראל). מוסיף רק אירועי יומן שאין להם התאמה לאירוע קיים (מונע כפילויות מול קליטת ווטסאפ).
 add('POST', /^\/api\/calendar\/auto-adopt$/, async (req, res, _p, q, body) => {
   const db = load();
   const cid = (body && body.companyId) || q.companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
   const todayIL = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date()); // YYYY-MM-DD בשעון ישראל
   db.calendarAutoAdopt = db.calendarAutoAdopt || {};
-  if (db.calendarAutoAdopt[cid] === todayIL) return json(res, { ok: true, adopted: 0, skipped: true, today: todayIL });
+  const force = q.force === '1' || (body && body.force); // רענון ידני יזום — מדלג על מנגנון "פעם ביום"
+  if (!force && db.calendarAutoAdopt[cid] === todayIL) return json(res, { ok: true, adopted: 0, skipped: true, today: todayIL });
   if (!hasCalendar(cid)) { db.calendarAutoAdopt[cid] = todayIL; save(db); return json(res, { ok: true, adopted: 0, noCalendar: true }); }
-  // אתמול = היום פחות יום
-  const dy = new Date(todayIL + 'T00:00:00Z'); dy.setUTCDate(dy.getUTCDate() - 1);
-  const yesterday = dy.toISOString().slice(0, 10);
   try {
     const ourEvents = (db.events || []).filter(e => e.companyId === cid && (e.date || '') >= MATCH_START);
     const adoptedGcal = new Set(ourEvents.map(e => e.gcalId).filter(Boolean));
     const confIdx = confirmedArtistIndex(db, cid); // אירועים מאושרים לפי תאריך+שם אמן — למניעת קליטה כפולה
+    // עד היום (כולל) — קולט את אירועי היום כבר בבוקר; לא מעבר להיום (בלי אירועים עתידיים).
     const cal = (await fetchCalendarEvents({ companyId: cid }))
-      .filter(e => e.id && (e.date || '') >= MATCH_START && (e.date || '') <= yesterday
+      .filter(e => e.id && (e.date || '') >= MATCH_START && (e.date || '') <= todayIL
         && !adoptedGcal.has(e.id) && !calendarAlreadyCaptured(confIdx, e));
     // רק אירועי יומן שאין להם התאמה לאירוע קיים אצלנו (missingInWhatsapp)
     const { missingInWhatsapp } = matchEvents(ourEvents, cal);
@@ -350,7 +349,7 @@ add('POST', /^\/api\/calendar\/auto-adopt$/, async (req, res, _p, q, body) => {
     }
     db.calendarAutoAdopt[cid] = todayIL;
     save(db);
-    json(res, { ok: true, adopted, yesterday, today: todayIL });
+    json(res, { ok: true, adopted, today: todayIL });
   } catch (e) {
     json(res, { ok: false, error: e.message });
   }
