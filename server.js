@@ -225,9 +225,15 @@ add('PUT', /^\/api\/events\/([^/]+)$/, (req, res, params, _q, body) => {
 // DELETE /api/events/:id — מוחק רק מרשימת האירועים שלנו (לא מיומן גוגל)
 add('DELETE', /^\/api\/events\/([^/]+)$/, (req, res, params) => {
   const db = load();
-  const before = db.events.length;
+  const ev = db.events.find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  // אם האירוע הגיע מיומן גוגל — נרשום את מזהה-היומן ברשימת "מודחקים", כדי שרענון/אימוץ יומי לא יקלוט אותו שוב.
+  if (ev.gcalId && ev.companyId) {
+    db.calendarDismissed = db.calendarDismissed || {};
+    const arr = db.calendarDismissed[ev.companyId] = db.calendarDismissed[ev.companyId] || [];
+    if (!arr.includes(ev.gcalId)) arr.push(ev.gcalId);
+  }
   db.events = db.events.filter(e => e.id !== params[0]);
-  if (db.events.length === before) return json(res, { error: 'אירוע לא נמצא' }, 404);
   save(db); json(res, { ok: true });
 });
 
@@ -322,15 +328,16 @@ add('POST', /^\/api\/calendar\/auto-adopt$/, async (req, res, _p, q, body) => {
     const ourEvents = (db.events || []).filter(e => e.companyId === cid && (e.date || '') >= MATCH_START);
     const adoptedGcal = new Set(ourEvents.map(e => e.gcalId).filter(Boolean));
     const confIdx = confirmedArtistIndex(db, cid); // אירועים מאושרים לפי תאריך+שם אמן — למניעת קליטה כפולה
+    const dismissed = new Set(((db.calendarDismissed || {})[cid]) || []); // אירועי יומן שנמחקו ידנית — לא לקלוט שוב
     // עד היום (כולל) — קולט את אירועי היום כבר בבוקר; לא מעבר להיום (בלי אירועים עתידיים).
     const cal = (await fetchCalendarEvents({ companyId: cid }))
       .filter(e => e.id && (e.date || '') >= MATCH_START && (e.date || '') <= todayIL
-        && !adoptedGcal.has(e.id) && !calendarAlreadyCaptured(confIdx, e));
+        && !adoptedGcal.has(e.id) && !dismissed.has(e.id) && !calendarAlreadyCaptured(confIdx, e));
     // רק אירועי יומן שאין להם התאמה לאירוע קיים אצלנו (missingInWhatsapp)
     const { missingInWhatsapp } = matchEvents(ourEvents, cal);
     let adopted = 0;
     for (const ce of missingInWhatsapp) {
-      if (!ce.id || adoptedGcal.has(ce.id) || calendarAlreadyCaptured(confIdx, ce)) continue;
+      if (!ce.id || adoptedGcal.has(ce.id) || dismissed.has(ce.id) || calendarAlreadyCaptured(confIdx, ce)) continue;
       let clientId = null, clientName = null;
       const mapped = mappedClientName(db, ce.title);
       if (mapped) { const r = await resolveClientByName(mapped); clientId = r.clientId; clientName = r.clientName; }
