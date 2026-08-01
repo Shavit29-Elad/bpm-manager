@@ -3243,13 +3243,16 @@ async function renderContractors(c) {
 // חיווי "האם הלקוח שילם" על האירוע (לפי בנק / חשבונית ירוקה) — מוצג בשורת האירוע ב"קבלנים לתשלום"
 function clientPaidBadge(cp) {
   cp = cp || { status: 'unknown' };
+  // ירוק — מס-קבלה/קבלה (320/400) או תשלום שזוהה בבנק
   if (cp.status === 'paid') {
     const d = cp.date ? ' · ' + ddmy(cp.date) : '';
-    const src = cp.via === 'bank' ? 'זוהה תשלום בבנק' : 'סומן שולם בחשבונית ירוקה';
+    const src = cp.via === 'bank' ? 'זוהה תשלום בבנק' : 'הופקה מס-קבלה/קבלה';
     return `<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap" title="${src}">🟢 הלקוח שילם${d}</span>`;
   }
-  if (cp.status === 'pending') return `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap" title="החשבונית עדיין פתוחה / לא זוהה תשלום בבנק">🟡 ממתין לתשלום מהלקוח</span>`;
-  if (cp.status === 'uninvoiced') return `<span class="tag" style="background:#eef1ff;color:#4a5578;white-space:nowrap" title="עדיין לא הופקה חשבונית לאירוע">טרם חויב</span>`;
+  // צהוב — הופקה חשבונית עסקה/מס (300/305), טרם שולם
+  if (cp.status === 'charged' || cp.status === 'pending') return `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap" title="הופקה חשבונית עסקה/מס — טרם שולם">🟡 ממתין לתשלום מהלקוח</span>`;
+  // אדום — אין חשבונית (או רק הצעת מחיר)
+  if (cp.status === 'uninvoiced') return `<span class="tag" style="background:#fde8e8;color:#b42318;white-space:nowrap" title="לא הופקה חשבונית עסקה/מס (הצעת מחיר אינה נחשבת)">🔴 טרם חויב</span>`;
   if (cp.status === 'noinvoice') return `<span class="muted" style="font-size:11px;white-space:nowrap">ללא חשבונית</span>`;
   return '';
 }
@@ -3359,7 +3362,7 @@ window.ctDismissSupplier = async (nameEnc) => {
 };
 window.toggleContractorPaid = async (eventId, index, paid, cpStatus) => {
   if (paid && cpStatus && cpStatus !== 'paid') {
-    const msg = cpStatus === 'pending' ? 'הלקוח עדיין לא שילם על האירוע הזה — לשלם לספק בכל זאת?'
+    const msg = (cpStatus === 'charged' || cpStatus === 'pending') ? 'הלקוח חויב אך עדיין לא שילם על האירוע הזה — לשלם לספק בכל זאת?'
       : cpStatus === 'uninvoiced' ? 'עדיין לא הופקה חשבונית ללקוח על האירוע הזה — לשלם לספק בכל זאת?'
         : 'לא ידוע אם הלקוח שילם על האירוע — לשלם לספק בכל זאת?';
     if (!confirm(msg)) return;

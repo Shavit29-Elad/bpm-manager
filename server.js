@@ -1605,23 +1605,19 @@ function eventClientPaid(e, bankPaid, openNums) {
   if (!docs.length && e.invoiceStatus === 'invoiced' && REAL.includes(Number(e.invoiceType))) {
     docs = [{ type: Number(e.invoiceType), number: e.invoiceNumber, id: e.invoiceId }];
   }
-  // אין חשבונית אמיתית (רק הצעת מחיר / כלום) → טרם חויב, ובוודאי טרם שולם
+  // אין חשבונית אמיתית (רק הצעת מחיר / כלום) → טרם חויב (אדום)
   if (!docs.length) return { status: 'uninvoiced' };
-  // בנק — הכסף נכנס בפועל (האות החזק ביותר)
+  // בנק — הכסף נכנס בפועל → שולם (האות החזק ביותר, גובר על סוג המסמך)
   for (const d of docs) {
     const num = d.number != null ? String(d.number) : null;
     const id = d.id != null ? String(d.id) : null;
     const key = (num && bankPaid.has('num:' + num)) ? 'num:' + num : (id && bankPaid.has('id:' + id)) ? 'id:' + id : null;
     if (key) return { status: 'paid', via: 'bank', date: bankPaid.get(key) || null };
   }
-  // מס-קבלה (320) / קבלה (400) — שולם מעצם הגדרתו
+  // מס-קבלה (320) / קבלה (400) → שולם (ירוק)
   if (docs.some(d => [320, 400].includes(Number(d.type)))) return { status: 'paid', via: 'greeninvoice' };
-  // עסקה/מס (300/305) — פתוח/סגור לפי רשימת המסמכים הפתוחים בחשבונית ירוקה
-  if (openNums != null) {
-    const anyOpen = docs.some(d => d.number != null && openNums.has(String(d.number)));
-    return anyOpen ? { status: 'pending' } : { status: 'paid', via: 'greeninvoice' };
-  }
-  return { status: 'pending' };
+  // עסקה (300) / מס (305) בלבד → הלקוח חויב אך טרם שילם (צהוב)
+  return { status: 'charged' };
 }
 
 // POST /api/contractors/toggle-paid — סימון תשלום לקבלן על אירוע מסוים
