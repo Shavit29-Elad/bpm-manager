@@ -2896,6 +2896,25 @@ function evLinkedDocsHtml(ev) {
     }).join('')}
   </div>`;
 }
+// תצוגה מקדימה חיה של קובץ שנבחר (PDF/תמונה) בתוך חלוניות ההעלאה — כדי למלא פרטים בקלות מול המסמך
+window.previewUploadFile = (inputEl, previewId) => {
+  const box = document.getElementById(previewId);
+  if (!box) return;
+  const f = inputEl && inputEl.files && inputEl.files[0];
+  if (box._objUrl) { try { URL.revokeObjectURL(box._objUrl); } catch {} box._objUrl = null; }
+  if (!f) { box.innerHTML = '<div style="color:var(--muted);font-size:13px">בחר קובץ כדי לראות אותו כאן ←</div>'; return; }
+  const url = URL.createObjectURL(f);
+  box._objUrl = url;
+  box.style.display = 'block';
+  if (/pdf/i.test(f.type) || /\.pdf$/i.test(f.name)) {
+    box.innerHTML = `<iframe src="${url}#toolbar=1&navpanes=0" style="width:100%;height:100%;border:0;display:block"></iframe>`;
+  } else if (/^image\//i.test(f.type)) {
+    box.innerHTML = `<img src="${url}" style="max-width:100%;max-height:100%;object-fit:contain;display:block;margin:auto"/>`;
+  } else {
+    box.style.display = 'flex';
+    box.innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center">${escapeHtml(f.name)}</div>`;
+  }
+};
 // ===== העלאת מסמך ישן (חשבונית ממערכת קודמת) וצירופו לאירוע — רלוונטי לאופק =====
 window.openAttachDoc = (eventId, presetType) => {
   let m = document.getElementById('attachDocModal');
@@ -2905,23 +2924,28 @@ window.openAttachDoc = (eventId, presetType) => {
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const today = new Date().toISOString().slice(0, 10);
   const opt = (v, l) => `<option value="${v}" ${String(presetType) === String(v) ? 'selected' : ''}>${l}</option>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(460px,95vw)">
+  m.innerHTML = `<div class="modal-card" style="width:min(900px,96vw)">
     <div class="row-between"><h3>📎 העלאת מסמך ישן לאירוע</h3></div>
     <p class="muted" style="font-size:12.5px">צרף קובץ חשבונית שהופקה במערכת הקודמת. עסקה/מס יופיעו ב״חשבוניות פתוחות״ עד שתצרף מס-קבלה/קבלה לאותו אירוע.</p>
-    <label style="display:block;font-size:13px;margin-top:8px">סוג מסמך
-      <select id="atType" style="width:100%;padding:7px 8px;margin-top:3px">
-        ${opt(300, 'חשבון עסקה')}${opt(305, 'חשבונית מס')}${opt(320, 'חשבונית מס-קבלה')}${opt(400, 'קבלה')}${opt(10, 'הצעת מחיר')}
-      </select></label>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-      <label style="font-size:13px">מספר מסמך<input id="atNumber" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 1024"></label>
-      <label style="font-size:13px">תאריך<input id="atDate" type="date" value="${today}" style="width:100%;padding:7px 8px;margin-top:3px"></label>
-      <label style="font-size:13px">סכום (כולל מע״מ) ₪<input id="atAmount" type="number" inputmode="decimal" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 5850"></label>
-      <label style="font-size:13px">קובץ (PDF/תמונה)<input id="atFile" type="file" accept=".pdf,image/*" style="width:100%;padding:5px 0;margin-top:3px"></label>
-    </div>
-    <div id="atStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
-    <div class="modal-actions">
-      <button class="btn ghost" onclick="document.getElementById('attachDocModal').classList.add('hidden')">ביטול</button>
-      <button class="btn success" onclick="doAttachDoc('${eventId}',this)">✓ העלה וצרף</button>
+    <div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;margin-top:6px">
+      <div id="atPreview" style="flex:1 1 320px;min-width:260px;height:460px;border:1px solid var(--border);border-radius:10px;overflow:auto;background:var(--panel2);display:flex;align-items:center;justify-content:center"><div style="color:var(--muted);font-size:13px">בחר קובץ כדי לראות אותו כאן ←</div></div>
+      <div style="flex:1 1 300px;min-width:260px">
+        <label style="display:block;font-size:13px">סוג מסמך
+          <select id="atType" style="width:100%;padding:7px 8px;margin-top:3px">
+            ${opt(300, 'חשבון עסקה')}${opt(305, 'חשבונית מס')}${opt(320, 'חשבונית מס-קבלה')}${opt(400, 'קבלה')}${opt(10, 'הצעת מחיר')}
+          </select></label>
+        <label style="display:block;font-size:13px;margin-top:8px">קובץ (PDF/תמונה)<input id="atFile" type="file" accept=".pdf,image/*" style="width:100%;padding:5px 0;margin-top:3px" onchange="previewUploadFile(this,'atPreview')"></label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+          <label style="font-size:13px">מספר מסמך<input id="atNumber" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 1024"></label>
+          <label style="font-size:13px">תאריך<input id="atDate" type="date" value="${today}" style="width:100%;padding:7px 8px;margin-top:3px"></label>
+          <label style="font-size:13px;grid-column:1/3">סכום (כולל מע״מ) ₪<input id="atAmount" type="number" inputmode="decimal" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 5850"></label>
+        </div>
+        <div id="atStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+        <div class="modal-actions">
+          <button class="btn ghost" onclick="document.getElementById('attachDocModal').classList.add('hidden')">ביטול</button>
+          <button class="btn success" onclick="doAttachDoc('${eventId}',this)">✓ העלה וצרף</button>
+        </div>
+      </div>
     </div></div>`;
 };
 window.doAttachDoc = async (eventId, btn) => {
@@ -2971,24 +2995,29 @@ window.openOldInvoice = async (mode, oldInvoiceId, presetType) => {
   const isReceipt = mode === 'receipt';
   const opt = (v, l) => `<option value="${v}" ${String(presetType) === String(v) ? 'selected' : ''}>${l}</option>`;
   const typeOpts = isReceipt ? `${opt(320, 'חשבונית מס-קבלה')}${opt(400, 'קבלה')}` : `${opt(300, 'חשבון עסקה')}${opt(305, 'חשבונית מס')}${opt(320, 'חשבונית מס-קבלה')}${opt(400, 'קבלה')}`;
-  m.innerHTML = `<div class="modal-card" style="width:min(480px,95vw)">
+  m.innerHTML = `<div class="modal-card" style="width:min(940px,96vw)">
     <div class="row-between"><h3>${isReceipt ? '✓ צירוף קבלה לחשבונית ישנה' : '➕ העלאת מסמך הכנסה ישן'}</h3></div>
     <p class="muted" style="font-size:12.5px">${isReceipt ? 'צרף מס-קבלה/קבלה שהופקה — החשבונית תיסגר ותרד מ״חשבוניות פתוחות״.' : 'מסמך הכנסה מהמערכת הקודמת (לפני יולי) שאינו כאן. עסקה/מס יופיעו ב״חשבוניות פתוחות״ למעקב; מס-קבלה/קבלה נשמרים לתיעוד ולשיוך בהתאמות בנק.'}</p>
-    <label style="display:block;font-size:13px;margin-top:8px">סוג מסמך
-      <select id="oiType" style="width:100%;padding:7px 8px;margin-top:3px">${typeOpts}</select></label>
-    ${isReceipt ? '' : `<label style="display:block;font-size:13px;margin-top:8px">שם הלקוח<input id="oiClient" list="oiClients" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="שם הלקוח בחשבונית ירוקה"></label>
-    <label style="display:block;font-size:13px;margin-top:8px">תיאור (זמר/אירוע — לא חובה)<input id="oiDesc" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל: הגברה - אירוע נובמבר"></label>`}
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-      <label style="font-size:13px">מספר מסמך<input id="oiNumber" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 1024"></label>
-      <label style="font-size:13px">תאריך<input id="oiDate" type="date" value="${today}" style="width:100%;padding:7px 8px;margin-top:3px"></label>
-      <label style="font-size:13px">סכום (כולל מע״מ) ₪<input id="oiAmount" type="number" inputmode="decimal" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 5850"></label>
-      <label style="font-size:13px">קובץ (PDF/תמונה)<input id="oiFile" type="file" accept=".pdf,image/*" style="width:100%;padding:5px 0;margin-top:3px"></label>
-    </div>
-    <datalist id="oiClients">${clientNames.map(c => `<option value="${escAttr(c)}">`).join('')}</datalist>
-    <div id="oiStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
-    <div class="modal-actions">
-      <button class="btn ghost" onclick="document.getElementById('oldInvModal').classList.add('hidden')">ביטול</button>
-      <button class="btn success" onclick="submitOldInvoice('${mode}','${oldInvoiceId || ''}',this)">✓ ${isReceipt ? 'צרף וסגור' : 'העלה'}</button>
+    <div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;margin-top:6px">
+      <div id="oiPreview" style="flex:1 1 330px;min-width:260px;height:480px;border:1px solid var(--border);border-radius:10px;overflow:auto;background:var(--panel2);display:flex;align-items:center;justify-content:center"><div style="color:var(--muted);font-size:13px">בחר קובץ כדי לראות אותו כאן ←</div></div>
+      <div style="flex:1 1 320px;min-width:260px">
+        <label style="display:block;font-size:13px">סוג מסמך
+          <select id="oiType" style="width:100%;padding:7px 8px;margin-top:3px">${typeOpts}</select></label>
+        <label style="display:block;font-size:13px;margin-top:8px">קובץ (PDF/תמונה)<input id="oiFile" type="file" accept=".pdf,image/*" style="width:100%;padding:5px 0;margin-top:3px" onchange="previewUploadFile(this,'oiPreview')"></label>
+        ${isReceipt ? '' : `<label style="display:block;font-size:13px;margin-top:8px">שם הלקוח<input id="oiClient" list="oiClients" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="שם הלקוח בחשבונית ירוקה"></label>
+        <label style="display:block;font-size:13px;margin-top:8px">תיאור (זמר/אירוע — לא חובה)<input id="oiDesc" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל: הגברה - אירוע נובמבר"></label>`}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+          <label style="font-size:13px">מספר מסמך<input id="oiNumber" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 1024"></label>
+          <label style="font-size:13px">תאריך<input id="oiDate" type="date" value="${today}" style="width:100%;padding:7px 8px;margin-top:3px"></label>
+          <label style="font-size:13px;grid-column:1/3">סכום (כולל מע״מ) ₪<input id="oiAmount" type="number" inputmode="decimal" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 5850"></label>
+        </div>
+        <datalist id="oiClients">${clientNames.map(c => `<option value="${escAttr(c)}">`).join('')}</datalist>
+        <div id="oiStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+        <div class="modal-actions">
+          <button class="btn ghost" onclick="document.getElementById('oldInvModal').classList.add('hidden')">ביטול</button>
+          <button class="btn success" onclick="submitOldInvoice('${mode}','${oldInvoiceId || ''}',this)">✓ ${isReceipt ? 'צרף וסגור' : 'העלה'}</button>
+        </div>
+      </div>
     </div></div>`;
 };
 let _openInvClients = [];
