@@ -466,6 +466,7 @@ add('POST', /^\/api\/invoicing\/preview-pdf$/, async (req, res, _p, _q, body) =>
       remarks: body.remarks || null,
       date: body.date || undefined,
     };
+    if (body.discount && Number(body.discount.amount) > 0) opts.discount = { amount: Number(body.discount.amount), type: body.discount.type };
     if (body.skipDateValidation) opts.skipDateValidation = true; // אישור הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     // חשבונית ירוקה מאפשרת תאריך עבר, אך לא מוקדם מהמסמך האחרון מסוגו (רצף) — אם נדחה, מרנדרים עם התאריך המותר הקרוב.
     let pv, dateAdjusted = false; const requestedDate = opts.date || null; let usedDate = opts.date || null; let minDate = null;
@@ -502,6 +503,7 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim() };
     const opts = { type, client, items, description: body.description || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.discount && Number(body.discount.amount) > 0) opts.discount = { amount: Number(body.discount.amount), type: body.discount.type };
     if (body.skipDateValidation) opts.skipDateValidation = true; // אישור הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
@@ -1765,6 +1767,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
       description: body.description != null ? body.description : (src.description || ''),
       remarks: body.remarks != null ? body.remarks : (src.remarks || null),
     };
+    if (body.discount && Number(body.discount.amount) > 0) opts.discount = { amount: Number(body.discount.amount), type: body.discount.type };
     if (body.date) opts.date = String(body.date).slice(0, 10);
     if (body.skipDateValidation) opts.skipDateValidation = true; // אישור הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון מסוגו)
     // תקבולים ערוכים (למסמכי מס-קבלה/קבלה) — סוג + סכום + תאריך + פרטים

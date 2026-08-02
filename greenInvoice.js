@@ -124,7 +124,7 @@ const PAYMENT_REQUIRED = new Set([320, 400, 405]);
 
 // בונה גוף מסמך. items = [{ description, quantity, price }].
 // client = { id? , name, taxId?, emails? } — אם יש id משתמשים בו (נמנע כפילות לקוח).
-function documentBody({ client, items, type, remarks, description, dueDate, date, payment, sendEmail, email, linkedDocumentIds, linkType, skipDateValidation }) {
+function documentBody({ client, items, type, remarks, description, dueDate, date, payment, sendEmail, email, linkedDocumentIds, linkType, skipDateValidation, discount }) {
   const total = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
   const body = {
     type,
@@ -146,6 +146,10 @@ function documentBody({ client, items, type, remarks, description, dueDate, date
       return line;
     }),
   };
+  // הנחה ברמת המסמך — כמו בחשבונית ירוקה: לפי סכום (₪) או אחוז. חשבונית ירוקה מפחיתה מהסכום לפני מע"מ ומחשבת מע"מ על היתרה.
+  if (discount && Number(discount.amount) > 0) {
+    body.discount = { amount: Number(discount.amount), type: discount.type === 'percentage' ? 'percentage' : 'sum' };
+  }
   // מסמך המשך — קישור למסמך מקור (למשל הצעת מחיר → חשבונית)
   if (Array.isArray(linkedDocumentIds) && linkedDocumentIds.length) body.linkedDocumentIds = linkedDocumentIds;
   // linkType: "link" (קישור) או "cancel" (ביטול — לזיכוי/קבלה שלילית)
