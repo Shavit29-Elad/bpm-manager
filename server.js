@@ -1766,7 +1766,8 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
   const cid = q.companyId;
   let docs = [], giErr = null;
   if (greenInvoice.haveCredentials()) {
-    try { docs = await greenInvoice.openDocuments(); } catch (e) { giErr = e.message; }
+    // חשוב: openDocuments מחזירה מערך מהמטמון (אותה הפניה) — חובה לשכפל לפני push, אחרת המסמכים שהועלו נדחפים למטמון ומצטברים בכל קריאה (כפילויות)
+    try { docs = (await greenInvoice.openDocuments() || []).slice(); } catch (e) { giErr = e.message; }
   }
   // חשבוניות ישנות שהועלו ידנית לאירוע (עסקה/מס) — פתוחות עד שמצורפת קבלה/מס-קבלה לאותו אירוע
   try {
