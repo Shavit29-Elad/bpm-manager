@@ -447,7 +447,21 @@ add('POST', /^\/api\/invoicing\/preview$/, async (req, res, _p, _q, body) => {
       clientEmail = c?.email || null;
     }
   } catch { }
-  json(res, { items, subtotal, vat: +(subtotal * 0.18).toFixed(2), total: +(subtotal * 1.18).toFixed(2), subject: subjectForEvents(evs), clientEmail });
+  // הצעת מחיר מקושרת לאחד האירועים — להצגה בצד ימין של חלון ההפקה
+  let linkedQuote = null;
+  try {
+    for (const e of evs) {
+      const qd = (e.linkedDocs || []).find(d => Number(d.type) === 10);
+      if (!qd) continue;
+      let url = qd.url || null;
+      if (!url && qd.id && greenInvoice.haveCredentials()) {
+        try { const doc = await greenInvoice.getDocument(qd.id); url = (doc.url && (doc.url.he || doc.url.origin || doc.url.pdf)) || null; } catch { }
+      }
+      linkedQuote = { id: qd.id, number: qd.number || null, url };
+      break;
+    }
+  } catch { }
+  json(res, { items, subtotal, vat: +(subtotal * 0.18).toFixed(2), total: +(subtotal * 1.18).toFixed(2), subject: subjectForEvents(evs), clientEmail, linkedQuote });
 });
 
 // POST /api/invoicing/preview-pdf — תצוגה מקדימה מעוצבת של המסמך (לפני הפקה), מחזיר PDF ב-base64

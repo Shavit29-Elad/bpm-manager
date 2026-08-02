@@ -3013,7 +3013,8 @@ window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   if (!pv) { alert('שגיאה בטעינת התצוגה המקדימה'); return; }
   _invPreview = { ids, client: decodeURIComponent(clientEnc), clientId: clientId || null,
     items: (pv.items || []).map(it => ({ description: it.description, quantity: it.quantity ?? 1, price: it.price ?? 0 })),
-    subject: pv.subject || '', type: 305, docDate: todayIso(), sendEmail: false, email: pv.clientEmail || '' };
+    subject: pv.subject || '', type: 305, docDate: todayIso(), sendEmail: false, email: pv.clientEmail || '',
+    quote: (pv.linkedQuote && pv.linkedQuote.url) ? pv.linkedQuote : null };
   showInvoicePreviewModal();
 };
 function invTotals() {
@@ -3061,7 +3062,17 @@ function renderInvoicePreviewModal() {
     <td id="rt_${i}" style="white-space:nowrap">${money((Number(it.price) || 0) * (Number(it.quantity) || 1))}</td>
     <td><button class="btn ghost" style="padding:2px 8px" onclick="invDelRow(${i})">✕</button></td>
   </tr>`).join('');
-  m.innerHTML = `<div class="modal-card" style="width:min(780px,96vw);max-height:92vh;overflow:auto">
+  // הצעת מחיר מקושרת — מוצגת בצד ימין של חלון ההפקה (אם קיימת)
+  const quote = (p.quote && p.quote.url) ? p.quote : null;
+  const quotePane = quote ? `<div style="flex:0 0 42%;min-width:0;display:flex;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
+      <div class="row-between" style="margin-bottom:6px"><b style="font-size:13px">📄 הצעת מחיר מקושרת${quote.number ? ' #' + escapeHtml(String(quote.number)) : ''}</b>
+        <a href="${quote.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none">פתח ↗</a></div>
+      <div id="invQuoteBody" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:62vh;border:1px solid var(--line);border-radius:8px;background:#fff"><div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען הצעת מחיר…</div></div>
+    </div>` : '';
+  m.innerHTML = `<div class="modal-card" style="width:${quote ? 'min(1180px,97vw)' : 'min(780px,96vw)'};max-height:92vh;overflow:auto">
+    <div style="display:flex;gap:14px;align-items:stretch">
+    ${quotePane}
+    <div style="flex:1;min-width:0">
     <div class="row-between"><h3>תצוגה מקדימה — הפקת מסמך</h3><span class="muted">${escapeHtml(p.client)}</span></div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0">
       <label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted)">סוג מסמך
@@ -3091,7 +3102,26 @@ function renderInvoicePreviewModal() {
       <button class="btn primary" onclick="showDesignedPreview(this)">👁 תצוגה מקדימה מעוצבת</button>
       <button class="btn success" onclick="generateInvoice(this)">✓ הפק בחשבונית ירוקה</button>
     </div>
+    </div>
+    </div>
   </div>`;
+  if (quote) invLoadQuotePreview(quote.url);
+}
+// טעינת הצעת המחיר המקושרת לתצוגה בצד ימין (blob כדי שתוצג inline)
+let _invQuoteBlobUrl = null;
+async function invLoadQuotePreview(url) {
+  const pane = document.getElementById('invQuoteBody'); if (!pane) return;
+  try {
+    const r = await fetch(url); const blob = await r.blob();
+    const t = (blob.type || r.headers.get('content-type') || '').toLowerCase();
+    if (_invQuoteBlobUrl) URL.revokeObjectURL(_invQuoteBlobUrl);
+    _invQuoteBlobUrl = URL.createObjectURL(blob);
+    pane.innerHTML = t.startsWith('image')
+      ? `<img src="${_invQuoteBlobUrl}" style="max-width:100%;max-height:100%;object-fit:contain">`
+      : `<iframe src="${_invQuoteBlobUrl}#toolbar=1" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
+  } catch {
+    pane.innerHTML = `<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center"><a href="${url}" target="_blank" rel="noopener" class="btn ghost" style="text-decoration:none">פתח הצעת מחיר ↗</a></div>`;
+  }
 }
 function invSummaryHtml(t) {
   return `<div>סכום ביניים (לפני מע"מ): <b>${money(t.net0)}</b></div>
