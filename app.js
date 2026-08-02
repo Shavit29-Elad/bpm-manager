@@ -561,8 +561,9 @@ window.openSendDoc = (id, number, typeName, clientNameEnc) => {
     <label style="font-size:13px;display:block;margin-bottom:4px">כתובת מייל</label>
     <input id="sendDocEmail" dir="ltr" value="${escAttr(email)}" placeholder="name@example.com" style="width:100%" onkeydown="if(event.key==='Enter')doSendDoc('${id}')">
     <div id="sendDocStatus" style="font-size:13px;min-height:16px;margin:10px 0"></div>
-    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('sendDocModal').classList.add('hidden')">ביטול</button>
-      <button class="btn primary" id="sendDocBtn" onclick="doSendDoc('${id}')">✉️ שלח</button></div>
+    <div class="modal-actions" style="flex-wrap:wrap"><button class="btn ghost" onclick="document.getElementById('sendDocModal').classList.add('hidden')">ביטול</button>
+      <button class="btn" style="background:#25D366;color:#fff" onclick="waSendForDoc('${id}')">📱 שלח בוואטסאפ</button>
+      <button class="btn primary" id="sendDocBtn" onclick="doSendDoc('${id}')">✉️ שלח במייל</button></div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   setTimeout(() => { const i = document.getElementById('sendDocEmail'); if (i && !email) i.focus(); }, 40);
@@ -580,6 +581,18 @@ window.doSendDoc = async (id) => {
     if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml(email)}</span>`;
     setTimeout(() => { const mm = document.getElementById('sendDocModal'); if (mm) mm.classList.add('hidden'); }, 1300);
   } else { if (btn) { btn.disabled = false; btn.textContent = '✉️ שלח'; } if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String((r && r.error) || ''))}</span>`; }
+};
+// שליחת מסמך בוואטסאפ (wa.me) מכל מקום שיש "שלח" — מושך את מספר הלקוח מחשבונית ירוקה, אחרת מבקש מספר
+window.waSendForDoc = async (docId) => {
+  const w = window.open('about:blank', '_blank'); // נפתח מיד בלחיצה כדי לא להיחסם ע"י הדפדפן
+  let r = await api(`/api/documents/${docId}/whatsapp`).catch(() => null);
+  if (r && r.ok && !r.waUrl) { // אין מספר שמור ללקוח — מבקשים
+    const p = prompt('הזן מספר טלפון של הלקוח (למשל 0501234567):');
+    if (!p) { if (w) w.close(); return; }
+    r = await api(`/api/documents/${docId}/whatsapp?phone=${encodeURIComponent(p)}`).catch(() => null);
+  }
+  if (r && r.waUrl) { if (w) w.location = r.waUrl; else window.open(r.waUrl, '_blank', 'noopener'); }
+  else { if (w) w.close(); alert('לא ניתן לשלוח בוואטסאפ' + (r && r.error ? ': ' + r.error : ' — נסה מסמך שקיים בחשבונית ירוקה')); }
 };
 
 // סוג המערכת החשבונאית של החברה הנוכחית (greenInvoice / paperless / null)
@@ -2202,6 +2215,13 @@ window.confirmEventRow = async (id, val) => {
   await fetch(`/api/events/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: val }) }).catch(() => {});
   renderCombined($('#content'));
 };
+// שכפול אירוע מאושר → עותק חדש ב"אירועים לאישור" ללא שיוך חשבונית (לחיוב עצמאי, למשל ללקוח אחר)
+window.duplicateEventRow = async (id) => {
+  if (!confirm('לשכפל את האירוע?\nייווצר עותק חדש ב"אירועים לאישור" ללא שיוך חשבונית — לחיוב עצמאי (למשל ללקוח אחר). תוכל לערוך אותו ולהחליף לקוח.')) return;
+  const r = await fetch(`/api/events/${id}/duplicate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r && r.id) { if (typeof clearApiCache === 'function') clearApiCache(); await renderCombined($('#content')); jumpTo('sec-pending'); }
+  else alert('שגיאה בשכפול' + (r && r.error ? ': ' + r.error : ''));
+};
 // פתיחת/הורדת מסמך משויך מחשבונית ירוקה לפי מזהה
 window.openLinkedDoc = async (docId, el) => {
   if (!docId) return;
@@ -2286,7 +2306,7 @@ function rowEvent(e) {
     <td>${invoiceCell(e)}</td>
     <td>${confBtn}</td>
     <td>${e.confirmed
-      ? `<button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button>`
+      ? `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button><button class="btn ghost" style="padding:4px 10px;font-size:12px" title="שכפול אירוע — עותק חדש ב״אירועים לאישור״ לחיוב עצמאי (למשל ללקוח אחר)" onclick="duplicateEventRow('${e.id}')">⧉ שכפול</button></div>`
       : `<button class="btn ghost" style="padding:4px 11px;font-size:12px;color:var(--danger)" onclick="deleteEventRow('${e.id}')">🗑 מחק</button>`}</td></tr>`;
 }
 

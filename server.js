@@ -208,6 +208,27 @@ add('POST', /^\/api\/events$/, async (req, res, _p, _q, body) => {
   upsertEvent(db, event); save(db); json(res, event);
 });
 
+// POST /api/events/:id/duplicate — שכפול אירוע כאירוע חדש "לאישור" (למשל חיוב לשני לקוחות שונים על אותו אירוע)
+// העותק נקי מכל שיוך חשבונית/מסמכים כדי שאפשר יהיה להפיק לו חשבונית עצמאית ללקוח אחר.
+add('POST', /^\/api\/events\/([^/]+)\/duplicate$/, (req, res, params, _q, body) => {
+  const db = load();
+  const src = db.events.find(e => e.id === params[0]);
+  if (!src) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  const copy = JSON.parse(JSON.stringify(src));
+  copy.id = id('ev');
+  copy.confirmed = false;              // ילך ל"אירועים לאישור"
+  copy.invoiceStatus = 'pending';
+  delete copy.invoiceId; delete copy.invoiceNumber; delete copy.invoiceType;
+  copy.linkedDocs = [];                // ללא מסמכים משויכים — חיוב עצמאי
+  delete copy.clientPaid;
+  copy.gcalId = null;                  // לא קשור לאירוע יומן (שכפול ידני)
+  copy.source = 'duplicate';
+  copy.createdAt = new Date().toISOString();
+  // אם נשלח לקוח אחר לשכפול — נשתמש בו (לתרחיש "אותו אירוע, לקוח אחר")
+  if (body && (body.clientId || body.clientName)) { copy.clientId = body.clientId || null; copy.clientName = body.clientName || null; }
+  db.events.push(copy); save(db); json(res, copy);
+});
+
 // GET /api/events/:id — אירוע בודד
 add('GET', /^\/api\/events\/([^/]+)$/, (req, res, params) => {
   const ev = load().events.find(e => e.id === params[0]);
