@@ -2196,7 +2196,7 @@ function evPayState(e) {
   if (types.has(300) || types.has(305)) return 'yellow';
   return 'red';
 }
-const EV_PAY_BG = { red: 'background:rgba(225,29,72,.12)', yellow: 'background:rgba(245,158,11,.16)', green: 'background:rgba(14,164,114,.13)', none: '' };
+const EV_PAY_BG = { red: 'background:rgba(225,29,72,.12)', yellow: 'background:rgba(245,158,11,.16)', green: 'background:rgba(14,164,114,.13)', none: 'background:rgba(14,164,114,.13)' };
 function invoiceCell(e) {
   const clientEnc = encodeURIComponent(e.clientName || '');
   const clientId = e.clientId || '';
@@ -2217,7 +2217,7 @@ function invoiceCell(e) {
         : `<div style="font-size:10px;color:var(--danger);font-weight:600;white-space:nowrap">חסר חיוב</div>`;
     return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">${tags}${status}${linkBtn}</div>`;
   }
-  if (isNoInvoiceEv(e)) return `<span class="tag" style="background:var(--panel2);color:var(--muted)">לא נדרש</span>`;
+  if (isNoInvoiceEv(e)) return `<span class="tag" style="background:rgba(14,164,114,.15);color:var(--accent2);font-weight:600">✓ שולם במזומן / ללא חיוב</span>`;
   const base = isOverdueUnbilled(e)
     ? `<span class="tag" style="background:rgba(225,29,72,.14);color:var(--danger);font-weight:700">חסר חשבונית!</span>`
     : `<span class="tag pending">ממתין</span>`;
