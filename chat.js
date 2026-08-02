@@ -374,6 +374,52 @@ ${supList || '(אין)'}`;
   };
 }
 
+// חילוץ שדות ממסמך הכנסה ישן (חשבונית/קבלה/הצעה שהעסק הנפיק ללקוח) — למילוי אוטומטי בקליטת מסמך ישן (אופק)
+export async function extractIncomeDocFields(fileBase64, mime, clients = []) {
+  if (!chatConfigured()) throw new Error('AI לא מוגדר (חסר ANTHROPIC_API_KEY או GEMINI_API_KEY)');
+  const mediaType = sniffMediaType(fileBase64, mime);
+  const cliList = (clients || []).slice(0, 600).map(c => `${c.id}\t${c.name}`).join('\n');
+  const system = 'אתה מומחה לקריאת מסמכי הכנסה ישראליים (חשבוניות/קבלות/הצעות מחיר שהעסק הנפיק ללקוח). אתה מחלץ נתונים במדויק ומחזיר JSON תקין בלבד, בלי טקסט לפני או אחרי.';
+  const prompt = `זהו מסמך הכנסה שהעסק הנפיק ללקוח. קרא את המסמך וחלץ את הנתונים.
+החזר אך ורק JSON במבנה המדויק:
+{"clientName":"שם הלקוח שהמסמך הופק עבורו (הנמען / לכבוד)","clientId":"","documentType":305,"documentNumber":"מספר המסמך","date":"YYYY-MM-DD","amountInclVat":0}
+
+כללים:
+- documentType: 10=הצעת מחיר, 300=חשבון עסקה, 305=חשבונית מס, 320=חשבונית מס-קבלה, 400=קבלה. בחר לפי כותרת המסמך.
+- clientName = מי שהמסמך מופנה אליו (לכבוד / שם הלקוח), ולא שם העסק המנפיק.
+- amountInclVat = הסכום הכולל לתשלום כולל מע"מ, כמספר בלבד.
+- אם הלקוח תואם לאחד מהרשימה למטה (לפי שם), החזר את ה-id שלו ב-clientId. אחרת clientId ריק.
+- אם שדה לא נמצא — החזר ריק ("") למחרוזות ו-0 למספרים.
+
+רשימת לקוחות קיימים (id<TAB>שם):
+${cliList || '(אין)'}`;
+
+  let raw;
+  if (process.env.ANTHROPIC_API_KEY) {
+    const isPdf = mediaType === 'application/pdf';
+    const block = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
+      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: fileBase64 } };
+    raw = await callAnthropicVision(system, [block, { type: 'text', text: prompt }]);
+  } else {
+    raw = await callGeminiVision(system, prompt, fileBase64, mediaType);
+  }
+  const jsonStr = (String(raw).replace(/```json/gi, '').replace(/```/g, '').match(/\{[\s\S]*\}/) || ['{}'])[0];
+  let out; try { out = JSON.parse(jsonStr); } catch { throw new Error('ה-AI לא החזיר נתונים תקינים'); }
+  const num = (v) => { const n = +String(v == null ? '' : v).replace(/[^\d.\-]/g, ''); return isNaN(n) ? 0 : n; };
+  let clientId = out.clientId && (clients || []).some(c => String(c.id) === String(out.clientId)) ? String(out.clientId) : '';
+  const nm = String(out.clientName || '').trim();
+  if (!clientId && nm) { const m = (clients || []).find(c => c.name && (c.name === nm || c.name.includes(nm) || nm.includes(c.name))); if (m) clientId = String(m.id); }
+  return {
+    clientId,
+    clientName: nm,
+    documentType: [10, 300, 305, 320, 400].includes(+out.documentType) ? +out.documentType : 305,
+    number: String(out.documentNumber || '').trim(),
+    date: /^\d{4}-\d{2}-\d{2}$/.test(out.date || '') ? out.date : '',
+    amountInclVat: num(out.amountInclVat) || 0,
+  };
+}
+
 // למידה: מפיק "עובדות לזכור" מתוך חילופי ההודעות האחרונים (לזיכרון המתמשך)
 export async function learnFromExchange(member, exchangeText) {
   const system = `אתה עוזר שמתחזק זיכרון ארוך-טווח עבור ${member.name} (${member.role}). מטרתך לזקק עובדות/העדפות/החלטות יציבות ששווה לזכור לטווח ארוך.`;

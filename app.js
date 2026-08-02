@@ -2927,6 +2927,27 @@ window.previewUploadFile = (inputEl, previewId) => {
     box.innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center">${escapeHtml(f.name)}</div>`;
   }
 };
+// מילוי אוטומטי (AI) של שדות מסמך ישן מתוך הקובץ שנבחר (מספר/סוג/תאריך/סכום/לקוח)
+window.aiFillOldDoc = async (inputEl, prefix) => {
+  const f = inputEl && inputEl.files && inputEl.files[0];
+  if (!f) return;
+  const st = document.getElementById(prefix + 'Status');
+  if (st) st.innerHTML = '<span class="muted">🤖 קורא את המסמך וממלא פרטים…</span>';
+  try {
+    const data = await new Promise((resolve) => { const rd = new FileReader(); rd.onload = () => resolve(String(rd.result).split(',')[1] || ''); rd.onerror = () => resolve(''); rd.readAsDataURL(f); });
+    if (!data) { if (st) st.innerHTML = ''; return; }
+    const r = await fetch(`/api/ai/extract-income-doc?companyId=${encodeURIComponent(state.company)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data, mime: f.type || 'application/pdf', companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (!r || r.error || !r.fields) { if (st) st.innerHTML = r && r.error ? `<span class="muted">מילוי אוטומטי לא זמין (${escapeHtml(String(r.error))}) — מלא ידנית</span>` : ''; return; }
+    const fx = r.fields;
+    const setV = (id, v) => { const el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+    const typeEl = document.getElementById(prefix + 'Type'); if (typeEl && fx.documentType && [...typeEl.options].some(o => String(o.value) === String(fx.documentType))) typeEl.value = String(fx.documentType);
+    setV(prefix + 'Number', fx.number);
+    setV(prefix + 'Date', fx.date);
+    if (fx.amountInclVat) setV(prefix + 'Amount', fx.amountInclVat);
+    if (prefix === 'oi' && fx.clientName) setV('oiClient', fx.clientName);
+    if (st) st.innerHTML = '<span style="color:var(--accent2)">✓ מולא אוטומטית מהמסמך — בדוק ותקן אם צריך</span>';
+  } catch { if (st) st.innerHTML = ''; }
+};
 // ===== העלאת מסמך ישן (חשבונית ממערכת קודמת) וצירופו לאירוע — רלוונטי לאופק =====
 window.openAttachDoc = (eventId, presetType) => {
   let m = document.getElementById('attachDocModal');
@@ -2946,7 +2967,7 @@ window.openAttachDoc = (eventId, presetType) => {
           <select id="atType" style="width:100%;padding:7px 8px;margin-top:3px">
             ${opt(300, 'חשבון עסקה')}${opt(305, 'חשבונית מס')}${opt(320, 'חשבונית מס-קבלה')}${opt(400, 'קבלה')}${opt(10, 'הצעת מחיר')}
           </select></label>
-        <label style="display:block;font-size:13px;margin-top:8px">קובץ (PDF/תמונה)<input id="atFile" type="file" accept=".pdf,image/*" style="width:100%;padding:5px 0;margin-top:3px" onchange="previewUploadFile(this,'atPreview')"></label>
+        <label style="display:block;font-size:13px;margin-top:8px">קובץ (PDF/תמונה) <span class="muted" style="font-size:11px">— ימולא אוטומטית 🤖</span><input id="atFile" type="file" accept=".pdf,image/*" style="width:100%;padding:5px 0;margin-top:3px" onchange="previewUploadFile(this,'atPreview');aiFillOldDoc(this,'at')"></label>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
           <label style="font-size:13px">מספר מסמך<input id="atNumber" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 1024"></label>
           <label style="font-size:13px">תאריך<input id="atDate" type="date" value="${today}" style="width:100%;padding:7px 8px;margin-top:3px"></label>
@@ -3015,7 +3036,7 @@ window.openOldInvoice = async (mode, oldInvoiceId, presetType) => {
       <div style="flex:1 1 320px;min-width:260px">
         <label style="display:block;font-size:13px">סוג מסמך
           <select id="oiType" style="width:100%;padding:7px 8px;margin-top:3px">${typeOpts}</select></label>
-        <label style="display:block;font-size:13px;margin-top:8px">קובץ (PDF/תמונה)<input id="oiFile" type="file" accept=".pdf,image/*" style="width:100%;padding:5px 0;margin-top:3px" onchange="previewUploadFile(this,'oiPreview')"></label>
+        <label style="display:block;font-size:13px;margin-top:8px">קובץ (PDF/תמונה) <span class="muted" style="font-size:11px">— ימולא אוטומטית 🤖</span><input id="oiFile" type="file" accept=".pdf,image/*" style="width:100%;padding:5px 0;margin-top:3px" onchange="previewUploadFile(this,'oiPreview');aiFillOldDoc(this,'oi')"></label>
         ${isReceipt ? '' : `<label style="display:block;font-size:13px;margin-top:8px">שם הלקוח<input id="oiClient" list="oiClients" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="שם הלקוח בחשבונית ירוקה"></label>
         <label style="display:block;font-size:13px;margin-top:8px">תיאור (זמר/אירוע — לא חובה)<input id="oiDesc" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל: הגברה - אירוע נובמבר"></label>`}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">

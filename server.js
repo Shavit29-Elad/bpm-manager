@@ -23,7 +23,7 @@ import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
 import { buildAppMap } from './appMap.js';
-import { chatWithMember, chatWithMemberVision, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields } from './chat.js';
+import { chatWithMember, chatWithMemberVision, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields } from './chat.js';
 import mailer from './mailer.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
 
@@ -1516,6 +1516,20 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/ai-extract$/, async (req, res, par
     const suppliers = await greenInvoice.listSuppliers().catch(() => []);
     const fields = await extractInvoiceFields(b64, mime, suppliers);
     const db2 = load(); db2.draftAi = db2.draftAi || {}; db2.draftAi[draftId] = fields; save(db2);
+    json(res, { ok: true, fields });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/ai/extract-income-doc { data(base64), mime } — חילוץ שדות ממסמך הכנסה ישן (אופק) למילוי אוטומטי
+add('POST', /^\/api\/ai\/extract-income-doc$/, async (req, res, _p, q, body) => {
+  if (!chatConfigured()) return json(res, { error: 'AI לא מוגדר. הוסף ANTHROPIC_API_KEY (או GEMINI_API_KEY) בהגדרות Render.' }, 400);
+  const data = body && body.data ? String(body.data) : '';
+  if (!data) return json(res, { error: 'חסר קובץ' }, 400);
+  const mime = (body && body.mime) || 'application/pdf';
+  try {
+    let clients = [];
+    try { if (greenInvoice.haveCredentials()) clients = await greenInvoice.listClients(); } catch { }
+    const fields = await extractIncomeDocFields(data, mime, clients);
     json(res, { ok: true, fields });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
