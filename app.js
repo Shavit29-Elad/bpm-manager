@@ -2768,10 +2768,10 @@ window.openOldInvoice = async (mode, oldInvoiceId, presetType) => {
   const today = new Date().toISOString().slice(0, 10);
   const isReceipt = mode === 'receipt';
   const opt = (v, l) => `<option value="${v}" ${String(presetType) === String(v) ? 'selected' : ''}>${l}</option>`;
-  const typeOpts = isReceipt ? `${opt(320, 'חשבונית מס-קבלה')}${opt(400, 'קבלה')}` : `${opt(300, 'חשבון עסקה')}${opt(305, 'חשבונית מס')}`;
+  const typeOpts = isReceipt ? `${opt(320, 'חשבונית מס-קבלה')}${opt(400, 'קבלה')}` : `${opt(300, 'חשבון עסקה')}${opt(305, 'חשבונית מס')}${opt(320, 'חשבונית מס-קבלה')}${opt(400, 'קבלה')}`;
   m.innerHTML = `<div class="modal-card" style="width:min(480px,95vw)">
-    <div class="row-between"><h3>${isReceipt ? '✓ צירוף קבלה לחשבונית ישנה' : '➕ העלאת חשבונית ישנה (עסקה/מס)'}</h3></div>
-    <p class="muted" style="font-size:12.5px">${isReceipt ? 'צרף מס-קבלה/קבלה שהופקה — החשבונית תיסגר ותרד מ״חשבוניות פתוחות״.' : 'חשבונית פתוחה מאירוע ישן (לפני יולי) שאינו במערכת — תופיע ב״חשבוניות פתוחות״ למעקב, עד שתצרף קבלה או תפיק מסמך המשך בחשבונית ירוקה.'}</p>
+    <div class="row-between"><h3>${isReceipt ? '✓ צירוף קבלה לחשבונית ישנה' : '➕ העלאת מסמך הכנסה ישן'}</h3></div>
+    <p class="muted" style="font-size:12.5px">${isReceipt ? 'צרף מס-קבלה/קבלה שהופקה — החשבונית תיסגר ותרד מ״חשבוניות פתוחות״.' : 'מסמך הכנסה מהמערכת הקודמת (לפני יולי) שאינו כאן. עסקה/מס יופיעו ב״חשבוניות פתוחות״ למעקב; מס-קבלה/קבלה נשמרים לתיעוד ולשיוך בהתאמות בנק.'}</p>
     <label style="display:block;font-size:13px;margin-top:8px">סוג מסמך
       <select id="oiType" style="width:100%;padding:7px 8px;margin-top:3px">${typeOpts}</select></label>
     ${isReceipt ? '' : `<label style="display:block;font-size:13px;margin-top:8px">שם הלקוח<input id="oiClient" list="oiClients" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="שם הלקוח בחשבונית ירוקה"></label>
