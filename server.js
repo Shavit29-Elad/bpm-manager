@@ -3895,6 +3895,8 @@ const server = http.createServer((req, res) => {
       // כל הבקשה רצה בהקשר החברה הנבחרת — כך שקריאות חשבונית ירוקה משתמשות במפתחות/מטמון של אותה חברה בלבד.
       // הקשר החברה נלקח מה-query, ואם חסר — מגוף הבקשה (הגנה לכתיבות שלא צירפו companyId ל-URL).
       const _cid = q.companyId || (body && body.companyId) || undefined;
+      // סנכרון ההערה הקבועה למסמכים (docRemark) של החברה מה-DB — כך שתוזרק לכל מסמך שנוצר, גם בלי כניסה מראש לפרטי העסק ואחרי ריסטארט
+      try { const _c = _cid || giCompanyId(); const _pr = (load().businessProfiles || {})[_c]; greenInvoice.setCompanyRemark(_c, (_pr && _pr.docRemark != null) ? _pr.docRemark : defaultDocRemark(_c)); } catch { }
       try { await greenInvoice.withCompany(_cid, () => route.handler(req, res, params, q, body)); }
       catch (e) { json(res, { error: e.message }, 500); }
     });
