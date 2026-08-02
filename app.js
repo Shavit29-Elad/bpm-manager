@@ -1494,6 +1494,7 @@ function showDocReadyPopup(doc, typeName) {
     <p class="muted" style="font-size:13px;margin:2px 0 12px">מה תרצה לעשות עכשיו?</p>
     <div style="display:flex;flex-direction:column;gap:9px">
       ${url ? `<button class="btn primary" onclick="autoDownloadDoc('${url}')">⬇ הורדה למחשב</button>` : ''}
+      <a id="waSendBtn" class="btn" style="background:#25D366;color:#fff;pointer-events:none;opacity:.6;text-decoration:none" target="_blank" rel="noopener">📱 טוען וואטסאפ…</a>
       <button class="btn success" onclick="docReadySend('${doc.id}',this)">✉️ שליחה למייל הלקוח</button>
       ${url ? `<button class="btn ghost" onclick="previewDoc('${url}')">👁 צפייה</button>` : ''}
     </div>
@@ -1501,7 +1502,29 @@ function showDocReadyPopup(doc, typeName) {
     <div class="modal-actions" style="margin-top:8px"><button class="btn ghost" onclick="document.getElementById('docReadyModal').classList.add('hidden')">סגור</button></div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  // כפתור "שלח בוואטסאפ" — טוען קישור wa.me מוכן (מספר הלקוח מחשבונית ירוקה + הודעה + קישור למסמך)
+  (async () => {
+    const a = document.getElementById('waSendBtn'); if (!a) return;
+    try {
+      const r = await api(`/api/documents/${doc.id}/whatsapp`).catch(() => null);
+      if (r && r.ok && r.waUrl) {
+        a.href = r.waUrl; a.style.pointerEvents = ''; a.style.opacity = '';
+        a.textContent = `📱 שלח בוואטסאפ${r.phone ? ' · ' + r.phone : ''}`;
+      } else {
+        a.textContent = '📱 שלח בוואטסאפ (הזן מספר)'; a.style.pointerEvents = ''; a.style.opacity = ''; a.style.cursor = 'pointer';
+        a.removeAttribute('href'); a.onclick = (ev) => { ev.preventDefault(); waSendManual(doc.id); };
+      }
+    } catch { a.textContent = '📱 שלח בוואטסאפ (הזן מספר)'; a.style.pointerEvents = ''; a.style.opacity = ''; a.onclick = (ev) => { ev.preventDefault(); waSendManual(doc.id); }; }
+  })();
 }
+// שליחה בוואטסאפ כשאין מספר שמור ללקוח — מבקשים מספר ופותחים wa.me
+window.waSendManual = async (docId) => {
+  const p = prompt('הזן מספר טלפון של הלקוח (למשל 0501234567):'); if (!p) return;
+  const w = window.open('about:blank', '_blank'); // פותחים חלון מיד (לחיצה) כדי לא להיחסם
+  const r = await api(`/api/documents/${docId}/whatsapp?phone=${encodeURIComponent(p)}`).catch(() => null);
+  if (r && r.waUrl) { if (w) w.location = r.waUrl; else window.open(r.waUrl, '_blank', 'noopener'); }
+  else { if (w) w.close(); alert('לא ניתן לבנות קישור וואטסאפ' + (r && r.error ? ': ' + r.error : '')); }
+};
 window.docReadySend = async (docId, btn) => {
   const st = document.getElementById('docReadyStatus');
   if (btn) btn.disabled = true;

@@ -1816,6 +1816,39 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
   }
 });
 
+// טלפון ישראלי → ספרות בפורמט בינלאומי (972...) עבור קישור wa.me
+function ilPhoneDigits(p) {
+  if (!p) return null;
+  let d = String(p).replace(/[^\d]/g, '');
+  if (!d) return null;
+  if (d.startsWith('972')) return d;
+  if (d.startsWith('0')) return '972' + d.slice(1);
+  if (d.length === 9 || d.length === 10) return '972' + d.replace(/^0/, '');
+  return d;
+}
+// GET /api/documents/:id/whatsapp[?phone=] — בונה קישור wa.me מוכן לשליחת המסמך ללקוח בוואטסאפ (לחיצה אחת, מהמספר של המשתמש)
+add('GET', /^\/api\/documents\/([^/]+)\/whatsapp$/, async (req, res, params, q) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { ok: false, error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const doc = await greenInvoice.getDocument(params[0]);
+    const clientId = doc.client?.id || null;
+    const clientName = doc.client?.name || '';
+    let phone = q.phone || doc.client?.phone || null;
+    if (!phone && clientId) { try { const cls = await greenInvoice.listClients(); const c = cls.find(x => x.id === clientId); phone = c?.phone || null; } catch { } }
+    const typeName = ({ 10: 'הצעת מחיר', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 330: 'חשבונית זיכוי' })[Number(doc.type)] || 'מסמך';
+    const number = doc.number || '';
+    const amount = Number(doc.amount ?? doc.total ?? doc.sum ?? 0);
+    const url = (doc.url && (doc.url.he || doc.url.origin || doc.url.pdf)) || (typeof doc.url === 'string' ? doc.url : '');
+    let bizName = ''; try { bizName = ((load().businessProfiles || {})[q.companyId] || {}).name || ''; } catch { }
+    const amt = amount ? `${amount.toLocaleString('he-IL')} ₪` : '';
+    const text = `שלום${clientName ? ' ' + clientName : ''}, מצורפת ${typeName}${number ? ` מס' ${number}` : ''}${amt ? ` על סך ${amt}` : ''}.`
+      + (url ? `\nלצפייה והורדה: ${url}` : '') + (bizName ? `\nתודה, ${bizName}` : '');
+    const digits = ilPhoneDigits(phone);
+    const waUrl = digits ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}` : null;
+    json(res, { ok: true, phone: phone || null, waUrl, text, clientName });
+  } catch (e) { json(res, { ok: false, error: e.message }, 500); }
+});
+
 // POST /api/documents/consolidate — מסמך מרוכז: כמה חשבוניות עסקה (300) של אותו לקוח → מסמך מס (305) או מס-קבלה (320) מסכם אחד
 // { sourceIds:[...], type:305|320, date?, items?(ערוכות), discount?, payment?(ל-320), remarks?, sendEmail?, email?, skipDateValidation? }
 // המסמך המסכם מקושר לכל מקורות ה-300 (linkedDocumentIds) → כל העסקאות נסגרות בחשבונית ירוקה; אירועים מקושרים מסומנים.
