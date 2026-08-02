@@ -868,10 +868,14 @@ add('POST', /^\/api\/old-invoices$/, async (req, res, _p, q, body) => {
   const numStr = (body.number != null && String(body.number).trim() !== '') ? String(body.number).trim() : null;
   // מניעת כפילות (אך ורק לחשבוניות ישנות של אופק): אותו קובץ, או אותו מספר+סוג מסמך, לא ייקלטו פעמיים
   const contentHash = crypto.createHash('sha256').update(String(body.data || '')).digest('hex');
-  const dupe = (db.oldInvoices || []).find(r => r.companyId === cid && (r.linkedDocs || []).some(d =>
-    (d.contentHash && d.contentHash === contentHash) ||
-    (numStr && d.number && String(d.number) === numStr && Number(d.type || 0) === Number(type || 0))));
-  if (dupe) return json(res, { error: 'המסמך הזה כבר קיים בחשבוניות פתוחות (אותו קובץ או אותו מספר מסמך) — לא נקלט שוב.', duplicate: true }, 409);
+  const dupMatch = (d) => (d.contentHash && d.contentHash === contentHash) ||
+    (numStr && d.number && String(d.number) === numStr && Number(d.type || 0) === Number(type || 0));
+  const dupe = (db.oldInvoices || []).find(r => r.companyId === cid && (r.linkedDocs || []).some(dupMatch));
+  if (dupe) {
+    // מחזירים גם את המסמך הקיים כדי שהצד לקוח יוכל לשייך אותו אוטומטית לתנועת הבנק
+    const existingDoc = (dupe.linkedDocs || []).find(dupMatch) || null;
+    return json(res, { error: 'המסמך הזה כבר קיים בחשבוניות פתוחות (אותו קובץ או אותו מספר מסמך) — לא נקלט שוב.', duplicate: true, existingDoc, clientName: dupe.clientName || '', oldInvoiceId: dupe.id }, 409);
+  }
   const saved = await saveFile({ employeeId: 'oldinv', kind: 'old-invoice', filename: body.filename || 'document', mime: body.mime || 'application/octet-stream', data: body.data });
   const doc = { id: saved.id, number: numStr, type, date: body.date || null, amount: (body.amount != null && body.amount !== '') ? Number(body.amount) : null, url: '/api/files/' + saved.id, uploaded: true, contentHash };
   const rec = { id: id('oinv'), companyId: cid, clientName: String(body.clientName || '').trim() || '—', description: String(body.description || '').trim(), linkedDocs: [doc], createdAt: new Date().toISOString() };

@@ -3075,22 +3075,32 @@ window.submitOldInvoice = async (mode, oldInvoiceId, btn) => {
   if (mode === 'create') { body.clientName = clientName; body.description = description; }
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) { btn.disabled = false; btn.textContent = '✓'; }
-  if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${(r && r.error) || 'שגיאה'}</span>`; return; }
+  const _lm = document.getElementById('linkModal');
+  const inBank = mode === 'create' && window._linkTxId && _lm && !_lm.classList.contains('hidden');
+  const entryFrom = (d) => ({
+    id: d.id, number: d.number, type: Number(d.type),
+    clientName: (r.clientName || clientName),
+    amount: (d.amount != null ? Number(d.amount) : (Number(amount) || 0)),
+    date: d.date || date || null, url: d.url || ('/api/files/' + d.id), kind: 'income',
+  });
+  // המסמך כבר קיים (כפילות) — אם אנחנו בשיוך בנק, נשייך את המסמך הקיים לתנועה ונשמור אוטומטית (במקום להיכשל)
+  if (r && r.error) {
+    if (inBank && r.duplicate && r.existingDoc && typeof linkAdd === 'function') {
+      document.getElementById('oldInvModal').classList.add('hidden');
+      linkAdd(jenc(entryFrom(r.existingDoc)));
+      if (typeof linkSave === 'function') await linkSave();
+      return;
+    }
+    if (st) st.innerHTML = `<span style="color:var(--danger)">${(r && r.error) || 'שגיאה'}</span>`;
+    return;
+  }
   document.getElementById('oldInvModal').classList.add('hidden');
   if (typeof clearApiCache === 'function') clearApiCache(); // כדי שמסמכי הלקוח (כולל המסמך שהועלה) יטענו מחדש בשיוך בנק
   if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices();
-  // אם ההעלאה נעשתה מתוך חלונית שיוך תנועת בנק — לשייך את המסמך שהועלה ישירות לתנועה (מתווסף לבחירה; נותר ללחוץ "שמור")
-  const _lm = document.getElementById('linkModal');
-  if (mode === 'create' && window._linkTxId && _lm && !_lm.classList.contains('hidden') && r.doc && typeof linkAdd === 'function') {
-    const entry = {
-      id: r.doc.id, number: r.doc.number, type: Number(r.doc.type),
-      clientName: clientName,
-      amount: (r.doc.amount != null ? Number(r.doc.amount) : (Number(amount) || 0)),
-      date: r.doc.date || date || null, url: r.doc.url || null, kind: 'income',
-    };
-    linkAdd(jenc(entry));
-    const lst = document.getElementById('linkStatus');
-    if (lst) lst.innerHTML = `<span style="color:var(--accent2)">✓ המסמך הועלה ושויך לתנועה — לחץ "שמור" לאישור</span>`;
+  // אם ההעלאה נעשתה מתוך חלונית שיוך תנועת בנק — לשייך את המסמך שהועלה ישירות לתנועה ולשמור אוטומטית
+  if (inBank && r.doc && typeof linkAdd === 'function') {
+    linkAdd(jenc(entryFrom(r.doc)));
+    if (typeof linkSave === 'function') await linkSave(); // שיוך אוטומטי מלא לתנועה (אם הסכום מכסה — נשמר ונסגר; אחרת יופיע חסר לכיסוי)
   } else if (window._linkTxId && _lm && !_lm.classList.contains('hidden') && _linkClientName && typeof linkPickContactByName === 'function') {
     linkPickContactByName(_linkClientName);
   }
@@ -6510,7 +6520,7 @@ window.renderLinkDocs = () => {
   const isExp = _linkDocsKind === 'expense';
   const q = (_linkQuery || '').trim();
   const qMatch = (d) => !q || String(d.number || '').includes(q) || (d.category || d.description || '').includes(q);
-  const amountOf = (d) => isExp ? (d.amountIncVat ?? d.amount) : d.amountIncVat;
+  const amountOf = (d) => isExp ? (d.amountIncVat ?? d.amount) : (d.amountIncVat ?? d.amount); // מסמכי הכנסה שהועלו ידנית מחזירים amount (לא amountIncVat) — חובה fallback כדי שהכיסוי לא יהיה 0
   let avail = _linkClientDocs.filter(d => !ids.has(d.id) && qMatch(d) && _docFromMay26(d));
   if (!isExp) {
     // ברירת מחדל: חשבונית מס / מס-קבלה / קבלה (חיוביות בלבד). עם הסימון — גם זיכוי (330) וקבלות שליליות.
