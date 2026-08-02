@@ -1765,8 +1765,9 @@ add('GET', /^\/api\/documents\/([^/]+)\/url$/, async (req, res, params) => {
 });
 
 // POST /api/documents/:id/send { email? } — שליחת מסמך קיים במייל דרך חשבונית ירוקה
-add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, _q, body) => {
+add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, body) => {
   const email0 = String((body && body.email) || '').trim();
+  const _cid = (q && q.companyId) || (body && body.companyId) || undefined;
   // מסמך שהועלה ידנית (אינו בחשבונית ירוקה) — שולחים את הקובץ עצמו במייל דרך SMTP
   try {
     const f = await getFile(params[0]);
@@ -1780,15 +1781,36 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, _q, bo
   } catch {}
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
-    const email = email0;
-    let emails = email ? [email] : [];
+    let emails = email0 ? [email0] : [];
+    let docMeta = null;
+    // ברירת מחדל — כתובות המייל השמורות ללקוח במסמך (וגם משמש לשם הקובץ/כותרת ב-fallback)
+    try { docMeta = await greenInvoice.getDocument(params[0]); } catch { }
     if (!emails.length) {
-      // ברירת מחדל — כתובות המייל השמורות ללקוח במסמך
-      try { const doc = await greenInvoice.getDocument(params[0]); const ce = (doc && doc.client && doc.client.emails) || []; emails = (Array.isArray(ce) ? ce : []).map(String).filter(Boolean); } catch { }
+      const ce = (docMeta && docMeta.client && docMeta.client.emails) || [];
+      emails = (Array.isArray(ce) ? ce : []).map(String).filter(Boolean);
     }
     if (!emails.length) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
-    const r = await greenInvoice.sendDocument(params[0], emails);
-    json(res, { ok: true, sentTo: emails, result: r });
+    // ניסיון ראשון: שליחה מקורית דרך חשבונית ירוקה
+    try {
+      const r = await greenInvoice.sendDocument(params[0], emails);
+      return json(res, { ok: true, sentTo: emails, result: r });
+    } catch (giErr) {
+      // חלק מחשבונות חשבונית ירוקה מחזירים 404 ל-endpoint השליחה — נופלים חזרה לשליחת SMTP עם ה-PDF מצורף
+      if (!mailer.mailerConfigured()) return json(res, { error: `שליחה דרך חשבונית ירוקה נכשלה (${giErr.message}) ושליחת SMTP אינה מוגדרת` }, 502);
+      const pdf = await greenInvoice.getDocumentPdf(params[0]);
+      const num = (docMeta && (docMeta.number != null ? docMeta.number : docMeta.docNumber)) || '';
+      const _biz = bizProfile(load(), _cid || giCompanyId());
+      const fromAddr = (_biz && _biz.senderEmail) || undefined;
+      const bizName = (_biz && (_biz.name || _biz.businessName)) || '';
+      await mailer.sendMail({
+        to: emails,
+        from: fromAddr,
+        subject: `מסמך${num ? ' מס\' ' + num : ''}${bizName ? ' — ' + bizName : ''}`,
+        text: `שלום,\nמצורף מסמך${num ? ' מס\' ' + num : ''}.\nתודה${bizName ? ', ' + bizName : ''}.`,
+        attachments: [{ filename: `document-${String(num || params[0]).replace(/[^\w.-]/g, '_')}.pdf`, content: Buffer.from(pdf.base64, 'base64') }],
+      });
+      return json(res, { ok: true, sentTo: emails, viaSmtp: true });
+    }
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 

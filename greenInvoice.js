@@ -421,12 +421,31 @@ export async function openQuotes({ months = 36 } = {}) {
 }
 // מסמך מלא לפי מזהה
 export async function getDocument(id) { return api(`/documents/${encodeURIComponent(id)}`); }
+// קישורי הורדה למסמך (he/en/origin) — GET /documents/:id/download/links
+export async function documentDownloadLinks(id) { return api(`/documents/${encodeURIComponent(id)}/download/links`); }
+// שליפת ה-PDF של מסמך קיים כ-base64 (דרך קישורי ההורדה, ואם אין — דרך url של המסמך). לשליחה עצמאית במייל.
+export async function getDocumentPdf(id) {
+  let url = null;
+  try {
+    const links = await documentDownloadLinks(id);
+    if (links && typeof links === 'object') url = links.origin || links.he || links.en || null;
+    else if (typeof links === 'string') url = links;
+  } catch { /* נמשיך לגיבוי */ }
+  if (!url) {
+    try { const d = await getDocument(id); url = (d && d.url && (d.url.origin || d.url.he || d.url.pdf)) || (typeof (d && d.url) === 'string' ? d.url : null); } catch { }
+  }
+  if (!url) throw new Error('לא נמצא קובץ PDF להורדה עבור המסמך');
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`הורדת PDF נכשלה: ${r.status}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  return { base64: buf.toString('base64'), mime: 'application/pdf' };
+}
 // שליחת מסמך קיים במייל דרך חשבונית ירוקה (POST /documents/:id/send)
+// לפי ה-API: השדה הוא emails (מערך). בחלק מהחשבונות ה-endpoint אינו זמין ומחזיר 404 — לכן השרת נופל חזרה לשליחת SMTP עם PDF מצורף.
 export async function sendDocument(id, emails, opts = {}) {
   const list = (Array.isArray(emails) ? emails : [emails]).map(e => String(e || '').trim()).filter(Boolean);
   if (!list.length) throw new Error('חסרה כתובת מייל');
-  // לפי ה-API של חשבונית ירוקה: POST /documents/:id/send עם body { email } (יחיד). כתובת ריקה = לכתובות השמורות של הלקוח.
-  const body = { email: list[0] };
+  const body = { emails: list };
   if (opts.message) body.message = String(opts.message);
   const r = await api(`/documents/${encodeURIComponent(id)}/send`, { method: 'POST', body });
   clearDataCache();
