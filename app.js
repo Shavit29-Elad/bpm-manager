@@ -2075,7 +2075,9 @@ async function renderMonthCalendar() {
       ${cells}
     </div>`;
 }
-const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור (ללא מע"מ)</th><th>תמחור כולל מע"מ</th><th>עובדים</th><th>קבלנים</th><th>חיוב</th><th>אישור</th><th>פעולה</th></tr></thead>`;
+const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור (ללא מע"מ)</th><th>תמחור כולל מע"מ</th><th>עובדים</th><th>קבלנים</th><th>מסמכי חיוב</th><th>אישור</th><th>פעולה</th></tr></thead>`;
+// תוויות קצרות לתאי מסמכי החיוב (כדי שהתג יישב על שורה אחת ולא ייתפס 2 שורות)
+const SHORT_BILL = { 10: 'הצעה', 300: 'עסקה', 305: 'מס', 320: 'מס-קבלה', 400: 'קבלה', 330: 'זיכוי' };
 let _evMonthFilter = 'all';
 window.setEvMonth = (v) => { _evMonthFilter = v; renderCombined($('#content')); };
 let _evClientFilter = 'all';
@@ -2112,21 +2114,38 @@ const isOverdueUnbilled = (e) => {
   const mk = (e.date || e.dateRaw || '').slice(0, 7);
   return Boolean(mk) && mk < curMonthKey();
 };
+// מצב מסמכי החיוב של אירוע — לצביעת השורה ולסטטוס:
+//   'red'    — אין מסמך חיוב (עסקה/מס/מס-קבלה). אדום גם אם משויכת רק הצעת מחיר.
+//   'yellow' — משויכת חשבונית עסקה (300) או חשבונית מס (305) → ממתין לתשלום הלקוח.
+//   'green'  — הלקוח שילם: חשבונית מס-קבלה (320), או חשבונית מס (305) + קבלה (400) יחד.
+//   'none'   — לא נדרשת חשבונית (סומן ידנית).
+function evPayState(e) {
+  if (isNoInvoiceEv(e)) return 'none';
+  const types = new Set((Array.isArray(e.linkedDocs) ? e.linkedDocs : []).map(d => Number(d.type)));
+  if (e.invoiceType) types.add(Number(e.invoiceType)); // תאימות לאחור (אירועים שסומנו לפני שמירת linkedDocs)
+  if (types.has(320) || (types.has(305) && types.has(400))) return 'green';
+  if (types.has(300) || types.has(305)) return 'yellow';
+  return 'red';
+}
+const EV_PAY_BG = { red: 'background:rgba(225,29,72,.12)', yellow: 'background:rgba(245,158,11,.16)', green: 'background:rgba(14,164,114,.13)', none: '' };
 function invoiceCell(e) {
   const clientEnc = encodeURIComponent(e.clientName || '');
   const clientId = e.clientId || '';
   // כפתור שיוך עד 4 מסמכים — רק מסמכים של אותו לקוח (linkForEvent אוכף את זה)
   const linkBtn = `<button class="btn ghost" style="padding:3px 9px;font-size:11px" onclick="linkForEvent('${e.id}','${clientEnc}','${clientId}')">🔗 שייך מסמכים</button>`;
   const docs = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
-  // "שולם" רק כשיש חשבונית מס-קבלה (320) או קבלה (400) — עסקה/מס בלבד נשאר פתוח
-  const isReceipt = docs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(e.invoiceType));
+  const ps = evPayState(e); // אדום=אין חיוב · צהוב=ממתין לתשלום · ירוק=שולם
   if (isBilledEv(e) || docs.length) {
+    // תג קומפקטי בשורה אחת (תווית קצרה + מספר + 👁) — כדי שלא ייתפס 2 שורות
+    const tagCss = 'font-size:10px;padding:1px 7px;line-height:1.5;white-space:nowrap;cursor:pointer;text-decoration:underline';
     const tags = docs.length
-      ? docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה / הורדה / מסמך המשך" onclick="previewLinkedDoc('${d.id}',this,'${e.id}')">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ')
-      : `<span class="tag invoiced" ${e.invoiceId ? `style="cursor:pointer;text-decoration:underline" title="צפייה / הורדה / מסמך המשך" onclick="previewLinkedDoc('${e.invoiceId}',this,'${e.id}')"` : ''}>שויך · ${DOC_TYPE_SHORT[e.invoiceType] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}${e.invoiceId ? ' 👁' : ''}</span>`;
-    const status = isReceipt
-      ? `<div style="font-size:10.5px;color:var(--accent2);font-weight:700">שולם ✓</div>`
-      : `<div style="font-size:10.5px;color:var(--muted)">ממתין לקבלה</div>`;
+      ? docs.map(d => `<span class="tag invoiced" style="${tagCss}" title="צפייה / הורדה / מסמך המשך" onclick="previewLinkedDoc('${d.id}',this,'${e.id}')">${SHORT_BILL[Number(d.type)] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join('')
+      : `<span class="tag invoiced" style="font-size:10px;padding:1px 7px;line-height:1.5;white-space:nowrap${e.invoiceId ? ';cursor:pointer;text-decoration:underline' : ''}" ${e.invoiceId ? `title="צפייה / הורדה / מסמך המשך" onclick="previewLinkedDoc('${e.invoiceId}',this,'${e.id}')"` : ''}>${SHORT_BILL[Number(e.invoiceType)] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}${e.invoiceId ? ' 👁' : ''}</span>`;
+    const status = ps === 'green'
+      ? `<div style="font-size:10px;color:var(--accent2);font-weight:700;white-space:nowrap">שולם ✓</div>`
+      : ps === 'yellow'
+        ? `<div style="font-size:10px;color:#b45309;font-weight:600;white-space:nowrap">ממתין לתשלום</div>`
+        : `<div style="font-size:10px;color:var(--danger);font-weight:600;white-space:nowrap">חסר חיוב</div>`;
     return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">${tags}${status}${linkBtn}</div>`;
   }
   if (isNoInvoiceEv(e)) return `<span class="tag" style="background:var(--panel2);color:var(--muted)">לא נדרש</span>`;
@@ -2207,9 +2226,10 @@ function rowEvent(e) {
   const confBtn = e.confirmed
     ? `<button class="btn success" style="padding:4px 12px;font-size:12px" onclick="confirmEventRow('${e.id}',false)">מאושר ✓</button>`
     : `<button class="btn ghost" style="padding:4px 12px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">ערוך ואשר →</button>`;
-  const rowBg = isOverdueUnbilled(e) ? 'background:rgba(225,29,72,.06)'
-    : (!e.confirmed && e._possibleMatch) ? 'background:rgba(245,158,11,.14)'
-    : (e.confirmed ? 'background:rgba(14,164,114,.05)' : '');
+  // שורה מאושרת נצבעת לפי מצב מסמכי החיוב: 🔴 אין חיוב · 🟡 ממתין לתשלום · 🟢 שולם
+  const rowBg = (!e.confirmed && e._possibleMatch) ? 'background:rgba(245,158,11,.14)'
+    : e.confirmed ? EV_PAY_BG[evPayState(e)]
+    : (isOverdueUnbilled(e) ? 'background:rgba(225,29,72,.06)' : '');
   return `<tr${rowBg ? ` style="${rowBg}"` : ''}>
     <td style="white-space:nowrap">${ddmy(e.date || e.dateRaw)}</td>
     <td>${e.artist || '—'}${(!e.confirmed && e._possibleMatch) ? `<div style="font-size:11px;color:#b45309;margin-top:2px">🟡 אולי כבר קיים במאושרים · ${escapeHtml(e._possibleMatch.why)}${e._possibleMatch.client ? ` · ${escapeHtml(e._possibleMatch.client)}` : ''}</div>` : ''}</td>
