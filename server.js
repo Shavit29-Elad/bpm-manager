@@ -1813,12 +1813,15 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
   // חשבוניות ישנות שהועלו ידנית לאירוע (עסקה/מס) — פתוחות עד שמצורפת קבלה/מס-קבלה לאותו אירוע
   try {
     const db = load();
+    const seenUp = new Set(); // דדופ: חשבונית שהועלתה וקושרה לכמה אירועים תופיע פעם אחת בלבד (לפי מספר+סוג)
     for (const ev of (db.events || [])) {
       if (cid && ev.companyId && ev.companyId !== cid) continue;
       const linked = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
       if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue; // נסגר בקבלה/מס-קבלה
       for (const d of linked) {
         if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
+        const upKey = (d.number || d.id) + '|' + Number(d.type);
+        if (seenUp.has(upKey)) continue; seenUp.add(upKey);
         docs.push({
           id: d.id, number: d.number, type: Number(d.type),
           date: d.date || ev.date || ev.dateRaw || null,
@@ -1837,6 +1840,8 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
       if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue;
       for (const d of linked) {
         if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
+        const upKey = (d.number || d.id) + '|' + Number(d.type);
+        if (seenUp.has(upKey)) continue; seenUp.add(upKey);
         docs.push({
           id: d.id, number: d.number, type: Number(d.type),
           date: d.date || rec.createdAt || null,
@@ -2723,9 +2728,32 @@ add('GET', /^\/api\/clients$/, async (req, res, _p, q) => {
   try { json(res, await greenInvoice.listClients()); } catch (e) { json(res, { error: e.message }, 500); }
 });
 
-// GET /api/clients/:id/documents — כל המסמכים של לקוח
+// GET /api/clients/:id/documents — כל המסמכים של לקוח (כולל מסמכים ישנים שהועלו ידנית — לשיוך בבנק/אירועים)
 add('GET', /^\/api\/clients\/([^/]+)\/documents$/, async (req, res, params) => {
-  try { json(res, await greenInvoice.clientDocuments(params[0])); } catch (e) { json(res, { error: e.message }, 500); }
+  try {
+    const docs = (await greenInvoice.clientDocuments(params[0]) || []).slice(); // שכפול — לא לגעת במטמון
+    try {
+      const clients = await greenInvoice.listClients();
+      const c = clients.find(x => String(x.id) === String(params[0]));
+      const nm = c && c.name ? c.name : '';
+      if (nm) {
+        const normU = (s) => String(s || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[."'׳״,()\-]/g, ' ').replace(/\s+/g, ' ').trim();
+        const want = normU(nm);
+        const match = (x) => { const a = normU(x); return !!a && (a === want || a.includes(want) || want.includes(a)); };
+        const db = load();
+        const seen = new Set();
+        const push = (d, clientName) => {
+          if (!d || !d.uploaded) return;
+          const key = (d.number || d.id) + '|' + Number(d.type);
+          if (seen.has(key)) return; seen.add(key);
+          docs.push({ id: d.id, number: d.number || null, type: Number(d.type), date: d.date || null, amount: d.amount != null ? Number(d.amount) : null, amountDue: d.amount != null ? Number(d.amount) : null, url: d.url || ('/api/files/' + d.id), status: 0, uploaded: true, clientName });
+        };
+        for (const e of (db.events || [])) { if (!match(e.clientName || e.client || '')) continue; for (const d of (e.linkedDocs || [])) if (d && d.uploaded) push(d, e.clientName || nm); }
+        for (const rec of (db.oldInvoices || [])) { if (!match(rec.clientName || '')) continue; for (const d of (rec.linkedDocs || [])) if (d && d.uploaded) push(d, rec.clientName || nm); }
+      }
+    } catch {}
+    json(res, docs);
+  } catch (e) { json(res, { error: e.message }, 500); }
 });
 
 // GET /api/suppliers/:id/documents — מסמכי ההוצאה של ספק (לשיוך ידני בבנק)
