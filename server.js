@@ -1809,6 +1809,92 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
   }
 });
 
+// POST /api/documents/consolidate — מסמך מרוכז: כמה חשבוניות עסקה (300) של אותו לקוח → מסמך מס (305) או מס-קבלה (320) מסכם אחד
+// { sourceIds:[...], type:305|320, date?, items?(ערוכות), discount?, payment?(ל-320), remarks?, sendEmail?, email?, skipDateValidation? }
+// המסמך המסכם מקושר לכל מקורות ה-300 (linkedDocumentIds) → כל העסקאות נסגרות בחשבונית ירוקה; אירועים מקושרים מסומנים.
+add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  const sourceIds = Array.isArray(body.sourceIds) ? body.sourceIds.map(String).filter(Boolean) : [];
+  if (sourceIds.length < 1) return json(res, { error: 'לא נבחרו חשבוניות עסקה למיזוג' }, 400);
+  const type = Number(body.type);
+  if (![305, 320].includes(type)) return json(res, { error: 'סוג מסמך מסכם חייב להיות חשבונית מס (305) או מס-קבלה (320)' }, 400);
+  try {
+    // שליפת מסמכי המקור — לאימות לקוח אחיד ולאיסוף שורות
+    const srcDocs = [];
+    for (const sid of sourceIds) { srcDocs.push(await greenInvoice.getDocument(sid)); }
+    // כל המקורות חייבים להיות חשבון עסקה (300) פתוח, ושל אותו לקוח
+    const badType = srcDocs.find(d => Number(d.type) !== 300);
+    if (badType) return json(res, { error: `ניתן למזג רק חשבוניות עסקה (300). מסמך #${badType.number || ''} אינו עסקה.` }, 400);
+    const clientIds = [...new Set(srcDocs.map(d => d.client?.id).filter(Boolean))];
+    const clientNames = [...new Set(srcDocs.map(d => (d.client?.name || '').trim()).filter(Boolean))];
+    if (clientIds.length > 1 || (!clientIds.length && clientNames.length > 1)) {
+      return json(res, { error: 'כל חשבוניות העסקה שנבחרו חייבות להיות של אותו לקוח.' }, 400);
+    }
+    const client = clientIds[0] ? { id: clientIds[0] } : { name: clientNames[0] || 'לקוח' };
+    // שורות: ערוכות מהלקוח אם נשלחו, אחרת איחוד שורות כל מסמכי המקור
+    let items;
+    if (Array.isArray(body.items) && body.items.length) {
+      items = body.items.map(it => ({ catalogNum: it.catalogNum || undefined, description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }));
+    } else {
+      items = [];
+      for (const d of srcDocs) { for (const it of (d.income || [])) { items.push({ catalogNum: it.catalogNum || undefined, description: String(it.description || '').trim(), quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }); } }
+    }
+    items = items.filter(it => it.description);
+    if (!items.length) return json(res, { error: 'אין שורות למסמך המסכם' }, 400);
+    // הערת קישור מרוכזת — מפרטת את מספרי מסמכי המקור
+    const nums = srcDocs.map(d => '#' + (d.number || d.id)).join(', ');
+    const ref = `מסמך מרוכז לחשבוניות עסקה: ${nums}`;
+    const cur = (body.remarks != null) ? String(body.remarks).trim() : '';
+    const opts = {
+      type, client, items,
+      description: body.description != null ? body.description : '',
+      remarks: cur.includes(ref) ? cur : (cur ? `${ref}\n\n${cur}` : ref),
+      linkedDocumentIds: sourceIds, // קישור לכל מקורות ה-300 → נסגרות
+    };
+    if (body.discount && Number(body.discount.amount) > 0) opts.discount = { amount: Number(body.discount.amount), type: body.discount.type };
+    if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.skipDateValidation) opts.skipDateValidation = true;
+    // תקבולים — חובה למס-קבלה (320)
+    if (Array.isArray(body.payment) && body.payment.length) {
+      opts.payment = body.payment.map(p => {
+        const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
+        if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum);
+        if ([2, 4].includes(Number(p.type))) { if (p.bankName) row.bankName = String(p.bankName).replace(/\s*\(\d+\)\s*$/, '').trim(); if (p.bankBranch) row.bankBranch = String(p.bankBranch); if (p.bankAccount) row.bankAccount = String(p.bankAccount); }
+        return row;
+      }).filter(p => Math.abs(p.price) > 0);
+    }
+    if (type === 320 && !(opts.payment && opts.payment.length)) return json(res, { error: 'חשבונית מס-קבלה מחייבת פירוט תקבול (סכום ואמצעי תשלום).' }, 400);
+    if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
+    const doc = await greenInvoice.createDocument(opts);
+    // סימון אירועים מקושרים למקורות שנסגרו — עדכון למסמך המסכם החדש
+    try {
+      const db = load();
+      const srcKeys = new Set(sourceIds.map(String).concat(srcDocs.map(d => String(d.number)).filter(Boolean)));
+      let touched = false;
+      for (const ev of (db.events || [])) {
+        const ld = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+        if (!ld.some(d => srcKeys.has(String(d.id)) || srcKeys.has(String(d.number)))) continue;
+        for (const d of ld) { if (srcKeys.has(String(d.id)) || srcKeys.has(String(d.number))) d.converted = true; }
+        ld.push({ id: doc.id, number: doc.number, type, uploaded: false });
+        ev.linkedDocs = ld.slice(0, 12);
+        ev.invoiceStatus = 'invoiced'; ev.invoiceId = doc.id; ev.invoiceNumber = doc.number; ev.invoiceType = type;
+        if (type === 320) ev.clientPaid = true; // מס-קבלה = שולם → האירוע סגור
+        touched = true;
+      }
+      if (touched) save(db);
+    } catch { /* לא חוסם את הצלחת ההפקה */ }
+    json(res, { ok: true, doc });
+  } catch (e) {
+    const msg = String(e.message || '');
+    if (/2405|עתידי|מוקדם/i.test(msg)) {
+      let minDate = null; try { minDate = await greenInvoice.latestDocumentDate(type); } catch { }
+      const dmy = minDate ? minDate.split('-').reverse().join('/') : '';
+      return json(res, { error: `חשבונית ירוקה חוסמת תאריך מוקדם מהמסמך האחרון מסוג זה${minDate ? ` (${dmy})` : ''}. בחר תאריך זה או מאוחר יותר, או סמן "הפקה מחוץ לרצף".`, minDate }, 400);
+    }
+    json(res, { error: msg }, 500);
+  }
+});
+
 // GET /api/open-invoices — חשבון עסקה + חשבונית מס פתוחים מחשבונית ירוקה,
 // בתוספת חשבוניות ישנות שהועלו ידנית לאירועים (עסקה/מס) שטרם נסגרו בקבלה/מס-קבלה.
 add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {

@@ -698,7 +698,7 @@ async function renderHome(c) {
   ]);
   const label = periodLabel();
   const err = d.errors || sum.errors || {};
-  const kpi = (lbl, val, sub, color) => `<div class="card"><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
+  const kpi = (lbl, val, sub, color, id) => `<div class="card"${id ? ` id="${id}"` : ''}><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
   const otherErrs = Object.keys(err).filter(k => k !== 'greenInvoice').map(k => err[k]);
   const docs = d.docs || [];
   c.innerHTML = `
@@ -710,8 +710,8 @@ async function renderHome(c) {
       <div class="cards" style="margin-top:14px">
         ${kpi('הכנסה השנה', money(sum.income), sum.monthDocs != null ? `${sum.monthDocs} מסמכים` : '', 'var(--accent2)')}
         ${kpi('צפי מע"מ (18%)', money(sum.vat), 'מתוך ההכנסה', 'var(--warn)')}
-        ${kpi('חיובים פתוחים', sum.openInvoices != null ? sum.openInvoices : '—', 'חשבון עסקה + חשבונית מס', 'var(--danger)')}
-        ${kpi('סכום מסמכים פתוחים', sum.openInvoicesSum != null ? money(sum.openInvoicesSum) : '—', 'סה"כ עסקה + מס פתוחים', 'var(--warn)')}
+        ${kpi('חיובים פתוחים', sum.openInvoices != null ? sum.openInvoices : '…', 'חשבון עסקה + חשבונית מס', 'var(--danger)', 'kpiOpenCount')}
+        ${kpi('סכום מסמכים פתוחים', sum.openInvoicesSum != null ? money(sum.openInvoicesSum) : '…', 'סה"כ עסקה + מס פתוחים', 'var(--warn)', 'kpiOpenSum')}
       </div>
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
     </div>
@@ -939,6 +939,16 @@ async function loadOpenInvoices() {
   const r = await api('/api/open-invoices').catch(() => ({ docs: [], error: 'שגיאת טעינה' }));
   _openInv = r.docs || []; _openInvErr = r.error || null;
   renderOpenInvoices();
+  syncOpenInvKpi();
+}
+// המונה העליון ("חיובים פתוחים") נגזר מאותה רשימה אמינה שמוצגת למטה — כך שלעולם לא יופיע מספר שגוי/חלקי
+// כשה-API של חשבונית ירוקה מחזיר תוצאה חלקית (מגבלת קצב). כולל גם מסמכים ישנים שהועלו ידנית.
+function syncOpenInvKpi() {
+  if (_openInvErr || !Array.isArray(_openInv)) return;
+  const cnt = _openInv.length;
+  const sum = _openInv.reduce((s, d) => s + (d.amountDue != null ? Number(d.amountDue) : Number(d.amount) || 0), 0);
+  const cEl = document.querySelector('#kpiOpenCount .big'); if (cEl) cEl.textContent = cnt;
+  const sEl = document.querySelector('#kpiOpenSum .big'); if (sEl) sEl.textContent = money(sum);
 }
 window.setOpenInvFilter = (v) => { _openInvFilter = v; renderOpenInvoices(); };
 function renderOpenInvoices() {
@@ -972,7 +982,10 @@ function renderOpenInvoices() {
 }
 function openInvClientHtml(cl) {
   const rid = 'oig_' + Math.random().toString(36).slice(2, 8);
+  // מסמך מרוכז: זמין כשיש ≥2 חשבוניות עסקה (300) לא-מועלות של אותו לקוח
+  const canConsol = cl.ds.filter(d => Number(d.type) === 300 && !d.uploaded).length >= 2;
   const rows = cl.ds.map(d => `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
+    ${canConsol ? ((Number(d.type) === 300 && !d.uploaded) ? `<input type="checkbox" class="cx-${rid}" data-id="${escAttr(String(d.id))}" data-num="${escAttr(String(d.number || ''))}" onclick="event.stopPropagation()" title="בחר למסמך מרוכז" style="width:15px;height:15px;flex:0 0 auto;cursor:pointer">` : '<span style="width:15px;flex:0 0 auto"></span>') : ''}
     <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.uploaded ? ' · ישן' : ''}</span>
     <span style="white-space:nowrap">${d.number ? '#' + d.number : ''}</span><span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</span>
@@ -991,9 +1004,61 @@ function openInvClientHtml(cl) {
       <div><b>${escapeHtml(cl.name)}</b> <span class="muted">· ${cl.ds.length} מסמכים</span></div>
       <div style="font-weight:700">${money(cl.total)}</div>
     </div>
-    <div id="${rid}" class="${cl.ds.length > 1 ? 'hidden' : ''}">${rows}</div>
+    <div id="${rid}" class="${cl.ds.length > 1 ? 'hidden' : ''}">${rows}${canConsol ? `<div style="padding:9px 12px;border-top:1px solid var(--line);background:var(--panel2);display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+      <button class="btn primary" style="padding:4px 12px;font-size:12.5px" onclick="openConsolidate('${encodeURIComponent(cl.name || '')}','${rid}')" title="מיזוג כמה חשבוניות עסקה למסמך מס/מס-קבלה מסכם אחד">🧾 הפק מסמך מרוכז</button>
+      <span class="muted" style="font-size:11.5px">סמן כמה חשבוניות עסקה → מסמך מס/מס-קבלה מסכם אחד שסוגר את כולן.</span>
+    </div>` : ''}</div>
   </div>`;
 }
+// ===== מסמך מרוכז: כמה חשבוניות עסקה (300) של אותו לקוח → מסמך מס (305) או מס-קבלה (320) מסכם אחד =====
+let _consolSel = null;
+window.openConsolidate = (clientEnc, rid) => {
+  const clientName = decodeURIComponent(clientEnc);
+  const sel = [...document.querySelectorAll('.cx-' + rid + ':checked')].map(c => ({ id: c.dataset.id, number: c.dataset.num }));
+  if (sel.length < 2) { alert('סמן לפחות שתי חשבוניות עסקה של אותו לקוח למיזוג.'); return; }
+  _consolSel = { clientName, sources: sel };
+  let m = document.getElementById('derModal');
+  if (!m) { m = document.createElement('div'); m.id = 'derModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  const nums = sel.map(s => '#' + s.number).join(', ');
+  m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)">
+    <h3>מסמך מרוכז — ${escapeHtml(clientName)}</h3>
+    <p class="muted" style="font-size:13px">${sel.length} חשבוניות עסקה (${escapeHtml(nums)}) ימוזגו למסמך מסכם אחד שיקושר אליהן ויסגור את כולן. בחר סוג מסמך מסכם:</p>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+      <button class="btn ghost" style="justify-content:flex-start;text-align:right" onclick="openConsolidateEditor(305)">חשבונית מס מסכמת ← <span class="muted" style="font-size:11.5px">(סוגרת את העסקאות; ממתינה לתשלום)</span></button>
+      <button class="btn ghost" style="justify-content:flex-start;text-align:right" onclick="openConsolidateEditor(320)">חשבונית מס-קבלה מסכמת ← <span class="muted" style="font-size:11.5px">(סוגרת ומסמנת כשולם)</span></button>
+    </div>
+    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">ביטול</button></div>
+  </div>`;
+  m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
+};
+window.openConsolidateEditor = async (type) => {
+  const sel = _consolSel; if (!sel) return;
+  type = Number(type);
+  const m = document.getElementById('derModal') || (() => { const x = document.createElement('div'); x.id = 'derModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען שורות מהמסמכים…</div></div>`;
+  const [ld, ...lineRes] = await Promise.all([
+    api(`/api/documents/last-date?type=${type}`).catch(() => ({})),
+    ...sel.sources.map(s => api(`/api/documents/${s.id}/lines`).catch(() => ({ error: true }))),
+  ]);
+  const items = [];
+  for (const r of lineRes) { if (r && r.items) for (const it of r.items) items.push({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }); }
+  if (!items.length) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">לא נטענו שורות מהמסמכים שנבחרו.</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">סגור</button></div></div>`; return; }
+  const date = todayIso();
+  const nums = sel.sources.map(s => '#' + s.number).join(', ');
+  _derEdit = {
+    consolidate: true, sourceIds: sel.sources.map(s => s.id), sourceNums: sel.sources.map(s => s.number),
+    type, linked: true, clientName: sel.clientName, date,
+    lastDocDate: (ld && ld.lastDocDate) || null, lastDocTypeName: DOC_TYPE_NAMES[type] || 'מסוג זה', allowBackdate: false,
+    description: '', remarks: `מסמך מרוכז לחשבוניות עסקה: ${nums}`,
+    items, payments: [], needsPay: DER_PAYMENT_DOCS.has(type),
+    srcUrl: null, srcLabel: '', uploadedSource: null,
+  };
+  if (_derEdit.needsPay) { const total = derTotals().total; _derEdit.payments = [{ type: 4, price: +total.toFixed(2), date, chequeNum: '', bankName: '' }]; }
+  _derBankLink = null;
+  renderDeriveEditor();
+};
 // מסמכי המשך מותרים לפי סוג המקור: הצעה→עסקה/מס/מס-קבלה ; עסקה→מס/מס-קבלה ; מס→קבלה
 const FOLLOWUP_FOR = { 10: [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 300: [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 305: [[400, 'קבלה']] };
 // שכפול — אפשר לבחור כל סוג (כולל הצעת מחיר)
@@ -1239,7 +1304,7 @@ function renderDeriveEditor() {
     <div style="display:flex;gap:14px;align-items:stretch">
     ${srcPane}
     <div style="flex:1;min-width:0">
-    <div class="row-between"><h3>${e.linked ? 'מסמך המשך' : 'שכפול'} — ${typeName}</h3><span class="muted">${escapeHtml(e.clientName)}</span></div>
+    <div class="row-between"><h3>${e.consolidate ? 'מסמך מרוכז' : (e.linked ? 'מסמך המשך' : 'שכפול')} — ${typeName}${e.consolidate ? ` <span class="muted" style="font-size:12px">(${e.sourceIds.length} עסקאות)</span>` : ''}</h3><span class="muted">${escapeHtml(e.clientName)}</span></div>
 
     <div style="margin:8px 0 4px">
       <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" ${(!e.allowBackdate && e.lastDocDate) ? `min="${e.lastDocDate}"` : ''} onchange="derDateChanged(this.value)" style="padding:6px 8px;margin-inline-start:6px"></label>
@@ -1331,6 +1396,26 @@ window.derConfirm = async () => {
     const psum = payment.reduce((s, p) => s + p.price, 0);
     if (!payment.length) { alert('מסמך מסוג ' + (DOC_TYPE_SHORT[e.type] || '') + ' מחייב לפחות תקבול אחד.'); return; }
     if (Math.abs(psum - t.total) > 0.01 && !confirm(`סכום התקבולים (${money(psum)}) שונה מסה"כ המסמך (${money(t.total)}).\nלהמשיך בכל זאת?`)) return;
+  }
+  // מסמך מרוכז — הפקה דרך endpoint ייעודי שמקשר לכל מסמכי המקור וסוגר אותם
+  if (e.consolidate) {
+    const typeName2 = DOC_TYPE_SHORT[e.type] || 'מסמך';
+    if (!confirm(`להפיק ${typeName2} מסכמת על סך ${money(t.total)} מ-${e.sourceIds.length} חשבוניות עסקה?\nהמסמך ייווצר בחשבונית ירוקה, יקושר לכל העסקאות ויסגור אותן. לא ניתן למחיקה (רק לזכות).`)) return;
+    const btn2 = document.getElementById('derConfirmBtn'); if (btn2) btn2.disabled = true;
+    const st2 = document.getElementById('derEditStatus'); if (st2) st2.innerHTML = '<span class="muted">מפיק מסמך מרוכז…</span>';
+    const r2 = await fetch('/api/documents/consolidate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceIds: e.sourceIds, type: e.type, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (r2.ok) {
+      if (typeof clearApiCache === 'function') clearApiCache();
+      const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');
+      showDocReadyPopup(r2.doc, typeName2);
+      loadOpenInvoices && loadOpenInvoices();
+      if (typeof _docActionRefresh === 'function') _docActionRefresh();
+    } else {
+      if (btn2) btn2.disabled = false;
+      if (st2) st2.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r2.error || 'לא הופק'))}</span>`;
+    }
+    return;
   }
   const typeName = DOC_TYPE_SHORT[e.type] || 'מסמך';
   if (!confirm(`להפיק ${typeName} על סך ${money(t.total)}?\nהמסמך ייווצר בחשבונית ירוקה${e.linked ? ' ויקושר למקור' : ''} ולא ניתן למחיקה (רק לזכות).`)) return;

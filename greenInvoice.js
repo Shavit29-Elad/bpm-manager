@@ -308,10 +308,19 @@ async function documentsInRange(fromDate, toDate, types) {
   const all = [];
   let page = 1;
   for (let i = 0; i < 20; i++) { // עד ~2000 מסמכים
-    const res = await api('/documents/search', {
-      method: 'POST',
-      body: { fromDate, toDate, page, pageSize: 100, type: types, sort: 'documentDate' },
-    });
+    // ניסיון חוזר לכל עמוד — מונע קטיעה של הרשימה בגלל מגבלת קצב/תקלה זמנית של חשבונית ירוקה
+    // (בלי זה עמוד שנכשל היה מקצר את הרשימה ומחזיר מספר "חיובים פתוחים" שגוי)
+    let res = null, lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        res = await api('/documents/search', {
+          method: 'POST',
+          body: { fromDate, toDate, page, pageSize: 100, type: types, sort: 'documentDate' },
+        });
+        lastErr = null; break;
+      } catch (e) { lastErr = e; await new Promise(r => setTimeout(r, 400 * (attempt + 1))); }
+    }
+    if (lastErr) throw lastErr;
     const items = res.items || [];
     all.push(...items);
     if (items.length < 100) break;
