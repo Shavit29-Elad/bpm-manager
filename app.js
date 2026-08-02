@@ -982,10 +982,10 @@ function renderOpenInvoices() {
 }
 function openInvClientHtml(cl) {
   const rid = 'oig_' + Math.random().toString(36).slice(2, 8);
-  // מסמך מרוכז: זמין כשיש ≥2 חשבוניות עסקה (300) לא-מועלות של אותו לקוח
-  const canConsol = cl.ds.filter(d => Number(d.type) === 300 && !d.uploaded).length >= 2;
+  // מסמך מרוכז: זמין כשיש ≥2 חשבוניות עסקה (300) של אותו לקוח — כולל כאלה שהועלו ידנית (אופק)
+  const canConsol = cl.ds.filter(d => Number(d.type) === 300).length >= 2;
   const rows = cl.ds.map(d => `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
-    ${canConsol ? ((Number(d.type) === 300 && !d.uploaded) ? `<input type="checkbox" class="cx-${rid}" data-id="${escAttr(String(d.id))}" data-num="${escAttr(String(d.number || ''))}" onclick="event.stopPropagation()" title="בחר למסמך מרוכז" style="width:15px;height:15px;flex:0 0 auto;cursor:pointer">` : '<span style="width:15px;flex:0 0 auto"></span>') : ''}
+    ${canConsol ? (Number(d.type) === 300 ? `<input type="checkbox" class="cx-${rid}" data-id="${escAttr(String(d.id))}" data-num="${escAttr(String(d.number || ''))}" data-uploaded="${d.uploaded ? '1' : '0'}" data-event="${escAttr(String(d.eventId || ''))}" data-old="${escAttr(String(d.oldInvoiceId || ''))}" data-amount="${d.amount != null ? Number(d.amount) : (d.amountDue != null ? Number(d.amountDue) : '')}" data-desc="${escAttr(String(d.description || ''))}" onclick="event.stopPropagation()" title="בחר למסמך מרוכז" style="width:15px;height:15px;flex:0 0 auto;cursor:pointer">` : '<span style="width:15px;flex:0 0 auto"></span>') : ''}
     <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.uploaded ? ' · ישן' : ''}</span>
     <span style="white-space:nowrap">${d.number ? '#' + d.number : ''}</span><span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</span>
@@ -1014,9 +1014,13 @@ function openInvClientHtml(cl) {
 let _consolSel = null;
 window.openConsolidate = (clientEnc, rid) => {
   const clientName = decodeURIComponent(clientEnc);
-  const sel = [...document.querySelectorAll('.cx-' + rid + ':checked')].map(c => ({ id: c.dataset.id, number: c.dataset.num }));
-  if (sel.length < 2) { alert('סמן לפחות שתי חשבוניות עסקה של אותו לקוח למיזוג.'); return; }
-  _consolSel = { clientName, sources: sel };
+  const boxes = [...document.querySelectorAll('.cx-' + rid + ':checked')];
+  const gi = boxes.filter(c => c.dataset.uploaded !== '1').map(c => ({ id: c.dataset.id, number: c.dataset.num }));
+  const up = boxes.filter(c => c.dataset.uploaded === '1').map(c => ({ docId: c.dataset.id, number: c.dataset.num, eventId: c.dataset.event || null, oldInvoiceId: c.dataset.old || null, amount: c.dataset.amount !== '' ? Number(c.dataset.amount) : null, desc: c.dataset.desc || '' }));
+  if (gi.length + up.length < 2) { alert('סמן לפחות שתי חשבוניות עסקה של אותו לקוח למיזוג.'); return; }
+  if (gi.length && up.length) { alert('אפשר למזג יחד רק מסמכים מאותו סוג — או חשבוניות מחשבונית ירוקה, או מסמכים ישנים שהועלו ידנית. לא שילוב של השניים.'); return; }
+  _consolSel = { clientName, gi, up };
+  const sel = boxes.map(c => ({ number: c.dataset.num }));
   let m = document.getElementById('derModal');
   if (!m) { m = document.createElement('div'); m.id = 'derModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
@@ -1035,21 +1039,34 @@ window.openConsolidate = (clientEnc, rid) => {
 window.openConsolidateEditor = async (type) => {
   const sel = _consolSel; if (!sel) return;
   type = Number(type);
+  const gi = sel.gi || [], up = sel.up || [];
   const m = document.getElementById('derModal') || (() => { const x = document.createElement('div'); x.id = 'derModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען שורות מהמסמכים…</div></div>`;
-  const [ld, ...lineRes] = await Promise.all([
-    api(`/api/documents/last-date?type=${type}`).catch(() => ({})),
-    ...sel.sources.map(s => api(`/api/documents/${s.id}/lines`).catch(() => ({ error: true }))),
-  ]);
-  const items = [];
-  for (const r of lineRes) { if (r && r.items) for (const it of r.items) items.push({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }); }
+  let items = [], pricesInclVat = false, ld = {};
+  if (gi.length) {
+    // מקורות חשבונית ירוקה — שורות אמיתיות מכל מסמך (ללא מע״מ)
+    const res = await Promise.all([
+      api(`/api/documents/last-date?type=${type}`).catch(() => ({})),
+      ...gi.map(s => api(`/api/documents/${s.id}/lines`).catch(() => ({ error: true }))),
+    ]);
+    ld = res[0] || {};
+    for (const r of res.slice(1)) { if (r && r.items) for (const it of r.items) items.push({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }); }
+  } else {
+    // מקורות שהועלו ידנית — שורה אחת לכל מסמך, לפי הסכום שנשמר (כברירת מחדל כולל מע״מ). ניתן לעריכה בעורך.
+    ld = await api(`/api/documents/last-date?type=${type}`).catch(() => ({}));
+    for (const u of up) items.push({ description: (u.desc && u.desc.trim()) || `${sel.clientName} — ${u.number ? '#' + u.number : 'מסמך ישן'}`, quantity: 1, price: Number(u.amount) || 0 });
+    pricesInclVat = true;
+  }
   if (!items.length) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">לא נטענו שורות מהמסמכים שנבחרו.</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">סגור</button></div></div>`; return; }
   const date = todayIso();
-  const nums = sel.sources.map(s => '#' + s.number).join(', ');
+  const nums = [...gi.map(s => '#' + s.number), ...up.map(u => '#' + u.number)].join(', ');
   _derEdit = {
-    consolidate: true, sourceIds: sel.sources.map(s => s.id), sourceNums: sel.sources.map(s => s.number),
-    type, linked: true, clientName: sel.clientName, date,
+    consolidate: true,
+    sourceIds: gi.map(s => s.id),
+    uploadedSources: up.map(u => ({ docId: u.docId, eventId: u.eventId || undefined, oldInvoiceId: u.oldInvoiceId || undefined, number: u.number })),
+    consolCount: gi.length + up.length,
+    type, linked: true, clientName: sel.clientName, date, pricesInclVat,
     lastDocDate: (ld && ld.lastDocDate) || null, lastDocTypeName: DOC_TYPE_NAMES[type] || 'מסוג זה', allowBackdate: false,
     description: '', remarks: `מסמך מרוכז לחשבוניות עסקה: ${nums}`,
     items, payments: [], needsPay: DER_PAYMENT_DOCS.has(type),
@@ -1304,7 +1321,7 @@ function renderDeriveEditor() {
     <div style="display:flex;gap:14px;align-items:stretch">
     ${srcPane}
     <div style="flex:1;min-width:0">
-    <div class="row-between"><h3>${e.consolidate ? 'מסמך מרוכז' : (e.linked ? 'מסמך המשך' : 'שכפול')} — ${typeName}${e.consolidate ? ` <span class="muted" style="font-size:12px">(${e.sourceIds.length} עסקאות)</span>` : ''}</h3><span class="muted">${escapeHtml(e.clientName)}</span></div>
+    <div class="row-between"><h3>${e.consolidate ? 'מסמך מרוכז' : (e.linked ? 'מסמך המשך' : 'שכפול')} — ${typeName}${e.consolidate ? ` <span class="muted" style="font-size:12px">(${e.consolCount || e.sourceIds.length} עסקאות)</span>` : ''}</h3><span class="muted">${escapeHtml(e.clientName)}</span></div>
 
     <div style="margin:8px 0 4px">
       <label style="font-size:13px">תאריך המסמך <input class="der-date" type="date" value="${e.date}" ${(!e.allowBackdate && e.lastDocDate) ? `min="${e.lastDocDate}"` : ''} onchange="derDateChanged(this.value)" style="padding:6px 8px;margin-inline-start:6px"></label>
@@ -1400,11 +1417,12 @@ window.derConfirm = async () => {
   // מסמך מרוכז — הפקה דרך endpoint ייעודי שמקשר לכל מסמכי המקור וסוגר אותם
   if (e.consolidate) {
     const typeName2 = DOC_TYPE_SHORT[e.type] || 'מסמך';
-    if (!confirm(`להפיק ${typeName2} מסכמת על סך ${money(t.total)} מ-${e.sourceIds.length} חשבוניות עסקה?\nהמסמך ייווצר בחשבונית ירוקה, יקושר לכל העסקאות ויסגור אותן. לא ניתן למחיקה (רק לזכות).`)) return;
+    const cnt = e.consolCount || (e.sourceIds.length + (e.uploadedSources ? e.uploadedSources.length : 0));
+    if (!confirm(`להפיק ${typeName2} מסכמת על סך ${money(t.total)} מ-${cnt} חשבוניות עסקה?\nהמסמך ייווצר בחשבונית ירוקה, יקושר לעסקאות ויסגור אותן. לא ניתן למחיקה (רק לזכות).`)) return;
     const btn2 = document.getElementById('derConfirmBtn'); if (btn2) btn2.disabled = true;
     const st2 = document.getElementById('derEditStatus'); if (st2) st2.innerHTML = '<span class="muted">מפיק מסמך מרוכז…</span>';
     const r2 = await fetch('/api/documents/consolidate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sourceIds: e.sourceIds, type: e.type, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+      body: JSON.stringify({ sourceIds: e.sourceIds, uploadedSources: e.uploadedSources || [], clientName: e.clientName, type: e.type, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (r2.ok) {
       if (typeof clearApiCache === 'function') clearApiCache();
       const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');

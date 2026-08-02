@@ -569,7 +569,14 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
     });
     for (const ev of evs) {
       const e = db.events.find(x => x.id === ev.id);
-      if (e) { e.invoiceStatus = 'invoiced'; e.invoiceId = doc.id; e.invoiceNumber = doc.number; e.invoiceType = type; }
+      if (e) {
+        e.invoiceStatus = 'invoiced'; e.invoiceId = doc.id; e.invoiceNumber = doc.number; e.invoiceType = type;
+        // חשוב: להוסיף את המסמך שהופק ל-linkedDocs של האירוע — אחרת עמודת החיוב מציגה רק את המסמכים הקיימים (למשל הצעת המחיר)
+        // ולא את חשבונית העסקה/המס שזה עתה הופקה. כך המסמך החדש מוצג ומאפשר צפייה/מסמך המשך ישירות מהאירוע.
+        const ld = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
+        if (!ld.some(d => String(d.id) === String(doc.id))) ld.push({ id: doc.id, number: doc.number, type, uploaded: false });
+        e.linkedDocs = ld.slice(0, 12);
+      }
     }
     save(db);
     json(res, { ok: true, doc });
@@ -1815,7 +1822,9 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
 add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   const sourceIds = Array.isArray(body.sourceIds) ? body.sourceIds.map(String).filter(Boolean) : [];
-  if (sourceIds.length < 1) return json(res, { error: 'לא נבחרו חשבוניות עסקה למיזוג' }, 400);
+  // מקורות שהועלו ידנית (אופק) — אינם קיימים בחשבונית ירוקה, לכן ייסגרו אצלנו (converted) במקום דרך linkedDocumentIds
+  const uploadedSources = Array.isArray(body.uploadedSources) ? body.uploadedSources.filter(u => u && (u.eventId || u.oldInvoiceId) && u.docId != null) : [];
+  if (sourceIds.length + uploadedSources.length < 1) return json(res, { error: 'לא נבחרו חשבוניות עסקה למיזוג' }, 400);
   const type = Number(body.type);
   if (![305, 320].includes(type)) return json(res, { error: 'סוג מסמך מסכם חייב להיות חשבונית מס (305) או מס-קבלה (320)' }, 400);
   try {
@@ -1830,7 +1839,10 @@ add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) =>
     if (clientIds.length > 1 || (!clientIds.length && clientNames.length > 1)) {
       return json(res, { error: 'כל חשבוניות העסקה שנבחרו חייבות להיות של אותו לקוח.' }, 400);
     }
-    const client = clientIds[0] ? { id: clientIds[0] } : { name: clientNames[0] || 'לקוח' };
+    // לקוח: קודם מזהה מחשבונית ירוקה; אחרת clientId/clientName שנשלחו (למקרה של מקורות שהועלו ידנית בלבד)
+    const client = clientIds[0] ? { id: clientIds[0] }
+      : (body.clientId ? { id: body.clientId }
+        : { name: (clientNames[0] || String(body.clientName || '').trim() || 'לקוח'), add: true });
     // שורות: ערוכות מהלקוח אם נשלחו, אחרת איחוד שורות כל מסמכי המקור
     let items;
     if (Array.isArray(body.items) && body.items.length) {
@@ -1842,14 +1854,16 @@ add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) =>
     items = items.filter(it => it.description);
     if (!items.length) return json(res, { error: 'אין שורות למסמך המסכם' }, 400);
     // הערת קישור מרוכזת — מפרטת את מספרי מסמכי המקור
-    const nums = srcDocs.map(d => '#' + (d.number || d.id)).join(', ');
+    const nums = srcDocs.map(d => '#' + (d.number || d.id))
+      .concat(uploadedSources.map(u => '#' + (u.number || u.docId))).join(', ');
     const ref = `מסמך מרוכז לחשבוניות עסקה: ${nums}`;
     const cur = (body.remarks != null) ? String(body.remarks).trim() : '';
     const opts = {
       type, client, items,
       description: body.description != null ? body.description : '',
       remarks: cur.includes(ref) ? cur : (cur ? `${ref}\n\n${cur}` : ref),
-      linkedDocumentIds: sourceIds, // קישור לכל מקורות ה-300 → נסגרות
+      // קישור רק למקורות שקיימים בחשבונית ירוקה (300) → נסגרות. מקורות שהועלו ידנית נסגרים אצלנו בהמשך.
+      linkedDocumentIds: sourceIds.length ? sourceIds : undefined,
     };
     if (body.discount && Number(body.discount.amount) > 0) opts.discount = { amount: Number(body.discount.amount), type: body.discount.type };
     if (body.date) opts.date = String(body.date).slice(0, 10);
@@ -1880,6 +1894,28 @@ add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) =>
         ev.invoiceStatus = 'invoiced'; ev.invoiceId = doc.id; ev.invoiceNumber = doc.number; ev.invoiceType = type;
         if (type === 320) ev.clientPaid = true; // מס-קבלה = שולם → האירוע סגור
         touched = true;
+      }
+      // מקורות שהועלו ידנית (אופק) — סימון כ"הומר" (converted) כך שיורדים מ"חשבוניות פתוחות", + סגירת האירוע/הרשומה
+      for (const us of uploadedSources) {
+        if (us.eventId) {
+          const ev = (db.events || []).find(e => e.id === us.eventId);
+          if (!ev) continue;
+          const ld = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+          const s = ld.find(d => String(d.id) === String(us.docId)); if (s) s.converted = true;
+          if (!ld.some(d => String(d.id) === String(doc.id))) ld.push({ id: doc.id, number: doc.number, type, uploaded: false });
+          ev.linkedDocs = ld.slice(0, 12);
+          ev.invoiceStatus = 'invoiced'; ev.invoiceId = doc.id; ev.invoiceNumber = doc.number; ev.invoiceType = type;
+          if (type === 320) ev.clientPaid = true;
+          touched = true;
+        } else if (us.oldInvoiceId) {
+          const rec = (db.oldInvoices || []).find(r => r.id === us.oldInvoiceId);
+          if (!rec) continue;
+          const ld = Array.isArray(rec.linkedDocs) ? rec.linkedDocs : [];
+          const s = ld.find(d => String(d.id) === String(us.docId)); if (s) s.converted = true;
+          if (!ld.some(d => String(d.id) === String(doc.id))) ld.push({ id: doc.id, number: doc.number, type, uploaded: false });
+          rec.linkedDocs = ld.slice(0, 12);
+          touched = true;
+        }
       }
       if (touched) save(db);
     } catch { /* לא חוסם את הצלחת ההפקה */ }
