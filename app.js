@@ -3104,7 +3104,7 @@ window.generateInvoice = async (btn) => {
   if (r.ok) {
     const dpv = document.getElementById('designPvModal'); if (dpv) dpv.classList.add('hidden');
     document.getElementById('invPvModal').classList.add('hidden');
-    showInvoiceDoneDialog(typeName, r.doc?.number, r.doc?.url);
+    showDocReadyPopup(r.doc, typeName); // חלונית צפייה/הורדה/שליחה — בלי לפתוח טאב חדש בכרום
     renderInvoicing($('#content'));
   } else {
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
@@ -3181,7 +3181,7 @@ window.showDesignedPreview = async (btn) => {
 };
 // חלון "החשבונית הופקה בהצלחה" עם אפשרות הורדה מיידית
 function showInvoiceDoneDialog(typeName, number, url) {
-  autoDownloadDoc(url); // הורדה אוטומטית מיד בהפקה
+  // ללא הורדה אוטומטית — לא לפתוח טאב חדש בכרום. ההורדה/צפייה דרך הכפתורים בחלונית.
   let m = document.getElementById('invDoneModal');
   if (!m) { m = document.createElement('div'); m.id = 'invDoneModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
@@ -3390,10 +3390,15 @@ window.createNewQuote = async (btn) => {
     const r = await fetch('/api/documents/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (btn) btn.disabled = false;
     if (r.ok) {
-      if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצר ${docName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
-      autoDownloadDoc(r.doc?.url);
-      if (e.bankTxId && r.doc) await linkDocToBankTx(e.bankTxId, { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: +total.toFixed(2), url: r.doc.url || null }, (_derBankLink && _derBankLink.sourceId) || null);
-      setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); }, 1300);
+      if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצר ${docName} #${r.doc?.number || ''}</span>`;
+      if (e.bankTxId && r.doc) {
+        // הופק מתוך "צור הכנסה" בבנק — קישור לתנועה וסגירה (בלי לפתוח טאב)
+        await linkDocToBankTx(e.bankTxId, { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: +total.toFixed(2), url: r.doc.url || null }, (_derBankLink && _derBankLink.sourceId) || null);
+        setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); }, 900);
+      } else {
+        document.getElementById('newQuoteModal').classList.add('hidden');
+        showDocReadyPopup(r.doc, docName); // חלונית צפייה/הורדה/שליחה
+      }
     } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
     return;
   }
@@ -3404,7 +3409,7 @@ window.createNewQuote = async (btn) => {
   const body = { clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim(), skipDateValidation: !!e.skipSeq };
   const r = await fetch('/api/quotes/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
-  if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''} · מוריד קובץ…</span>`; autoDownloadDoc(r.doc?.url); setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); }, 1300); }
+  if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''}</span>`; document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); showDocReadyPopup(r.doc, 'הצעת מחיר'); }
   else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
 // הוספת לקוח חדש מתוך מסך הצעת המחיר — נוצר בחשבונית ירוקה ונבחר אוטומטית
@@ -3558,9 +3563,9 @@ window.doFollowup = async (id, type, btn) => {
   st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
   const r = await fetch(`/api/quotes/${id}/followup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
-    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
-    autoDownloadDoc(r.doc?.url);
-    setTimeout(() => { document.getElementById('fuModal').classList.add('hidden'); renderQuotes($('#content')); }, 1300);
+    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
+    document.getElementById('fuModal').classList.add('hidden'); renderQuotes($('#content'));
+    showDocReadyPopup(r.doc, typeName); // חלונית צפייה/הורדה/שליחה — בלי טאב חדש
   } else {
     [...document.querySelectorAll('#fuModal button')].forEach(b => b.disabled = false);
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
