@@ -576,7 +576,7 @@ window.doSendDoc = async (id) => {
   if (!confirm(`לשלוח את המסמך לכתובת:\n${email}?`)) return;
   if (btn) { btn.disabled = true; btn.textContent = 'שולח…'; }
   if (st) st.innerHTML = '<span class="muted">שולח מייל…</span>';
-  const r = await fetch(`/api/documents/${id}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const r = await fetch(`/api/documents/${id}/send?companyId=${encodeURIComponent(state.company)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r && r.ok) {
     if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml(email)}</span>`;
     setTimeout(() => { const mm = document.getElementById('sendDocModal'); if (mm) mm.classList.add('hidden'); }, 1300);
@@ -1542,7 +1542,7 @@ window.docReadySend = async (docId, btn) => {
   const st = document.getElementById('docReadyStatus');
   if (btn) btn.disabled = true;
   if (st) st.innerHTML = '<span class="muted">שולח למייל הלקוח…</span>';
-  const r = await fetch(`/api/documents/${docId}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const r = await fetch(`/api/documents/${docId}/send?companyId=${encodeURIComponent(state.company)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
   if (st) st.innerHTML = r.ok
     ? `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml((r.sentTo || []).join(', '))}</span>`
