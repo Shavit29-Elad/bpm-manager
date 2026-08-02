@@ -565,6 +565,7 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
       date: body.date || undefined,   // תאריך המסמך שהמשתמש בחר (ברירת מחדל: היום)
       skipDateValidation: Boolean(body.skipDateValidation), // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
       sendEmail: Boolean(body.sendEmail), email: body.email || null,
+      discount: (body.discount && Number(body.discount.amount) > 0) ? body.discount : undefined, // הנחה (סכום/אחוז) — כבר מומרת ל-net ע"י הצד לקוח
     });
     for (const ev of evs) {
       const e = db.events.find(x => x.id === ev.id);

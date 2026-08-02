@@ -2847,8 +2847,30 @@ window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   showInvoicePreviewModal();
 };
 function invTotals() {
-  const sub = _invPreview.items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
-  return { sub, vat: sub * 0.18, total: sub * 1.18 };
+  const p = _invPreview;
+  const raw = p.items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
+  const net0 = p.pricesInclVat ? raw / 1.18 : raw; // נטו לפני הנחה (אם המחירים כוללים מע"מ — מפרידים את המע"מ)
+  const dAmt = Number(p.discAmount) || 0;
+  let discNet = 0;
+  if (dAmt > 0) {
+    if (p.discType === 'percentage') discNet = net0 * (dAmt / 100);
+    else discNet = p.discAfterVat ? (dAmt / 1.18) : dAmt; // הנחת סכום "אחרי מע"מ" → ההנחה נטו = הסכום ÷ 1.18
+  }
+  discNet = Math.min(Math.max(0, discNet), net0);
+  const net = net0 - discNet;
+  const vat = net * 0.18;
+  return { sub: net0, net0, discNet, net, vat, total: net + vat };
+}
+// ההנחה שנשלחת לחשבונית ירוקה (תמיד ברמת נטו): אחוז כפי שהוא; סכום — אם "אחרי מע"מ" ממירים ÷1.18
+function invDiscountForApi() {
+  const p = _invPreview; const dAmt = Number(p.discAmount) || 0;
+  if (!(dAmt > 0)) return null;
+  if (p.discType === 'percentage') return { amount: dAmt, type: 'percentage' };
+  return { amount: +(p.discAfterVat ? dAmt / 1.18 : dAmt).toFixed(4), type: 'sum' };
+}
+// שורות לשליחה: אם המחירים כוללים מע"מ — ממירים לנטו (÷1.18) כדי שחשבונית ירוקה תוסיף מע"מ ותגיע לאותו סכום
+function invItemsForApi(items) {
+  return items.map(it => ({ ...it, price: _invPreview.pricesInclVat ? +(Number(it.price) / 1.18).toFixed(4) : Number(it.price) || 0 }));
 }
 function showInvoicePreviewModal() {
   let m = document.getElementById('invPvModal');
@@ -2891,6 +2913,7 @@ function renderInvoicePreviewModal() {
         <input type="email" dir="ltr" placeholder="mail@example.com" value="${escAttr(p.email)}" oninput="_invPreview.email=this.value" style="width:100%"/>
       </div>
     </div>
+    ${invDiscountBoxHtml()}
     <div id="invSummary" style="margin-top:12px;text-align:left;font-size:14px">${invSummaryHtml(t)}</div>
     <div id="invPvStatus" style="min-height:18px;font-size:13px;margin:6px 0"></div>
     <div class="modal-actions">
@@ -2901,9 +2924,23 @@ function renderInvoicePreviewModal() {
   </div>`;
 }
 function invSummaryHtml(t) {
-  return `<div>סכום ביניים: <b>${money(t.sub)}</b></div>
+  return `<div>סכום ביניים (לפני מע"מ): <b>${money(t.net0)}</b></div>
+    ${t.discNet > 0 ? `<div style="color:var(--accent)">הנחה: <b>-${money(t.discNet)}</b></div><div>לאחר הנחה: <b>${money(t.net)}</b></div>` : ''}
     <div>מע"מ 18%: <b>${money(t.vat)}</b></div>
     <div style="font-size:16px">סה"כ לתשלום: <b>${money(t.total)}</b></div>`;
+}
+// חלק ההנחה + בורר לפני/אחרי מע"מ בטופס הפקת מסמך
+function invDiscountBoxHtml() {
+  const p = _invPreview;
+  return `<div style="margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;gap:8px">
+    <label style="font-size:12.5px;display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" ${p.pricesInclVat ? 'checked' : ''} onchange="invSetInclVat(this.checked)"><span>המחירים שהוזנו כוללים מע״מ (ברירת מחדל: לפני מע״מ)</span></label>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px">
+      <span>הנחה:</span>
+      <input type="number" inputmode="decimal" value="${p.discAmount || ''}" placeholder="0" oninput="invSetDiscAmount(this.value)" style="width:90px" dir="ltr"/>
+      <select onchange="invSetDiscType(this.value)"><option value="sum" ${p.discType !== 'percentage' ? 'selected' : ''}>₪ סכום</option><option value="percentage" ${p.discType === 'percentage' ? 'selected' : ''}>% אחוז</option></select>
+      <label id="invDiscAfterWrap" style="${p.discType === 'percentage' ? 'display:none;' : ''}display:inline-flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" ${p.discAfterVat ? 'checked' : ''} onchange="invSetDiscAfterVat(this.checked)"><span>מהסכום כולל מע״מ</span></label>
+    </div>
+  </div>`;
 }
 window.invEdit = (i, k, v) => {
   _invPreview.items[i][k] = (k === 'description') ? v : (v === '' ? 0 : +v);
@@ -2913,6 +2950,11 @@ window.invEdit = (i, k, v) => {
 };
 window.invSetType = (v) => { _invPreview.type = +v; renderInvoicePreviewModal(); };
 window.invToggleEmail = (on) => { _invPreview.sendEmail = on; const r = document.getElementById('invEmailRow'); if (r) r.classList.toggle('hidden', !on); };
+function invRefreshSummary() { const s = document.getElementById('invSummary'); if (s) s.innerHTML = invSummaryHtml(invTotals()); }
+window.invSetInclVat = (on) => { _invPreview.pricesInclVat = !!on; invRefreshSummary(); };
+window.invSetDiscAmount = (v) => { _invPreview.discAmount = (v === '' ? 0 : Number(v) || 0); invRefreshSummary(); };
+window.invSetDiscType = (v) => { _invPreview.discType = v; const w = document.getElementById('invDiscAfterWrap'); if (w) w.style.display = v === 'percentage' ? 'none' : 'inline-flex'; invRefreshSummary(); };
+window.invSetDiscAfterVat = (on) => { _invPreview.discAfterVat = !!on; invRefreshSummary(); };
 window.invAddRow = () => { _invPreview.items.push({ description: '', quantity: 1, price: 0 }); renderInvoicePreviewModal(); };
 window.invDelRow = (i) => { _invPreview.items.splice(i, 1); renderInvoicePreviewModal(); };
 window.generateInvoice = async (btn) => {
@@ -2927,7 +2969,7 @@ window.generateInvoice = async (btn) => {
   const st = document.getElementById('invPvStatus'); if (st) st.innerHTML = '<span class="muted">יוצר מסמך בחשבונית ירוקה…</span>';
   const doGen = (allowReinvoice) => fetch('/api/invoicing/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ companyId: state.company, eventIds: p.ids, clientName: p.client, clientId: p.clientId,
-      type: p.type, items, description: p.subject, date: p.docDate || null,
+      type: p.type, items: invItemsForApi(items), discount: invDiscountForApi(), description: p.subject, date: p.docDate || null,
       sendEmail: p.sendEmail, email: p.sendEmail ? p.email : null, allowReinvoice, skipDateValidation: !!p.skipSeq }) }).then(r => r.json()).catch(() => ({ error: 'שגיאת רשת' }));
   let r = await doGen(false);
   // אירועים שכבר חויבו — דורש אישור מפורש כדי להפיק חשבונית נוספת (מונע חיוב כפול)
@@ -2990,7 +3032,7 @@ window.showDesignedPreview = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'טוען…'; }
   if (st) st.innerHTML = '<span class="muted">טוען תצוגה מקדימה מעוצבת מחשבונית ירוקה…</span>';
   const r = await fetch('/api/invoicing/preview-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ eventIds: p.ids, items, type: p.type, description: p.subject, date: p.docDate || null, clientId: p.clientId, clientName: p.client, skipDateValidation: !!p.skipSeq }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    body: JSON.stringify({ eventIds: p.ids, items: invItemsForApi(items), discount: invDiscountForApi(), type: p.type, description: p.subject, date: p.docDate || null, clientId: p.clientId, clientName: p.client, skipDateValidation: !!p.skipSeq }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) { btn.disabled = false; btn.textContent = '👁 תצוגה מקדימה מעוצבת'; }
   if (r.ok && r.pdfBase64) {
     if (st) st.innerHTML = '';
