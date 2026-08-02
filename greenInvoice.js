@@ -425,7 +425,8 @@ export async function getDocument(id) { return api(`/documents/${encodeURICompon
 export async function sendDocument(id, emails, opts = {}) {
   const list = (Array.isArray(emails) ? emails : [emails]).map(e => String(e || '').trim()).filter(Boolean);
   if (!list.length) throw new Error('חסרה כתובת מייל');
-  const body = { emails: list, original: true };
+  // לפי ה-API של חשבונית ירוקה: POST /documents/:id/send עם body { email } (יחיד). כתובת ריקה = לכתובות השמורות של הלקוח.
+  const body = { email: list[0] };
   if (opts.message) body.message = String(opts.message);
   const r = await api(`/documents/${encodeURIComponent(id)}/send`, { method: 'POST', body });
   clearDataCache();
