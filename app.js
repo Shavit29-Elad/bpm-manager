@@ -3058,7 +3058,21 @@ window.submitOldInvoice = async (mode, oldInvoiceId, btn) => {
   document.getElementById('oldInvModal').classList.add('hidden');
   if (typeof clearApiCache === 'function') clearApiCache(); // כדי שמסמכי הלקוח (כולל המסמך שהועלה) יטענו מחדש בשיוך בנק
   if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices();
-  if (window._linkTxId && document.getElementById('linkModal') && !document.getElementById('linkModal').classList.contains('hidden') && _linkClientName && typeof linkPickContactByName === 'function') linkPickContactByName(_linkClientName);
+  // אם ההעלאה נעשתה מתוך חלונית שיוך תנועת בנק — לשייך את המסמך שהועלה ישירות לתנועה (מתווסף לבחירה; נותר ללחוץ "שמור")
+  const _lm = document.getElementById('linkModal');
+  if (mode === 'create' && window._linkTxId && _lm && !_lm.classList.contains('hidden') && r.doc && typeof linkAdd === 'function') {
+    const entry = {
+      id: r.doc.id, number: r.doc.number, type: Number(r.doc.type),
+      clientName: clientName,
+      amount: (r.doc.amount != null ? Number(r.doc.amount) : (Number(amount) || 0)),
+      date: r.doc.date || date || null, url: r.doc.url || null, kind: 'income',
+    };
+    linkAdd(jenc(entry));
+    const lst = document.getElementById('linkStatus');
+    if (lst) lst.innerHTML = `<span style="color:var(--accent2)">✓ המסמך הועלה ושויך לתנועה — לחץ "שמור" לאישור</span>`;
+  } else if (window._linkTxId && _lm && !_lm.classList.contains('hidden') && _linkClientName && typeof linkPickContactByName === 'function') {
+    linkPickContactByName(_linkClientName);
+  }
 };
 window.delOldInvoice = async (oldInvoiceId) => {
   if (!confirm('למחוק את החשבונית הישנה הזו לגמרי?')) return;
