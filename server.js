@@ -904,6 +904,7 @@ add('POST', /^\/api\/quotes\/create$/, async (req, res, _p, _q, body) => {
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim(), add: true };
     const opts = { type: 10, client, items, description: body.subject || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.discount && Number(body.discount.amount) > 0) opts.discount = body.discount; // הנחה (סכום/אחוז) — כבר מומרת ל-net
     if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
     const doc = await greenInvoice.createDocument(opts);
@@ -927,6 +928,7 @@ add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
     const client = body.clientId ? { id: body.clientId } : { name: String(body.clientName || 'לקוח').trim(), add: true };
     const opts = { type, client, items, description: body.subject || body.description || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.discount && Number(body.discount.amount) > 0) opts.discount = body.discount; // הנחה (סכום/אחוז) — כבר מומרת ל-net
     if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {

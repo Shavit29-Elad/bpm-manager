@@ -3154,10 +3154,47 @@ window.nqAddItem = () => { nqSync(); _nq.items.push({ description: '', quantity:
 window.nqDelItem = (i) => { nqSync(); _nq.items.splice(i, 1); if (!_nq.items.length) _nq.items.push({ description: '', quantity: 1, price: 0 }); renderNewQuote(); };
 window.nqClientChanged = () => { nqSync(); renderNewQuote(); };
 window.nqRecalc = () => {
-  let sub = 0; document.querySelectorAll('#newQuoteModal .nq-item').forEach(row => { sub += (Number(row.querySelector('.nq-qty')?.value) || 0) * (Number(row.querySelector('.nq-price')?.value) || 0); });
-  const vat = sub * VAT_RATE, total = sub + vat;
-  const box = document.getElementById('nqTotals'); if (box) box.innerHTML = `ביניים: <b>${money(sub)}</b> · מע"מ ${Math.round(VAT_RATE * 100)}%: <b>${money(vat)}</b> · סה"כ: <b style="color:var(--accent2)">${money(total)}</b>`;
+  nqSync();
+  const t = docNetTotals(_nq.items, _nq);
+  const box = document.getElementById('nqTotals');
+  if (box) box.innerHTML = `ביניים (לפני מע"מ): <b>${money(t.net0)}</b>${t.discNet > 0 ? ` · הנחה: <b style="color:var(--accent)">-${money(t.discNet)}</b>` : ''} · מע"מ ${Math.round(VAT_RATE * 100)}%: <b>${money(t.vat)}</b> · סה"כ: <b style="color:var(--accent2)">${money(t.total)}</b>`;
 };
+// ── מנוע הנחה + לפני/אחרי מע"מ — משותף לכל טפסי הפקת המסמכים ──
+function docNetTotals(items, cfg) {
+  cfg = cfg || {};
+  const raw = (items || []).reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
+  const net0 = cfg.pricesInclVat ? raw / 1.18 : raw; // אם המחירים כוללים מע"מ — מפרידים את המע"מ
+  const dAmt = Number(cfg.discAmount) || 0;
+  let discNet = 0;
+  if (dAmt > 0) { if (cfg.discType === 'percentage') discNet = net0 * (dAmt / 100); else discNet = cfg.discAfterVat ? (dAmt / 1.18) : dAmt; }
+  discNet = Math.min(Math.max(0, discNet), net0);
+  const net = net0 - discNet, vat = net * 0.18;
+  return { sub: net0, net0, discNet, net, vat, total: net + vat };
+}
+function docDiscForApi(cfg) {
+  cfg = cfg || {}; const dAmt = Number(cfg.discAmount) || 0;
+  if (!(dAmt > 0)) return null;
+  if (cfg.discType === 'percentage') return { amount: dAmt, type: 'percentage' };
+  return { amount: +(cfg.discAfterVat ? dAmt / 1.18 : dAmt).toFixed(4), type: 'sum' }; // "אחרי מע"מ" → נטו = ÷1.18
+}
+function docItemsForApi(items, cfg) {
+  return (items || []).map(it => ({ ...it, price: (cfg && cfg.pricesInclVat) ? +(Number(it.price) / 1.18).toFixed(4) : Number(it.price) || 0 }));
+}
+function discountBoxHtml(cfg, prefix) {
+  return `<div style="margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;gap:8px">
+    <label style="font-size:12.5px;display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" ${cfg.pricesInclVat ? 'checked' : ''} onchange="${prefix}SetInclVat(this.checked)"><span>המחירים שהוזנו כוללים מע״מ (ברירת מחדל: לפני מע״מ)</span></label>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px">
+      <span>הנחה:</span>
+      <input type="number" inputmode="decimal" value="${cfg.discAmount || ''}" placeholder="0" oninput="${prefix}SetDiscAmount(this.value)" style="width:90px" dir="ltr"/>
+      <select onchange="${prefix}SetDiscType(this.value)"><option value="sum" ${cfg.discType !== 'percentage' ? 'selected' : ''}>₪ סכום</option><option value="percentage" ${cfg.discType === 'percentage' ? 'selected' : ''}>% אחוז</option></select>
+      <label id="${prefix}DiscAfterWrap" style="${cfg.discType === 'percentage' ? 'display:none;' : ''}display:inline-flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" ${cfg.discAfterVat ? 'checked' : ''} onchange="${prefix}SetDiscAfterVat(this.checked)"><span>מהסכום כולל מע״מ</span></label>
+    </div>
+  </div>`;
+}
+window.nqSetInclVat = (on) => { _nq.pricesInclVat = !!on; nqRecalc(); };
+window.nqSetDiscAmount = (v) => { _nq.discAmount = (v === '' ? 0 : Number(v) || 0); nqRecalc(); };
+window.nqSetDiscType = (v) => { _nq.discType = v; const w = document.getElementById('nqDiscAfterWrap'); if (w) w.style.display = v === 'percentage' ? 'none' : 'inline-flex'; nqRecalc(); };
+window.nqSetDiscAfterVat = (on) => { _nq.discAfterVat = !!on; nqRecalc(); };
 function renderNewQuote() {
   const e = _nq; if (!e) return;
   const m = document.getElementById('newQuoteModal');
@@ -3186,6 +3223,7 @@ function renderNewQuote() {
     <div style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;font-size:11px;color:var(--muted);margin-bottom:3px"><span>תיאור</span><span style="text-align:center">כמות</span><span style="text-align:left">מחיר</span><span></span></div>
     <div id="nqItems">${itemRows}</div>
     <button class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:2px" onclick="nqAddItem()">+ הוסף שורה</button>
+    ${discountBoxHtml(e, 'nq')}
     <div id="nqTotals" style="margin-top:10px;font-size:14px"></div>
     <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית (לא חובה) <input class="nq-remarks" value="${escAttr(e.remarks)}" style="width:100%;padding:6px 8px;margin-top:3px"></label>
     <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:10px"><input type="checkbox" class="nq-sendemail" ${e.sendEmail ? 'checked' : ''}> שלח את ההצעה ללקוח במייל</label>
@@ -3206,7 +3244,7 @@ window.nqPreviewPdf = async (btn) => {
   const st = document.getElementById('nqStatus');
   if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות לתצוגה.</span>'; return; }
   const issueLabel = (e.type && e.type !== 10) ? `✓ צור ${DOC_TYPE_NAMES[e.type] || 'מסמך'}` : '✓ צור הצעת מחיר';
-  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type || 10, clientId: e.clientId || null, clientName: e.clientName || null, items, description: e.subject, date: e.date, remarks: e.remarks, skipDateValidation: !!e.skipSeq }, { statusEl: st, btn, onIssue: () => createNewQuote(), issueLabel });
+  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type || 10, clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), description: e.subject, date: e.date, remarks: e.remarks, skipDateValidation: !!e.skipSeq }, { statusEl: st, btn, onIssue: () => createNewQuote(), issueLabel });
 };
 window.createNewQuote = async (btn) => {
   nqSync(); const e = _nq;
@@ -3217,12 +3255,12 @@ window.createNewQuote = async (btn) => {
   const st = document.getElementById('nqStatus');
   // --- מסמך הכנסה מאפס (מס-קבלה / קבלה) ---
   if (isIncome) {
-    const total = items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.price) || 0), 0) * (1 + VAT_RATE);
+    const total = docNetTotals(items, e).total;
     const docName = DOC_TYPE_NAMES[e.type] || 'מסמך';
     if (!confirm(`ליצור ${docName} על סך ${money(total)} עבור ${e.clientName || 'הלקוח'}?\nהמסמך ייווצר בחשבונית ירוקה ולא ניתן למחיקה (רק לזכות).`)) return;
     if (btn) btn.disabled = true; if (st) st.innerHTML = `<span class="muted">יוצר ${docName}…</span>`;
     const payment = [{ type: 4, price: +total.toFixed(2), date: e.date }];
-    const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items, date: e.date, subject: e.subject, remarks: e.remarks, payment, skipDateValidation: !!e.skipSeq };
+    const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, payment, skipDateValidation: !!e.skipSeq };
     const r = await fetch('/api/documents/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (btn) btn.disabled = false;
     if (r.ok) {
@@ -3237,7 +3275,7 @@ window.createNewQuote = async (btn) => {
   if (e.sendEmail && !e.email.trim()) { alert('סמנת "שלח במייל" — יש להזין כתובת מייל.'); return; }
   if (e.sendEmail && !confirm(`ליצור את הצעת המחיר ולשלוח אותה במייל ל-${e.email.trim()}?`)) return;
   if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">יוצר הצעת מחיר…</span>';
-  const body = { clientId: e.clientId || null, clientName: e.clientName || null, items, date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim(), skipDateValidation: !!e.skipSeq };
+  const body = { clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim(), skipDateValidation: !!e.skipSeq };
   const r = await fetch('/api/quotes/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
   if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''} · מוריד קובץ…</span>`; autoDownloadDoc(r.doc?.url); setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); }, 1300); }
