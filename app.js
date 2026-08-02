@@ -49,7 +49,7 @@ const api = (p) => {
   };
 })();
 
-const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', invoicing: '🧾 חשבוניות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
+const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
 // לשוניות רלוונטיות לחברה מסוימת (לניהול הרשאות משתמשים) — נגזר מאותם כללים כמו applyCompanyTabs. "פרטי העסק" — הנהלה בלבד.
 function companyTabsFor(cid) {
   const isBpm = cid === 'co_bpm', isMoshe = cid === 'co_moshe';
@@ -310,7 +310,7 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderInvoicing, quotes: renderQuotes, team: renderTeam,
+  ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes, team: renderTeam,
      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections, business: renderBusiness }[state.tab])(c);
 }
 
@@ -1865,6 +1865,14 @@ window.forceAdoptCalendar = async (btn) => {
   else alert(`✓ הרענון הושלם — נקלטו ${r && r.adopted || 0} אירועים חדשים מהיומן.`);
   renderCombined($('#content'));
 };
+// קפיצה חלקה למקטע בלשונית האירועים (שורת קיצורי-הדרך למעלה)
+window.jumpTo = (id) => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+// רענון מקטע "הפקת חשבוניות" — למכולה המוטמעת בלשונית האירועים אם קיימת, אחרת לתוכן הראשי
+function refreshInvoicingUI() {
+  const w = document.getElementById('invoicingWrap');
+  return renderInvoicing(w || $('#content'));
+}
+window.refreshInvoicingUI = refreshInvoicingUI;
 async function renderCombined(c) {
   ensureNamesSynced(() => { if (state.tab === 'combined' || state.tab === 'events') renderCombined($('#content')); }); // ברקע, פעם בחברה
   await autoAdoptCalendar();
@@ -1890,6 +1898,16 @@ async function renderCombined(c) {
   const evClientSel = approvedClients.length ? `<select onchange="setEvClient(this.value)" style="padding:5px 10px;font-size:13px"><option value="all" ${_evClientFilter === 'all' ? 'selected' : ''}>כל הלקוחות</option>${approvedClients.map(cn => `<option value="${escAttr(cn)}" ${_evClientFilter === cn ? 'selected' : ''}>${escapeHtml(cn)}</option>`).join('')}</select>` : '';
   const evContractorSel = approvedContractors.length ? `<select onchange="setEvContractor(this.value)" style="padding:5px 10px;font-size:13px"><option value="all" ${_evContractorFilter === 'all' ? 'selected' : ''}>כל הקבלנים</option>${approvedContractors.map(cn => `<option value="${escAttr(cn)}" ${_evContractorFilter === cn ? 'selected' : ''}>${escapeHtml(cn)}</option>`).join('')}</select>` : '';
   c.innerHTML = `
+    <div class="panel" style="position:sticky;top:6px;z-index:30;display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 12px;margin-bottom:12px">
+      <span class="muted" style="font-size:12.5px">קפיצה מהירה:</span>
+      <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="jumpTo('calWrap')">📅 יומן</button>
+      <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="jumpTo('sec-pending')">🕓 לאישור${pending.length ? ` · ${pending.length}` : ''}</button>
+      <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="jumpTo('sec-approved')">✓ מאושרים</button>
+      <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="jumpTo('invoicingWrap')">🧾 הפקת חשבוניות</button>
+    </div>
+
+    <div class="panel" id="calWrap" style="scroll-margin-top:64px"><div class="empty">טוען יומן…</div></div>
+
     <div class="panel">
       <div class="row-between">
         <div><h2>אירועים</h2><span class="muted">${events.length} אירועים${overdue ? ` · <span style="color:var(--danger)">${overdue} ללא חשבונית מחודש שעבר</span>` : ''}</span></div>
@@ -1901,9 +1919,9 @@ async function renderCombined(c) {
         </div>
       </div>
       ${events.length ? `
-        <h3 style="margin:16px 0 4px;font-size:15px">🕓 אירועים לאישור <span class="muted" style="font-weight:400;font-size:13px">· ${pending.length}</span></h3>
+        <h3 id="sec-pending" style="margin:16px 0 4px;font-size:15px;scroll-margin-top:64px">🕓 אירועים לאישור <span class="muted" style="font-weight:400;font-size:13px">· ${pending.length}</span></h3>
         ${pending.length ? eventsByMonthHtml(pending, 'pending') : `<div class="empty">אין אירועים הממתינים לאישור 👌</div>`}
-        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:22px 0 4px">
+        <div id="sec-approved" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:22px 0 4px;scroll-margin-top:64px">
           <h3 style="margin:0;font-size:15px">✓ אירועים מאושרים <span class="muted" style="font-weight:400;font-size:13px">· ${approvedShown.length}${anyApprovedFilter ? ` מתוך ${approved.length}` : ''}</span></h3>
           <div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">🔍</span><input id="evTextSearch" value="${escAttr(_evText)}" oninput="setEvText(this.value)" placeholder="חיפוש חופשי: זמר / מיקום / לקוח / קבלן…" style="padding:5px 10px;font-size:13px;min-width:230px"/>${_evText ? `<button class="btn ghost" style="padding:4px 9px;font-size:12px" onclick="setEvText('')">✕</button>` : ''}</div>
           ${approvedClients.length ? `<div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">לקוח:</span>${evClientSel}</div>` : ''}
@@ -1913,13 +1931,16 @@ async function renderCombined(c) {
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
     </div>
 
-    <div class="panel" id="calWrap"><div class="empty">טוען יומן…</div></div>`;
+    <div id="invoicingWrap" style="scroll-margin-top:64px"><div class="panel"><div class="empty">טוען הפקת חשבוניות…</div></div></div>`;
   $('#addEvent').onclick = () => $('#ingestModal').classList.remove('hidden');
   $('#addEventManual').onclick = async () => {
     const ev = await fetch('/api/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, source: 'manual', date: todayIso() }) }).then(r => r.json()).catch(() => null);
     if (ev && ev.id) openEventEditor(ev);
   };
   renderCalView();
+  // הפקת חשבוניות מוטמעת בתחתית הלשונית (לא לשונית נפרדת)
+  const _invWrap = document.getElementById('invoicingWrap');
+  if (_invWrap) renderInvoicing(_invWrap);
 }
 
 // תאריך בפורמט DD/MM/YY (למשל 09/07/26)
@@ -2621,7 +2642,7 @@ window.linkChkChanged = (el) => {
 window.openLinkExisting = (safe, clientEnc, clientId) => {
   const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
   if (!ids.length) { alert('לא נבחרו אירועים לשיוך'); return; }
-  openDocLinkModal(ids, decodeURIComponent(clientEnc), clientId, renderInvoicing);
+  openDocLinkModal(ids, decodeURIComponent(clientEnc), clientId, refreshInvoicingUI);
 };
 // שיוך מסמכים לאירוע בודד — מלשונית האירועים (עמודת חיוב). רק מסמכים של אותו לקוח.
 window.linkForEvent = (eventId, clientEnc, clientId) => {
@@ -2630,11 +2651,11 @@ window.linkForEvent = (eventId, clientEnc, clientId) => {
 };
 // שיוך מסמכים לאירוע בודד מתוך כרטיס החשבוניות (בלי תלות ב-checkbox) — מרענן את מסך החשבוניות
 window.linkOneEvent = (eventId, clientEnc, clientId) => {
-  openDocLinkModal([eventId], decodeURIComponent(clientEnc), clientId || '', renderInvoicing);
+  openDocLinkModal([eventId], decodeURIComponent(clientEnc), clientId || '', refreshInvoicingUI);
 };
 // שיוך אירוע למסמכים קיימים של אותו הלקוח (שם ייחודי כדי לא להתנגש עם שיוך-בנק openLinkModal)
 async function openDocLinkModal(ids, client, clientId, onDone) {
-  _linkCtx = { ids, client, clientId: clientId || '', onDone: onDone || renderInvoicing };
+  _linkCtx = { ids, client, clientId: clientId || '', onDone: onDone || refreshInvoicingUI };
   let m = document.getElementById('docLinkModal');
   if (!m) { m = document.createElement('div'); m.id = 'docLinkModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden'); m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
@@ -2676,7 +2697,7 @@ window.linkConfirm = async () => {
   const r = await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventIds: _linkCtx.ids, docs }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
     if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ האירוע שויך ל-${r.docs} מסמכים וסומן כחויב.</span>`;
-    const done = (_linkCtx && _linkCtx.onDone) || renderInvoicing;
+    const done = (_linkCtx && _linkCtx.onDone) || refreshInvoicingUI;
     setTimeout(() => { document.getElementById('docLinkModal').classList.add('hidden'); done($('#content')); }, 1200);
   } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
@@ -3105,7 +3126,7 @@ window.generateInvoice = async (btn) => {
     const dpv = document.getElementById('designPvModal'); if (dpv) dpv.classList.add('hidden');
     document.getElementById('invPvModal').classList.add('hidden');
     showDocReadyPopup(r.doc, typeName); // חלונית צפייה/הורדה/שליחה — בלי לפתוח טאב חדש בכרום
-    renderInvoicing($('#content'));
+    refreshInvoicingUI();
   } else {
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }
