@@ -6283,8 +6283,8 @@ let _linkTxId = null, _linkSel = [], _linkClients = null, _linkSuppliers = null,
 let _linkMode = 'clients', _linkDocsKind = 'income', _linkQuery = '', _linkNumTimer = null, _linkNumResults = [], _linkIncludeCredits = false, _linkInclUsed = false;
 // התאמת סכום בין קבלה לחשבונית (מלא או פחות ניכוי מס במקור לפי שיעור החברה)
 const _amtClose = (a, b) => { const t = Math.max(3, (a || 0) * 0.004); return Math.min(Math.abs(a - b), Math.abs(a - b * whFactor())) <= t; };
-// #1 — לא מציגים לשיוך מסמכים ישנים מ-מאי 2026 (רק מאי 2026 והלאה)
-const _docFromMay26 = (d) => { const dt = String((d && d.date) || '').slice(0, 10); return !dt || dt >= '2026-05-01'; };
+// #1 — לא מציגים לשיוך מסמכים ישנים מ-מאי 2026 (רק מאי 2026 והלאה) — אך מסמכים שהועלו ידנית (אופק, מהמערכת הקודמת) תמיד מוצגים
+const _docFromMay26 = (d) => { if (d && d.uploaded) return true; const dt = String((d && d.date) || '').slice(0, 10); return !dt || dt >= '2026-05-01'; };
 function linkSelHtml() {
   if (!_linkSel.length) return '<span class="muted">אין מסמכים מקושרים.</span>';
   return _linkSel.map((d, i) => `<div style="padding:3px 0">
