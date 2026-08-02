@@ -1507,6 +1507,9 @@ window.derConfirm = async () => {
     if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }
 };
+// העדפת "שלח אוטומטית למייל הלקוח בעת הפקה" — נשמרת מקומית, ברירת מחדל: מופעל
+function autoSendPref() { try { return localStorage.getItem('autoSendDocEmail') !== '0'; } catch { return true; } }
+window.setAutoSendPref = (v) => { try { localStorage.setItem('autoSendDocEmail', v ? '1' : '0'); } catch {} };
 // חלונית אחרי הפקת מסמך: הורדה למחשב / שליחה למייל הלקוח / צפייה
 function showDocReadyPopup(doc, typeName) {
   if (!doc) return;
@@ -1523,7 +1526,8 @@ function showDocReadyPopup(doc, typeName) {
       <button class="btn success" onclick="docReadySend('${doc.id}',this)">✉️ שליחה למייל הלקוח</button>
       ${url ? `<button class="btn ghost" onclick="previewDoc('${url}')">👁 צפייה</button>` : ''}
     </div>
-    <div id="docReadyStatus" style="font-size:12.5px;min-height:16px;margin-top:10px"></div>
+    <label style="display:flex;gap:7px;align-items:center;justify-content:center;font-size:12.5px;color:var(--muted);margin-top:10px"><input type="checkbox" id="docReadyAuto" ${autoSendPref() ? 'checked' : ''} onchange="setAutoSendPref(this.checked)"> שלח אוטומטית למייל הלקוח בעת הפקה</label>
+    <div id="docReadyStatus" style="font-size:12.5px;min-height:16px;margin-top:6px"></div>
     <div class="modal-actions" style="margin-top:8px"><button class="btn ghost" onclick="document.getElementById('docReadyModal').classList.add('hidden')">סגור</button></div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
@@ -1541,6 +1545,14 @@ function showDocReadyPopup(doc, typeName) {
       }
     } catch { a.textContent = '📱 שלח בוואטסאפ (הזן מספר)'; a.style.pointerEvents = ''; a.style.opacity = ''; a.onclick = (ev) => { ev.preventDefault(); waSendManual(doc.id); }; }
   })();
+  // שליחה אוטומטית למייל הלקוח (אם התיבה מסומנת) — כדי שלא צריך ללחוץ ידנית אחרי כל הפקה
+  if (autoSendPref()) {
+    setTimeout(() => {
+      const st = document.getElementById('docReadyStatus');
+      if (st) st.innerHTML = '<span class="muted">שולח אוטומטית למייל הלקוח…</span>';
+      docReadySend(doc.id, null);
+    }, 80);
+  }
 }
 // שליחה בוואטסאפ כשאין מספר שמור ללקוח — מבקשים מספר ופותחים wa.me
 window.waSendManual = async (docId) => {
