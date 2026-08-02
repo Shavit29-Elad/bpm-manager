@@ -981,7 +981,7 @@ function openInvClientHtml(cl) {
     <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : ''}
     ${d.uploaded
       ? `${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number || ''))}',${Number(d.type)},'followup')" title="הפקת מסמך המשך בחשבונית ירוקה">מסמך המשך ↪</button>` : ''}
-    <button class="btn success" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="${d.oldInvoiceId ? `openOldInvoice('receipt','${d.oldInvoiceId}',320)` : `openAttachDoc('${d.eventId}',320)`}" title="צרף מס-קבלה/קבלה כדי לסגור את החשבונית">✓ צרף קבלה</button>${d.oldInvoiceId ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="delOldInvoice('${d.oldInvoiceId}')" title="מחק חשבונית ישנה">✕</button>` : ''}`
+    <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number || ''))}','${escAttr(DOC_TYPE_NAMES[d.type] || 'מסמך')}','${encodeURIComponent(cl.name || '')}')" title="שליחת המסמך במייל ללקוח">✉️ שלח</button>${d.oldInvoiceId ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="delOldInvoice('${d.oldInvoiceId}')" title="מחק חשבונית ישנה">✕</button>` : ''}`
       : `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number))}','${escAttr(DOC_TYPE_NAMES[d.type] || 'מסמך')}','${encodeURIComponent(cl.name || '')}')">✉️ שלח</button>
     ${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'followup')">מסמך המשך ↪</button>` : ''}
     <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'duplicate')">שכפול ⧉</button>`}
@@ -2620,8 +2620,8 @@ function evLinkDocRow(d) {
   const prevBtn = url ? `<button type="button" class="btn ghost" style="padding:3px 9px;font-size:11px;white-space:nowrap" onclick="event.preventDefault();event.stopPropagation();previewDoc('${url}')">👁 תצוגה מקדימה</button>` : '';
   const deriveBtn = isQuote ? `<button type="button" class="btn ghost" style="padding:3px 9px;font-size:11px;white-space:nowrap" onclick="event.preventDefault();event.stopPropagation();evLinkDeriveQuote('${escAttr(String(d.id))}','${escAttr(String(d.number))}')">↪ הפק מסמך המשך</button>` : '';
   return `<label class="card" style="padding:9px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;cursor:pointer">
-      <input type="checkbox" class="evlinkchk" data-id="${escAttr(String(d.id))}" data-number="${escAttr(String(d.number))}" data-type="${d.type}" onchange="evLinkChkChanged(this)"/>
-      <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}</span>
+      <input type="checkbox" class="evlinkchk" data-id="${escAttr(String(d.id))}" data-number="${escAttr(String(d.number))}" data-type="${d.type}"${d.uploaded ? ` data-uploaded="1" data-url="${escAttr(String(d.url || ''))}" data-date="${escAttr(String(d.date || ''))}" data-amount="${d.amount != null ? d.amount : ''}"` : ''} onchange="evLinkChkChanged(this)"/>
+      <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.uploaded ? ' · ישן' : ''}</span>
       <span style="white-space:nowrap">#${d.number}</span>
       ${closed ? '<span class="tag" style="background:rgba(120,120,120,.18);color:var(--muted)">סגור</span>' : ''}
       ${(Array.isArray(d.linkedTo) && d.linkedTo.length) ? `<span class="tag" style="background:rgba(230,150,20,.18);color:var(--warn)" title="משויך כבר לאירוע: ${escAttr(d.linkedTo.join(', '))}">⚠ משויך: ${escapeHtml(d.linkedTo.join(', '))}</span>` : ''}
@@ -2640,7 +2640,7 @@ window.evLinkChkChanged = (el) => {
 };
 window.evLinkConfirm = async () => {
   if (!_evLinkCtx) return;
-  const docs = [...document.querySelectorAll('.evlinkchk:checked')].map(x => ({ id: x.dataset.id, number: x.dataset.number, type: +x.dataset.type }));
+  const docs = [...document.querySelectorAll('.evlinkchk:checked')].map(x => { const o = { id: x.dataset.id, number: x.dataset.number, type: +x.dataset.type }; if (x.dataset.uploaded) { o.uploaded = true; if (x.dataset.url) o.url = x.dataset.url; if (x.dataset.date) o.date = x.dataset.date; if (x.dataset.amount) o.amount = Number(x.dataset.amount); } return o; });
   if (!docs.length) { alert('סמן לפחות מסמך אחד לשיוך.'); return; }
   const st = document.getElementById('evLinkStatus'); if (st) st.innerHTML = '<span class="muted">משייך…</span>';
   const r = await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventIds: [_evLinkCtx.eventId], docs }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));

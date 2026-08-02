@@ -646,17 +646,41 @@ add('GET', /^\/api\/invoicing\/linkable-docs$/, async (req, res, _p, q) => {
     const includeLinked = q.includeLinked === '1' || q.includeLinked === 'true';
     let pool = all.filter(d => types.includes(Number(d.type)));
     // כמה מסמכים משוייכים כבר לאירוע אחר (לשם הצגת/הסתרת האפשרות)
-    const linkedCount = pool.filter(d => linkedMap.has(String(d.id))).length;
+    const linkedCount0 = pool.filter(d => linkedMap.has(String(d.id))).length;
     if (!includeLinked) pool = pool.filter(d => !linkedMap.has(String(d.id)));
     // הוספת שמות האירועים שהמסמך כבר משויך אליהם (לתצוגה)
     pool = pool.map(d => { const s = linkedMap.get(String(d.id)); return s ? { ...d, linkedTo: [...s] } : d; });
     // ברירת מחדל: רק מסמכים בסטטוס פתוח (status 0). "הצג סגורים" → כולל גם סגורים.
     const openOnly = pool.filter(d => Number(d.status) === 0);
-    const docs = (includeClosed ? pool : openOnly)
+    let docs = (includeClosed ? pool : openOnly)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       .slice(0, 60);
     const closedCount = pool.length - openOnly.length;
-    json(res, { docs, clientId, closedCount, linkedCount });
+    // ── גם מסמכים ישנים שהועלו ידנית (אינם בחשבונית ירוקה) — ניתנים לשיוך, וגם לכמה אירועים ──
+    const normU = (s) => String(s || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[."'׳״,()\-]/g, ' ').replace(/\s+/g, ' ').trim();
+    const wantN = normU(name);
+    const cliMatchU = (nm) => { const a = normU(nm); return !!a && (!wantN || a === wantN || a.includes(wantN) || wantN.includes(a)); };
+    const upByKey = new Map();
+    const addUp = (d, lbl) => {
+      if (!d || !d.uploaded || ![10, 300, 305, 320, 330].includes(Number(d.type))) return;
+      const key = (d.number || d.id) + '|' + Number(d.type);
+      if (!upByKey.has(key)) upByKey.set(key, { doc: { id: d.id, number: d.number || null, type: Number(d.type), date: d.date || null, amount: d.amount != null ? Number(d.amount) : null, amountDue: d.amount != null ? Number(d.amount) : null, url: d.url || ('/api/files/' + d.id), status: 0, uploaded: true }, labels: new Set() });
+      if (lbl) upByKey.get(key).labels.add(lbl);
+    };
+    for (const e of evs) {
+      if (!cliMatchU(e.clientName || e.client || '')) continue;
+      const lbl = evLabel(e);
+      for (const d of (e.linkedDocs || [])) if (d && d.uploaded) addUp(d, (excludeId && e.id === excludeId) ? null : lbl);
+    }
+    for (const rec of (db.oldInvoices || [])) {
+      if (!cliMatchU(rec.clientName || '')) continue;
+      for (const d of (rec.linkedDocs || [])) if (d && d.uploaded) addUp(d, null);
+    }
+    let upList = [...upByKey.values()].map(v => ({ ...v.doc, linkedTo: [...v.labels] }));
+    const upLinked = upList.filter(x => x.linkedTo.length).length;
+    if (!includeLinked) upList = upList.filter(x => !x.linkedTo.length);
+    docs = docs.concat(upList).slice(0, 80);
+    json(res, { docs, clientId, closedCount, linkedCount: linkedCount0 + upLinked });
   } catch (e) { json(res, { docs: [], error: e.message }, 500); }
 });
 
@@ -668,7 +692,12 @@ add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
     ? body.docs
     : (body.docId ? [{ id: body.docId, number: body.docNumber || null, type: Number(body.docType) || null }] : []);
   if (!ids.length || !docs.length) return json(res, { error: 'חסרים נתונים לשיוך' }, 400);
-  docs = docs.slice(0, 4).map(d => ({ id: d.id, number: d.number || null, type: Number(d.type) || null }));
+  docs = docs.slice(0, 4).map(d => {
+    const o = { id: d.id, number: d.number || null, type: Number(d.type) || null };
+    // מסמך ישן שהועלה ידנית (אינו בחשבונית ירוקה) — שומרים url/uploaded/date/amount כדי שיוצג ויורד וייחשב כחיוב פתוח
+    if (d.uploaded) { o.uploaded = true; if (d.url) o.url = d.url; if (d.date) o.date = d.date; if (d.amount != null) o.amount = Number(d.amount); }
+    return o;
+  });
   let n = 0;
   for (const id of ids) {
     const e = db.events.find(x => x.id === id);
@@ -1688,9 +1717,21 @@ add('GET', /^\/api\/documents\/([^/]+)\/url$/, async (req, res, params) => {
 
 // POST /api/documents/:id/send { email? } — שליחת מסמך קיים במייל דרך חשבונית ירוקה
 add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, _q, body) => {
+  const email0 = String((body && body.email) || '').trim();
+  // מסמך שהועלה ידנית (אינו בחשבונית ירוקה) — שולחים את הקובץ עצמו במייל דרך SMTP
+  try {
+    const f = await getFile(params[0]);
+    if (f) {
+      if (!email0) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
+      if (!mailer.mailerConfigured()) return json(res, { error: 'שליחת מייל אינה מוגדרת (חסר SMTP_USER/SMTP_PASS)' }, 400);
+      const content = Buffer.from(String(f.data || ''), 'base64');
+      await mailer.sendMail({ to: email0, subject: `מסמך${f.filename ? ' — ' + f.filename : ''}`, text: 'שלום,\nמצורף מסמך.\nתודה.', attachments: [{ filename: f.filename || 'document.pdf', content }] });
+      return json(res, { ok: true, sentTo: [email0], uploaded: true });
+    }
+  } catch {}
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
-    const email = String((body && body.email) || '').trim();
+    const email = email0;
     let emails = email ? [email] : [];
     if (!emails.length) {
       // ברירת מחדל — כתובות המייל השמורות ללקוח במסמך
