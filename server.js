@@ -787,6 +787,7 @@ add('POST', /^\/api\/events\/([^/]+)\/create-followup$/, async (req, res, params
     const client = ev.clientId ? { id: ev.clientId } : { name: String(body.clientName || ev.clientName || ev.client || 'לקוח').trim(), add: true };
     const opts = { type, client, items, description: body.description || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.discount && Number(body.discount.amount) > 0) opts.discount = body.discount; // הנחה (סכום/אחוז) — כבר מומרת ל-net
     if (body.skipDateValidation) opts.skipDateValidation = true;
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
@@ -870,6 +871,7 @@ add('POST', /^\/api\/old-invoices\/([^/]+)\/create-followup$/, async (req, res, 
     const client = rec.clientId ? { id: rec.clientId } : { name: String(body.clientName || rec.clientName || 'לקוח').trim(), add: true };
     const opts = { type, client, items, description: body.description || '', remarks: body.remarks || null };
     if (body.date) opts.date = String(body.date).slice(0, 10);
+    if (body.discount && Number(body.discount.amount) > 0) opts.discount = body.discount; // הנחה (סכום/אחוז) — כבר מומרת ל-net
     if (body.skipDateValidation) opts.skipDateValidation = true;
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => { const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' }; if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum); if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName); return row; }).filter(p => Math.abs(p.price) > 0);

@@ -1178,21 +1178,22 @@ window.derFillBalance = () => {
   if (_derEdit.payments[0]) _derEdit.payments[0].price = Math.max(0, +(t.total - others).toFixed(2));
   renderDeriveEditor();
 };
-function derTotals() {
-  const sub = _derEdit.items.reduce((s, it) => s + (Number(it.quantity) || 0) * (Number(it.price) || 0), 0);
-  const vat = +(sub * VAT_RATE).toFixed(2);
-  return { sub: +sub.toFixed(2), vat, total: +(sub + vat).toFixed(2) };
-}
+function derTotals() { return docNetTotals(_derEdit.items, _derEdit); }
+window.derSetInclVat = (on) => { _derEdit.pricesInclVat = !!on; derRecalc(); };
+window.derSetDiscAmount = (v) => { _derEdit.discAmount = (v === '' ? 0 : Number(v) || 0); derRecalc(); };
+window.derSetDiscType = (v) => { _derEdit.discType = v; const w = document.getElementById('derDiscAfterWrap'); if (w) w.style.display = v === 'percentage' ? 'none' : 'inline-flex'; derRecalc(); };
+window.derSetDiscAfterVat = (on) => { _derEdit.discAfterVat = !!on; derRecalc(); };
 window.derRecalc = () => {
-  // עדכון חי של הסכומים בלי רינדור מלא
+  // עדכון חי של הסכומים בלי רינדור מלא — כולל הנחה
   const e = _derEdit; if (!e) return;
-  let sub = 0;
+  let raw = 0;
   document.querySelectorAll('#derModal .der-item').forEach(row => {
-    sub += (Number(row.querySelector('.der-qty')?.value) || 0) * (Number(row.querySelector('.der-price')?.value) || 0);
+    raw += (Number(row.querySelector('.der-qty')?.value) || 0) * (Number(row.querySelector('.der-price')?.value) || 0);
   });
-  const vat = sub * VAT_RATE, total = sub + vat;
+  const t = docNetTotals([{ quantity: 1, price: raw }], e);
   const box = document.getElementById('derTotals');
-  if (box) box.innerHTML = `ביניים: <b>${money(sub)}</b> · מע"מ ${Math.round(VAT_RATE * 100)}%: <b>${money(vat)}</b> · סה"כ: <b style="color:var(--accent2)">${money(total)}</b>`;
+  if (box) box.innerHTML = `ביניים (לפני מע"מ): <b>${money(t.net0)}</b>${t.discNet > 0 ? ` · הנחה: <b style="color:var(--accent)">-${money(t.discNet)}</b>` : ''} · מע"מ ${Math.round(VAT_RATE * 100)}%: <b>${money(t.vat)}</b> · סה"כ: <b style="color:var(--accent2)">${money(t.total)}</b>`;
+  const total = t.total;
   if (e.needsPay) {
     let psum = 0; document.querySelectorAll('#derModal .der-pprice').forEach(x => psum += Number(x.value) || 0);
     const ps = document.getElementById('derPaySum');
@@ -1257,6 +1258,7 @@ function renderDeriveEditor() {
     <div style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;font-size:11px;color:var(--muted);margin-bottom:3px"><span>תיאור</span><span style="text-align:center">כמות</span><span style="text-align:left">מחיר</span><span></span></div>
     <div id="derItems">${itemRows}</div>
     <button class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:2px" onclick="derAddItem()">+ הוסף שורה</button>
+    ${discountBoxHtml(e, 'der')}
     <div id="derTotals" style="margin-top:10px;font-size:14px">ביניים: <b>${money(t.sub)}</b> · מע"מ ${Math.round(VAT_RATE * 100)}%: <b>${money(t.vat)}</b> · סה"כ: <b style="color:var(--accent2)">${money(t.total)}</b></div>
 
     ${e.needsPay ? `<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:10px">
@@ -1315,7 +1317,7 @@ window.derPreviewPdf = async (btn) => {
   if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות לתצוגה.</span>'; return; }
   let payment = [];
   if (e.needsPay) payment = e.payments.map(p => ({ type: Number(p.type), price: Number(p.price) || 0, date: (p.date || e.date), chequeNum: p.chequeNum || '', bankName: p.bankName || '', bankBranch: p.bankBranch || '', bankAccount: p.bankAccount || '' })).filter(p => Math.abs(p.price) > 0);
-  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type, clientName: e.clientName || null, items, description: e.description, date: e.date, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }, { statusEl: st, btn, onIssue: () => derConfirm(), issueLabel: `✓ הפק ${DOC_TYPE_SHORT[e.type] || 'מסמך'}` });
+  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), description: e.description, date: e.date, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }, { statusEl: st, btn, onIssue: () => derConfirm(), issueLabel: `✓ הפק ${DOC_TYPE_SHORT[e.type] || 'מסמך'}` });
 };
 window.derConfirm = async () => {
   derSyncFromDom();
@@ -1334,12 +1336,13 @@ window.derConfirm = async () => {
   if (!confirm(`להפיק ${typeName} על סך ${money(t.total)}?\nהמסמך ייווצר בחשבונית ירוקה${e.linked ? ' ויקושר למקור' : ''} ולא ניתן למחיקה (רק לזכות).`)) return;
   const btn = document.getElementById('derConfirmBtn'); if (btn) { btn.disabled = true; }
   const st = document.getElementById('derEditStatus'); if (st) st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
-  const usBody = e.uploadedSource ? JSON.stringify({ uploadedDocId: e.uploadedSource.uploadedDocId, type: e.type, items, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate, clientName: e.clientName }) : null;
+  const apiItems = docItemsForApi(items, e); const apiDiscount = docDiscForApi(e);
+  const usBody = e.uploadedSource ? JSON.stringify({ uploadedDocId: e.uploadedSource.uploadedDocId, type: e.type, items: apiItems, discount: apiDiscount, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate, clientName: e.clientName }) : null;
   const usUrl = e.uploadedSource ? (e.uploadedSource.oldInvoiceId ? `/api/old-invoices/${e.uploadedSource.oldInvoiceId}/create-followup` : `/api/events/${e.uploadedSource.eventId}/create-followup`) : null;
   const r = e.uploadedSource
     ? await fetch(usUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: usBody }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }))
     : await fetch(`/api/documents/${e.id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: e.type, linked: e.linked, items, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+        body: JSON.stringify({ type: e.type, linked: e.linked, items: apiItems, discount: apiDiscount, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
     // מסמך המשך שנוצר ממסמך שהועלה — השרת כבר קישר וסימן את הישן כ"הומר"; נעדכן את עורך האירוע אם פתוח
     if (e.uploadedSource && _evEditing && _evEditing.id === e.uploadedSource.eventId && r.doc) {
