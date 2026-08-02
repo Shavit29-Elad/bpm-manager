@@ -1814,6 +1814,19 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/documents/:id/client-email — כתובות המייל השמורות ללקוח על המסמך (למילוי אוטומטי בחלונית השליחה)
+add('GET', /^\/api\/documents\/([^/]+)\/client-email$/, async (req, res, params) => {
+  // מסמך שהועלה ידנית — אין לקוח בחשבונית ירוקה
+  try { const f = await getFile(params[0]); if (f) return json(res, { ok: true, emails: [], clientName: '' }); } catch {}
+  if (!greenInvoice.haveCredentials()) return json(res, { ok: false, emails: [] });
+  try {
+    const doc = await greenInvoice.getDocument(params[0]);
+    const ce = (doc && doc.client && doc.client.emails) || [];
+    const emails = (Array.isArray(ce) ? ce : []).map(String).map(s => s.trim()).filter(Boolean);
+    json(res, { ok: true, emails, clientName: (doc && doc.client && doc.client.name) || '' });
+  } catch (e) { json(res, { ok: false, emails: [], error: e.message }); }
+});
+
 // POST /api/documents/:id/derive { type, linked, items?, date?, payment?, description?, remarks? }
 // מסמך המשך (מקושר) או שכפול (חופשי). אם נשלחות שורות/תאריך/תקבולים ערוכים — משתמשים בהם.
 add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, body) => {

@@ -567,6 +567,18 @@ window.openSendDoc = (id, number, typeName, clientNameEnc) => {
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   setTimeout(() => { const i = document.getElementById('sendDocEmail'); if (i && !email) i.focus(); }, 40);
+  // מילוי אוטומטי של המייל השמור ללקוח מתוך חשבונית ירוקה (גם כשאין התאמה ברשימת הלקוחות המקומית)
+  if (!email) {
+    api(`/api/documents/${id}/client-email`).then(r => {
+      const saved = (r && r.emails && r.emails[0]) || '';
+      const inp = document.getElementById('sendDocEmail');
+      const p = document.querySelector('#sendDocModal .muted');
+      if (saved && inp && !inp.value) {
+        inp.value = saved;
+        if (p) p.innerHTML = (clientName ? 'ללקוח: ' + escapeHtml(clientName) + ' · ' : '') + 'המסמך יישלח למייל השמור בחשבונית ירוקה.';
+      }
+    }).catch(() => {});
+  }
 };
 window.doSendDoc = async (id) => {
   const email = (document.getElementById('sendDocEmail')?.value || '').trim();
