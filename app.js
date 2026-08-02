@@ -2813,7 +2813,9 @@ window.submitOldInvoice = async (mode, oldInvoiceId, btn) => {
   if (btn) { btn.disabled = false; btn.textContent = '✓'; }
   if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${(r && r.error) || 'שגיאה'}</span>`; return; }
   document.getElementById('oldInvModal').classList.add('hidden');
+  if (typeof clearApiCache === 'function') clearApiCache(); // כדי שמסמכי הלקוח (כולל המסמך שהועלה) יטענו מחדש בשיוך בנק
   if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices();
+  if (window._linkTxId && document.getElementById('linkModal') && !document.getElementById('linkModal').classList.contains('hidden') && _linkClientName && typeof linkPickContactByName === 'function') linkPickContactByName(_linkClientName);
 };
 window.delOldInvoice = async (oldInvoiceId) => {
   if (!confirm('למחוק את החשבונית הישנה הזו לגמרי?')) return;
@@ -5923,6 +5925,11 @@ window.openLinkModal = async (txId) => {
         <input type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/*" style="display:none" onchange="bankExpensePick(this,'${txId}')">
       </label>
       <div id="bankExpStatus" style="font-size:12.5px;margin-top:6px"></div>
+    </div>` : ''}
+    ${(tx && tx.direction !== 'debit' && state.company === 'co_ofek') ? `<div style="margin:8px 0;padding:10px 12px;border:1.5px dashed var(--accent);border-radius:12px;background:var(--panel2)">
+      <div style="font-size:13px;font-weight:700;margin-bottom:5px">➕ מסמך הכנסה ישן שאינו במערכת? העלה אותו כאן</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">העלה מסמך הכנסה מהמערכת הקודמת (עסקה / מס / מס-קבלה / קבלה). אחרי ההעלאה — בחר את הלקוח למטה כדי לשייך את המסמך לתנועה זו.</div>
+      <button class="btn primary" style="padding:5px 14px;font-size:13px" onclick="openOldInvoice('create','',300)">📎 העלה מסמך ישן</button>
     </div>` : ''}
     <label id="linkCreditsWrap" style="display:${_linkMode === 'clients' ? 'flex' : 'none'};gap:6px;align-items:center;font-size:12px;margin:2px 0 4px;cursor:pointer"><input type="checkbox" id="linkCreditsChk" ${_linkIncludeCredits ? 'checked' : ''} onchange="toggleLinkCredits(this.checked)"> כלול גם חשבוניות זיכוי וקבלות שליליות</label>
     <label style="display:flex;gap:6px;align-items:center;font-size:12px;margin:2px 0 4px;cursor:pointer"><input type="checkbox" id="linkInclUsedChk" ${_linkInclUsed ? 'checked' : ''} onchange="toggleLinkInclUsed(this.checked)"> אפשר לבחור גם חשבוניות שכבר משויכות לתנועה אחרת</label>
