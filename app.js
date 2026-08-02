@@ -2757,11 +2757,14 @@ window.evRemoveUploadedDoc = async (eventId, docId) => {
 };
 // ===== חשבוניות ישנות עצמאיות (אופק) — העלאה למעקב ב"חשבוניות פתוחות", ללא קשר לאירוע =====
 // mode='create' — העלאת חשבונית עסקה/מס ישנה חדשה · mode='receipt' — צירוף קבלה/מס-קבלה לסגירה
-window.openOldInvoice = (mode, oldInvoiceId, presetType) => {
+window.openOldInvoice = async (mode, oldInvoiceId, presetType) => {
   let m = document.getElementById('oldInvModal');
   if (!m) { m = document.createElement('div'); m.id = 'oldInvModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.style.zIndex = '210'; m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  // רשימת הלקוחות המלאה מחשבונית ירוקה (לא רק לקוחות עם חשבוניות פתוחות) — כדי שאפשר יהיה לבחור כל לקוח קיים
+  if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
+  const clientNames = [...new Set([...(_evClients || []).map(c => c.name), ...(_openInvClients || [])].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he'));
   const today = new Date().toISOString().slice(0, 10);
   const isReceipt = mode === 'receipt';
   const opt = (v, l) => `<option value="${v}" ${String(presetType) === String(v) ? 'selected' : ''}>${l}</option>`;
@@ -2779,7 +2782,7 @@ window.openOldInvoice = (mode, oldInvoiceId, presetType) => {
       <label style="font-size:13px">סכום (כולל מע״מ) ₪<input id="oiAmount" type="number" inputmode="decimal" style="width:100%;padding:7px 8px;margin-top:3px" placeholder="למשל 5850"></label>
       <label style="font-size:13px">קובץ (PDF/תמונה)<input id="oiFile" type="file" accept=".pdf,image/*" style="width:100%;padding:5px 0;margin-top:3px"></label>
     </div>
-    <datalist id="oiClients">${(_openInvClients || []).map(c => `<option value="${escAttr(c)}">`).join('')}</datalist>
+    <datalist id="oiClients">${clientNames.map(c => `<option value="${escAttr(c)}">`).join('')}</datalist>
     <div id="oiStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('oldInvModal').classList.add('hidden')">ביטול</button>

@@ -5,6 +5,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 import { init as initStore, load, save, id, upsertEvent, companyEvents, saveFile, getFile, deleteFile } from './store.js';
@@ -789,8 +790,15 @@ add('POST', /^\/api\/old-invoices$/, async (req, res, _p, q, body) => {
   const cid = q.companyId || body.companyId;
   const db = load(); db.oldInvoices = db.oldInvoices || [];
   const type = Number(body.type) || null;
+  const numStr = (body.number != null && String(body.number).trim() !== '') ? String(body.number).trim() : null;
+  // מניעת כפילות (אך ורק לחשבוניות ישנות של אופק): אותו קובץ, או אותו מספר+סוג מסמך, לא ייקלטו פעמיים
+  const contentHash = crypto.createHash('sha256').update(String(body.data || '')).digest('hex');
+  const dupe = (db.oldInvoices || []).find(r => r.companyId === cid && (r.linkedDocs || []).some(d =>
+    (d.contentHash && d.contentHash === contentHash) ||
+    (numStr && d.number && String(d.number) === numStr && Number(d.type || 0) === Number(type || 0))));
+  if (dupe) return json(res, { error: 'המסמך הזה כבר קיים בחשבוניות פתוחות (אותו קובץ או אותו מספר מסמך) — לא נקלט שוב.', duplicate: true }, 409);
   const saved = await saveFile({ employeeId: 'oldinv', kind: 'old-invoice', filename: body.filename || 'document', mime: body.mime || 'application/octet-stream', data: body.data });
-  const doc = { id: saved.id, number: (body.number != null && String(body.number).trim() !== '') ? String(body.number).trim() : null, type, date: body.date || null, amount: (body.amount != null && body.amount !== '') ? Number(body.amount) : null, url: '/api/files/' + saved.id, uploaded: true };
+  const doc = { id: saved.id, number: numStr, type, date: body.date || null, amount: (body.amount != null && body.amount !== '') ? Number(body.amount) : null, url: '/api/files/' + saved.id, uploaded: true, contentHash };
   const rec = { id: id('oinv'), companyId: cid, clientName: String(body.clientName || '').trim() || '—', description: String(body.description || '').trim(), linkedDocs: [doc], createdAt: new Date().toISOString() };
   db.oldInvoices.push(rec);
   save(db);
