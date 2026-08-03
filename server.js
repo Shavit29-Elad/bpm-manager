@@ -2617,151 +2617,50 @@ function mailScanState(db, cid) {
   if (!db.mailScan[cid]) db.mailScan[cid] = { seenUids: [], lastScanAt: null, since: null };
   return db.mailScan[cid];
 }
-function mailDraftsFor(db, cid) { db.mailDrafts = db.mailDrafts || {}; if (!db.mailDrafts[cid]) db.mailDrafts[cid] = []; return db.mailDrafts[cid]; }
 
-// POST /api/mail-scan/run?companyId= { since?, limit? } — אצווה: סורק הודעות חדשות, מסווג ב-AI, יוצר טיוטות ממתינות. חוזר עם remaining.
+// POST /api/mail-scan/run?companyId= { since?, limit? } — אצווה: סורק הודעות חדשות, מזהה ב-AI, ומעלה חשבוניות מס
+// כטיוטות OCR לחשבונית ירוקה — כך שהן מופיעות ב"טיוטות הוצאה לאישור" בדיוק כמו קובץ שנגרר. חוזר עם remaining.
 add('POST', /^\/api\/mail-scan\/run$/, async (req, res, _p, q, body) => {
   const cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
   const creds = companyMailCreds(load(), cid);
   if (!creds.user || !creds.pass) return json(res, { ok: false, error: 'לחברה זו אין חשבון מייל מוגדר — הגדר בפרטי העסק.' });
   if (!chatConfigured()) return json(res, { ok: false, error: 'AI לא מוגדר (חסר ANTHROPIC_API_KEY).' });
-  const since = (body && body.since) || mailScanState(load(), cid).since || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
-  const limit = Math.min(12, Math.max(1, Number(body && body.limit) || 8));
+  if (!greenInvoice.haveCredentials()) return json(res, { ok: false, error: 'חשבונית ירוקה לא מחוברת' });
+  const since = (body && body.since) || mailScanState(load(), cid).since || '2026-06-01';
+  const limit = Math.min(12, Math.max(1, Number(body && body.limit) || 5));
   const scan = await mailReader.scanMailbox({ user: creds.user, pass: creds.pass }, since, { excludeUids: mailScanState(load(), cid).seenUids, limit });
   if (!scan.ok) return json(res, { ok: false, error: scan.error });
   let suppliers = []; try { suppliers = await greenInvoice.listSuppliers(); } catch { }
-  let created = 0, skipped = 0, errors = 0;
+  let uploaded = 0, recorded = 0, duplicates = 0, skipped = 0, errors = 0;
   const db = load();
-  const drafts = mailDraftsFor(db, cid);
   const st = mailScanState(db, cid);
-  const seenKey = new Set(drafts.map(d => d.messageId + '|' + (d.attIndex ?? '')));
+  const _payables = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid);
+  const _amtEq = (a, b) => Math.abs((a || 0) - (b || 0)) < 1;
+  db.mailRecords = db.mailRecords || {}; db.mailRecords[cid] = db.mailRecords[cid] || [];
   for (const it of scan.items) {
-    const key = it.messageId + '|' + it.attIndex;
-    if (seenKey.has(key)) { skipped++; continue; }
     let ai;
     try { ai = await classifyExpenseAttachment(it.contentBase64, it.mime, suppliers); }
     catch { errors++; continue; }
-    if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; seenKey.add(key); continue; }
-    // דדופ: מול טיוטות אחרות + מול הוצאות שכבר נקלטו (כולל כאלה שכבר הותאמו בבנק — הן supplierPayables) לפי מספר+סכום.
-    const _payables = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid);
-    const _amtEq = (a, b) => Math.abs((a || 0) - (b || 0)) < 1;
-    const dupHint = (ai.invoiceNumber && (
-      drafts.some(d => d.ai && String(d.ai.invoiceNumber || '') === String(ai.invoiceNumber) && _amtEq(d.ai.amountInclVat, ai.amountInclVat)) ||
-      _payables.some(p => String(p.number || '') === String(ai.invoiceNumber) && _amtEq(p.amount, ai.amountInclVat))
-    )) || false;
-    const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-attachment', filename: it.filename, mime: it.mime, data: it.contentBase64 });
-    drafts.push({
-      id: 'md_' + Math.random().toString(16).slice(2, 12), source: 'email', messageId: it.messageId, attIndex: it.attIndex,
-      from: it.from, subject: it.subject, receivedDate: it.receivedDate, fileId: saved.id, filename: it.filename, mime: it.mime, size: it.size,
-      route: ai.route, ai, possibleDuplicate: dupHint, status: 'pending', createdAt: new Date().toISOString(),
-    });
-    seenKey.add(key); created++;
+    if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; continue; }
+    // דדופ מול הוצאות שכבר נקלטו (כולל כאלה שכבר הותאמו בבנק — supplierPayables) לפי מספר+סכום
+    const isDup = ai.invoiceNumber && _payables.some(p => String(p.number || '') === String(ai.invoiceNumber) && _amtEq(p.amount, ai.amountInclVat));
+    if (isDup) { duplicates++; continue; }
+    if (ai.route === 'expense') {
+      // העלאה לחשבונית ירוקה כטיוטת OCR — נכנסת ל"טיוטות הוצאה לאישור" של אותה חברה (הראוטר עוטף ב-withCompany(cid))
+      try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; }
+      catch { errors++; }
+    } else if (ai.route === 'record') {
+      // הצעת מחיר / חשבון עסקה — רישום פנימי בלבד (לא לחשבונית ירוקה)
+      const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-record', filename: it.filename, mime: it.mime, data: it.contentBase64 });
+      db.mailRecords[cid].push({ id: 'mr_' + Math.random().toString(16).slice(2, 10), fileId: saved.id, filename: it.filename, mime: it.mime, from: it.from, subject: it.subject, receivedDate: it.receivedDate, documentType: ai.documentType, supplierName: ai.supplierName, number: ai.invoiceNumber, date: ai.date, amountInclVat: ai.amountInclVat, description: ai.description, recordedAt: new Date().toISOString() });
+      recorded++;
+    } else { skipped++; }
   }
   const seenUidSet = new Set(st.seenUids.map(String));
   (scan.processedUids || []).forEach(u => { if (!seenUidSet.has(String(u))) st.seenUids.push(u); });
   st.since = since; st.lastScanAt = new Date().toISOString();
   save(db);
-  json(res, { ok: true, processed: (scan.processedUids || []).length, created, skipped, errors, remaining: scan.remaining, done: scan.remaining === 0 });
-});
-
-// GET /api/mail-scan/drafts?companyId= — טיוטות ממתינות (הכי חדשות קודם)
-add('GET', /^\/api\/mail-scan\/drafts$/, (req, res, _p, q) => {
-  const cid = (q && q.companyId) || giCompanyId();
-  const db = load();
-  const drafts = mailDraftsFor(db, cid).filter(d => d.status === 'pending')
-    .sort((a, b) => String(b.receivedDate || '').localeCompare(String(a.receivedDate || '')));
-  json(res, {
-    ok: true, lastScanAt: mailScanState(db, cid).lastScanAt,
-    drafts: drafts.map(d => ({ id: d.id, from: d.from, subject: d.subject, receivedDate: d.receivedDate, filename: d.filename, mime: d.mime, route: d.route, possibleDuplicate: d.possibleDuplicate, ai: d.ai, createdAt: d.createdAt })),
-  });
-});
-
-// GET /api/mail-scan/drafts/:id/file?companyId= — הקובץ המצורף לתצוגה מקדימה/הורדה
-add('GET', /^\/api\/mail-scan\/drafts\/([^/]+)\/file$/, async (req, res, params, q) => {
-  const cid = (q && q.companyId) || giCompanyId();
-  const d = mailDraftsFor(load(), cid).find(x => x.id === params[0]);
-  if (!d) return json(res, { error: 'לא נמצא' }, 404);
-  const f = await getFile(d.fileId);
-  if (!f) return json(res, { error: 'קובץ לא נמצא' }, 404);
-  res.writeHead(200, { 'Content-Type': f.mime || 'application/octet-stream' });
-  res.end(Buffer.from(String(f.data || ''), 'base64'));
-});
-
-// POST /api/mail-scan/drafts/:id/reject?companyId= — דחיית טיוטה (מסתירה + מוחקת את הקובץ)
-add('POST', /^\/api\/mail-scan\/drafts\/([^/]+)\/reject$/, async (req, res, params, q, body) => {
-  const cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
-  const db = load();
-  const d = mailDraftsFor(db, cid).find(x => x.id === params[0]);
-  if (!d) return json(res, { error: 'לא נמצא' }, 404);
-  d.status = 'rejected'; d.rejectedAt = new Date().toISOString();
-  try { await deleteFile(d.fileId); } catch { }
-  save(db);
-  json(res, { ok: true });
-});
-
-// POST /api/mail-scan/drafts/:id/approve?companyId= { fields } — אישור טיוטה.
-// route 'expense' → הוצאה בחשבונית ירוקה של החברה + העברת ה-PDF למייל הרו"ח/Paperless + רישום מקומי. route 'record' → רישום פנימי בלבד.
-add('POST', /^\/api\/mail-scan\/drafts\/([^/]+)\/approve$/, async (req, res, params, q, body) => {
-  const cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
-  const db = load();
-  const d = mailDraftsFor(db, cid).find(x => x.id === params[0]);
-  if (!d) return json(res, { error: 'לא נמצא' }, 404);
-  if (d.status !== 'pending') return json(res, { error: 'הטיוטה כבר טופלה' }, 400);
-  const f = (body && body.fields) || {};
-  const numF = (v) => { const n = +String(v == null ? '' : v).replace(/[^\d.\-]/g, ''); return isNaN(n) ? 0 : n; };
-  const pick = (a, b) => (a != null && a !== '' ? a : b);
-  const supplierId = String(pick(f.supplierId, d.ai.supplierId) || '').trim();
-  const supplierName = String(pick(f.supplierName, d.ai.supplierName) || '').trim();
-  const documentType = Number(pick(f.documentType, d.ai.documentType)) || 305;
-  const number = String(pick(f.invoiceNumber, d.ai.invoiceNumber) || '').trim();
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(f.date || '') ? f.date : (/^\d{4}-\d{2}-\d{2}$/.test(d.ai.date || '') ? d.ai.date : new Date().toISOString().slice(0, 10));
-  let incl = numF(pick(f.amountInclVat, d.ai.amountInclVat)), net = numF(pick(f.amountExcludeVat, d.ai.amountExcludeVat)), vat = numF(pick(f.vat, d.ai.vat));
-  if (incl && !net) net = +(incl / 1.18).toFixed(2);
-  if (incl && !vat) vat = +(incl - net).toFixed(2);
-  const alloc = String(pick(f.allocationNumber, d.ai.allocationNumber) || '').replace(/[^\d]/g, '');
-  const description = String(pick(f.description, d.ai.description) || d.subject || 'הוצאה מהמייל').trim();
-  const paidFlag = f.paid === true;
-  const route = f.route || d.route;
-
-  if (route === 'record') {
-    db.mailRecords = db.mailRecords || {}; db.mailRecords[cid] = db.mailRecords[cid] || [];
-    db.mailRecords[cid].push({ id: 'mr_' + Math.random().toString(16).slice(2, 10), fileId: d.fileId, filename: d.filename, mime: d.mime, from: d.from, subject: d.subject, receivedDate: d.receivedDate, documentType, supplierName, number, date, amountInclVat: incl, description, recordedAt: new Date().toISOString() });
-    d.status = 'approved'; d.approvedAs = 'record'; d.approvedAt = new Date().toISOString();
-    save(db); return json(res, { ok: true, mode: 'record' });
-  }
-
-  // route 'expense'
-  if (!supplierId) return json(res, { error: 'יש לבחור או ליצור ספק לפני האישור' }, 400);
-  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
-  let classId = f.accountingClassificationId || null;
-  if (!classId) { try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { } }
-  const expBody = {
-    supplier: { id: supplierId }, documentType, number: number || undefined, date, reportingDate: date,
-    currency: 'ILS', paymentType: paidFlag ? 4 : -1, amount: incl, amountExcludeVat: net, vat,
-    accountingClassification: classId ? { id: classId } : undefined,
-    description: alloc ? `${description} · מס' הקצאה ${alloc}` : description,
-  };
-  let created = null, duplicate = false;
-  try { created = await greenInvoice.createExpense(expBody); }
-  catch (err) { if (/"errorCode"\s*:\s*1010/.test(err.message || '')) duplicate = true; else return json(res, { error: err.message }, 500); }
-  db.supplierPayables = db.supplierPayables || [];
-  db.supplierPayables.push({ id: 'pay_' + Math.random().toString(36).slice(2, 10), companyId: cid, supplierId, supplierName, taxId: String(pick(f.taxId, d.ai.taxId) || '') || null, documentType, number, date, amount: incl, amountExcludeVat: net, vat, description, allocationNumber: alloc || null, paid: paidFlag, paidAt: paidFlag ? new Date().toISOString() : null, giExpenseId: created?.id || null, localFileId: d.fileId, source: 'email', createdAt: new Date().toISOString() });
-  // העברת ה-PDF למייל הרו"ח/Paperless של החברה (אצל אופק — bk@mail.paperless.tax), מהתיבה של החברה
-  let forwarded = false, forwardError = null;
-  try {
-    const fwd = String((bizProfile(db, cid).accountantEmail) || '').replace(/[​-‍﻿]/g, '').trim();
-    const mcreds = companyMailCreds(db, cid);
-    if (fwd && (mailer.companyMailConfigured(mcreds) || mailer.mailerConfigured())) {
-      const file = await getFile(d.fileId);
-      if (file) {
-        await mailer.sendMailFrom(mcreds, { to: fwd, subject: `הוצאה #${number || ''}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`, text: `מצורפת חשבונית הוצאה שנקלטה מהמייל.\nספק: ${supplierName}\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${incl}`, attachments: [{ filename: d.filename || 'expense.pdf', content: Buffer.from(String(file.data || ''), 'base64'), contentType: d.mime }] });
-        forwarded = true;
-      }
-    }
-  } catch (e) { forwardError = e.message; }
-  d.status = 'approved'; d.approvedAs = 'expense'; d.approvedAt = new Date().toISOString(); d.expenseId = created?.id || null; d.duplicate = duplicate;
-  save(db);
-  json(res, { ok: true, mode: 'expense', duplicate, expenseId: created?.id || null, forwarded, forwardError });
+  json(res, { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, remaining: scan.remaining, done: scan.remaining === 0 });
 });
 // POST /api/business-profile/file?companyId=&slot= { filename, mime, data(base64), expiry?, label? }
 add('POST', /^\/api\/business-profile\/file$/, async (req, res, _p, q, body) => {
