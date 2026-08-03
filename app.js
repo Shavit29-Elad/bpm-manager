@@ -5341,23 +5341,30 @@ function bizDocRow(label, slot, meta) {
 // ===== סריקת מייל → טיוטות הוצאה בחשבונית ירוקה (נכנסות לאותו מקום כמו קובץ שנגרר/הועלה) =====
 let _mailScanSince = '2026-06-01';
 window.scanMailNow = async () => {
-  const btn = document.getElementById('mailScanBtn'), prog = document.getElementById('mailScanProg');
+  const scanCid = state.company; // מקבעים את החברה לכל הסריקה — מעבר לחברה אחרת יעצור בבטחה (מה שכבר נסרק נשמר)
+  const prog0 = document.getElementById('mailScanProg');
   const since = document.getElementById('mailSince')?.value || _mailScanSince;
   _mailScanSince = since;
-  if (btn) btn.disabled = true;
-  let up = 0, rec = 0, dup = 0, done = false, safety = 0;
+  const btn0 = document.getElementById('mailScanBtn'); if (btn0) btn0.disabled = true;
+  const setProg = (html) => { if (state.company !== scanCid) return; const p = document.getElementById('mailScanProg'); if (p) p.innerHTML = html; };
+  const enableBtn = () => { const b = document.getElementById('mailScanBtn'); if (b) b.disabled = false; };
+  let up = 0, rec = 0, dup = 0, done = false, safety = 0, stopped = false;
   while (!done && safety++ < 120) {
-    if (prog) prog.textContent = `סורק את המייל… (${up} חשבוניות חדשות עד כה)`;
-    const r = await fetch(`/api/mail-scan/run?companyId=${state.company}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, since, limit: 4 }) }).then(x => x.json()).catch(() => ({ ok: false, error: 'timeout/רשת — נסה שוב' }));
-    if (!r.ok) { if (prog) prog.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(r.error || '')}</span>`; if (btn) btn.disabled = false; return; }
+    if (state.company !== scanCid) { stopped = true; break; } // המשתמש עבר חברה — עוצרים לפני האצווה הבאה
+    setProg(`סורק את המייל… (${up} חשבוניות חדשות עד כה)`);
+    const r = await fetch(`/api/mail-scan/run?companyId=${scanCid}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: scanCid, since, limit: 4 }) }).then(x => x.json()).catch(() => ({ ok: false, error: 'timeout/רשת — נסה שוב' }));
+    if (state.company !== scanCid) { stopped = true; break; } // עבר חברה בזמן האצווה — לא נמשיך ולא נרנדר עליו
+    if (!r.ok) { setProg(`<span style="color:var(--danger)">שגיאה: ${escapeHtml(r.error || '')}</span>`); enableBtn(); return; }
     up += (r.uploaded || 0); rec += (r.recorded || 0); dup += (r.duplicates || 0);
     done = !!r.done || r.remaining === 0;
   }
-  if (btn) btn.disabled = false;
-  if (prog) prog.innerHTML = `<span style="color:var(--accent2)">✓ הסתיים — ${up} חשבוניות עלו כטיוטות${rec ? ` · ${rec} רישומים` : ''}${dup ? ` · ${dup} כבר קיימות (דולגו)` : ''}. הזיהוי האוטומטי (OCR) של חשבונית ירוקה רץ ברקע — לחץ "רענן" בעוד רגע אם הן עדיין לא מופיעות.</span>`;
+  enableBtn();
+  if (stopped) return; // עברת חברה — האצווה שרצה נשמרה בשרת; בפעם הבאה שתסרוק תמשיך מאיפה שנעצר
+  setProg(`<span style="color:var(--accent2)">✓ הסתיים — ${up} חשבוניות עלו כטיוטות${rec ? ` · ${rec} רישומים` : ''}${dup ? ` · ${dup} כבר קיימות (דולגו)` : ''}. הזיהוי האוטומטי (OCR) של חשבונית ירוקה רץ ברקע — לחץ "רענן" בעוד רגע אם הן עדיין לא מופיעות.</span>`);
   if (typeof clearApiCache === 'function') clearApiCache();
-  // רענון רשימת הטיוטות (הכרטיסים החדשים שנקלטו מהמייל מופיעים כאן, כמו קובץ שנגרר)
+  // רענון רשימת הטיוטות (הכרטיסים החדשים שנקלטו מהמייל מופיעים כאן, כמו קובץ שנגרר) — רק אם עדיין באותה חברה+לשונית
   setTimeout(async () => {
+    if (state.company !== scanCid || state.tab !== 'contractors') return;
     try {
       const dr = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
       _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
