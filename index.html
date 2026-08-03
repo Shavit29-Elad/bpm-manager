@@ -9,6 +9,15 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700;800&family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
+  <style>
+    #fabNew { position: fixed; top: 62px; left: 16px; z-index: 40; display: none; flex-direction: column; align-items: flex-start; gap: 8px; }
+    #fabNew .fab-btn { width: 52px; height: 52px; border-radius: 50%; border: none; background: #4f46e5; color: #fff; font-size: 30px; line-height: 1; cursor: pointer; box-shadow: 0 4px 16px rgba(79,70,229,.45); transition: transform .12s, background .12s; }
+    #fabNew .fab-btn:hover { background: #4338ca; transform: scale(1.06); }
+    #fabMenu { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; box-shadow: 0 10px 28px rgba(0,0,0,.16); padding: 6px; min-width: 200px; }
+    #fabMenu.hidden { display: none; }
+    #fabMenu .fab-opt { display: block; width: 100%; text-align: right; background: none; border: none; padding: 9px 12px; font-size: 14px; cursor: pointer; border-radius: 8px; color: #1f2937; font-family: inherit; }
+    #fabMenu .fab-opt:hover { background: #eef0fb; }
+  </style>
 </head>
 <body>
   <header class="topbar">
@@ -33,6 +42,17 @@
     <button class="tab" data-tab="connections">🔌 חיבורים</button>
     <button class="tab" data-tab="business">🏢 פרטי העסק</button>
   </nav>
+
+  <!-- כפתור "+" צף (מסמך חדש מכל מקום) — מוצג רק אחרי התחברות -->
+  <div id="fabNew">
+    <button class="fab-btn" onclick="toggleFabMenu()" title="מסמך חדש">+</button>
+    <div id="fabMenu" class="hidden">
+      <button class="fab-opt" onclick="fabNewDoc(10)">📄 הצעת מחיר</button>
+      <button class="fab-opt" onclick="fabNewDoc(300)">🧾 חשבונית עסקה</button>
+      <button class="fab-opt" onclick="fabNewDoc(305)">🧾 חשבונית מס</button>
+      <button class="fab-opt" onclick="fabNewDoc(320)">🧾 חשבונית מס-קבלה</button>
+    </div>
+  </div>
 
   <main id="content"></main>
 

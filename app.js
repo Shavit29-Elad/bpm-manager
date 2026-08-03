@@ -128,6 +128,9 @@ async function startApp() {
   sel.onchange = () => { state.company = sel.value; state.whRate = undefined; try { localStorage.setItem('bpm_company', state.company); } catch { } clearApiCache(); loadWhRate(); applyCompanyTabs(); renderStatus(); render(); };
   applyPermissions();
   applyCompanyTabs();
+  // כפתור ה-+ הצף (מסמך חדש מכל מקום) — מציגים אחרי התחברות, וסוגרים את התפריט בלחיצה בחוץ
+  const fab = document.getElementById('fabNew'); if (fab) fab.style.display = 'flex';
+  if (!window._fabInit) { window._fabInit = true; document.addEventListener('click', (ev) => { const f = document.getElementById('fabNew'); const mn = document.getElementById('fabMenu'); if (f && mn && !mn.classList.contains('hidden') && !f.contains(ev.target)) mn.classList.add('hidden'); }); }
 
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
@@ -3445,6 +3448,17 @@ window.openNewQuote = async () => {
   _nq = { clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
   renderNewQuote();
 };
+// מסמך חדש מכל מקום באתר (כפתור ה-+ הצף) — הצעת מחיר(10) / חשבונית עסקה(300) / חשבונית מס(305) / חשבונית מס-קבלה(320)
+window.openNewDoc = async (type) => {
+  const m = document.getElementById('newQuoteModal') || (() => { const x = document.createElement('div'); x.id = 'newQuoteModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  m.classList.remove('hidden');
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
+  try { const cl = await api('/api/clients'); if (Array.isArray(cl) && cl.length) _evClients = cl; } catch { if (!_evClients) _evClients = []; }
+  _nq = { type: Number(type) || 10, clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
+  renderNewQuote();
+};
+window.toggleFabMenu = () => { const mn = document.getElementById('fabMenu'); if (mn) mn.classList.toggle('hidden'); };
+window.fabNewDoc = (type) => { const mn = document.getElementById('fabMenu'); if (mn) mn.classList.add('hidden'); openNewDoc(type); };
 // שכפול הצעת מחיר קיימת לתוך מסך ההצעה החדשה — עם עריכה מלאה (כולל שינוי/הוספת לקוח)
 window.openDuplicateQuote = async (id) => {
   const m = document.getElementById('newQuoteModal') || (() => { const x = document.createElement('div'); x.id = 'newQuoteModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
@@ -3593,8 +3607,9 @@ window.createNewQuote = async (btn) => {
     const docName = DOC_TYPE_NAMES[e.type] || 'מסמך';
     if (!confirm(`ליצור ${docName} על סך ${money(total)} עבור ${e.clientName || 'הלקוח'}?\nהמסמך ייווצר בחשבונית ירוקה ולא ניתן למחיקה (רק לזכות).`)) return;
     if (btn) btn.disabled = true; if (st) st.innerHTML = `<span class="muted">יוצר ${docName}…</span>`;
-    const payment = [{ type: 4, price: +total.toFixed(2), date: e.date }];
-    const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, payment, skipDateValidation: !!e.skipSeq };
+    const needsPay = [320, 400, 405].includes(Number(e.type)); // רק מס-קבלה/קבלה דורשים תקבול; עסקה(300)/מס(305) בלי תשלום
+    const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, skipDateValidation: !!e.skipSeq };
+    if (needsPay) body.payment = [{ type: 4, price: +total.toFixed(2), date: e.date }];
     const r = await fetch('/api/documents/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (btn) btn.disabled = false;
     if (r.ok) {
