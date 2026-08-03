@@ -1784,36 +1784,49 @@ add('GET', /^\/api\/documents\/([^/]+)\/url$/, async (req, res, params) => {
 
 // POST /api/documents/:id/send { email? } — שליחת מסמך קיים במייל דרך חשבונית ירוקה
 add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, body) => {
-  const email0 = String((body && body.email) || '').trim();
+  // תמיכה במספר כתובות (email/email2/emails[]) — נשלח מייל אחד לכולן
+  const _rawEmails = [];
+  if (body) {
+    if (Array.isArray(body.emails)) body.emails.forEach(e => _rawEmails.push(String(e || '').trim()));
+    if (body.email) _rawEmails.push(String(body.email).trim());
+    if (body.email2) _rawEmails.push(String(body.email2).trim());
+  }
+  const _isEmail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
+  const emailsIn = [...new Set(_rawEmails.filter(_isEmail))];
+  const email0 = emailsIn[0] || '';
   const _cid = (q && q.companyId) || (body && body.companyId) || undefined;
   // מסמך שהועלה ידנית (אינו בחשבונית ירוקה) — שולחים את הקובץ עצמו במייל דרך SMTP
   try {
     const f = await getFile(params[0]);
     if (f) {
-      const creds = companyMailCreds(load(), _cid || giCompanyId());
-      if (!email0) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
+      const _db = load();
+      const creds = companyMailCreds(_db, _cid || giCompanyId());
+      if (!emailsIn.length) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
       if (!mailer.companyMailConfigured(creds) && !mailer.mailerConfigured()) return json(res, { error: 'לחברה זו אין חשבון מייל מוגדר — הגדר חשבון מייל בפרטי העסק.' }, 400);
       const content = Buffer.from(String(f.data || ''), 'base64');
-      await mailer.sendMailFrom(creds, { to: email0, subject: `מסמך${f.filename ? ' — ' + f.filename : ''}`, text: 'שלום,\nמצורף מסמך.\nתודה.', attachments: [{ filename: f.filename || 'document.pdf', content }] });
-      return json(res, { ok: true, sentTo: [email0], uploaded: true });
+      const body = mailBodyFor(_db, _cid || giCompanyId(), { clientName: '', num: '' });
+      await mailer.sendMailFrom(creds, { to: emailsIn, subject: `מסמך${f.filename ? ' — ' + f.filename : ''}`, text: body, attachments: [{ filename: f.filename || 'document.pdf', content }] });
+      return json(res, { ok: true, sentTo: emailsIn, uploaded: true });
     }
   } catch {}
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
-    let emails = email0 ? [email0] : [];
+    let emails = emailsIn.slice();   // כתובות שהוזנו ידנית (עד 2) — נשלח מייל אחד לכולן
     let docMeta = null;
     // ברירת מחדל — כתובות המייל השמורות ללקוח במסמך (וגם משמש לשם הקובץ/כותרת ב-fallback)
     try { docMeta = await greenInvoice.getDocument(params[0]); } catch { }
     if (!emails.length) {
       const ce = (docMeta && docMeta.client && docMeta.client.emails) || [];
-      emails = (Array.isArray(ce) ? ce : []).map(String).filter(Boolean);
+      emails = [...new Set((Array.isArray(ce) ? ce : []).map(e => String(e || '').trim()).filter(e => _isEmail(e)))];
     }
     if (!emails.length) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
     const num = (docMeta && (docMeta.number != null ? docMeta.number : docMeta.docNumber)) || '';
-    const creds = companyMailCreds(load(), _cid || giCompanyId());
+    const _db = load();
+    const creds = companyMailCreds(_db, _cid || giCompanyId());
     const bizName = creds.fromName || '';
+    const clientName = (docMeta && docMeta.client && (docMeta.client.name || docMeta.client.fullName)) || '';
     const subject = `מסמך${num ? ' מס\' ' + num : ''}${bizName ? ' — ' + bizName : ''}`;
-    const text = `שלום,\nמצורף מסמך${num ? ' מס\' ' + num : ''}.\nתודה${bizName ? ', ' + bizName : ''}.`;
+    const text = mailBodyFor(_db, _cid || giCompanyId(), { clientName, num });
     const pdfAttach = async () => { const pdf = await greenInvoice.getDocumentPdf(params[0]); return [{ filename: `document-${String(num || params[0]).replace(/[^\w.-]/g, '_')}.pdf`, content: Buffer.from(pdf.base64, 'base64') }]; };
     // אם לחברה יש חשבון מייל משלה (Gmail) — שולחים ממנו ישירות (המייל יוצא מהתיבה של החברה), עם ה-PDF מצורף
     if (mailer.companyMailConfigured(creds)) {
@@ -2436,6 +2449,7 @@ function bizProfile(db, cid) {
   if (p.mailUser === undefined) p.mailUser = '';
   if (p.mailPass === undefined) p.mailPass = '';
   if (p.mailFromName === undefined) p.mailFromName = '';
+  if (p.mailBodyTemplate === undefined) p.mailBodyTemplate = ''; // ניסוח מייל קבוע (עם משתנים {לקוח}/{מספר}/{עסק}). ריק = טקסט ברירת מחדל
   // שיעור ניכוי מס במקור (fraction). BPM: 5% היסטורי. חברות אחרות: 0 עד שמגדירים. ניתן לשינוי בפרטי העסק.
   if (p.withholdingRate === undefined) p.withholdingRate = (cid === 'co_bpm') ? 0.05 : 0;
   p.withholdingRate = Math.min(0.3, Math.max(0, Number(p.withholdingRate) || 0));
@@ -2448,6 +2462,20 @@ function companyMailCreds(db, cid) {
   const p = bizProfile(db, cid);
   const comp = (db.companies || []).find(c => c.id === cid);
   return { user: (p.mailUser || '').trim(), pass: p.mailPass || '', fromName: (p.mailFromName || p.name || (comp && comp.name) || '').trim() };
+}
+// גוף המייל הנשלח ללקוח — לפי "ניסוח מייל קבוע" של החברה (עם משתנים {לקוח}/{מספר}/{עסק}). ריק = טקסט ברירת מחדל.
+function mailBodyFor(db, cid, { clientName = '', num = '' } = {}) {
+  const p = bizProfile(db, cid);
+  const bizName = (p.mailFromName || p.name || '').trim();
+  const tpl = String(p.mailBodyTemplate || '').trim();
+  if (tpl) {
+    return tpl
+      .replace(/\{לקוח\}/g, clientName || '')
+      .replace(/\{מספר\}/g, num != null ? String(num) : '')
+      .replace(/\{עסק\}/g, bizName || '');
+  }
+  // ברירת מחדל
+  return `שלום${clientName ? ' ' + clientName : ''},\nמצורף מסמך${num ? ' מס\' ' + num : ''}.\nתודה${bizName ? ', ' + bizName : ''}.`;
 }
 // GET /api/business-profile?companyId=  (הסיסמה לא מוחזרת לצד לקוח — רק חיווי אם מוגדרת)
 add('GET', /^\/api\/business-profile$/, (req, res, _p, q) => {
@@ -2492,6 +2520,7 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   // חשבון מייל שולח פר-חברה (Gmail). הסיסמה מתעדכנת רק אם נשלח ערך חדש לא-ריק (כדי לאפשר עדכון שאר השדות בלי לשלוח סיסמה שוב).
   if ('mailUser' in b) p.mailUser = String(b.mailUser || '').trim();
   if ('mailFromName' in b) p.mailFromName = String(b.mailFromName || '').trim();
+  if ('mailBodyTemplate' in b) p.mailBodyTemplate = String(b.mailBodyTemplate || '');
   if ('mailPass' in b && String(b.mailPass || '').trim() !== '') p.mailPass = String(b.mailPass).replace(/\s+/g, ''); // App Password — מסירים רווחים
   // שיעור ניכוי מס במקור — מתקבל באחוזים (0..30) ונשמר כ-fraction
   if ('withholdingPct' in b) p.withholdingRate = Math.min(0.3, Math.max(0, (Number(b.withholdingPct) || 0) / 100));

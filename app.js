@@ -563,6 +563,8 @@ window.openSendDoc = (id, number, typeName, clientNameEnc) => {
     <p class="muted" style="font-size:12.5px;margin:6px 0 10px">${clientName ? 'ללקוח: ' + escapeHtml(clientName) + ' · ' : ''}המסמך יישלח במייל דרך חשבונית ירוקה.${email ? '' : ' אין מייל שמור ללקוח — הזן כתובת.'}</p>
     <label style="font-size:13px;display:block;margin-bottom:4px">כתובת מייל</label>
     <input id="sendDocEmail" dir="ltr" value="${escAttr(email)}" placeholder="name@example.com" style="width:100%" onkeydown="if(event.key==='Enter')doSendDoc('${id}')">
+    <label style="font-size:13px;display:block;margin:8px 0 4px">כתובת מייל נוספת (יישלח מייל אחד לשתיהן)</label>
+    <input id="sendDocEmail2" dir="ltr" value="" placeholder="שנייה — אופציונלי" style="width:100%" onkeydown="if(event.key==='Enter')doSendDoc('${id}')">
     <div id="sendDocStatus" style="font-size:13px;min-height:16px;margin:10px 0"></div>
     <div class="modal-actions" style="flex-wrap:wrap"><button class="btn ghost" onclick="document.getElementById('sendDocModal').classList.add('hidden')">ביטול</button>
       <button class="btn" style="background:#25D366;color:#fff" onclick="waSendForDoc('${id}')">📱 שלח בוואטסאפ</button>
@@ -570,30 +572,32 @@ window.openSendDoc = (id, number, typeName, clientNameEnc) => {
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   setTimeout(() => { const i = document.getElementById('sendDocEmail'); if (i && !email) i.focus(); }, 40);
-  // מילוי אוטומטי של המייל השמור ללקוח מתוך חשבונית ירוקה (גם כשאין התאמה ברשימת הלקוחות המקומית)
-  if (!email) {
-    api(`/api/documents/${id}/client-email`).then(r => {
-      const saved = (r && r.emails && r.emails[0]) || '';
-      const inp = document.getElementById('sendDocEmail');
-      const p = document.querySelector('#sendDocModal .muted');
-      if (saved && inp && !inp.value) {
-        inp.value = saved;
-        if (p) p.innerHTML = (clientName ? 'ללקוח: ' + escapeHtml(clientName) + ' · ' : '') + 'המסמך יישלח למייל השמור בחשבונית ירוקה.';
-      }
-    }).catch(() => {});
-  }
+  // מילוי אוטומטי של כתובות המייל השמורות ללקוח (עד 2) מתוך חשבונית ירוקה
+  api(`/api/documents/${id}/client-email`).then(r => {
+    const saved = (r && Array.isArray(r.emails)) ? r.emails.filter(Boolean) : [];
+    const inp = document.getElementById('sendDocEmail');
+    const inp2 = document.getElementById('sendDocEmail2');
+    const p = document.querySelector('#sendDocModal .muted');
+    if (inp && !inp.value && saved[0]) inp.value = saved[0];
+    if (inp2 && !inp2.value && saved[1]) inp2.value = saved[1];
+    if (saved[0] && p) p.innerHTML = (clientName ? 'ללקוח: ' + escapeHtml(clientName) + ' · ' : '') + 'המסמך יישלח למייל/ים השמורים בחשבונית ירוקה.';
+  }).catch(() => {});
 };
 window.doSendDoc = async (id) => {
-  const email = (document.getElementById('sendDocEmail')?.value || '').trim();
+  const isMail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
+  const e1 = (document.getElementById('sendDocEmail')?.value || '').trim();
+  const e2 = (document.getElementById('sendDocEmail2')?.value || '').trim();
   const st = document.getElementById('sendDocStatus');
   const btn = document.getElementById('sendDocBtn');
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש להזין כתובת מייל תקינה.</span>'; return; }
-  if (!confirm(`לשלוח את המסמך לכתובת:\n${email}?`)) return;
+  if (e2 && !isMail(e2)) { if (st) st.innerHTML = '<span style="color:var(--danger)">הכתובת השנייה אינה תקינה.</span>'; return; }
+  const emails = [...new Set([e1, e2].filter(e => isMail(e)))];
+  if (!emails.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש להזין כתובת מייל תקינה.</span>'; return; }
+  if (!confirm(`לשלוח את המסמך ל${emails.length > 1 ? '-' + emails.length + ' כתובות' : 'כתובת'}:\n${emails.join('\n')}?`)) return;
   if (btn) { btn.disabled = true; btn.textContent = 'שולח…'; }
   if (st) st.innerHTML = '<span class="muted">שולח מייל…</span>';
-  const r = await fetch(`/api/documents/${id}/send?companyId=${encodeURIComponent(state.company)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const r = await fetch(`/api/documents/${id}/send?companyId=${encodeURIComponent(state.company)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emails, companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r && r.ok) {
-    if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml(email)}</span>`;
+    if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml((r.sentTo || emails).join(', '))}</span>`;
     setTimeout(() => { const mm = document.getElementById('sendDocModal'); if (mm) mm.classList.add('hidden'); }, 1300);
   } else { if (btn) { btn.disabled = false; btn.textContent = '✉️ שלח'; } if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String((r && r.error) || ''))}</span>`; }
 };
@@ -5345,6 +5349,10 @@ async function renderBusiness(c) {
         <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
       </div>
       <div class="muted" style="font-size:12px;margin-top:8px">צריך <b>סיסמת אפליקציה</b> של גוגל (לא סיסמת החשבון הרגילה). יש להפעיל אימות דו-שלבי ואז ליצור App Password בכתובת <span dir="ltr">myaccount.google.com/apppasswords</span>. הסיסמה נשמרת מוצפנת בשרת ולא מוצגת שוב.</div>
+      <label style="display:block;margin-top:14px;font-weight:600">✍️ ניסוח מייל קבוע ללקוח
+        <textarea id="biz_mailBody" rows="4" style="width:100%;margin-top:4px;font-size:13px" placeholder="ריק = טקסט ברירת המחדל. לדוגמה: שלום {לקוח}, מצורף מסמך מס' {מספר}. תודה, {עסק}">${escapeHtml(p.mailBodyTemplate || '')}</textarea>
+      </label>
+      <div class="muted" style="font-size:12px;margin-top:4px">הטקסט הזה נשלח כגוף המייל בכל שליחת מסמך ללקוח בחברה זו. אפשר להשתמש במשתנים שמתמלאים אוטומטית: <b dir="ltr">{לקוח}</b> = שם הלקוח, <b dir="ltr">{מספר}</b> = מספר המסמך, <b dir="ltr">{עסק}</b> = שם העסק. אם ריק — נשלח טקסט ברירת מחדל.</div>
     </div>
 
     <label style="display:block;margin-top:14px">הערה קבועה לכל המסמכים (פרטי בנק להעברה וכו')
@@ -5529,7 +5537,7 @@ window.bizSave = async () => {
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
     name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), senderEmail: g('biz_sender'), docRemark: g('biz_docremark'),
-    mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'),
+    mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'), mailBodyTemplate: (document.getElementById('biz_mailBody')?.value || ''),
     withholdingPct: Number(g('biz_wh')) || 0,
     managers: [
       { name: g('mgr0_name'), idNumber: g('mgr0_id'), phone: g('mgr0_phone'), email: g('mgr0_email') },
