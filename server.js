@@ -25,6 +25,7 @@ import { listTeam, findMember, TEAM } from './team.js';
 import { buildAppMap } from './appMap.js';
 import { chatWithMember, chatWithMemberVision, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields } from './chat.js';
 import mailer from './mailer.js';
+import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
@@ -2598,6 +2599,16 @@ add('POST', /^\/api\/business-profile\/mail-test$/, async (req, res, _p, q) => {
   if (!creds.user || !creds.pass) return json(res, { ok: false, error: 'חסרים כתובת מייל וסיסמת אפליקציה — שמור אותם קודם ואז בדוק.' });
   const r = await mailer.verifyMailerFor(creds);
   json(res, r.ok ? { ok: true, user: creds.user } : { ok: false, error: r.error });
+});
+// POST /api/mail-scan/test?companyId= { since? } — בדיקת קריאת IMAP של תיבת החברה (INBOX): ספירת הודעות ומאז תאריך.
+add('POST', /^\/api\/mail-scan\/test$/, async (req, res, _p, q, body) => {
+  const db = load();
+  const cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
+  const creds = companyMailCreds(db, cid);
+  if (!creds.user || !creds.pass) return json(res, { ok: false, error: 'חסרים כתובת מייל וסיסמת אפליקציה — הגדר חשבון מייל בפרטי העסק.' });
+  const since = (body && body.since) || (q && q.since) || null;
+  const r = await mailReader.imapTest({ user: creds.user, pass: creds.pass }, since);
+  json(res, r.ok ? { ok: true, user: creds.user, total: r.total, sinceCount: r.sinceCount, parserOk: r.parserOk, lastSubject: r.lastSubject } : { ok: false, error: r.error });
 });
 // POST /api/business-profile/file?companyId=&slot= { filename, mime, data(base64), expiry?, label? }
 add('POST', /^\/api\/business-profile\/file$/, async (req, res, _p, q, body) => {
