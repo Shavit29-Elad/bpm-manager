@@ -2618,49 +2618,122 @@ function mailScanState(db, cid) {
   return db.mailScan[cid];
 }
 
-// POST /api/mail-scan/run?companyId= { since?, limit? } — אצווה: סורק הודעות חדשות, מזהה ב-AI, ומעלה חשבוניות מס
-// כטיוטות OCR לחשבונית ירוקה — כך שהן מופיעות ב"טיוטות הוצאה לאישור" בדיוק כמו קובץ שנגרר. חוזר עם remaining.
+// אצווה אחת של סריקת מייל לחברה — לוגיקה משותפת ל-endpoint הידני ולסריקה הלילית האוטומטית.
+// רצה בהקשר החברה (withCompany) כך שכל קריאות חשבונית ירוקה מכוונות לחברה הנכונה בלבד.
+async function mailScanBatchFor(cid, since, limit) {
+  return await greenInvoice.withCompany(cid, async () => {
+    const creds = companyMailCreds(load(), cid);
+    if (!creds.user || !creds.pass) return { ok: false, error: 'לחברה זו אין חשבון מייל מוגדר — הגדר בפרטי העסק.' };
+    if (!chatConfigured()) return { ok: false, error: 'AI לא מוגדר (חסר ANTHROPIC_API_KEY).' };
+    if (!greenInvoice.haveCredentials()) return { ok: false, error: 'חשבונית ירוקה לא מחוברת' };
+    const scan = await mailReader.scanMailbox({ user: creds.user, pass: creds.pass }, since, { excludeUids: mailScanState(load(), cid).seenUids, limit });
+    if (!scan.ok) return { ok: false, error: scan.error };
+    let suppliers = []; try { suppliers = await greenInvoice.listSuppliers(); } catch { }
+    let uploaded = 0, recorded = 0, duplicates = 0, skipped = 0, errors = 0, links = 0;
+    const db = load();
+    const st = mailScanState(db, cid);
+    const _payables = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid);
+    const _amtEq = (a, b) => Math.abs((a || 0) - (b || 0)) < 1;
+    db.mailRecords = db.mailRecords || {}; db.mailRecords[cid] = db.mailRecords[cid] || [];
+    for (const it of scan.items) {
+      if (it.viaLink) links++;
+      let ai;
+      try { ai = await classifyExpenseAttachment(it.contentBase64, it.mime, suppliers); }
+      catch { errors++; continue; }
+      if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; continue; }
+      // דדופ מול הוצאות שכבר נקלטו (כולל כאלה שכבר הותאמו בבנק — supplierPayables) לפי מספר+סכום
+      const isDup = ai.invoiceNumber && _payables.some(p => String(p.number || '') === String(ai.invoiceNumber) && _amtEq(p.amount, ai.amountInclVat));
+      if (isDup) { duplicates++; continue; }
+      if (ai.route === 'expense') {
+        // העלאה לחשבונית ירוקה כטיוטת OCR — נכנסת ל"טיוטות הוצאה לאישור" של אותה חברה
+        try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; }
+        catch { errors++; }
+      } else if (ai.route === 'record') {
+        // הצעת מחיר / חשבון עסקה — רישום פנימי בלבד (לא לחשבונית ירוקה)
+        const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-record', filename: it.filename, mime: it.mime, data: it.contentBase64 });
+        db.mailRecords[cid].push({ id: 'mr_' + Math.random().toString(16).slice(2, 10), fileId: saved.id, filename: it.filename, mime: it.mime, from: it.from, subject: it.subject, receivedDate: it.receivedDate, documentType: ai.documentType, supplierName: ai.supplierName, number: ai.invoiceNumber, date: ai.date, amountInclVat: ai.amountInclVat, description: ai.description, recordedAt: new Date().toISOString() });
+        recorded++;
+      } else { skipped++; }
+    }
+    const seenUidSet = new Set(st.seenUids.map(String));
+    (scan.processedUids || []).forEach(u => { if (!seenUidSet.has(String(u))) st.seenUids.push(u); });
+    st.since = since; st.lastScanAt = new Date().toISOString();
+    save(db);
+    return { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, links, remaining: scan.remaining, done: scan.remaining === 0 };
+  });
+}
+
+// POST /api/mail-scan/run?companyId= { since?, limit? } — אצווה אחת; חוזר עם remaining (הצד-לקוח לולאה עד done).
 add('POST', /^\/api\/mail-scan\/run$/, async (req, res, _p, q, body) => {
   const cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
-  const creds = companyMailCreds(load(), cid);
-  if (!creds.user || !creds.pass) return json(res, { ok: false, error: 'לחברה זו אין חשבון מייל מוגדר — הגדר בפרטי העסק.' });
-  if (!chatConfigured()) return json(res, { ok: false, error: 'AI לא מוגדר (חסר ANTHROPIC_API_KEY).' });
-  if (!greenInvoice.haveCredentials()) return json(res, { ok: false, error: 'חשבונית ירוקה לא מחוברת' });
   const since = (body && body.since) || mailScanState(load(), cid).since || '2026-06-01';
   const limit = Math.min(12, Math.max(1, Number(body && body.limit) || 5));
-  const scan = await mailReader.scanMailbox({ user: creds.user, pass: creds.pass }, since, { excludeUids: mailScanState(load(), cid).seenUids, limit });
-  if (!scan.ok) return json(res, { ok: false, error: scan.error });
-  let suppliers = []; try { suppliers = await greenInvoice.listSuppliers(); } catch { }
-  let uploaded = 0, recorded = 0, duplicates = 0, skipped = 0, errors = 0;
-  const db = load();
-  const st = mailScanState(db, cid);
-  const _payables = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid);
-  const _amtEq = (a, b) => Math.abs((a || 0) - (b || 0)) < 1;
-  db.mailRecords = db.mailRecords || {}; db.mailRecords[cid] = db.mailRecords[cid] || [];
-  for (const it of scan.items) {
-    let ai;
-    try { ai = await classifyExpenseAttachment(it.contentBase64, it.mime, suppliers); }
-    catch { errors++; continue; }
-    if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; continue; }
-    // דדופ מול הוצאות שכבר נקלטו (כולל כאלה שכבר הותאמו בבנק — supplierPayables) לפי מספר+סכום
-    const isDup = ai.invoiceNumber && _payables.some(p => String(p.number || '') === String(ai.invoiceNumber) && _amtEq(p.amount, ai.amountInclVat));
-    if (isDup) { duplicates++; continue; }
-    if (ai.route === 'expense') {
-      // העלאה לחשבונית ירוקה כטיוטת OCR — נכנסת ל"טיוטות הוצאה לאישור" של אותה חברה (הראוטר עוטף ב-withCompany(cid))
-      try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; }
-      catch { errors++; }
-    } else if (ai.route === 'record') {
-      // הצעת מחיר / חשבון עסקה — רישום פנימי בלבד (לא לחשבונית ירוקה)
-      const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-record', filename: it.filename, mime: it.mime, data: it.contentBase64 });
-      db.mailRecords[cid].push({ id: 'mr_' + Math.random().toString(16).slice(2, 10), fileId: saved.id, filename: it.filename, mime: it.mime, from: it.from, subject: it.subject, receivedDate: it.receivedDate, documentType: ai.documentType, supplierName: ai.supplierName, number: ai.invoiceNumber, date: ai.date, amountInclVat: ai.amountInclVat, description: ai.description, recordedAt: new Date().toISOString() });
-      recorded++;
-    } else { skipped++; }
+  const r = await mailScanBatchFor(cid, since, limit);
+  json(res, r.ok ? r : { ok: false, error: r.error });
+});
+
+// ===== סריקה לילית אוטומטית לכל החברות =====
+// סורק את כל טווח הזמן (מ-since) עד שאין עוד — באצוות קטנות כדי לא להעמיס. seenUids מונע כפילויות בין לילות.
+async function runMailScanFull(cid, since, maxBatches = 400) {
+  const tot = { uploaded: 0, recorded: 0, duplicates: 0, skipped: 0, errors: 0, links: 0, batches: 0 };
+  let done = false, i = 0;
+  while (!done && i++ < maxBatches) {
+    let r;
+    try { r = await mailScanBatchFor(cid, since, 4); } catch { tot.errors++; break; }
+    if (!r || !r.ok) break;
+    tot.uploaded += r.uploaded || 0; tot.recorded += r.recorded || 0; tot.duplicates += r.duplicates || 0;
+    tot.skipped += r.skipped || 0; tot.errors += r.errors || 0; tot.links += r.links || 0; tot.batches++;
+    done = !!r.done;
   }
-  const seenUidSet = new Set(st.seenUids.map(String));
-  (scan.processedUids || []).forEach(u => { if (!seenUidSet.has(String(u))) st.seenUids.push(u); });
-  st.since = since; st.lastScanAt = new Date().toISOString();
-  save(db);
-  json(res, { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, remaining: scan.remaining, done: scan.remaining === 0 });
+  return tot;
+}
+let _nightlyMailRunning = false;
+async function runNightlyMailScan(sinceOverride) {
+  if (_nightlyMailRunning) return { skipped: 'כבר רץ' };
+  _nightlyMailRunning = true;
+  const per = {};
+  try {
+    const db = load();
+    const since = sinceOverride || (db.mailAutoScan && db.mailAutoScan.since) || '2026-01-01';
+    const companies = (db.companies || []).map(c => c.id);
+    for (const cid of companies) {
+      const creds = companyMailCreds(load(), cid);
+      if (!creds.user || !creds.pass) { per[cid] = { skipped: 'אין חשבון מייל' }; continue; }
+      try { per[cid] = await runMailScanFull(cid, since); }
+      catch (e) { per[cid] = { error: e.message }; }
+      try { console.log(`[mail-nightly] ${cid}:`, JSON.stringify(per[cid])); } catch { }
+    }
+    const db2 = load();
+    db2.mailAutoScan = { ...(db2.mailAutoScan || {}), enabled: true, since, lastRun: { at: new Date().toISOString(), per } };
+    save(db2);
+    console.log('[mail-nightly] הסתיים', new Date().toISOString());
+  } catch (e) { console.error('[mail-nightly] נכשל:', e.message); }
+  finally { _nightlyMailRunning = false; }
+  return { ok: true, per };
+}
+function scheduleNightlyMailScan() {
+  const HOUR_UTC = 23, MIN_UTC = 30; // ~02:30 שעון ישראל — לילה, מוכן לבוקר
+  const msToNext = () => {
+    const now = new Date();
+    const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), HOUR_UTC, MIN_UTC, 0, 0));
+    if (t.getTime() <= now.getTime()) t.setUTCDate(t.getUTCDate() + 1);
+    return t.getTime() - now.getTime();
+  };
+  const arm = () => { setTimeout(async () => { await runNightlyMailScan(); arm(); }, msToNext()); };
+  arm();
+  console.log(`[mail-nightly] מתוזמן — ריצה ראשונה בעוד ~${Math.round(msToNext() / 60000)} דק'`);
+}
+// POST /api/mail-scan/nightly-now { since? } — הפעלה ידנית של הסריקה המלאה לכל החברות (רקע). לא ממתין לסיום.
+add('POST', /^\/api\/mail-scan\/nightly-now$/, async (req, res, _p, q, body) => {
+  if (_nightlyMailRunning) return json(res, { ok: false, error: 'סריקה כבר רצה כרגע' });
+  const since = (body && body.since) || undefined;
+  runNightlyMailScan(since); // רקע — לא await
+  json(res, { ok: true, started: true, since: since || 'ברירת מחדל (01/01/2026)' });
+});
+// GET /api/mail-scan/nightly-status — תוצאת הריצה האחרונה
+add('GET', /^\/api\/mail-scan\/nightly-status$/, (req, res) => {
+  const a = load().mailAutoScan || {};
+  json(res, { ok: true, running: _nightlyMailRunning, since: a.since || '2026-01-01', lastRun: a.lastRun || null });
 });
 // POST /api/business-profile/file?companyId=&slot= { filename, mime, data(base64), expiry?, label? }
 add('POST', /^\/api\/business-profile\/file$/, async (req, res, _p, q, body) => {
@@ -4329,4 +4402,5 @@ server.listen(PORT, async () => {
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);
   startWhatsappBridge(async (text) => { try { const wc = process.env.WHATSAPP_COMPANY || 'co_bpm'; await greenInvoice.withCompany(wc, () => ingestText(text, wc)); } catch {} })
     .then(r => { if (r && !r.ok) console.log('ווטסאפ:', r.reason); });
+  try { scheduleNightlyMailScan(); } catch (e) { console.error('תזמון סריקת מייל נכשל:', e.message); } // סריקת מייל לילית אוטומטית לכל החברות
 });
