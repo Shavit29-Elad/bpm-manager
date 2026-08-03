@@ -1724,9 +1724,39 @@ add('POST', /^\/api\/documents\/([^/]+)\/open$/, async (req, res, params) => {
   catch (e) { json(res, { error: e.message }, 500); }
 });
 
-// POST /api/documents/:id/credit { date? } — הפקת זיכוי
+// זיכוי מלא — מחזיר את כל האירועים שחויבו ע"י המסמך הזה חזרה ל"ממתין" (לא מחויב), כדי שיופיעו שוב להפקת חשבונית חדשה.
+// מסמן את מסמך המקור כ-credited (לא נספר יותר כחיוב), מצרף רשומת מסמך הזיכוי לתיעוד, ומאפס "הלקוח שילם" אם לא נותר חיוב פעיל.
+function revertEventsForCreditedInvoice(db, srcId, credit) {
+  const REAL = [300, 305, 320, 400];
+  const out = [];
+  for (const e of (db.events || [])) {
+    const links = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
+    const references = links.some(d => String(d.id) === String(srcId)) || String(e.invoiceId || '') === String(srcId);
+    if (!references) continue;
+    links.forEach(d => { if (String(d.id) === String(srcId)) d.credited = true; });
+    if (credit && credit.id && !links.some(d => String(d.id) === String(credit.id))) {
+      links.push({ id: credit.id, number: credit.number || null, type: 330, credit: true });
+    }
+    e.linkedDocs = links.slice(0, 12);
+    const activeReal = e.linkedDocs.filter(d => REAL.includes(Number(d.type)) && !d.converted && !d.credited && !d.credit);
+    if (activeReal.length) {
+      e.invoiceStatus = 'invoiced';
+      let primary = activeReal[0];
+      for (const t of [305, 320, 300, 400]) { const d = activeReal.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+      e.invoiceId = primary.id; e.invoiceNumber = primary.number; e.invoiceType = primary.type;
+    } else {
+      e.invoiceStatus = 'pending'; e.invoiceId = null; e.invoiceNumber = null; e.invoiceType = null;
+      delete e.clientPaid; // הזיכוי ביטל את החיוב/תקבול — האירוע חוזר להיות פתוח להפקה
+    }
+    out.push({ id: e.id, date: e.date || null, artist: e.artist || e.title || '' });
+  }
+  return out;
+}
+
+// POST /api/documents/:id/credit { date?, revertEvents? } — הפקת זיכוי
 //   חשבונית מס (305) → חשבונית זיכוי אחת (330, linkType cancel)
 //   חשבונית מס-קבלה (320) → זיכוי דו-שלבי: חשבונית זיכוי (330) + קבלה שלילית (400 עם תקבול שלילי)
+//   זיכוי מלא (ברירת מחדל) מחזיר את האירועים ל"ממתין". revertEvents:false = זיכוי חלקי (לא משנה סטטוס אירועים).
 add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
@@ -1750,7 +1780,15 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
       linkedDocumentIds: [params[0]], linkType: 'cancel',
     });
 
-    if (srcType === 305) return json(res, { ok: true, mode: 'single', credit });
+    // זיכוי מלא — החזרת האירועים שחויבו ע"י המסמך ל"ממתין" (אלא אם revertEvents:false = זיכוי חלקי)
+    let revertedEvents = [];
+    if (!(body && body.revertEvents === false)) {
+      const _db = load();
+      revertedEvents = revertEventsForCreditedInvoice(_db, params[0], credit);
+      if (revertedEvents.length) save(_db);
+    }
+
+    if (srcType === 305) return json(res, { ok: true, mode: 'single', credit, revertedEvents });
 
     // שלב 2 (רק ל-320) — קבלה שלילית לביטול חלק התקבול
     const srcPay = Array.isArray(src.payment) ? src.payment : [];
@@ -1764,7 +1802,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
       type: 400, client, items: [], payment: negPayment, date, skipDateValidation,
       description: `ביטול קבלה — חשבונית מס-קבלה #${src.number}`,
     });
-    json(res, { ok: true, mode: 'two-stage', credit, negativeReceipt });
+    json(res, { ok: true, mode: 'two-stage', credit, negativeReceipt, revertedEvents });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 

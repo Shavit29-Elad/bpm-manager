@@ -2337,7 +2337,7 @@ function rowEvent(e) {
     <td>${invoiceCell(e)}</td>
     <td>${confBtn}</td>
     <td>${e.confirmed
-      ? `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button><button class="btn ghost" style="padding:4px 10px;font-size:12px" title="שכפול אירוע — עותק חדש ב״אירועים לאישור״ לחיוב עצמאי (למשל ללקוח אחר)" onclick="duplicateEventRow('${e.id}')">⧉ שכפול</button></div>`
+      ? `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button><button class="btn ghost" style="padding:4px 10px;font-size:12px" title="שכפול אירוע — עותק חדש ב״אירועים לאישור״ לחיוב עצמאי (למשל ללקוח אחר)" onclick="duplicateEventRow('${e.id}')">⧉ שכפול</button><button class="btn ghost" style="padding:4px 10px;font-size:12px;color:var(--accent2)" title="הפקת מסמך חדש לאירוע (חשבונית מס / עסקה / מס-קבלה) — שימושי אחרי זיכוי שהחזיר את האירוע ל״ממתין״" onclick="eventProduceDoc('${e.id}')">📄 מסמך המשך</button></div>`
       : `<button class="btn ghost" style="padding:4px 11px;font-size:12px;color:var(--danger)" onclick="deleteEventRow('${e.id}')">🗑 מחק</button>`}</td></tr>`;
 }
 
@@ -3130,17 +3130,27 @@ window.evUploadedFollowup = (id, number, type) => { window._deriveEventLink = nu
 window.evDocDuplicate = (id, number, type) => { openDerive(id, number, type, 'duplicate'); evRaiseActionModals(); };
 // זיכוי (חשבונית מס → זיכוי; מס-קבלה → זיכוי + קבלה שלילית, מטופל ב-openCreditModal)
 window.evDocCredit = (id, number, type) => { openCreditModal(id, number, type); evRaiseActionModals(); };
-window.openInvoicePreview = async (safe, clientEnc, clientId) => {
-  const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
+async function _invPreviewForIds(ids, client, clientId) {
   if (!ids.length) { alert('לא נבחרו אירועים לחיוב'); return; }
   const pv = await fetch('/api/invoicing/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ companyId: state.company, eventIds: ids }) }).then(r => r.json()).catch(() => null);
   if (!pv) { alert('שגיאה בטעינת התצוגה המקדימה'); return; }
-  _invPreview = { ids, client: decodeURIComponent(clientEnc), clientId: clientId || null,
+  _invPreview = { ids, client: client || '', clientId: clientId || null,
     items: (pv.items || []).map(it => ({ description: it.description, quantity: it.quantity ?? 1, price: it.price ?? 0 })),
     subject: pv.subject || '', type: 305, docDate: todayIso(), sendEmail: false, email: pv.clientEmail || '',
     quote: (pv.linkedQuote && pv.linkedQuote.url) ? pv.linkedQuote : null };
   showInvoicePreviewModal();
+}
+window.openInvoicePreview = async (safe, clientEnc, clientId) => {
+  const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
+  return _invPreviewForIds(ids, decodeURIComponent(clientEnc || ''), clientId);
+};
+// הפקת מסמך חדש לאירוע בודד ישירות משורת האירוע (למשל אחרי זיכוי שהחזיר אירוע ל"ממתין")
+window.eventProduceDoc = async (eventId) => {
+  const ev = await fetchEventById(eventId);
+  if (!ev) { alert('אירוע לא נמצא'); return; }
+  if (isBilledEv(ev) && !confirm('לאירוע זה כבר משויכת חשבונית. להפיק בכל זאת מסמך נוסף?')) return;
+  return _invPreviewForIds([eventId], ev.clientName || '', ev.clientId || null);
 };
 function invTotals() {
   const p = _invPreview;
