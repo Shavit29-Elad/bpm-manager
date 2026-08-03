@@ -314,7 +314,7 @@ const pill = (label, ok, text) =>
 function render() {
   const c = $('#content');
   ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes, team: renderTeam,
-     bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections, business: renderBusiness }[state.tab])(c);
+     bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections, business: renderBusiness, mailscan: renderMailScan }[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
@@ -5329,6 +5329,108 @@ function bizSlotHtml(slot, meta) {
 function bizDocRow(label, slot, meta) {
   return `<div class="biz-row"><div class="biz-row-label">${label}</div><div class="biz-row-slot">${bizSlotHtml(slot, meta)}</div></div>`;
 }
+
+// ================= סריקת מייל → טיוטות הוצאה/רישום לאישור =================
+let _mailSuppliers = null, _mailClasses = null, _mailScanSince = '2026-06-01';
+async function renderMailScan(c) {
+  const comp = (state.companies || []).find(x => x.id === state.company) || {};
+  if (_mailSuppliers === null) { try { _mailSuppliers = await api('/api/suppliers'); } catch { _mailSuppliers = []; } }
+  if (_mailClasses === null) { try { _mailClasses = (await api('/api/accounting/classifications')).classifications || []; } catch { _mailClasses = []; } }
+  const bp = await api('/api/business-profile').catch(() => ({}));
+  const fwd = (bp && bp.accountantEmail) ? String(bp.accountantEmail).trim() : '';
+  const data = await api(`/api/mail-scan/drafts?companyId=${state.company}`).catch(() => ({ drafts: [] }));
+  const drafts = data.drafts || [];
+  c.innerHTML = `<div class="panel">
+    <div class="row-between" style="margin:0"><h2 style="margin:0">📥 סריקת מייל — ${escapeHtml(comp.name || '')}</h2>
+      <span class="muted" style="font-size:12.5px">${data.lastScanAt ? 'סריקה אחרונה: ' + new Date(data.lastScanAt).toLocaleString('he-IL') : 'טרם נסרק'}</span></div>
+    <p class="muted" style="font-size:13px;margin:6px 0 10px">הסורק קורא את תיבת המייל של החברה, מזהה חשבוניות/קבלות עם AI ומעלה כטיוטות לאישור. <b>מסמכי מס</b> → הוצאה בחשבונית ירוקה${fwd ? ' + העברה ל-' + escapeHtml(fwd) : ''}. <b>הצעת מחיר / חשבון עסקה</b> → רישום בלבד.</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:13px">מתאריך <input type="date" id="mailSince" value="${_mailScanSince}" onchange="_mailScanSince=this.value"></label>
+      <button class="btn primary" id="mailScanBtn" onclick="mailScanRun()">🔍 סרוק עכשיו</button>
+      <span id="mailScanProg" class="muted" style="font-size:13px"></span>
+    </div>
+  </div>
+  <div id="mailDrafts">${drafts.length ? drafts.map(mailDraftCard).join('') : '<div class="panel"><div class="empty">אין טיוטות ממתינות. בחר תאריך ולחץ "סרוק עכשיו".</div></div>'}</div>`;
+}
+function mailDraftCard(d) {
+  const id = d.id, ai = d.ai || {};
+  const supOpts = ['<option value="">— בחר ספק —</option>'].concat((_mailSuppliers || []).map(s => `<option value="${s.id}" ${String(ai.supplierId) === String(s.id) ? 'selected' : ''}>${escapeHtml(s.name || '')}</option>`)).join('');
+  const clsOpts = ['<option value="">— סיווג (אוטומטי מהספק) —</option>'].concat((_mailClasses || []).map(cl => `<option value="${cl.id}">${escapeHtml(cl.name || cl.title || '')}</option>`)).join('');
+  const typeOpts = [[305, 'חשבונית מס'], [320, 'מס-קבלה'], [400, 'קבלה'], [300, 'חשבון עסקה'], [10, 'הצעת מחיר']].map(([v, l]) => `<option value="${v}" ${Number(ai.documentType) === v ? 'selected' : ''}>${l}</option>`).join('');
+  const warn = [];
+  if (d.possibleDuplicate) warn.push('<span class="tag" style="background:rgba(245,158,11,.18);color:#b45309">⚠ אולי כבר נקלט</span>');
+  if ((ai.confidence || 0) < 0.75) warn.push('<span class="tag" style="background:rgba(245,158,11,.14);color:#b45309">⚠ ביטחון נמוך — בדוק</span>');
+  return `<div class="panel" id="mailcard_${id}" style="margin-top:12px">
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      <div style="flex:1 1 320px;min-width:280px">
+        <iframe src="/api/mail-scan/drafts/${id}/file?companyId=${state.company}" style="width:100%;height:360px;border:1px solid #e5e7eb;border-radius:8px;background:#fff"></iframe>
+        <div class="muted" style="font-size:11.5px;margin-top:4px">מ: ${escapeHtml((d.from || '').slice(0, 60))} · ${escapeHtml((d.subject || '').slice(0, 60))} · ${escapeHtml(d.receivedDate || '')}</div>
+      </div>
+      <div style="flex:1 1 320px;min-width:280px;display:flex;flex-direction:column;gap:7px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${warn.join('')}</div>
+        <label style="font-size:12px">מסלול<select id="mroute_${id}" style="width:100%">
+          <option value="expense" ${d.route === 'expense' ? 'selected' : ''}>הוצאה → חשבונית ירוקה (+העברה לרו״ח/Paperless)</option>
+          <option value="record" ${d.route === 'record' ? 'selected' : ''}>רישום בלבד (לא לחשבונית ירוקה)</option></select></label>
+        <label style="font-size:12px">ספק<select id="msup_${id}" style="width:100%">${supOpts}</select></label>
+        ${ai.supplierName && !ai.supplierId ? `<button class="btn ghost" style="padding:3px 8px;font-size:11.5px;align-self:flex-start" onclick="mailCreateSupplier('${id}','${escAttr(ai.supplierName)}','${escAttr(ai.taxId || '')}')">➕ צור ספק "${escapeHtml(ai.supplierName)}"</button>` : ''}
+        <label style="font-size:12px">סיווג חשבונאי<select id="mcls_${id}" style="width:100%">${clsOpts}</select></label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <label style="font-size:12px;flex:1 1 45%">סוג<select id="mtype_${id}" style="width:100%">${typeOpts}</select></label>
+          <label style="font-size:12px;flex:1 1 45%">מספר<input id="mnum_${id}" value="${escAttr(String(ai.invoiceNumber || ''))}" style="width:100%"></label></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <label style="font-size:12px;flex:1 1 45%">תאריך<input type="date" id="mdate_${id}" value="${escAttr(ai.date || '')}" style="width:100%"></label>
+          <label style="font-size:12px;flex:1 1 45%">סכום כולל מע״מ<input id="mamt_${id}" type="number" step="0.01" value="${ai.amountInclVat || ''}" style="width:100%"></label></div>
+        <label style="font-size:12px">תיאור<input id="mdesc_${id}" value="${escAttr(ai.description || '')}" style="width:100%"></label>
+        <label style="font-size:12px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="mpaid_${id}"> ההוצאה כבר שולמה</label>
+        <div id="mstatus_${id}" style="font-size:12.5px;min-height:16px"></div>
+        <div style="display:flex;gap:8px"><button class="btn success" onclick="mailApprove('${id}')">✓ אשר</button>
+          <button class="btn ghost" style="color:var(--danger)" onclick="mailReject('${id}')">✕ דחה</button></div>
+      </div></div></div>`;
+}
+window.mailScanRun = async () => {
+  const btn = document.getElementById('mailScanBtn'), prog = document.getElementById('mailScanProg');
+  const since = document.getElementById('mailSince')?.value || '2026-06-01';
+  if (btn) btn.disabled = true;
+  let total = 0, done = false, safety = 0;
+  while (!done && safety++ < 80) {
+    if (prog) prog.textContent = `סורק… (${total} טיוטות חדשות עד כה)`;
+    const r = await fetch(`/api/mail-scan/run?companyId=${state.company}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, since, limit: 3 }) }).then(x => x.json()).catch(() => ({ ok: false, error: 'timeout/רשת — נסה שוב' }));
+    if (!r.ok) { if (prog) prog.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(r.error || '')}</span>`; break; }
+    total += (r.created || 0); done = !!r.done || r.remaining === 0;
+  }
+  if (btn) btn.disabled = false;
+  if (done && prog) prog.textContent = `הסתיים — ${total} טיוטות חדשות.`;
+  if (typeof clearApiCache === 'function') clearApiCache();
+  renderMailScan($('#content'));
+};
+window.mailApprove = async (id) => {
+  const g = (p) => document.getElementById(p + id);
+  const st = g('mstatus_'), route = g('mroute_')?.value;
+  const fields = { route, supplierId: g('msup_')?.value, accountingClassificationId: g('mcls_')?.value || null, documentType: Number(g('mtype_')?.value), invoiceNumber: g('mnum_')?.value, date: g('mdate_')?.value, amountInclVat: g('mamt_')?.value, description: g('mdesc_')?.value, paid: !!g('mpaid_')?.checked };
+  if (route === 'expense' && !fields.supplierId) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש לבחור/ליצור ספק.</span>'; return; }
+  if (st) st.innerHTML = '<span class="muted">מאשר…</span>';
+  const r = await fetch(`/api/mail-scan/drafts/${id}/approve?companyId=${state.company}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, fields }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok) {
+    const msg = r.mode === 'record' ? '✓ נרשם (רישום בלבד)' : (r.duplicate ? '✓ כבר קיים בחשבונית ירוקה — לא נוצר כפול' : `✓ נקלט כהוצאה בחשבונית ירוקה${r.forwarded ? ' + הועבר לרו״ח/Paperless' : ''}`);
+    if (st) st.innerHTML = `<span style="color:var(--accent2)">${msg}</span>`;
+    const card = document.getElementById('mailcard_' + id); if (card) { card.style.opacity = '.5'; setTimeout(() => card.remove(), 1500); }
+  } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(r.error || '')}</span>`;
+};
+window.mailReject = async (id) => {
+  if (!confirm('לדחות את הטיוטה? הקובץ יימחק.')) return;
+  await fetch(`/api/mail-scan/drafts/${id}/reject?companyId=${state.company}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).catch(() => { });
+  const card = document.getElementById('mailcard_' + id); if (card) card.remove();
+};
+window.mailCreateSupplier = async (id, name, taxId) => {
+  const st = document.getElementById('mstatus_' + id); if (st) st.innerHTML = '<span class="muted">יוצר ספק…</span>';
+  const r = await fetch('/api/suppliers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, taxId }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok && r.supplier) {
+    try { _mailSuppliers = await api('/api/suppliers?fresh=1'); } catch { }
+    const sel = document.getElementById('msup_' + id);
+    if (sel) sel.innerHTML = ['<option value="">— בחר ספק —</option>'].concat((_mailSuppliers || []).map(s => `<option value="${s.id}" ${String(s.id) === String(r.supplier.id) ? 'selected' : ''}>${escapeHtml(s.name || '')}</option>`)).join('');
+    if (st) st.innerHTML = '<span style="color:var(--accent2)">✓ ספק נוצר ונבחר</span>';
+  } else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(r.error || '')}</span>`;
+};
 
 async function renderBusiness(c) {
   const p = await api('/api/business-profile');

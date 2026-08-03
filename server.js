@@ -2642,7 +2642,13 @@ add('POST', /^\/api\/mail-scan\/run$/, async (req, res, _p, q, body) => {
     try { ai = await classifyExpenseAttachment(it.contentBase64, it.mime, suppliers); }
     catch { errors++; continue; }
     if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; seenKey.add(key); continue; }
-    const dupHint = drafts.some(d => d.ai && d.ai.invoiceNumber && ai.invoiceNumber && d.ai.invoiceNumber === ai.invoiceNumber && Math.abs((d.ai.amountInclVat || 0) - (ai.amountInclVat || 0)) < 1);
+    // דדופ: מול טיוטות אחרות + מול הוצאות שכבר נקלטו (כולל כאלה שכבר הותאמו בבנק — הן supplierPayables) לפי מספר+סכום.
+    const _payables = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid);
+    const _amtEq = (a, b) => Math.abs((a || 0) - (b || 0)) < 1;
+    const dupHint = (ai.invoiceNumber && (
+      drafts.some(d => d.ai && String(d.ai.invoiceNumber || '') === String(ai.invoiceNumber) && _amtEq(d.ai.amountInclVat, ai.amountInclVat)) ||
+      _payables.some(p => String(p.number || '') === String(ai.invoiceNumber) && _amtEq(p.amount, ai.amountInclVat))
+    )) || false;
     const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-attachment', filename: it.filename, mime: it.mime, data: it.contentBase64 });
     drafts.push({
       id: 'md_' + Math.random().toString(16).slice(2, 12), source: 'email', messageId: it.messageId, attIndex: it.attIndex,
@@ -2691,6 +2697,71 @@ add('POST', /^\/api\/mail-scan\/drafts\/([^/]+)\/reject$/, async (req, res, para
   try { await deleteFile(d.fileId); } catch { }
   save(db);
   json(res, { ok: true });
+});
+
+// POST /api/mail-scan/drafts/:id/approve?companyId= { fields } — אישור טיוטה.
+// route 'expense' → הוצאה בחשבונית ירוקה של החברה + העברת ה-PDF למייל הרו"ח/Paperless + רישום מקומי. route 'record' → רישום פנימי בלבד.
+add('POST', /^\/api\/mail-scan\/drafts\/([^/]+)\/approve$/, async (req, res, params, q, body) => {
+  const cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
+  const db = load();
+  const d = mailDraftsFor(db, cid).find(x => x.id === params[0]);
+  if (!d) return json(res, { error: 'לא נמצא' }, 404);
+  if (d.status !== 'pending') return json(res, { error: 'הטיוטה כבר טופלה' }, 400);
+  const f = (body && body.fields) || {};
+  const numF = (v) => { const n = +String(v == null ? '' : v).replace(/[^\d.\-]/g, ''); return isNaN(n) ? 0 : n; };
+  const pick = (a, b) => (a != null && a !== '' ? a : b);
+  const supplierId = String(pick(f.supplierId, d.ai.supplierId) || '').trim();
+  const supplierName = String(pick(f.supplierName, d.ai.supplierName) || '').trim();
+  const documentType = Number(pick(f.documentType, d.ai.documentType)) || 305;
+  const number = String(pick(f.invoiceNumber, d.ai.invoiceNumber) || '').trim();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(f.date || '') ? f.date : (/^\d{4}-\d{2}-\d{2}$/.test(d.ai.date || '') ? d.ai.date : new Date().toISOString().slice(0, 10));
+  let incl = numF(pick(f.amountInclVat, d.ai.amountInclVat)), net = numF(pick(f.amountExcludeVat, d.ai.amountExcludeVat)), vat = numF(pick(f.vat, d.ai.vat));
+  if (incl && !net) net = +(incl / 1.18).toFixed(2);
+  if (incl && !vat) vat = +(incl - net).toFixed(2);
+  const alloc = String(pick(f.allocationNumber, d.ai.allocationNumber) || '').replace(/[^\d]/g, '');
+  const description = String(pick(f.description, d.ai.description) || d.subject || 'הוצאה מהמייל').trim();
+  const paidFlag = f.paid === true;
+  const route = f.route || d.route;
+
+  if (route === 'record') {
+    db.mailRecords = db.mailRecords || {}; db.mailRecords[cid] = db.mailRecords[cid] || [];
+    db.mailRecords[cid].push({ id: 'mr_' + Math.random().toString(16).slice(2, 10), fileId: d.fileId, filename: d.filename, mime: d.mime, from: d.from, subject: d.subject, receivedDate: d.receivedDate, documentType, supplierName, number, date, amountInclVat: incl, description, recordedAt: new Date().toISOString() });
+    d.status = 'approved'; d.approvedAs = 'record'; d.approvedAt = new Date().toISOString();
+    save(db); return json(res, { ok: true, mode: 'record' });
+  }
+
+  // route 'expense'
+  if (!supplierId) return json(res, { error: 'יש לבחור או ליצור ספק לפני האישור' }, 400);
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  let classId = f.accountingClassificationId || null;
+  if (!classId) { try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { } }
+  const expBody = {
+    supplier: { id: supplierId }, documentType, number: number || undefined, date, reportingDate: date,
+    currency: 'ILS', paymentType: paidFlag ? 4 : -1, amount: incl, amountExcludeVat: net, vat,
+    accountingClassification: classId ? { id: classId } : undefined,
+    description: alloc ? `${description} · מס' הקצאה ${alloc}` : description,
+  };
+  let created = null, duplicate = false;
+  try { created = await greenInvoice.createExpense(expBody); }
+  catch (err) { if (/"errorCode"\s*:\s*1010/.test(err.message || '')) duplicate = true; else return json(res, { error: err.message }, 500); }
+  db.supplierPayables = db.supplierPayables || [];
+  db.supplierPayables.push({ id: 'pay_' + Math.random().toString(36).slice(2, 10), companyId: cid, supplierId, supplierName, taxId: String(pick(f.taxId, d.ai.taxId) || '') || null, documentType, number, date, amount: incl, amountExcludeVat: net, vat, description, allocationNumber: alloc || null, paid: paidFlag, paidAt: paidFlag ? new Date().toISOString() : null, giExpenseId: created?.id || null, localFileId: d.fileId, source: 'email', createdAt: new Date().toISOString() });
+  // העברת ה-PDF למייל הרו"ח/Paperless של החברה (אצל אופק — bk@mail.paperless.tax), מהתיבה של החברה
+  let forwarded = false, forwardError = null;
+  try {
+    const fwd = String((bizProfile(db, cid).accountantEmail) || '').replace(/[​-‍﻿]/g, '').trim();
+    const mcreds = companyMailCreds(db, cid);
+    if (fwd && (mailer.companyMailConfigured(mcreds) || mailer.mailerConfigured())) {
+      const file = await getFile(d.fileId);
+      if (file) {
+        await mailer.sendMailFrom(mcreds, { to: fwd, subject: `הוצאה #${number || ''}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`, text: `מצורפת חשבונית הוצאה שנקלטה מהמייל.\nספק: ${supplierName}\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${incl}`, attachments: [{ filename: d.filename || 'expense.pdf', content: Buffer.from(String(file.data || ''), 'base64'), contentType: d.mime }] });
+        forwarded = true;
+      }
+    }
+  } catch (e) { forwardError = e.message; }
+  d.status = 'approved'; d.approvedAs = 'expense'; d.approvedAt = new Date().toISOString(); d.expenseId = created?.id || null; d.duplicate = duplicate;
+  save(db);
+  json(res, { ok: true, mode: 'expense', duplicate, expenseId: created?.id || null, forwarded, forwardError });
 });
 // POST /api/business-profile/file?companyId=&slot= { filename, mime, data(base64), expiry?, label? }
 add('POST', /^\/api\/business-profile\/file$/, async (req, res, _p, q, body) => {
