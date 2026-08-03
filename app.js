@@ -3440,7 +3440,8 @@ window.openNewQuote = async () => {
   const m = document.getElementById('newQuoteModal') || (() => { const x = document.createElement('div'); x.id = 'newQuoteModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
-  if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
+  // טעינה רעננה של רשימת הלקוחות המלאה (כדי שלקוחות חדשים יופיעו וניתן יהיה לחפש את כולם)
+  try { const cl = await api('/api/clients'); if (Array.isArray(cl) && cl.length) _evClients = cl; } catch { if (!_evClients) _evClients = []; }
   _nq = { clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
   renderNewQuote();
 };
@@ -3459,7 +3460,15 @@ window.openDuplicateQuote = async (id) => {
 function nqSync() {
   const e = _nq; if (!e) return;
   const m = document.getElementById('newQuoteModal'); if (!m) return;
-  const csel = m.querySelector('.nq-client'); if (csel) { e.clientId = csel.value; const c = (_evClients || []).find(x => String(x.id) === String(csel.value)); e.clientName = c ? c.name : ''; }
+  const cin = m.querySelector('.nq-client');
+  if (cin) {
+    const nm = (cin.value || '').trim();
+    e.clientName = nm;
+    let c = (_evClients || []).find(x => (x.name || '').trim() === nm); // התאמה מדויקת (בחירה מהרשימה)
+    if (!c && nm.length >= 2) { const ms = (_evClients || []).filter(x => (x.name || '').toLowerCase().includes(nm.toLowerCase())); if (ms.length === 1) c = ms[0]; } // אם יש התאמה חלקית יחידה
+    e.clientId = c ? c.id : '';
+    if (c) e.clientName = c.name;
+  }
   const d = m.querySelector('.nq-date'); if (d) e.date = d.value;
   const s = m.querySelector('.nq-subject'); if (s) e.subject = s.value;
   const r = m.querySelector('.nq-remarks'); if (r) e.remarks = r.value;
@@ -3470,7 +3479,14 @@ function nqSync() {
 }
 window.nqAddItem = () => { nqSync(); _nq.items.push({ description: '', quantity: 1, price: 0 }); renderNewQuote(); };
 window.nqDelItem = (i) => { nqSync(); _nq.items.splice(i, 1); if (!_nq.items.length) _nq.items.push({ description: '', quantity: 1, price: 0 }); renderNewQuote(); };
-window.nqClientChanged = () => { nqSync(); renderNewQuote(); };
+window.nqClientChanged = () => {
+  nqSync();
+  // עדכון מייל אוטומטי לפי הלקוח שנבחר — בלי render מחדש כדי לא לקטוע את ההקלדה/החיפוש
+  const m = document.getElementById('newQuoteModal'); if (!m) return;
+  const c = (_evClients || []).find(x => String(x.id) === String(_nq.clientId));
+  const em = m.querySelector('.nq-email');
+  if (em && c && c.email && !em.value) em.value = c.email;
+};
 window.nqRecalc = () => {
   nqSync();
   const t = docNetTotals(_nq.items, _nq);
@@ -3517,7 +3533,7 @@ function renderNewQuote() {
   const e = _nq; if (!e) return;
   const m = document.getElementById('newQuoteModal');
   const clients = (_evClients || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he'));
-  const clientOpts = `<option value="">— בחר לקוח —</option>` + clients.map(c => `<option value="${escAttr(String(c.id))}" ${String(c.id) === String(e.clientId) ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+  const clientOpts = clients.map(c => `<option value="${escAttr(c.name)}">`).join(''); // אפשרויות ל-datalist (חיפוש חופשי לפי שם)
   const itemRows = e.items.map((it, i) => `<div class="nq-item" style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;align-items:center;margin-bottom:6px">
     <input class="nq-desc" value="${escAttr(it.description)}" placeholder="תיאור" style="padding:6px 8px">
     <input class="nq-qty" type="number" step="any" value="${it.quantity}" oninput="nqRecalc()" style="padding:6px 6px;text-align:center" title="כמות">
@@ -3532,7 +3548,7 @@ function renderNewQuote() {
     <h3>${titleTxt}</h3>
     ${isIncome ? `<div class="muted" style="font-size:12px;margin:2px 0 6px">ייווצר ${DOC_TYPE_NAMES[e.type]} בחשבונית ירוקה, עם תקבול בהעברה בנקאית על מלוא הסכום בתאריך התנועה${e.bankTxId ? ' ויקושר לתנועת הבנק' : ''}.</div>` : ''}
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px">
-      <label style="font-size:13px;flex:1;min-width:260px">לקוח <div style="display:flex;gap:6px;align-items:center;margin-top:3px"><select class="nq-client" onchange="nqClientChanged()" style="flex:1;padding:6px 8px">${clientOpts}</select><button type="button" class="btn ghost" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="openAddClientForQuote()">+ לקוח חדש</button></div></label>
+      <label style="font-size:13px;flex:1;min-width:260px">לקוח <div style="display:flex;gap:6px;align-items:center;margin-top:3px"><input class="nq-client" list="nqClientList" value="${escAttr(selClient ? selClient.name : (e.clientName || ''))}" placeholder="הקלד שם לקוח לחיפוש…" autocomplete="off" oninput="nqClientChanged()" style="flex:1;padding:6px 8px"><datalist id="nqClientList">${clientOpts}</datalist><button type="button" class="btn ghost" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="openAddClientForQuote()">+ לקוח חדש</button></div></label>
       <label style="font-size:13px">תאריך <input class="nq-date" type="date" value="${e.date}" style="padding:6px 8px;margin-top:3px"></label>
     </div>
     <label style="font-size:12px;display:inline-flex;gap:6px;align-items:center;cursor:pointer;margin:0 0 6px"><input type="checkbox" class="nq-skipseq" ${e.skipSeq ? 'checked' : ''}><span>אפשר תאריך מוקדם מהמסמך האחרון (הפקה מחוץ לרצף)</span></label>
