@@ -5349,10 +5349,14 @@ async function renderBusiness(c) {
         <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
       </div>
       <div class="muted" style="font-size:12px;margin-top:8px">צריך <b>סיסמת אפליקציה</b> של גוגל (לא סיסמת החשבון הרגילה). יש להפעיל אימות דו-שלבי ואז ליצור App Password בכתובת <span dir="ltr">myaccount.google.com/apppasswords</span>. הסיסמה נשמרת מוצפנת בשרת ולא מוצגת שוב.</div>
-      <label style="display:block;margin-top:14px;font-weight:600">✍️ ניסוח מייל קבוע ללקוח
-        <textarea id="biz_mailBody" rows="4" style="width:100%;margin-top:4px;font-size:13px" placeholder="ריק = טקסט ברירת המחדל. לדוגמה: שלום {לקוח}, מצורף מסמך מס' {מספר}. תודה, {עסק}">${escapeHtml(p.mailBodyTemplate || '')}</textarea>
+      <label style="display:block;margin-top:14px;font-weight:600">✉️ שורת הנושא של המייל
+        <input id="biz_mailSubject" style="width:100%;margin-top:4px;font-size:13px" placeholder="ריק = ברירת מחדל. לדוגמה: [שם החברה] | [סוג מסמך] | מס' [מספר מסמך]" value="${escapeHtml(p.mailSubjectTemplate || '')}">
       </label>
-      <div class="muted" style="font-size:12px;margin-top:4px">הטקסט הזה נשלח כגוף המייל בכל שליחת מסמך ללקוח בחברה זו. אפשר להשתמש במשתנים שמתמלאים אוטומטית: <b dir="ltr">{לקוח}</b> = שם הלקוח, <b dir="ltr">{מספר}</b> = מספר המסמך, <b dir="ltr">{עסק}</b> = שם העסק. אם ריק — נשלח טקסט ברירת מחדל.</div>
+      <label style="display:block;margin-top:12px;font-weight:600">✍️ ניסוח גוף המייל הקבוע ללקוח
+        <textarea id="biz_mailBody" rows="7" style="width:100%;margin-top:4px;font-size:13px" placeholder="ריק = טקסט ברירת המחדל.">${escapeHtml(p.mailBodyTemplate || '')}</textarea>
+      </label>
+      <div class="muted" style="font-size:12px;margin-top:4px">גוף המייל ושורת הנושא נשלחים בכל שליחת מסמך ללקוח בחברה זו. אפשר להשתמש במשתנים שמתמלאים אוטומטית (בסוגריים מרובעים או מסולסלים):
+        <b dir="ltr">[שם החברה]</b> · <b dir="ltr">[סוג מסמך]</b> (הצעת מחיר / חשבונית מס / חשבונית מס-קבלה / קבלה…) · <b dir="ltr">[מספר מסמך]</b> · <b dir="ltr">[שם הלקוח]</b>. אם ריק — נשלח נוסח ברירת מחדל.</div>
     </div>
 
     <label style="display:block;margin-top:14px">הערה קבועה לכל המסמכים (פרטי בנק להעברה וכו')
@@ -5537,7 +5541,7 @@ window.bizSave = async () => {
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
     name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), senderEmail: g('biz_sender'), docRemark: g('biz_docremark'),
-    mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'), mailBodyTemplate: (document.getElementById('biz_mailBody')?.value || ''),
+    mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'), mailBodyTemplate: (document.getElementById('biz_mailBody')?.value || ''), mailSubjectTemplate: (document.getElementById('biz_mailSubject')?.value || ''),
     withholdingPct: Number(g('biz_wh')) || 0,
     managers: [
       { name: g('mgr0_name'), idNumber: g('mgr0_id'), phone: g('mgr0_phone'), email: g('mgr0_email') },

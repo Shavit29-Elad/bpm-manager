@@ -1804,8 +1804,10 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
       if (!emailsIn.length) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
       if (!mailer.companyMailConfigured(creds) && !mailer.mailerConfigured()) return json(res, { error: 'לחברה זו אין חשבון מייל מוגדר — הגדר חשבון מייל בפרטי העסק.' }, 400);
       const content = Buffer.from(String(f.data || ''), 'base64');
-      const body = mailBodyFor(_db, _cid || giCompanyId(), { clientName: '', num: '' });
-      await mailer.sendMailFrom(creds, { to: emailsIn, subject: `מסמך${f.filename ? ' — ' + f.filename : ''}`, text: body, attachments: [{ filename: f.filename || 'document.pdf', content }] });
+      const _ucid = _cid || giCompanyId();
+      const body = mailBodyFor(_db, _ucid, { clientName: '', num: '', docType: 'מסמך' });
+      const subj = mailSubjectFor(_db, _ucid, { clientName: '', num: '', docType: 'מסמך' });
+      await mailer.sendMailFrom(creds, { to: emailsIn, subject: subj, text: body, attachments: [{ filename: f.filename || 'document.pdf', content }] });
       return json(res, { ok: true, sentTo: emailsIn, uploaded: true });
     }
   } catch {}
@@ -1822,11 +1824,12 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
     if (!emails.length) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
     const num = (docMeta && (docMeta.number != null ? docMeta.number : docMeta.docNumber)) || '';
     const _db = load();
-    const creds = companyMailCreds(_db, _cid || giCompanyId());
-    const bizName = creds.fromName || '';
+    const _mcid = _cid || giCompanyId();
+    const creds = companyMailCreds(_db, _mcid);
     const clientName = (docMeta && docMeta.client && (docMeta.client.name || docMeta.client.fullName)) || '';
-    const subject = `מסמך${num ? ' מס\' ' + num : ''}${bizName ? ' — ' + bizName : ''}`;
-    const text = mailBodyFor(_db, _cid || giCompanyId(), { clientName, num });
+    const docTypeHe = DOC_NAMES_HE[Number(docMeta && docMeta.type)] || 'מסמך';
+    const subject = mailSubjectFor(_db, _mcid, { clientName, num, docType: docTypeHe });
+    const text = mailBodyFor(_db, _mcid, { clientName, num, docType: docTypeHe });
     const pdfAttach = async () => { const pdf = await greenInvoice.getDocumentPdf(params[0]); return [{ filename: `document-${String(num || params[0]).replace(/[^\w.-]/g, '_')}.pdf`, content: Buffer.from(pdf.base64, 'base64') }]; };
     // אם לחברה יש חשבון מייל משלה (Gmail) — שולחים ממנו ישירות (המייל יוצא מהתיבה של החברה), עם ה-PDF מצורף
     if (mailer.companyMailConfigured(creds)) {
@@ -2449,7 +2452,8 @@ function bizProfile(db, cid) {
   if (p.mailUser === undefined) p.mailUser = '';
   if (p.mailPass === undefined) p.mailPass = '';
   if (p.mailFromName === undefined) p.mailFromName = '';
-  if (p.mailBodyTemplate === undefined) p.mailBodyTemplate = ''; // ניסוח מייל קבוע (עם משתנים {לקוח}/{מספר}/{עסק}). ריק = טקסט ברירת מחדל
+  if (p.mailBodyTemplate === undefined) p.mailBodyTemplate = ''; // ניסוח גוף המייל הקבוע (עם משתנים [שם החברה]/[סוג מסמך]/[מספר מסמך]/[שם הלקוח]). ריק = ברירת מחדל
+  if (p.mailSubjectTemplate === undefined) p.mailSubjectTemplate = ''; // ניסוח שורת הנושא הקבועה. ריק = "חברה | סוג | מס' X"
   // שיעור ניכוי מס במקור (fraction). BPM: 5% היסטורי. חברות אחרות: 0 עד שמגדירים. ניתן לשינוי בפרטי העסק.
   if (p.withholdingRate === undefined) p.withholdingRate = (cid === 'co_bpm') ? 0.05 : 0;
   p.withholdingRate = Math.min(0.3, Math.max(0, Number(p.withholdingRate) || 0));
@@ -2463,19 +2467,33 @@ function companyMailCreds(db, cid) {
   const comp = (db.companies || []).find(c => c.id === cid);
   return { user: (p.mailUser || '').trim(), pass: p.mailPass || '', fromName: (p.mailFromName || p.name || (comp && comp.name) || '').trim() };
 }
-// גוף המייל הנשלח ללקוח — לפי "ניסוח מייל קבוע" של החברה (עם משתנים {לקוח}/{מספר}/{עסק}). ריק = טקסט ברירת מחדל.
-function mailBodyFor(db, cid, { clientName = '', num = '' } = {}) {
+// החלפת טוקנים בניסוח מייל — תומך גם ב-[...] וגם ב-{...}. משתנים: שם החברה / סוג מסמך / מספר מסמך / שם הלקוח.
+function renderMailTokens(tpl, v) {
+  let s = String(tpl || '');
+  s = s.replace(/\[שם החברה\]|\{שם החברה\}|\{עסק\}/g, v.company || '');
+  s = s.replace(/\[סוג מסמך\]|\{סוג מסמך\}|\{סוג\}/g, v.docType || '');
+  s = s.replace(/\[מספר מסמך\]|\{מספר מסמך\}|\{מספר\}/g, (v.num != null ? String(v.num) : ''));
+  s = s.replace(/\[שם הלקוח\]|\{שם הלקוח\}|\{לקוח\}/g, v.client || '');
+  return s;
+}
+function _mailVals(db, cid, { clientName = '', num = '', docType = '' } = {}) {
   const p = bizProfile(db, cid);
-  const bizName = (p.mailFromName || p.name || '').trim();
+  const company = (p.mailFromName || p.name || '').trim();
+  return { p, v: { company, docType: docType || 'מסמך', num, client: clientName } };
+}
+// גוף המייל הנשלח ללקוח — לפי "ניסוח מייל קבוע" של החברה. ריק = טקסט ברירת מחדל.
+function mailBodyFor(db, cid, opts = {}) {
+  const { p, v } = _mailVals(db, cid, opts);
   const tpl = String(p.mailBodyTemplate || '').trim();
-  if (tpl) {
-    return tpl
-      .replace(/\{לקוח\}/g, clientName || '')
-      .replace(/\{מספר\}/g, num != null ? String(num) : '')
-      .replace(/\{עסק\}/g, bizName || '');
-  }
-  // ברירת מחדל
-  return `שלום${clientName ? ' ' + clientName : ''},\nמצורף מסמך${num ? ' מס\' ' + num : ''}.\nתודה${bizName ? ', ' + bizName : ''}.`;
+  if (tpl) return renderMailTokens(tpl, v);
+  return `שלום${v.client ? ' ' + v.client : ''},\nמצורף ${v.docType}${v.num ? ' מספר ' + v.num : ''} לעיונכם.\nתודה${v.company ? ', ' + v.company : ''}.`;
+}
+// שורת הנושא של המייל ללקוח — לפי "ניסוח נושא קבוע" של החברה. ריק = ברירת מחדל "חברה | סוג | מס' X".
+function mailSubjectFor(db, cid, opts = {}) {
+  const { p, v } = _mailVals(db, cid, opts);
+  const tpl = String(p.mailSubjectTemplate || '').trim();
+  if (tpl) return renderMailTokens(tpl, v);
+  return [v.company, v.docType, v.num ? "מס' " + v.num : ''].filter(Boolean).join(' | ');
 }
 // GET /api/business-profile?companyId=  (הסיסמה לא מוחזרת לצד לקוח — רק חיווי אם מוגדרת)
 add('GET', /^\/api\/business-profile$/, (req, res, _p, q) => {
@@ -2521,6 +2539,7 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   if ('mailUser' in b) p.mailUser = String(b.mailUser || '').trim();
   if ('mailFromName' in b) p.mailFromName = String(b.mailFromName || '').trim();
   if ('mailBodyTemplate' in b) p.mailBodyTemplate = String(b.mailBodyTemplate || '');
+  if ('mailSubjectTemplate' in b) p.mailSubjectTemplate = String(b.mailSubjectTemplate || '');
   if ('mailPass' in b && String(b.mailPass || '').trim() !== '') p.mailPass = String(b.mailPass).replace(/\s+/g, ''); // App Password — מסירים רווחים
   // שיעור ניכוי מס במקור — מתקבל באחוזים (0..30) ונשמר כ-fraction
   if ('withholdingPct' in b) p.withholdingRate = Math.min(0.3, Math.max(0, (Number(b.withholdingPct) || 0) / 100));
