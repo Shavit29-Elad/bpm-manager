@@ -2229,7 +2229,7 @@ function invoiceCell(e) {
         : `<div style="font-size:10px;color:var(--danger);font-weight:600;white-space:nowrap">חסר חיוב</div>`;
     return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">${tags}${status}${linkBtn}</div>`;
   }
-  if (isNoInvoiceEv(e)) return `<span class="tag" style="background:rgba(14,164,114,.15);color:var(--accent2);font-weight:600">✓ שולם במזומן / ללא חיוב</span>`;
+  if (isNoInvoiceEv(e)) return `<span class="tag" style="background:rgba(14,164,114,.15);color:var(--accent2);font-weight:600">✓ ללא חיוב</span>`;
   const base = isOverdueUnbilled(e)
     ? `<span class="tag" style="background:rgba(225,29,72,.14);color:var(--danger);font-weight:700">חסר חשבונית!</span>`
     : `<span class="tag pending">ממתין</span>`;
@@ -2388,7 +2388,7 @@ async function openEventEditor(ev) {
       ${fld('מסך לד — כמות (מ׳)', `<input id="evLedMeters" type="number" inputmode="decimal" value="${ev.ledMeters ?? ''}"/>`)}
       ${fld('מחיר תוספות ₪', `<input id="evPriceExtras" type="number" inputmode="decimal" value="${ev.priceExtras ?? ''}"/>`)}
       ${fld('שיוך ללקוח (לחיוב חודשי)', `<div style="display:flex;gap:6px;align-items:center"><input id="evClient" list="evClientList" value="${v(ev.clientName)}" placeholder="שם לקוח…" style="flex:1"/><button type="button" class="btn ghost" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="openAddClientForEvent()">➕ לקוח חדש</button></div>`)}
-      <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted);grid-column:1/3"><input id="evNoInvoice" type="checkbox" ${ev.noInvoice ? 'checked' : ''}/> לא צריך להוציא חשבונית על אירוע זה (שולם במזומן / ללא חיוב)</label>
+      <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted);grid-column:1/3"><input id="evNoInvoice" type="checkbox" ${ev.noInvoice ? 'checked' : ''}/> ללא חיוב (לא צריך להוציא חשבונית על אירוע זה)</label>
       <div style="grid-column:1/3;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button type="button" class="btn ghost" style="padding:6px 12px;font-size:12.5px" onclick="openEventDocLink('${ev.id}', (document.getElementById('evClient')?.value||'').trim(), '')">🔗 שייך מסמך קיים</button>
         ${state.company === 'co_ofek' ? `<button type="button" class="btn ghost" style="padding:6px 12px;font-size:12.5px" onclick="openAttachDoc('${ev.id}')">📎 העלה מסמך ישן</button>` : ''}
