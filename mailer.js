@@ -51,4 +51,38 @@ export async function verifyMailer() {
   catch (e) { return { ok: false, error: e.message }; }
 }
 
-export default { mailerConfigured, forwardExpenseTo, sendMail, verifyMailer };
+// ===== שליחה מחשבון Gmail פר-חברה (App Password) — כל חברה יוצאת מהתיבה שלה =====
+const _companyTransports = new Map(); // user -> transporter
+async function transporterFor(user, pass) {
+  const key = String(user || '');
+  const cached = _companyTransports.get(key);
+  if (cached && cached._pass === pass) return cached.t;
+  const nodemailer = await nm();
+  const t = nodemailer.createTransport({ host: 'smtp.gmail.com', port: 465, secure: true, auth: { user, pass } });
+  _companyTransports.set(key, { t, _pass: pass });
+  return t;
+}
+// האם לחברה יש חשבון מייל משלה (Gmail + App Password)
+export function companyMailConfigured(creds) { return Boolean(creds && creds.user && creds.pass); }
+// שליחה מחשבון החברה. creds = { user, pass, fromName }. אם אין creds — גיבוי לחשבון הכללי (עם From מתוקן אם ניתן).
+export async function sendMailFrom(creds, { to, subject, text, html, attachments }) {
+  if (companyMailConfigured(creds)) {
+    const t = await transporterFor(creds.user, creds.pass);
+    const nm = (creds.fromName ? String(creds.fromName).replace(/"/g, '') : '').trim();
+    const from = nm ? `"${nm}" <${creds.user}>` : creds.user;
+    return t.sendMail({ from, to, subject, text, html, attachments });
+  }
+  // אין חשבון פר-חברה — נופלים לחשבון הכללי, אך עם כתובת/שם של החברה אם קיימים (כדי לא להיראות כחברה אחרת)
+  const nm2 = (creds && creds.fromName ? String(creds.fromName).replace(/"/g, '') : '').trim();
+  const addr = (creds && creds.user) ? creds.user : (process.env.SMTP_FROM || process.env.SMTP_USER);
+  const from = nm2 && addr ? `"${nm2}" <${addr}>` : (addr || undefined);
+  return sendMail({ to, subject, text, html, attachments, from });
+}
+// בדיקת חיבור לחשבון של חברה
+export async function verifyMailerFor(creds) {
+  if (!companyMailConfigured(creds)) return { ok: false, error: 'חסר כתובת/סיסמת אפליקציה' };
+  try { const t = await transporterFor(creds.user, creds.pass); await t.verify(); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message }; }
+}
+
+export default { mailerConfigured, forwardExpenseTo, sendMail, verifyMailer, companyMailConfigured, sendMailFrom, verifyMailerFor };

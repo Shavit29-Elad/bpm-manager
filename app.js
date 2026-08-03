@@ -5331,6 +5331,22 @@ async function renderBusiness(c) {
     </div>
     <div class="muted" style="font-size:12px;margin-top:6px">שיעור ניכוי המס במקור של החברה. משפיע על כל חישובי ההתאמות בבנק, הפקת מסמכי המשך/קבלות, וסיווג ההכנסות. 0 = ללא ניכוי.</div>
     <div class="muted" style="font-size:12px;margin-top:8px">כשמאשרים קליטת הוצאה, קובץ החשבונית נשלח אוטומטית לכתובת רו״ח <b>של החברה הזו בלבד</b>. אם ריק — לא נשלח מייל.</div>
+
+    <div style="margin-top:16px;padding:14px;border:1px solid #e5e7eb;border-radius:12px;background:#fafafe">
+      <div style="font-weight:700;margin-bottom:2px">📧 חשבון המייל של החברה (שליחה יוצאת)</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">כל מייל שהמערכת שולחת בחברה זו (מסמכים ללקוחות, העברת הוצאות לרו״ח) ייצא <b>מהתיבה הזו</b>. אם ריק — נשלח מחשבון ברירת המחדל של המערכת.</div>
+      <div class="biz-grid">
+        <label>כתובת Gmail<input id="biz_mailUser" type="email" dir="ltr" placeholder="name@gmail.com" value="${escapeHtml(p.mailUser || '')}"></label>
+        <label>שם השולח (מוצג ללקוח)<input id="biz_mailFromName" placeholder="${escapeHtml(p.name || comp.name || '')}" value="${escapeHtml(p.mailFromName || '')}"></label>
+        <label>סיסמת אפליקציה (App Password)<input id="biz_mailPass" type="password" dir="ltr" autocomplete="new-password" placeholder="${p.mailPassSet ? '•••••••• (שמורה — השאר ריק כדי לא לשנות)' : '16 תווים מגוגל'}" value=""></label>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn ghost" onclick="bizMailTest()">🔌 בדוק חיבור</button>
+        <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:8px">צריך <b>סיסמת אפליקציה</b> של גוגל (לא סיסמת החשבון הרגילה). יש להפעיל אימות דו-שלבי ואז ליצור App Password בכתובת <span dir="ltr">myaccount.google.com/apppasswords</span>. הסיסמה נשמרת מוצפנת בשרת ולא מוצגת שוב.</div>
+    </div>
+
     <label style="display:block;margin-top:14px">הערה קבועה לכל המסמכים (פרטי בנק להעברה וכו')
       <textarea id="biz_docremark" rows="5" style="width:100%;margin-top:4px;font-size:13px" placeholder="למשל שם מוטב, בנק, סניף ומספר חשבון…">${escapeHtml(p.docRemark || '')}</textarea>
     </label>
@@ -5513,6 +5529,7 @@ window.bizSave = async () => {
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
     name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), senderEmail: g('biz_sender'), docRemark: g('biz_docremark'),
+    mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'),
     withholdingPct: Number(g('biz_wh')) || 0,
     managers: [
       { name: g('mgr0_name'), idNumber: g('mgr0_id'), phone: g('mgr0_phone'), email: g('mgr0_email') },
@@ -5521,6 +5538,18 @@ window.bizSave = async () => {
   });
   state.whRate = Math.min(0.3, Math.max(0, (Number(g('biz_wh')) || 0) / 100));   // רענון שיעור הניכוי בזיכרון מיד
   if (msg) { msg.textContent = 'נשמר ✓'; setTimeout(() => { if (msg) msg.textContent = ''; }, 2500); }
+};
+window.bizMailTest = async () => {
+  const g = (id) => (document.getElementById(id)?.value || '').trim();
+  const msg = document.getElementById('bizMailTestMsg');
+  if (msg) { msg.style.color = 'var(--muted)'; msg.textContent = 'שומר ובודק…'; }
+  // שומרים קודם את פרטי המייל (כולל סיסמה אם הוזנה) ואז בודקים את החיבור בשרת
+  await bizWrite('/api/business-profile', 'PUT', { mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass') });
+  const pw = document.getElementById('biz_mailPass'); if (pw) pw.value = '';
+  const r = await fetch('/api/business-profile/mail-test?companyId=' + encodeURIComponent(state.company), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => null);
+  if (!msg) return;
+  if (r && r.ok) { msg.style.color = '#059669'; msg.textContent = `✓ החיבור תקין — נשלח מ-${r.user}`; }
+  else { msg.style.color = '#dc2626'; msg.textContent = '✗ ' + ((r && r.error) || 'החיבור נכשל'); }
 };
 window.bizSaveTaxExpiry = async () => {
   const v = (document.getElementById('tax_expiry')?.value || '').trim();

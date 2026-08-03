@@ -1181,10 +1181,10 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     let forwarded = false, forwardError = null;
     try {
       const fwd = _acctEmail;   // כתובת רו"ח של החברה הפעילה (ריק = לא מעבירים)
-      if (mailer.mailerConfigured() && fwd && fileBuf) {
-        await mailer.sendMail({
+      const _mcreds = companyMailCreds(load(), q.companyId || giCompanyId());   // חשבון המייל של החברה (אם הוגדר) — כדי שיישלח מהתיבה שלה
+      if ((mailer.companyMailConfigured(_mcreds) || mailer.mailerConfigured()) && fwd && fileBuf) {
+        await mailer.sendMailFrom(_mcreds, {
           to: fwd,
-          from: _senderEmail || undefined,   // כתובת "מאת" פר-חברה (אם הוגדרה)
           subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
           text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
           attachments: [{ filename: `expense-${safeNum}.${fileExt}`, content: fileBuf, contentType: fileCt }],
@@ -1790,10 +1790,11 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
   try {
     const f = await getFile(params[0]);
     if (f) {
+      const creds = companyMailCreds(load(), _cid || giCompanyId());
       if (!email0) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
-      if (!mailer.mailerConfigured()) return json(res, { error: 'שליחת מייל אינה מוגדרת (חסר SMTP_USER/SMTP_PASS)' }, 400);
+      if (!mailer.companyMailConfigured(creds) && !mailer.mailerConfigured()) return json(res, { error: 'לחברה זו אין חשבון מייל מוגדר — הגדר חשבון מייל בפרטי העסק.' }, 400);
       const content = Buffer.from(String(f.data || ''), 'base64');
-      await mailer.sendMail({ to: email0, subject: `מסמך${f.filename ? ' — ' + f.filename : ''}`, text: 'שלום,\nמצורף מסמך.\nתודה.', attachments: [{ filename: f.filename || 'document.pdf', content }] });
+      await mailer.sendMailFrom(creds, { to: email0, subject: `מסמך${f.filename ? ' — ' + f.filename : ''}`, text: 'שלום,\nמצורף מסמך.\nתודה.', attachments: [{ filename: f.filename || 'document.pdf', content }] });
       return json(res, { ok: true, sentTo: [email0], uploaded: true });
     }
   } catch {}
@@ -1808,25 +1809,24 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
       emails = (Array.isArray(ce) ? ce : []).map(String).filter(Boolean);
     }
     if (!emails.length) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
-    // ניסיון ראשון: שליחה מקורית דרך חשבונית ירוקה
+    const num = (docMeta && (docMeta.number != null ? docMeta.number : docMeta.docNumber)) || '';
+    const creds = companyMailCreds(load(), _cid || giCompanyId());
+    const bizName = creds.fromName || '';
+    const subject = `מסמך${num ? ' מס\' ' + num : ''}${bizName ? ' — ' + bizName : ''}`;
+    const text = `שלום,\nמצורף מסמך${num ? ' מס\' ' + num : ''}.\nתודה${bizName ? ', ' + bizName : ''}.`;
+    const pdfAttach = async () => { const pdf = await greenInvoice.getDocumentPdf(params[0]); return [{ filename: `document-${String(num || params[0]).replace(/[^\w.-]/g, '_')}.pdf`, content: Buffer.from(pdf.base64, 'base64') }]; };
+    // אם לחברה יש חשבון מייל משלה (Gmail) — שולחים ממנו ישירות (המייל יוצא מהתיבה של החברה), עם ה-PDF מצורף
+    if (mailer.companyMailConfigured(creds)) {
+      await mailer.sendMailFrom(creds, { to: emails, subject, text, attachments: await pdfAttach() });
+      return json(res, { ok: true, sentTo: emails, viaCompanyMail: true });
+    }
+    // אחרת: ניסיון שליחה ישירה דרך חשבונית ירוקה; אם נכשל — חשבון SMTP כללי (עם שם החברה)
     try {
       const r = await greenInvoice.sendDocument(params[0], emails);
       return json(res, { ok: true, sentTo: emails, result: r });
     } catch (giErr) {
-      // חלק מחשבונות חשבונית ירוקה מחזירים 404 ל-endpoint השליחה — נופלים חזרה לשליחת SMTP עם ה-PDF מצורף
-      if (!mailer.mailerConfigured()) return json(res, { error: `שליחה דרך חשבונית ירוקה נכשלה (${giErr.message}) ושליחת SMTP אינה מוגדרת` }, 502);
-      const pdf = await greenInvoice.getDocumentPdf(params[0]);
-      const num = (docMeta && (docMeta.number != null ? docMeta.number : docMeta.docNumber)) || '';
-      const _biz = bizProfile(load(), _cid || giCompanyId());
-      const fromAddr = (_biz && _biz.senderEmail) || undefined;
-      const bizName = (_biz && (_biz.name || _biz.businessName)) || '';
-      await mailer.sendMail({
-        to: emails,
-        from: fromAddr,
-        subject: `מסמך${num ? ' מס\' ' + num : ''}${bizName ? ' — ' + bizName : ''}`,
-        text: `שלום,\nמצורף מסמך${num ? ' מס\' ' + num : ''}.\nתודה${bizName ? ', ' + bizName : ''}.`,
-        attachments: [{ filename: `document-${String(num || params[0]).replace(/[^\w.-]/g, '_')}.pdf`, content: Buffer.from(pdf.base64, 'base64') }],
-      });
+      if (!mailer.mailerConfigured()) return json(res, { error: `שליחה דרך חשבונית ירוקה נכשלה (${giErr.message}) — ולחברה זו אין חשבון מייל מוגדר. הגדר חשבון מייל בפרטי העסק.` }, 502);
+      await mailer.sendMailFrom(creds, { to: emails, subject, text, attachments: await pdfAttach() });
       return json(res, { ok: true, sentTo: emails, viaSmtp: true });
     }
   } catch (e) { json(res, { error: e.message }, 500); }
@@ -2432,6 +2432,10 @@ function bizProfile(db, cid) {
   if (p.accountantEmail === undefined) p.accountantEmail = (cid === 'co_bpm') ? (process.env.FORWARD_EXPENSE_EMAIL || '516942349@rivh.it') : '';
   // כתובת "מאת" לשליחת מיילים (העברת הוצאות לרו"ח) — פר-חברה. ריק = ברירת המחדל של ה-SMTP.
   if (p.senderEmail === undefined) p.senderEmail = '';
+  // חשבון מייל שולח פר-חברה (Gmail + App Password) — כל חברה שולחת מהתיבה שלה
+  if (p.mailUser === undefined) p.mailUser = '';
+  if (p.mailPass === undefined) p.mailPass = '';
+  if (p.mailFromName === undefined) p.mailFromName = '';
   // שיעור ניכוי מס במקור (fraction). BPM: 5% היסטורי. חברות אחרות: 0 עד שמגדירים. ניתן לשינוי בפרטי העסק.
   if (p.withholdingRate === undefined) p.withholdingRate = (cid === 'co_bpm') ? 0.05 : 0;
   p.withholdingRate = Math.min(0.3, Math.max(0, Number(p.withholdingRate) || 0));
@@ -2439,10 +2443,17 @@ function bizProfile(db, cid) {
   try { greenInvoice.setCompanyRemark(cid, p.docRemark); } catch { } // סנכרון: ההערה תוזרק לכל מסמך שנוצר בחברה
   return p;
 }
-// GET /api/business-profile?companyId=
+// פרטי חשבון המייל של החברה (Gmail App Password) לשליחת מסמכים "מהתיבה של החברה"
+function companyMailCreds(db, cid) {
+  const p = bizProfile(db, cid);
+  const comp = (db.companies || []).find(c => c.id === cid);
+  return { user: (p.mailUser || '').trim(), pass: p.mailPass || '', fromName: (p.mailFromName || p.name || (comp && comp.name) || '').trim() };
+}
+// GET /api/business-profile?companyId=  (הסיסמה לא מוחזרת לצד לקוח — רק חיווי אם מוגדרת)
 add('GET', /^\/api\/business-profile$/, (req, res, _p, q) => {
   const db = load();
-  json(res, bizProfile(db, q.companyId || giCompanyId()));
+  const p = bizProfile(db, q.companyId || giCompanyId());
+  json(res, { ...p, mailPass: '', mailPassSet: Boolean(p.mailPass) });
 });
 // GET /api/business-profile/alerts — אישורי ניכוי מס שפגים בתוך 14 יום (לכל החברות)
 add('GET', /^\/api\/business-profile\/alerts$/, (req, res) => {
@@ -2478,6 +2489,10 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   if ('docRemark' in b) p.docRemark = String(b.docRemark || ''); // הערה קבועה לכל המסמכים (פר-חברה)
   if ('accountantEmail' in b) p.accountantEmail = String(b.accountantEmail || '').trim();
   if ('senderEmail' in b) p.senderEmail = String(b.senderEmail || '').trim();
+  // חשבון מייל שולח פר-חברה (Gmail). הסיסמה מתעדכנת רק אם נשלח ערך חדש לא-ריק (כדי לאפשר עדכון שאר השדות בלי לשלוח סיסמה שוב).
+  if ('mailUser' in b) p.mailUser = String(b.mailUser || '').trim();
+  if ('mailFromName' in b) p.mailFromName = String(b.mailFromName || '').trim();
+  if ('mailPass' in b && String(b.mailPass || '').trim() !== '') p.mailPass = String(b.mailPass).replace(/\s+/g, ''); // App Password — מסירים רווחים
   // שיעור ניכוי מס במקור — מתקבל באחוזים (0..30) ונשמר כ-fraction
   if ('withholdingPct' in b) p.withholdingRate = Math.min(0.3, Math.max(0, (Number(b.withholdingPct) || 0) / 100));
   else if ('withholdingRate' in b) p.withholdingRate = Math.min(0.3, Math.max(0, Number(b.withholdingRate) || 0));
@@ -2488,7 +2503,15 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   if ('taxExpiry' in b) { p.taxConfirmation = p.taxConfirmation || {}; p.taxConfirmation.expiry = b.taxExpiry ? String(b.taxExpiry).slice(0, 10) : ''; }
   if ('taxAuthorityRenewedAt' in b) { p.taxAuthority = p.taxAuthority || {}; p.taxAuthority.renewedAt = b.taxAuthorityRenewedAt ? String(b.taxAuthorityRenewedAt).slice(0, 10) : ''; }
   if ('taxAuthorityValidDays' in b) { p.taxAuthority = p.taxAuthority || {}; p.taxAuthority.validDays = Number(b.taxAuthorityValidDays) || 90; }
-  save(db); json(res, p);
+  save(db); json(res, { ...p, mailPass: '', mailPassSet: Boolean(p.mailPass) });
+});
+// POST /api/business-profile/mail-test?companyId= — בדיקת חשבון המייל של החברה (Gmail App Password)
+add('POST', /^\/api\/business-profile\/mail-test$/, async (req, res, _p, q) => {
+  const db = load();
+  const creds = companyMailCreds(db, q.companyId || giCompanyId());
+  if (!creds.user || !creds.pass) return json(res, { ok: false, error: 'חסרים כתובת מייל וסיסמת אפליקציה — שמור אותם קודם ואז בדוק.' });
+  const r = await mailer.verifyMailerFor(creds);
+  json(res, r.ok ? { ok: true, user: creds.user } : { ok: false, error: r.error });
 });
 // POST /api/business-profile/file?companyId=&slot= { filename, mime, data(base64), expiry?, label? }
 add('POST', /^\/api\/business-profile\/file$/, async (req, res, _p, q, body) => {
