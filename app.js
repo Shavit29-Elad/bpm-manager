@@ -4427,7 +4427,7 @@ function draftCard(d) {
   const amt = (amtVal != null && amtVal !== '') ? money(amtVal) : '<span class="muted">—</span>';
   const supTxt = supName ? escapeHtml(supName) : '<span class="muted">ספק לא זוהה</span>';
   const typeTxt = DRAFT_TYPE_NAMES[docType] || '';
-  const file = d.url ? `<a class="btn ghost" style="padding:3px 10px;font-size:12px" href="/api/expense-drafts/${d.id}/file" target="_blank" rel="noopener">📄 צפה</a>` : '';
+  const file = d.url ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="previewDoc('/api/expense-drafts/${d.id}/file')">📄 צפה</button>` : '';
   const aiBadge = ai
     ? '<span class="tag" style="background:#e7f7ee;color:var(--accent2)">🤖 נקרא — מוכן לקליטה</span>'
     : '<span class="tag muted">🤖 קורא…</span>';
