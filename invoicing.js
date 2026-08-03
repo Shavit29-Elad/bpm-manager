@@ -77,11 +77,13 @@ export function eventsByClient(events) {
     const t = eventTotal(ev);
     const billed = isBilled(ev);
     const linkedDocs = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+    // מסמכים פעילים בלבד — מסמך שזוכה/הומר (credited/credit/converted) אינו נחשב עוד כחיוב פעיל, כך שהאירוע חוזר להפקה.
+    const activeDocs = linkedDocs.filter(d => !d.credited && !d.credit && !d.converted);
     // "שולם/הושלם" רק כשיש מסמך מסוג קבלה או מס-קבלה (320/400) — עסקה/מס בלבד = חויב אך פתוח
-    const paid = linkedDocs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(ev.invoiceType));
-    // "הופק" — הופקה/שויכה חשבונית כלשהי: עסקה(300)/מס(305)/מס-קבלה(320)/קבלה(400). הצעת מחיר(10) אינה נחשבת.
+    const paid = activeDocs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(ev.invoiceType));
+    // "הופק" — הופקה/שויכה חשבונית כלשהי: עסקה(300)/מס(305)/מס-קבלה(320)/קבלה(400). הצעת מחיר(10) אינה נחשבת. מסמך שזוכה — אינו נחשב.
     // אירוע שהופק יורד ממסך "הפקת חשבוניות" — המעקב אחריו נמשך ב"חשבוניות פתוחות" עד לתשלום.
-    const issued = billed || linkedDocs.some(d => [300, 305, 320, 400].includes(Number(d.type))) || [300, 305, 320, 400].includes(Number(ev.invoiceType));
+    const issued = billed || activeDocs.some(d => [300, 305, 320, 400].includes(Number(d.type))) || [300, 305, 320, 400].includes(Number(ev.invoiceType));
     g.events.push({
       id: ev.id, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '',
       price: num(ev.price), priceLighting: num(ev.priceLighting), priceSound: num(ev.priceSound), priceBackline: num(ev.priceBackline), ledMeters: num(ev.ledMeters), ledPricePerMeter: num(ev.ledPricePerMeter), priceExtras: num(ev.priceExtras), total: t,

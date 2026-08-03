@@ -2205,6 +2205,8 @@ const monthKeyLabel = (k) => { const m = String(k).match(/^(\d{4})-(\d{2})$/); r
 const curMonthKey = () => new Date().toISOString().slice(0, 7);
 const isNoInvoiceEv = (e) => Boolean(e.noInvoice) || /ללא\s*-?\s*שול[םמ]/.test(e.clientName || '');
 const isBilledEv = (e) => Boolean(e.invoiceId) || e.invoiceStatus === 'invoiced';
+// מסמכי חיוב פעילים בלבד — מסמך שזוכה/הומר (credited/credit/converted) אינו נחשב עוד כחיוב.
+const activeLinkedDocs = (e) => (Array.isArray(e.linkedDocs) ? e.linkedDocs : []).filter(d => !d.credited && !d.credit && !d.converted);
 const isOverdueUnbilled = (e) => {
   if (isBilledEv(e) || isNoInvoiceEv(e)) return false;
   const mk = (e.date || e.dateRaw || '').slice(0, 7);
@@ -2217,7 +2219,7 @@ const isOverdueUnbilled = (e) => {
 //   'none'   — לא נדרשת חשבונית (סומן ידנית).
 function evPayState(e) {
   if (isNoInvoiceEv(e)) return 'none';
-  const types = new Set((Array.isArray(e.linkedDocs) ? e.linkedDocs : []).map(d => Number(d.type)));
+  const types = new Set(activeLinkedDocs(e).map(d => Number(d.type)));
   if (e.invoiceType) types.add(Number(e.invoiceType)); // תאימות לאחור (אירועים שסומנו לפני שמירת linkedDocs)
   if (types.has(320) || (types.has(305) && types.has(400))) return 'green';
   if (types.has(300) || types.has(305)) return 'yellow';
@@ -2229,7 +2231,7 @@ function invoiceCell(e) {
   const clientId = e.clientId || '';
   // כפתור שיוך עד 4 מסמכים — רק מסמכים של אותו לקוח (linkForEvent אוכף את זה)
   const linkBtn = `<button class="btn ghost" style="padding:3px 9px;font-size:11px" onclick="linkForEvent('${e.id}','${clientEnc}','${clientId}')">🔗 שייך מסמכים</button>`;
-  const docs = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
+  const docs = activeLinkedDocs(e); // רק מסמכי חיוב פעילים — מסמך שזוכה יורד ומחזיר את האירוע ל"ממתין"
   const ps = evPayState(e); // אדום=אין חיוב · צהוב=ממתין לתשלום · ירוק=שולם
   if (isBilledEv(e) || docs.length) {
     // תג קומפקטי בשורה אחת (תווית קצרה + מספר + 👁) — כדי שלא ייתפס 2 שורות
