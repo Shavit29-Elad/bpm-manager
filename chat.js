@@ -420,6 +420,66 @@ ${cliList || '(אין)'}`;
   };
 }
 
+// classifyExpenseAttachment — סיווג צרופת מייל: האם זו חשבונית/קבלה/הצעה של הוצאה, ואם כן איזה סוג + שדות מלאים.
+// route: 'expense' (מס/מס-קבלה/קבלה → הוצאה לחשבונית ירוקה) · 'record' (הצעת מחיר/עסקה → רישום בלבד) · 'skip' (לא מסמך כספי).
+export async function classifyExpenseAttachment(fileBase64, mime, suppliers = []) {
+  if (!chatConfigured()) throw new Error('AI לא מוגדר (חסר ANTHROPIC_API_KEY או GEMINI_API_KEY)');
+  const mediaType = sniffMediaType(fileBase64, mime);
+  const supList = (suppliers || []).slice(0, 500).map(s => `${s.id}\t${s.name}${s.taxId ? ' | ח.פ ' + s.taxId : ''}`).join('\n');
+  const system = 'אתה מומחה לקריאת מסמכים עסקיים ישראליים. אתה מסווג במדויק ומחזיר JSON תקין בלבד, בלי טקסט לפני או אחרי.';
+  const prompt = `לפניך צרופה שהגיעה במייל לעסק. קבע קודם האם זו בכלל מסמך כספי של ספק — חשבונית מס / חשבונית מס-קבלה / קבלה / הצעת מחיר / חשבון עסקה (דרישת תשלום/פרופורמה) — או משהו אחר (מצגת, לוגו, חתימת מייל, צילום כללי, קטלוג, מסמך שאינו כספי).
+החזר אך ורק JSON במבנה המדויק:
+{"isFinancialDoc":true,"documentType":305,"supplierName":"שם הספק המנפיק","taxId":"ח.פ/עוסק (ספרות בלבד) או ריק","supplierPhone":"","supplierEmail":"","supplierContact":"","invoiceNumber":"מספר המסמך","allocationNumber":"מספר הקצאה של רשות המסים (בד״כ 9 ספרות) או ריק","date":"YYYY-MM-DD","amountInclVat":0,"amountExclVat":0,"vat":0,"description":"תיאור קצר של ההוצאה","supplierId":"","confidence":0.9}
+
+כללים:
+- isFinancialDoc=false אם זו לא חשבונית/קבלה/הצעה/דרישת תשלום. במקרה כזה documentType=0 ואפסים/ריקים בשאר.
+- documentType: 10=הצעת מחיר, 300=חשבון עסקה/דרישת תשלום/פרופורמה, 305=חשבונית מס, 320=חשבונית מס-קבלה, 400=קבלה. בחר לפי כותרת המסמך. מסמך כספי שסוגו לא ברור — 305.
+- הספק הוא מי שהנפיק את המסמך (לא מקבל המייל).
+- amountInclVat = סכום כולל מע"מ. amountExclVat = לפני מע"מ. vat = סכום המע"מ. השלם חסרים (מע"מ 18%). מספרים בלבד.
+- אם הספק תואם לרשימה למטה (לפי שם/ח.פ), החזר את ה-id שלו ב-supplierId. אחרת ריק.
+- confidence בין 0 ל-1.
+
+רשימת ספקים קיימים (id<TAB>שם | ח.פ):
+${supList || '(אין)'}`;
+  let raw;
+  if (process.env.ANTHROPIC_API_KEY) {
+    const isPdf = mediaType === 'application/pdf';
+    const block = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
+      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: fileBase64 } };
+    raw = await callAnthropicVision(system, [block, { type: 'text', text: prompt }]);
+  } else {
+    raw = await callGeminiVision(system, prompt, fileBase64, mediaType);
+  }
+  const jsonStr = (String(raw).replace(/```json/gi, '').replace(/```/g, '').match(/\{[\s\S]*\}/) || ['{}'])[0];
+  let out; try { out = JSON.parse(jsonStr); } catch { return { isFinancialDoc: false, documentType: 0, route: 'skip' }; }
+  const numF = (v) => { const n = +String(v == null ? '' : v).replace(/[^\d.\-]/g, ''); return isNaN(n) ? 0 : n; };
+  const isFin = out.isFinancialDoc === true || out.isFinancialDoc === 'true';
+  const dt = [10, 300, 305, 320, 400].includes(+out.documentType) ? +out.documentType : (isFin ? 305 : 0);
+  let incl = numF(out.amountInclVat), net = numF(out.amountExclVat), vat = numF(out.vat);
+  if (incl && !net) net = +(incl / 1.18).toFixed(2);
+  if (incl && !vat) vat = +(incl - net).toFixed(2);
+  if (!incl && net && vat) incl = +(net + vat).toFixed(2);
+  let supplierId = out.supplierId && (suppliers || []).some(s => String(s.id) === String(out.supplierId)) ? String(out.supplierId) : '';
+  if (!supplierId && out.taxId) { const m = (suppliers || []).find(s => s.taxId && String(s.taxId).replace(/\D/g, '') === String(out.taxId).replace(/\D/g, '')); if (m) supplierId = String(m.id); }
+  if (!supplierId && out.supplierName) { const nm = String(out.supplierName).trim(); const m = (suppliers || []).find(s => s.name && (s.name === nm || s.name.includes(nm) || nm.includes(s.name))); if (m) supplierId = String(m.id); }
+  const route = [305, 320, 400].includes(dt) ? 'expense' : ([10, 300].includes(dt) ? 'record' : 'skip');
+  return {
+    isFinancialDoc: isFin && dt !== 0, documentType: dt, route,
+    supplierId, supplierName: String(out.supplierName || '').trim(),
+    taxId: String(out.taxId || '').replace(/[^\d]/g, ''),
+    supplierPhone: String(out.supplierPhone || '').trim(),
+    supplierEmail: String(out.supplierEmail || '').trim(),
+    supplierContact: String(out.supplierContact || '').trim(),
+    invoiceNumber: String(out.invoiceNumber || '').trim(),
+    allocationNumber: String(out.allocationNumber || '').replace(/[^\d]/g, ''),
+    date: /^\d{4}-\d{2}-\d{2}$/.test(out.date || '') ? out.date : '',
+    amountInclVat: incl || 0, amountExcludeVat: net || 0, vat: vat || 0,
+    description: String(out.description || '').trim(),
+    confidence: Math.max(0, Math.min(1, numF(out.confidence) || 0)),
+  };
+}
+
 // למידה: מפיק "עובדות לזכור" מתוך חילופי ההודעות האחרונים (לזיכרון המתמשך)
 export async function learnFromExchange(member, exchangeText) {
   const system = `אתה עוזר שמתחזק זיכרון ארוך-טווח עבור ${member.name} (${member.role}). מטרתך לזקק עובדות/העדפות/החלטות יציבות ששווה לזכור לטווח ארוך.`;

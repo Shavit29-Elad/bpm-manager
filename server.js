@@ -23,7 +23,7 @@ import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
 import { buildAppMap } from './appMap.js';
-import { chatWithMember, chatWithMemberVision, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields } from './chat.js';
+import { chatWithMember, chatWithMemberVision, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields, classifyExpenseAttachment } from './chat.js';
 import mailer from './mailer.js';
 import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
@@ -2609,6 +2609,88 @@ add('POST', /^\/api\/mail-scan\/test$/, async (req, res, _p, q, body) => {
   const since = (body && body.since) || (q && q.since) || null;
   const r = await mailReader.imapTest({ user: creds.user, pass: creds.pass }, since);
   json(res, r.ok ? { ok: true, user: creds.user, total: r.total, sinceCount: r.sinceCount, parserOk: r.parserOk, lastSubject: r.lastSubject } : { ok: false, error: r.error });
+});
+
+// ===== סורק מייל → טיוטות הוצאה/רישום לאישור =====
+function mailScanState(db, cid) {
+  db.mailScan = db.mailScan || {};
+  if (!db.mailScan[cid]) db.mailScan[cid] = { seenUids: [], lastScanAt: null, since: null };
+  return db.mailScan[cid];
+}
+function mailDraftsFor(db, cid) { db.mailDrafts = db.mailDrafts || {}; if (!db.mailDrafts[cid]) db.mailDrafts[cid] = []; return db.mailDrafts[cid]; }
+
+// POST /api/mail-scan/run?companyId= { since?, limit? } — אצווה: סורק הודעות חדשות, מסווג ב-AI, יוצר טיוטות ממתינות. חוזר עם remaining.
+add('POST', /^\/api\/mail-scan\/run$/, async (req, res, _p, q, body) => {
+  const cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
+  const creds = companyMailCreds(load(), cid);
+  if (!creds.user || !creds.pass) return json(res, { ok: false, error: 'לחברה זו אין חשבון מייל מוגדר — הגדר בפרטי העסק.' });
+  if (!chatConfigured()) return json(res, { ok: false, error: 'AI לא מוגדר (חסר ANTHROPIC_API_KEY).' });
+  const since = (body && body.since) || mailScanState(load(), cid).since || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  const limit = Math.min(12, Math.max(1, Number(body && body.limit) || 8));
+  const scan = await mailReader.scanMailbox({ user: creds.user, pass: creds.pass }, since, { excludeUids: mailScanState(load(), cid).seenUids, limit });
+  if (!scan.ok) return json(res, { ok: false, error: scan.error });
+  let suppliers = []; try { suppliers = await greenInvoice.listSuppliers(); } catch { }
+  let created = 0, skipped = 0, errors = 0;
+  const db = load();
+  const drafts = mailDraftsFor(db, cid);
+  const st = mailScanState(db, cid);
+  const seenKey = new Set(drafts.map(d => d.messageId + '|' + (d.attIndex ?? '')));
+  for (const it of scan.items) {
+    const key = it.messageId + '|' + it.attIndex;
+    if (seenKey.has(key)) { skipped++; continue; }
+    let ai;
+    try { ai = await classifyExpenseAttachment(it.contentBase64, it.mime, suppliers); }
+    catch { errors++; continue; }
+    if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; seenKey.add(key); continue; }
+    const dupHint = drafts.some(d => d.ai && d.ai.invoiceNumber && ai.invoiceNumber && d.ai.invoiceNumber === ai.invoiceNumber && Math.abs((d.ai.amountInclVat || 0) - (ai.amountInclVat || 0)) < 1);
+    const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-attachment', filename: it.filename, mime: it.mime, data: it.contentBase64 });
+    drafts.push({
+      id: 'md_' + Math.random().toString(16).slice(2, 12), source: 'email', messageId: it.messageId, attIndex: it.attIndex,
+      from: it.from, subject: it.subject, receivedDate: it.receivedDate, fileId: saved.id, filename: it.filename, mime: it.mime, size: it.size,
+      route: ai.route, ai, possibleDuplicate: dupHint, status: 'pending', createdAt: new Date().toISOString(),
+    });
+    seenKey.add(key); created++;
+  }
+  const seenUidSet = new Set(st.seenUids.map(String));
+  (scan.processedUids || []).forEach(u => { if (!seenUidSet.has(String(u))) st.seenUids.push(u); });
+  st.since = since; st.lastScanAt = new Date().toISOString();
+  save(db);
+  json(res, { ok: true, processed: (scan.processedUids || []).length, created, skipped, errors, remaining: scan.remaining, done: scan.remaining === 0 });
+});
+
+// GET /api/mail-scan/drafts?companyId= — טיוטות ממתינות (הכי חדשות קודם)
+add('GET', /^\/api\/mail-scan\/drafts$/, (req, res, _p, q) => {
+  const cid = (q && q.companyId) || giCompanyId();
+  const db = load();
+  const drafts = mailDraftsFor(db, cid).filter(d => d.status === 'pending')
+    .sort((a, b) => String(b.receivedDate || '').localeCompare(String(a.receivedDate || '')));
+  json(res, {
+    ok: true, lastScanAt: mailScanState(db, cid).lastScanAt,
+    drafts: drafts.map(d => ({ id: d.id, from: d.from, subject: d.subject, receivedDate: d.receivedDate, filename: d.filename, mime: d.mime, route: d.route, possibleDuplicate: d.possibleDuplicate, ai: d.ai, createdAt: d.createdAt })),
+  });
+});
+
+// GET /api/mail-scan/drafts/:id/file?companyId= — הקובץ המצורף לתצוגה מקדימה/הורדה
+add('GET', /^\/api\/mail-scan\/drafts\/([^/]+)\/file$/, async (req, res, params, q) => {
+  const cid = (q && q.companyId) || giCompanyId();
+  const d = mailDraftsFor(load(), cid).find(x => x.id === params[0]);
+  if (!d) return json(res, { error: 'לא נמצא' }, 404);
+  const f = await getFile(d.fileId);
+  if (!f) return json(res, { error: 'קובץ לא נמצא' }, 404);
+  res.writeHead(200, { 'Content-Type': f.mime || 'application/octet-stream' });
+  res.end(Buffer.from(String(f.data || ''), 'base64'));
+});
+
+// POST /api/mail-scan/drafts/:id/reject?companyId= — דחיית טיוטה (מסתירה + מוחקת את הקובץ)
+add('POST', /^\/api\/mail-scan\/drafts\/([^/]+)\/reject$/, async (req, res, params, q, body) => {
+  const cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
+  const db = load();
+  const d = mailDraftsFor(db, cid).find(x => x.id === params[0]);
+  if (!d) return json(res, { error: 'לא נמצא' }, 404);
+  d.status = 'rejected'; d.rejectedAt = new Date().toISOString();
+  try { await deleteFile(d.fileId); } catch { }
+  save(db);
+  json(res, { ok: true });
 });
 // POST /api/business-profile/file?companyId=&slot= { filename, mime, data(base64), expiry?, label? }
 add('POST', /^\/api\/business-profile\/file$/, async (req, res, _p, q, body) => {
