@@ -1109,7 +1109,8 @@ window.openConsolidateEditor = async (type) => {
   renderDeriveEditor();
 };
 // מסמכי המשך מותרים לפי סוג המקור: הצעה→עסקה/מס/מס-קבלה ; עסקה→מס/מס-קבלה ; מס→קבלה
-const FOLLOWUP_FOR = { 10: [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 300: [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 305: [[400, 'קבלה']] };
+// כללי מסמך-המשך: הצעה→עסקה/מס/מס-קבלה · עסקה→מס/מס-קבלה/קבלה · מס→קבלה (זיכוי נפרד). מס-קבלה/קבלה/זיכוי — אין המשך.
+const FOLLOWUP_FOR = { 10: [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה']], 300: [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']], 305: [[400, 'קבלה']] };
 // שכפול — אפשר לבחור כל סוג (כולל הצעת מחיר)
 const DUPLICATE_TYPES = [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה'], [10, 'הצעת מחיר']];
 // הערות למסמך המשך: שורת התייחסות למסמך המקור בלבד. פרטי הבנק מגיעים מ"הערה קבועה" של העסק (נוספת בשרת לכל מסמך).
@@ -1647,7 +1648,14 @@ window.doCredit = async (id, srcType) => {
     if (st) st.innerHTML = `<span style="color:var(--accent2)">${parts.join(' · ')} · מוריד קבצים…</span>`;
     autoDownloadDoc(r.credit?.url);
     if (r.negativeReceipt?.url) setTimeout(() => autoDownloadDoc(r.negativeReceipt.url), 900);
-    setTimeout(() => { document.getElementById('creditModal').classList.add('hidden'); if (typeof reloadClientDocs === 'function') reloadClientDocs(); }, 1900);
+    const revN = Array.isArray(r.revertedEvents) ? r.revertedEvents.length : 0;
+    if (st) st.innerHTML = `<span style="color:var(--accent2)">${parts.join(' · ')}${revN ? ` · ${revN} אירוע הוחזר ל״ממתין״` : ''} · מוריד קבצים…</span>`;
+    setTimeout(() => {
+      document.getElementById('creditModal').classList.add('hidden');
+      if (typeof clearApiCache === 'function') clearApiCache();
+      if (state.tab === 'events' || state.tab === 'invoicing') renderCombined($('#content'));
+      else if (typeof reloadClientDocs === 'function') reloadClientDocs();
+    }, 1900);
   } else {
     if (btn) btn.disabled = false;
     if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
@@ -2316,6 +2324,26 @@ function possibleApprovedMatch(p, confList) {
   }
   return null;
 }
+// המסמך הפעיל שממנו מפיקים "מסמך המשך" לאירוע (מס > מס-קבלה > עסקה), אם קיים ופתוח להמשך. null אם אין חשבונית פעילה.
+function followupDocForEvent(e) {
+  const real = (e.linkedDocs || []).filter(d => [300, 305, 320].includes(Number(d.type)) && !d.credited && !d.credit && !d.converted);
+  if (real.length) {
+    let primary = real[0];
+    for (const t of [305, 320, 300]) { const d = real.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+    return { id: primary.id, number: primary.number, type: Number(primary.type), uploaded: !!primary.uploaded };
+  }
+  // תאימות לאחור — אין linkedDocs אך שמורה חשבונית ראשית על האירוע
+  if ([300, 305, 320].includes(Number(e.invoiceType)) && e.invoiceId)
+    return { id: e.invoiceId, number: e.invoiceNumber, type: Number(e.invoiceType), uploaded: false };
+  return null;
+}
+// חשבונית מס/מס-קבלה מקושרת לאירוע שניתן להפיק לה זיכוי (מ-linkedDocs, ובתאימות לאחור גם מ-invoiceType)
+function creditableDocForEvent(e) {
+  const d = (e.linkedDocs || []).find(x => [305, 320].includes(Number(x.type)) && !x.credited && !x.credit);
+  if (d) return { id: d.id, number: d.number, type: Number(d.type) };
+  if ([305, 320].includes(Number(e.invoiceType)) && e.invoiceId) return { id: e.invoiceId, number: e.invoiceNumber, type: Number(e.invoiceType) };
+  return null;
+}
 function rowEvent(e) {
   // אישור נעשה רק דרך העריכה (כדי לוודא פרטים) — בשורה לא מאושרת יש כפתור שפותח עריכה
   const confBtn = e.confirmed
@@ -2337,7 +2365,17 @@ function rowEvent(e) {
     <td>${invoiceCell(e)}</td>
     <td>${confBtn}</td>
     <td>${e.confirmed
-      ? `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button><button class="btn ghost" style="padding:4px 10px;font-size:12px" title="שכפול אירוע — עותק חדש ב״אירועים לאישור״ לחיוב עצמאי (למשל ללקוח אחר)" onclick="duplicateEventRow('${e.id}')">⧉ שכפול</button><button class="btn ghost" style="padding:4px 10px;font-size:12px;color:var(--accent2)" title="הפקת מסמך חדש לאירוע (חשבונית מס / עסקה / מס-קבלה) — שימושי אחרי זיכוי שהחזיר את האירוע ל״ממתין״" onclick="eventProduceDoc('${e.id}')">📄 מסמך המשך</button></div>`
+      ? `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button><button class="btn ghost" style="padding:4px 10px;font-size:12px" title="שכפול אירוע — עותק חדש ב״אירועים לאישור״ לחיוב עצמאי (למשל ללקוח אחר)" onclick="duplicateEventRow('${e.id}')">⧉ שכפול</button>${(() => {
+        const fu = followupDocForEvent(e);
+        if (fu) {
+          // יש חשבונית מקושרת — מסמך המשך לפי הכללים בלבד (מס→קבלה · עסקה→מס/מס-קבלה/קבלה). מס-קבלה/קבלה — אין המשך (רק זיכוי).
+          if (FOLLOWUP_FOR[fu.type] && FOLLOWUP_FOR[fu.type].length)
+            return `<button class="btn ghost" style="padding:4px 10px;font-size:12px;color:var(--accent2)" title="מסמך המשך לחשבונית ${SHORT_BILL[fu.type] || ''} #${escAttr(String(fu.number || ''))} — לפי הכללים" onclick="eventFollowupDoc('${e.id}','${fu.id}','${escAttr(String(fu.number || ''))}',${fu.type},${fu.uploaded ? 1 : 0})">📄 מסמך המשך</button>`;
+          return '';
+        }
+        // אין חשבונית מקושרת (ממתין / אחרי זיכוי) — הפקת מסמך ראשון לאירוע
+        return `<button class="btn ghost" style="padding:4px 10px;font-size:12px;color:var(--accent2)" title="הפקת מסמך ראשון לאירוע (עסקה / מס / מס-קבלה)" onclick="eventProduceDoc('${e.id}')">📄 הפק מסמך</button>`;
+      })()}${(() => { const cd = creditableDocForEvent(e); return cd ? `<button class="btn ghost" style="padding:4px 10px;font-size:12px;color:var(--danger)" title="הפקת זיכוי לחשבונית ${SHORT_BILL[cd.type] || ''} #${escAttr(String(cd.number || ''))} — יחזיר את האירוע ל״ממתין״ להפקה מחדש" onclick="openCreditModal('${cd.id}','${escAttr(String(cd.number || ''))}',${cd.type})">⊖ זיכוי</button>` : ''; })()}</div>`
       : `<button class="btn ghost" style="padding:4px 11px;font-size:12px;color:var(--danger)" onclick="deleteEventRow('${e.id}')">🗑 מחק</button>`}</td></tr>`;
 }
 
@@ -3144,6 +3182,11 @@ async function _invPreviewForIds(ids, client, clientId) {
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
   return _invPreviewForIds(ids, decodeURIComponent(clientEnc || ''), clientId);
+};
+// מסמך המשך לאירוע לפי הכללים (מס→קבלה · עסקה→מס/מס-קבלה/קבלה). מקושר אוטומטית לאירוע. חוסם הפקת סוג לא-חוקי.
+window.eventFollowupDoc = (eventId, docId, number, type, uploaded) => {
+  window._deriveEventLink = uploaded ? null : (eventId || null); // מסמך שהועלה — הקישור נעשה בשרת
+  openDerive(docId, number, Number(type), 'followup');
 };
 // הפקת מסמך חדש לאירוע בודד ישירות משורת האירוע (למשל אחרי זיכוי שהחזיר אירוע ל"ממתין")
 window.eventProduceDoc = async (eventId) => {
