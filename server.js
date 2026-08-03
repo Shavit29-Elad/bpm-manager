@@ -2687,6 +2687,50 @@ async function runMailScanFull(cid, since, maxBatches = 400) {
   }
   return tot;
 }
+// ניקוי כפילויות: אחרי הקליטה, מוחק טיוטות הוצאה שכבר קיימות במערכת (הוצאה שנקלטה / רשומה קיימת) — לפי מספר+סכום.
+// טיוטה בלי מספר (OCR עוד לא הסתיים) לעולם לא נמחקת. פר-חברה (withCompany).
+async function dedupeCompanyDrafts(cid, fromDate) {
+  return await greenInvoice.withCompany(cid, async () => {
+    let deleted = 0;
+    try {
+      greenInvoice.clearDataCache();
+      const drafts = await greenInvoice.expenseDrafts();
+      if (!drafts || !drafts.length) return 0;
+      const today = new Date().toISOString().slice(0, 10);
+      let expenses = [];
+      try { expenses = await greenInvoice.expensesInRange(fromDate || '2026-01-01', today); } catch { }
+      const nrm = (s) => String(s == null ? '' : s).replace(/\s+/g, '').replace(/^0+/, '').toLowerCase();
+      const amtEq = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) < 1;
+      // מסמכים שכבר קיימים במערכת: הוצאות בפועל בחשבונית ירוקה + רשומות ספקים מקומיות (כולל שהותאמו בבנק)
+      const existing = [];
+      for (const e of (expenses || [])) if (e.number) existing.push({ num: nrm(e.number), amt: Number(e.amount) || 0 });
+      const db = load();
+      for (const p of (db.supplierPayables || []).filter(x => (x.companyId || giCompanyId()) === cid)) if (p.number) existing.push({ num: nrm(p.number), amt: Number(p.amount) || 0 });
+      const seenDraft = new Set();
+      for (const d of drafts) {
+        const num = nrm(d.number);
+        if (!num) continue; // אין מספר עדיין — לא נוגעים
+        const amt = d.amount != null ? Number(d.amount) : null;
+        const isDupExisting = existing.some(x => x.num === num && (amt == null || amtEq(x.amt, amt)));
+        const dk = num + '|' + (amt != null ? Math.round(amt) : 'x');
+        const isDupDraft = seenDraft.has(dk);
+        if (isDupExisting || isDupDraft) {
+          try { await greenInvoice.deleteExpenseDraft(d.id); deleted++; }
+          catch { /* ה-API אולי לא תומך במחיקה — מדלגים */ }
+        } else { seenDraft.add(dk); }
+      }
+    } catch (e) { console.error(`[mail-dedupe] ${cid} נכשל:`, e.message); }
+    return deleted;
+  });
+}
+// POST /api/mail-scan/dedupe?companyId= { since? } — ניקוי כפילויות ידני לחברה
+add('POST', /^\/api\/mail-scan\/dedupe$/, async (req, res, _p, q, body) => {
+  const cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
+  const from = (body && body.since) || (load().mailAutoScan && load().mailAutoScan.since) || '2026-01-01';
+  const deleted = await dedupeCompanyDrafts(cid, from);
+  json(res, { ok: true, deleted });
+});
+
 let _nightlyMailRunning = false;
 async function runNightlyMailScan(sinceOverride) {
   if (_nightlyMailRunning) return { skipped: 'כבר רץ' };
@@ -2701,6 +2745,8 @@ async function runNightlyMailScan(sinceOverride) {
       if (!creds.user || !creds.pass) { per[cid] = { skipped: 'אין חשבון מייל' }; continue; }
       try { per[cid] = await runMailScanFull(cid, since); }
       catch (e) { per[cid] = { error: e.message }; }
+      // אחרי הקליטה — ניקוי כפילויות מול מסמכים שכבר קיימים במערכת (פר-חברה)
+      try { const del = await dedupeCompanyDrafts(cid, since); if (per[cid] && typeof per[cid] === 'object') per[cid].dupsDeleted = del; } catch { }
       try { console.log(`[mail-nightly] ${cid}:`, JSON.stringify(per[cid])); } catch { }
     }
     const db2 = load();
