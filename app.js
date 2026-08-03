@@ -5357,6 +5357,16 @@ window.scanMailNow = async () => {
     if (!r.ok) { setProg(`<span style="color:var(--danger)">שגיאה: ${escapeHtml(r.error || '')}</span>`); enableBtn(); return; }
     up += (r.uploaded || 0); rec += (r.recorded || 0); dup += (r.duplicates || 0);
     done = !!r.done || r.remaining === 0;
+    // רענון מצטבר — הכרטיסים החדשים מופיעים תוך כדי הסריקה (לא רק בסוף). מרעננים רק אם עלה משהו באצווה.
+    if ((r.uploaded || 0) > 0 && state.company === scanCid && state.tab === 'contractors') {
+      try {
+        const dr = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
+        _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
+        const panel = document.getElementById('draftsPanel');
+        if (panel) { panel.innerHTML = draftsSection(); kickDraftsAi(); }
+      } catch { }
+      const b = document.getElementById('mailScanBtn'); if (b) b.disabled = true; // הכפתור נבנה מחדש עם הפאנל — משביתים שוב עד סוף הסריקה
+    }
   }
   enableBtn();
   if (stopped) return; // עברת חברה — האצווה שרצה נשמרה בשרת; בפעם הבאה שתסרוק תמשיך מאיפה שנעצר
