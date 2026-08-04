@@ -5221,10 +5221,16 @@ window.printJobsReport = () => {
 
 // ===== ייצוא/שליחת פירוט עבודות לכל עובד (PDF נפרד) =====
 // טוען html2canvas + jsPDF פעם אחת (רק כשצריך), כדי לא להעמיס על טעינת הדף.
-function _loadScriptOnce(src) {
+function _loadScriptOnce(src, tries = 2) {
   return new Promise((res, rej) => {
-    if ([...document.scripts].some(s => s.src === src)) return res();
-    const s = document.createElement('script'); s.src = src; s.onload = () => res(); s.onerror = () => rej(new Error('טעינת ספרייה נכשלה')); document.head.appendChild(s);
+    // אם כבר נטען בהצלחה (האובייקט קיים) — לא טוענים שוב
+    const attempt = (n) => {
+      const s = document.createElement('script'); s.src = src;
+      s.onload = () => res();
+      s.onerror = () => { s.remove(); if (n > 1) setTimeout(() => attempt(n - 1), 400); else rej(new Error('טעינת ספרייה נכשלה')); };
+      document.head.appendChild(s);
+    };
+    attempt(Math.max(1, tries));
   });
 }
 async function _ensurePdfLibs() {
@@ -5272,22 +5278,25 @@ async function _htmlToPdfBlob(innerHtml) {
   holder.innerHTML = innerHtml;
   document.body.appendChild(holder);
   let canvas;
-  try { canvas = await window.html2canvas(holder, { scale: 2, backgroundColor: '#ffffff' }); }
+  // scale 1.5 + JPEG דחוס => קובץ קטן משמעותית (מתחת למגבלת 25MB של Gmail גם לכמה עובדים)
+  try { canvas = await window.html2canvas(holder, { scale: 1.5, backgroundColor: '#ffffff' }); }
   finally { document.body.removeChild(holder); }
   const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pdf = new jsPDF({ unit: 'pt', format: 'a4', compress: true });
+  const JPEG_Q = 0.7;
   const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
   const margin = 20, imgWpt = pw - margin * 2, scale = imgWpt / canvas.width, pageH = ph - margin * 2;
   const imgHpt = canvas.height * scale;
-  if (imgHpt <= pageH) { pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, imgWpt, imgHpt); }
+  if (imgHpt <= pageH) { pdf.addImage(canvas.toDataURL('image/jpeg', JPEG_Q), 'JPEG', margin, margin, imgWpt, imgHpt); }
   else {
     const pagePx = Math.floor(pageH / scale); let sPos = 0, first = true;
     while (sPos < canvas.height) {
       const sliceH = Math.min(pagePx, canvas.height - sPos);
       const c2 = document.createElement('canvas'); c2.width = canvas.width; c2.height = sliceH;
-      c2.getContext('2d').drawImage(canvas, 0, sPos, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+      const ctx = c2.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c2.width, c2.height);
+      ctx.drawImage(canvas, 0, sPos, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
       if (!first) pdf.addPage();
-      pdf.addImage(c2.toDataURL('image/png'), 'PNG', margin, margin, imgWpt, sliceH * scale);
+      pdf.addImage(c2.toDataURL('image/jpeg', JPEG_Q), 'JPEG', margin, margin, imgWpt, sliceH * scale);
       sPos += sliceH; first = false;
     }
   }
@@ -5303,12 +5312,13 @@ async function _buildEmployeePdfs(month, prog) {
     const p = list[i];
     const emp = emps.find(e => e.name === p.name);
     if (!emp) continue;
-    if (prog) prog(`מכין PDF… ${i + 1}/${list.length} (${p.name})`);
+    const fullName = [p.name, emp.lastName].map(x => String(x || '').trim()).filter(Boolean).join(' ') || p.name;
+    if (prog) prog(`מכין PDF… ${i + 1}/${list.length} (${fullName})`);
     const jobs = await api(`/api/employees/${emp.id}/jobs?month=${month}`).catch(() => null);
-    const rep = _reportFromJobs(emp, jobs, month, p.name);
+    const rep = _reportFromJobs(emp, jobs, month, fullName);
     if (!rep.rows.length) continue;
     const blob = await _htmlToPdfBlob(_reportHtmlStatic(rep));
-    out.push({ name: p.name, filename: `${p.name} - פירוט עבודות חודש ${monthLabelFromKey(month)}.pdf`, blob });
+    out.push({ name: fullName, filename: `${fullName} - פירוט עבודות חודש ${monthLabelFromKey(month)}.pdf`, blob });
   }
   return out;
 }

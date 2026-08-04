@@ -1924,6 +1924,8 @@ add('POST', /^\/api\/payroll\/send-report$/, async (req, res, _p, q, body) => {
     contentType: 'application/pdf',
   })).filter(a => a.content && a.content.length);
   if (!attachments.length) return json(res, { error: 'הקבצים ריקים.' }, 400);
+  const totalBytes = attachments.reduce((s, a) => s + a.content.length, 0);
+  if (totalBytes > 23 * 1024 * 1024) return json(res, { error: `הקבצים כבדים מדי לשליחה במייל (${Math.round(totalBytes / 1048576)}MB, המגבלה ~25MB). נסה לשלוח פחות עובדים בבת אחת או פנה אליי.` }, 413);
   try {
     await mailer.sendMailFrom(creds, { to, subject, text, attachments });
     json(res, { ok: true, to, count: attachments.length, subject });
