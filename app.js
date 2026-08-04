@@ -5104,11 +5104,13 @@ const dmy = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2
 let _report = null;
 function openEmpJobsModal(name, r) {
   const emp = r.employee || {};
+  // שם מלא: פרטי + משפחה (אם קיים) — לתצוגה בכותרת הדוח ובקובץ
+  const fullName = [name, emp.lastName].map(x => String(x || '').trim()).filter(Boolean).join(' ') || name;
   const shifts = (r.pay && r.pay.shifts) || [];
   const allManual = (emp.manualLines && typeof emp.manualLines === 'object') ? JSON.parse(JSON.stringify(emp.manualLines)) : {};
   const monthManual = Array.isArray(allManual[state.payMonth]) ? allManual[state.payMonth] : [];
   _report = {
-    empId: emp.id, empName: name, month: state.payMonth,
+    empId: emp.id, empName: fullName, month: state.payMonth,
     salaryType: emp.salaryType || 'gross',
     empTravel: Number(emp.travel) || 0,
     allManual,
@@ -5121,7 +5123,7 @@ function openEmpJobsModal(name, r) {
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:90vh;overflow:auto">
     <div class="row-between" style="align-items:center">
-      <div><h3 style="margin:0">${escapeHtml(name)}</h3><span class="muted" style="font-size:13.5px">דוח עבודות · ${monthLabelFromKey(_report.month)} · ${_report.salaryType === 'net' ? 'נטו' : 'ברוטו'} · לחיצה על תא לעריכה</span></div>
+      <div><h3 style="margin:0">${escapeHtml(fullName)}</h3><span class="muted" style="font-size:13.5px">דוח עבודות · ${monthLabelFromKey(_report.month)} · ${_report.salaryType === 'net' ? 'נטו' : 'ברוטו'} · לחיצה על תא לעריכה</span></div>
       <div style="display:flex;gap:8px">
         <button class="btn ghost" style="padding:6px 13px" onclick="addManualLine()">+ הוסף שורה ידנית</button>
         <button class="btn ghost" style="padding:6px 13px" onclick="printJobsReport()">🖨 הדפס / PDF</button>
@@ -5412,6 +5414,8 @@ async function renderPayroll(c) {
   ]);
   window._payEmps = emps;
   const tot = (k) => list.reduce((s, e) => s + (e[k] || 0), 0);
+  // שם מלא (פרטי + משפחה) לפי רשומת העובד — לתצוגה בטבלה ובמודל
+  const fullNameOf = (first) => { const emp = emps.find(x => x.name === first); const ln = emp && emp.lastName ? String(emp.lastName).trim() : ''; return ln ? `${first} ${ln}` : first; };
   c.innerHTML = `
     <div class="panel">
       <div class="warn-banner">מסך פנימי — נתוני שכר של עובד אינם נחשפים לעובדים אחרים.</div>
@@ -5422,7 +5426,7 @@ async function renderPayroll(c) {
         <span class="muted" style="font-size:11.5px;align-self:center">PDF נפרד לכל עובד לחודש ${monthLabelFromKey(month)} · הכתובת נקבעת ב"פרטי העסק"</span>
       </div>` : ''}
       ${list.length ? `<div style="overflow-x:auto"><table style="min-width:680px"><thead><tr><th>עובד</th><th>שכר בסיס</th><th>משמרות</th><th>בסיס מצטבר</th><th>בונוס</th><th>סה"כ לתשלום</th></tr></thead>
-        <tbody>${list.map(e => `<tr><td><a onclick="empJobsByName('${encodeURIComponent(e.name)}')" style="cursor:pointer;color:var(--accent);font-weight:600">${escapeHtml(e.name)}</a></td><td>${e.baseRate ? money(e.baseRate) : '<span class="muted">—</span>'}</td><td>${e.shifts.length}</td><td>${money(e.base)}</td><td>${money(e.bonus)}</td><td><b>${money(e.total)}</b></td></tr>`).join('')}
+        <tbody>${list.map(e => `<tr><td><a onclick="empJobsByName('${encodeURIComponent(e.name)}')" style="cursor:pointer;color:var(--accent);font-weight:600">${escapeHtml(fullNameOf(e.name))}</a></td><td>${e.baseRate ? money(e.baseRate) : '<span class="muted">—</span>'}</td><td>${e.shifts.length}</td><td>${money(e.base)}</td><td>${money(e.bonus)}</td><td><b>${money(e.total)}</b></td></tr>`).join('')}
         <tr style="border-top:2px solid var(--line)"><td colspan="3"><b>סה"כ</b></td><td><b>${money(tot('base'))}</b></td><td><b>${money(tot('bonus'))}</b></td><td><b style="color:var(--accent)">${money(tot('total'))}</b></td></tr>
         </tbody></table></div>` : `<div class="empty">אין נתוני שכר לחודש זה. שייך עובדים לאירועים והגדר שכר בסיס למטה.</div>`}
     </div>
