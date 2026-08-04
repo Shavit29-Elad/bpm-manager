@@ -314,16 +314,30 @@ async function callGeminiVision(system, prompt, fileBase64, mime, { maxTokens = 
     contents: [{ role: 'user', parts: [{ inline_data: { mime_type: mime || 'application/pdf', data: fileBase64 } }, { text: prompt }] }],
     generationConfig: { maxOutputTokens: maxTokens, temperature: 0 },
   });
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   let lastErr = '';
   for (const model of candidates) {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body,
-    });
-    const text = await res.text();
-    if (res.status === 404 || res.status === 429) { lastErr = `(${res.status})`; continue; }
-    if (!res.ok) throw new Error(`שגיאת AI (${res.status}): ${text.slice(0, 300)}`);
-    let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מ-AI'); }
-    return (data.candidates?.[0]?.content?.parts || []).map(p => p.text).filter(Boolean).join('');
+    for (let attempt = 0; attempt < 6; attempt++) {
+      let res, text;
+      try {
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body,
+        });
+        text = await res.text();
+      } catch (e) { lastErr = 'network: ' + e.message; await sleep(2000 * (attempt + 1)); continue; }
+      if (res.status === 404) { lastErr = '(404)'; break; } // מודל לא קיים — למודל הבא
+      // 429 = חריגה ממגבלת קצב (Gemini free). ממתין וניסיון חוזר (מכבד retryDelay אם מוחזר).
+      if (res.status === 429 || res.status === 503 || res.status === 500) {
+        let wait = Math.min(60000, 5000 * Math.pow(2, attempt));
+        const m = String(text).match(/"retryDelay"\s*:\s*"(\d+)s"/); if (m) wait = Math.max(wait, (Number(m[1]) + 1) * 1000);
+        lastErr = `(${res.status}) rate`;
+        await sleep(wait);
+        continue;
+      }
+      if (!res.ok) throw new Error(`שגיאת AI (${res.status}): ${text.slice(0, 300)}`);
+      let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מ-AI'); }
+      return (data.candidates?.[0]?.content?.parts || []).map(p => p.text).filter(Boolean).join('');
+    }
   }
   throw new Error(`אף מודל Gemini זמין לקריאת מסמכים. פרט: ${lastErr}`);
 }
