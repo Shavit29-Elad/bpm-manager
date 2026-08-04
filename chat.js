@@ -258,18 +258,32 @@ async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = 
   const candidates = process.env.VISION_MODEL
     ? [process.env.VISION_MODEL]
     : ['claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-latest'];
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   let lastErr = '';
   for (const model of candidates) {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'pdfs-2024-09-25', 'content-type': 'application/json' },
-      body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: contentBlocks }] }),
-    });
-    const text = await res.text();
-    if (res.status === 404) { lastErr = `(404) ${text.slice(0, 120)}`; continue; }
-    if (!res.ok) throw new Error(`שגיאת AI (${res.status}): ${text.slice(0, 300)}`);
-    let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מ-AI'); }
-    return (data.content || []).map(c => c.text).filter(Boolean).join('');
+    for (let attempt = 0; attempt < 6; attempt++) {
+      let res, text;
+      try {
+        res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'pdfs-2024-09-25', 'content-type': 'application/json' },
+          body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: contentBlocks }] }),
+        });
+        text = await res.text();
+      } catch (e) { lastErr = 'network: ' + e.message; await sleep(1500 * (attempt + 1)); continue; } // שגיאת רשת — ניסיון חוזר
+      if (res.status === 404) { lastErr = `(404) ${text.slice(0, 120)}`; break; } // מודל לא קיים — למודל הבא
+      // הגבלת קצב (429) / עומס (529) / שגיאות שרת זמניות — המתנה עם backoff וניסיון חוזר על אותו מודל
+      if (res.status === 429 || res.status === 529 || res.status === 500 || res.status === 502 || res.status === 503) {
+        const ra = Number(res.headers.get('retry-after'));
+        const wait = (ra > 0 ? ra * 1000 : 0) || Math.min(32000, 2000 * Math.pow(2, attempt));
+        lastErr = `(${res.status}) rate/overload`;
+        await sleep(wait);
+        continue;
+      }
+      if (!res.ok) throw new Error(`שגיאת AI (${res.status}): ${text.slice(0, 300)}`);
+      let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מ-AI'); }
+      return (data.content || []).map(c => c.text).filter(Boolean).join('');
+    }
   }
   throw new Error(`אף מודל Claude זמין לקריאת מסמכים. פרט: ${lastErr}`);
 }
