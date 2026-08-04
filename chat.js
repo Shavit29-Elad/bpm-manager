@@ -287,6 +287,24 @@ async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = 
   }
   throw new Error(`אף מודל Claude זמין לקריאת מסמכים. פרט: ${lastErr}`);
 }
+// חילוץ ראייתי עם גיבוי אוטומטי: מנסה Claude (אם יש מפתח); אם נכשל (למשל מכסה/קרדיט נגמר) — עובר ל-Gemini (אם יש מפתח).
+async function visionExtract(system, prompt, fileBase64, mediaType) {
+  const isPdf = mediaType === 'application/pdf';
+  const block = isPdf
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
+    : { type: 'image', source: { type: 'base64', media_type: mediaType, data: fileBase64 } };
+  const hasA = !!process.env.ANTHROPIC_API_KEY, hasG = !!process.env.GEMINI_API_KEY;
+  if (hasA) {
+    try { return await callAnthropicVision(system, [block, { type: 'text', text: prompt }]); }
+    catch (e) {
+      if (!hasG) throw e;
+      console.error('[vision] Claude נכשל — עובר ל-Gemini:', String(e.message || e).slice(0, 140));
+      return await callGeminiVision(system, prompt, fileBase64, mediaType);
+    }
+  }
+  if (hasG) return await callGeminiVision(system, prompt, fileBase64, mediaType);
+  throw new Error('AI לא מוגדר (חסר ANTHROPIC_API_KEY או GEMINI_API_KEY)');
+}
 // קריאה מולטימודלית ל-Gemini (גיבוי)
 async function callGeminiVision(system, prompt, fileBase64, mime, { maxTokens = 900 } = {}) {
   const key = process.env.GEMINI_API_KEY;
@@ -350,15 +368,7 @@ export async function extractInvoiceFields(fileBase64, mime, suppliers = []) {
 ${supList || '(אין)'}`;
 
   let raw;
-  if (process.env.ANTHROPIC_API_KEY) {
-    const isPdf = mediaType === 'application/pdf';
-    const block = isPdf
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
-      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: fileBase64 } };
-    raw = await callAnthropicVision(system, [block, { type: 'text', text: prompt }]);
-  } else {
-    raw = await callGeminiVision(system, prompt, fileBase64, mediaType);
-  }
+  raw = await visionExtract(system, prompt, fileBase64, mediaType);
   const jsonStr = (String(raw).replace(/```json/gi, '').replace(/```/g, '').match(/\{[\s\S]*\}/) || ['{}'])[0];
   let out; try { out = JSON.parse(jsonStr); } catch { throw new Error('ה-AI לא החזיר נתונים תקינים'); }
   const num = (v) => { const n = +String(v == null ? '' : v).replace(/[^\d.\-]/g, ''); return isNaN(n) ? 0 : n; };
@@ -409,15 +419,7 @@ export async function extractIncomeDocFields(fileBase64, mime, clients = []) {
 ${cliList || '(אין)'}`;
 
   let raw;
-  if (process.env.ANTHROPIC_API_KEY) {
-    const isPdf = mediaType === 'application/pdf';
-    const block = isPdf
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
-      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: fileBase64 } };
-    raw = await callAnthropicVision(system, [block, { type: 'text', text: prompt }]);
-  } else {
-    raw = await callGeminiVision(system, prompt, fileBase64, mediaType);
-  }
+  raw = await visionExtract(system, prompt, fileBase64, mediaType);
   const jsonStr = (String(raw).replace(/```json/gi, '').replace(/```/g, '').match(/\{[\s\S]*\}/) || ['{}'])[0];
   let out; try { out = JSON.parse(jsonStr); } catch { throw new Error('ה-AI לא החזיר נתונים תקינים'); }
   const num = (v) => { const n = +String(v == null ? '' : v).replace(/[^\d.\-]/g, ''); return isNaN(n) ? 0 : n; };
@@ -456,15 +458,7 @@ export async function classifyExpenseAttachment(fileBase64, mime, suppliers = []
 רשימת ספקים קיימים (id<TAB>שם | ח.פ):
 ${supList || '(אין)'}`;
   let raw;
-  if (process.env.ANTHROPIC_API_KEY) {
-    const isPdf = mediaType === 'application/pdf';
-    const block = isPdf
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
-      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: fileBase64 } };
-    raw = await callAnthropicVision(system, [block, { type: 'text', text: prompt }]);
-  } else {
-    raw = await callGeminiVision(system, prompt, fileBase64, mediaType);
-  }
+  raw = await visionExtract(system, prompt, fileBase64, mediaType);
   const jsonStr = (String(raw).replace(/```json/gi, '').replace(/```/g, '').match(/\{[\s\S]*\}/) || ['{}'])[0];
   let out; try { out = JSON.parse(jsonStr); } catch { return { isFinancialDoc: false, documentType: 0, route: 'skip' }; }
   const numF = (v) => { const n = +String(v == null ? '' : v).replace(/[^\d.\-]/g, ''); return isNaN(n) ? 0 : n; };
