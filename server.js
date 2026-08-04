@@ -1846,7 +1846,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
       const _ucid = _cid || giCompanyId();
       const body = mailBodyFor(_db, _ucid, { clientName: '', num: '', docType: 'מסמך' });
       const subj = mailSubjectFor(_db, _ucid, { clientName: '', num: '', docType: 'מסמך' });
-      await mailer.sendMailFrom(creds, { to: emailsIn, subject: subj, text: body, attachments: [{ filename: f.filename || 'document.pdf', content }] });
+      await mailer.sendMailFrom(creds, { to: emailsIn, subject: subj, text: body, html: htmlBodyWithSig(_db, _ucid, body), attachments: [{ filename: f.filename || 'document.pdf', content }] });
       return json(res, { ok: true, sentTo: emailsIn, uploaded: true });
     }
   } catch {}
@@ -1869,10 +1869,11 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
     const docTypeHe = DOC_NAMES_HE[Number(docMeta && docMeta.type)] || 'מסמך';
     const subject = mailSubjectFor(_db, _mcid, { clientName, num, docType: docTypeHe });
     const text = mailBodyFor(_db, _mcid, { clientName, num, docType: docTypeHe });
+    const htmlBody = htmlBodyWithSig(_db, _mcid, text);   // גוף RTL + חתימת החברה
     const pdfAttach = async () => { const pdf = await greenInvoice.getDocumentPdf(params[0]); return [{ filename: `document-${String(num || params[0]).replace(/[^\w.-]/g, '_')}.pdf`, content: Buffer.from(pdf.base64, 'base64') }]; };
     // אם לחברה יש חשבון מייל משלה (Gmail) — שולחים ממנו ישירות (המייל יוצא מהתיבה של החברה), עם ה-PDF מצורף
     if (mailer.companyMailConfigured(creds)) {
-      await mailer.sendMailFrom(creds, { to: emails, subject, text, attachments: await pdfAttach() });
+      await mailer.sendMailFrom(creds, { to: emails, subject, text, html: htmlBody, attachments: await pdfAttach() });
       return json(res, { ok: true, sentTo: emails, viaCompanyMail: true });
     }
     // אחרת: ניסיון שליחה ישירה דרך חשבונית ירוקה; אם נכשל — חשבון SMTP כללי (עם שם החברה)
@@ -1881,7 +1882,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
       return json(res, { ok: true, sentTo: emails, result: r });
     } catch (giErr) {
       if (!mailer.mailerConfigured()) return json(res, { error: `שליחה דרך חשבונית ירוקה נכשלה (${giErr.message}) — ולחברה זו אין חשבון מייל מוגדר. הגדר חשבון מייל בפרטי העסק.` }, 502);
-      await mailer.sendMailFrom(creds, { to: emails, subject, text, attachments: await pdfAttach() });
+      await mailer.sendMailFrom(creds, { to: emails, subject, text, html: htmlBody, attachments: await pdfAttach() });
       return json(res, { ok: true, sentTo: emails, viaSmtp: true });
     }
   } catch (e) { json(res, { error: e.message }, 500); }
@@ -1935,6 +1936,27 @@ add('POST', /^\/api\/payroll\/send-report$/, async (req, res, _p, q, body) => {
   try {
     await mailer.sendMailFrom(creds, { to, subject, text, html, attachments });
     json(res, { ok: true, to, count: attachments.length, subject });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/email/test-signature?companyId= { to } — מייל דוגמה (גוף RTL + חתימת החברה), לבדיקה
+add('POST', /^\/api\/email\/test-signature$/, async (req, res, _p, q, body) => {
+  const b = body || {};
+  const cid = (q && q.companyId) || b.companyId || giCompanyId();
+  const to = String(b.to || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return json(res, { error: 'כתובת מייל לא תקינה' }, 400);
+  const db = load();
+  const p = bizProfile(db, cid);
+  const comp = (db.companies || []).find(c => c.id === cid);
+  const companyName = (p.name || (comp && comp.name) || '').trim();
+  const creds = companyMailCreds(db, cid);
+  if (!mailer.companyMailConfigured(creds) && !mailer.mailerConfigured()) return json(res, { error: 'לחברה זו אין חשבון מייל מוגדר' }, 400);
+  const subject = `דוגמת מייל — ${companyName}`;
+  const text = `היי מה נשמע?\nזהו מייל דוגמה לבדיקת החתימה והיישור לימין (RTL).`;
+  const html = htmlBodyWithSig(db, cid, text);
+  try {
+    await mailer.sendMailFrom(creds, { to, subject, text, html });
+    json(res, { ok: true, to, company: companyName, from: creds.user || '(default)', hasSignature: !!emailSigHtml(db, cid) });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -2588,6 +2610,18 @@ function mailSubjectFor(db, cid, opts = {}) {
   const tpl = String(p.mailSubjectTemplate || '').trim();
   if (tpl) return renderMailTokens(tpl, v);
   return [v.company, v.docType, v.num ? "מס' " + v.num : ''].filter(Boolean).join(' | ');
+}
+// חתימת המייל (HTML) של החברה — מוגדרת בפרטי העסק. ריק = אין חתימה.
+function emailSigHtml(db, cid) { return String(bizProfile(db, cid).emailSignature || '').trim(); }
+// עוטף גוף מייל טקסטואלי כ-HTML מיושר לימין (עברית) ומוסיף את חתימת החברה בתחתית. משמש בכל המיילים היוצאים.
+function htmlBodyWithSig(db, cid, textBody) {
+  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const bodyHtml = esc(textBody).replace(/\n/g, '<br>');
+  const sig = emailSigHtml(db, cid);
+  return `<div dir="rtl" style="text-align:right;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1c2333">`
+    + bodyHtml
+    + (sig ? `<br><br><div dir="rtl" style="text-align:right">${sig}</div>` : '')
+    + `</div>`;
 }
 // GET /api/business-profile?companyId=  (הסיסמה לא מוחזרת לצד לקוח — רק חיווי אם מוגדרת)
 add('GET', /^\/api\/business-profile$/, (req, res, _p, q) => {
