@@ -2705,9 +2705,12 @@ add('POST', /^\/api\/mail-scan\/test$/, async (req, res, _p, q, body) => {
 // ===== סורק מייל → טיוטות הוצאה/רישום לאישור =====
 function mailScanState(db, cid) {
   db.mailScan = db.mailScan || {};
-  if (!db.mailScan[cid]) db.mailScan[cid] = { seenUids: [], lastScanAt: null, since: null };
+  if (!db.mailScan[cid]) db.mailScan[cid] = { seenUids: [], lastScanAt: null, since: null, uploadedHashes: [] };
+  if (!Array.isArray(db.mailScan[cid].uploadedHashes)) db.mailScan[cid].uploadedHashes = []; // טביעות אצבע של קבצים שכבר הועלו — לא מעלים אותו קובץ פעמיים
   return db.mailScan[cid];
 }
+// טביעת אצבע יציבה של תוכן הקובץ (לא תלויה ב-AI) — מזהה את אותו מסמך בדיוק גם בין הרצות
+function _fileHash(base64) { try { return crypto.createHash('sha1').update(String(base64 || '')).digest('hex'); } catch { return ''; } }
 
 // אצווה אחת של סריקת מייל לחברה — לוגיקה משותפת ל-endpoint הידני ולסריקה הלילית האוטומטית.
 // רצה בהקשר החברה (withCompany) כך שכל קריאות חשבונית ירוקה מכוונות לחברה הנכונה בלבד.
@@ -2727,26 +2730,53 @@ async function mailScanBatchFor(cid, since, limit) {
     const existing = [];
     for (const p of (db0.supplierPayables || []).filter(x => (x.companyId || giCompanyId()) === cid)) if (p.number) existing.push({ num: nrm(p.number), amt: Number(p.amount) || 0, sup: nrm(p.supplierName) });
     try { for (const d of (await greenInvoice.expenseDrafts())) if (d.number) existing.push({ num: nrm(d.number), amt: Number(d.amount) || 0, sup: nrm(d.supplierName) }); } catch { }
+    // גם הוצאות שכבר אושרו (לא רק טיוטות) — כדי לא להעלות שוב מסמך שכבר נקלט ואושר במערכת
+    try { const _to = new Date().toISOString().slice(0, 10); for (const e of (await greenInvoice.expensesInRange(since, _to))) if (e.number) existing.push({ num: nrm(e.number), amt: Number(e.amount) || 0, sup: nrm(e.supplierName) }); } catch { }
     const isExisting = (ai) => {
       const num = nrm(ai.invoiceNumber), amt = ai.amountInclVat, sup = nrm(ai.supplierName);
       return existing.some(x => (num && x.num === num && (amt == null || _amtEq(x.amt, amt))) || (amt != null && _amtEq(x.amt, amt) && sup && x.sup && x.sup === sup));
     };
-    let uploaded = 0, recorded = 0, duplicates = 0, skipped = 0, errors = 0, links = 0;
-    const erroredUids = new Set();               // הודעות שנכשלו — לא נסמן כ"נסרקו" כדי שינוסו שוב בהרצה הבאה
+    let uploaded = 0, recorded = 0, duplicates = 0, skipped = 0, errors = 0, links = 0, unreadable = 0;
+    const erroredUids = new Set();               // הודעות שנכשלו זמנית — לא נסמן כ"נסרקו" כדי שינוסו שוב בהרצה הבאה
     const db = load();
     const st = mailScanState(db, cid);
+    st.errCounts = st.errCounts || {};           // מונה כשלונות פר-הודעה — כדי להפסיק לנסות מסמכים שנכשלים שוב ושוב
+    const uploadedSet = new Set((st.uploadedHashes || []).map(String)); // קבצים שכבר הועלו (טביעת אצבע של התוכן)
     db.mailRecords = db.mailRecords || {}; db.mailRecords[cid] = db.mailRecords[cid] || [];
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     for (const it of scan.items) {
       if (it.viaLink) links++;
+      // סינון ראשון — לפני ה-AI: אם את הקובץ הזה בדיוק כבר העלינו פעם, מדלגים לגמרי (חוסך גם קריאת AI, מונע כפילות)
+      const h = _fileHash(it.contentBase64);
+      if (h && uploadedSet.has(h)) { duplicates++; continue; }
       let ai;
       try { ai = await classifyExpenseAttachment(it.contentBase64, it.mime, suppliers); }
-      catch (e) { errors++; erroredUids.add(String(it.uid)); console.error(`[mail-scan] ${cid} classify נכשל (uid ${it.uid}):`, String(e.message || e).slice(0, 160)); await sleep(400); continue; }
+      catch (e) {
+        errors++;
+        const msg = String((e && (e.message || e)) || '');
+        // כשל קבוע = מסמך שלא ניתן לקריאה (PDF פגום/ריק) — Claude/Gemini דוחים אותו. אין טעם לנסות שוב.
+        const permanent = /no pages|pdf spec|invalid_request|INVALID_ARGUMENT|unsupported|corrupt|not a valid|לא ניתן|פגום|no models/i.test(msg);
+        // כשל זמני = מגבלת קצב / עומס / רשת — כן לנסות שוב בהרצה הבאה
+        const transient = /429|rate|quota|overload|timeout|ETIMEDOUT|ECONN|network|529|503|502|500/i.test(msg);
+        const uidS = String(it.uid);
+        const cnt = (st.errCounts[uidS] || 0) + 1;
+        if (permanent || (!transient && cnt >= 3)) {
+          // מפסיקים לנסות — נסמן כ"נסרק" (לא נכנס ל-erroredUids) כדי שלא ייכשל שוב ושוב לנצח
+          unreadable++; delete st.errCounts[uidS];
+          if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } // גם לפי טביעת אצבע — שלא ינסה קובץ זהה ממייל אחר
+          console.error(`[mail-scan] ${cid} מסמך לא קריא — מדלגים לצמיתות (uid ${it.uid}): ${msg.slice(0, 120)}`);
+        } else {
+          st.errCounts[uidS] = cnt; erroredUids.add(uidS); // זמני — ננסה שוב
+          console.error(`[mail-scan] ${cid} classify נכשל (uid ${it.uid}, ניסיון ${cnt}):`, msg.slice(0, 140));
+        }
+        await sleep(400); continue;
+      }
+      if (st.errCounts[String(it.uid)]) delete st.errCounts[String(it.uid)]; // הצליח — מאפסים מונה כשלונות
       await sleep(250); // קצב — למנוע חריגה ממגבלת ה-AI
       if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; continue; }
-      if (isExisting(ai)) { duplicates++; continue; } // כבר קיים במערכת (הוצאה/רשומה/טיוטה) — לא מעלים כפילות
+      if (isExisting(ai)) { duplicates++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; } // כבר קיים במערכת — לא מעלים, וגם מסמנים את הקובץ כדי לא לנתח אותו שוב
       if (ai.route === 'expense') {
-        try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; existing.push({ num: nrm(ai.invoiceNumber), amt: Number(ai.amountInclVat) || 0, sup: nrm(ai.supplierName) }); }
+        try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; existing.push({ num: nrm(ai.invoiceNumber), amt: Number(ai.amountInclVat) || 0, sup: nrm(ai.supplierName) }); if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } }
         catch (e) { errors++; erroredUids.add(String(it.uid)); console.error(`[mail-scan] ${cid} העלאה נכשלה (uid ${it.uid}):`, String(e.message || e).slice(0, 160)); }
       } else if (ai.route === 'record') {
         const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-record', filename: it.filename, mime: it.mime, data: it.contentBase64 });
@@ -2759,7 +2789,7 @@ async function mailScanBatchFor(cid, since, limit) {
     (scan.processedUids || []).forEach(u => { const s = String(u); if (!seenUidSet.has(s) && !erroredUids.has(s)) st.seenUids.push(u); });
     st.since = since; st.lastScanAt = new Date().toISOString();
     save(db);
-    return { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, links, remaining: scan.remaining, done: scan.remaining === 0 };
+    return { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, unreadable, links, remaining: scan.remaining, done: scan.remaining === 0 };
   });
 }
 
@@ -2775,14 +2805,14 @@ add('POST', /^\/api\/mail-scan\/run$/, async (req, res, _p, q, body) => {
 // ===== סריקה לילית אוטומטית לכל החברות =====
 // סורק את כל טווח הזמן (מ-since) עד שאין עוד — באצוות קטנות כדי לא להעמיס. seenUids מונע כפילויות בין לילות.
 async function runMailScanFull(cid, since, maxBatches = 400) {
-  const tot = { uploaded: 0, recorded: 0, duplicates: 0, skipped: 0, errors: 0, links: 0, batches: 0 };
+  const tot = { uploaded: 0, recorded: 0, duplicates: 0, skipped: 0, errors: 0, unreadable: 0, links: 0, batches: 0 };
   let done = false, i = 0;
   while (!done && i++ < maxBatches) {
     let r;
     try { r = await mailScanBatchFor(cid, since, 4); } catch { tot.errors++; break; }
     if (!r || !r.ok) break;
     tot.uploaded += r.uploaded || 0; tot.recorded += r.recorded || 0; tot.duplicates += r.duplicates || 0;
-    tot.skipped += r.skipped || 0; tot.errors += r.errors || 0; tot.links += r.links || 0; tot.batches++;
+    tot.skipped += r.skipped || 0; tot.errors += r.errors || 0; tot.unreadable += r.unreadable || 0; tot.links += r.links || 0; tot.batches++;
     done = !!r.done;
   }
   return tot;
