@@ -5590,6 +5590,16 @@ async function renderBusiness(c) {
     <div class="muted" style="font-size:12px;margin-top:8px">כשמאשרים קליטת הוצאה, קובץ החשבונית נשלח אוטומטית לכתובת רו״ח <b>של החברה הזו בלבד</b>. אם ריק — לא נשלח מייל.</div>
 
     <div style="margin-top:16px;padding:14px;border:1px solid #e5e7eb;border-radius:12px;background:#fafafe">
+      <div style="font-weight:700;margin-bottom:2px">🖋️ חתימת מייל / חותמת (פירוט עבודות)</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">מודבקת בתחתית המייל של פירוט העבודות לרו״ח. <b>הדבק כאן את החתימה מה-Gmail שלך</b> (Ctrl+V / Cmd+V) — כולל החותמת/תמונה. המייל נשלח בעברית מיושר לימין.</div>
+      <div id="biz_sig" contenteditable="true" dir="rtl" style="min-height:90px;border:1px solid #d8dced;border-radius:8px;padding:10px;background:#fff;font-size:13px;text-align:right;overflow:auto">${p.emailSignature || ''}</div>
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn ghost" type="button" onclick="document.getElementById('biz_sig').innerHTML=''">נקה חתימה</button>
+        <span class="muted" style="font-size:11.5px">אם התמונה לא מופיעה אצל הנמען — הדבק חותמת כתמונה, או פנה אליי לצרף קובץ חותמת.</span>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;padding:14px;border:1px solid #e5e7eb;border-radius:12px;background:#fafafe">
       <div style="font-weight:700;margin-bottom:2px">📧 חשבון המייל של החברה (שליחה יוצאת)</div>
       <div class="muted" style="font-size:12px;margin-bottom:10px">כל מייל שהמערכת שולחת בחברה זו (מסמכים ללקוחות, העברת הוצאות לרו״ח) ייצא <b>מהתיבה הזו</b>. אם ריק — נשלח מחשבון ברירת המחדל של המערכת.</div>
       <div class="biz-grid">
@@ -5793,7 +5803,7 @@ window.bizSave = async () => {
   const g = (id) => (document.getElementById(id)?.value || '').trim();
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
-    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), senderEmail: g('biz_sender'), payrollEmail: g('biz_payroll'), docRemark: g('biz_docremark'),
+    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), senderEmail: g('biz_sender'), payrollEmail: g('biz_payroll'), emailSignature: (document.getElementById('biz_sig')?.innerHTML || ''), docRemark: g('biz_docremark'),
     mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'), mailBodyTemplate: (document.getElementById('biz_mailBody')?.value || ''), mailSubjectTemplate: (document.getElementById('biz_mailSubject')?.value || ''),
     withholdingPct: Number(g('biz_wh')) || 0,
     managers: [

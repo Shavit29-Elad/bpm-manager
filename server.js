@@ -1918,6 +1918,12 @@ add('POST', /^\/api\/payroll\/send-report$/, async (req, res, _p, q, body) => {
   const label = monthLabelHe(month);
   const subject = `${companyName} - פירוט עבודות ${label} - תלושי משכורת`;
   const text = `היי מה נשמע?\nמצרף לכאן את פירוט העבודות לחודש ${label}`;
+  // גוף HTML מיושר לימין (עברית) + חתימת המייל (חותמת) בתחתית אם הוגדרה
+  const sig = String(p.emailSignature || '').trim();
+  const html = `<div dir="rtl" style="text-align:right;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1c2333">`
+    + `<div>היי מה נשמע?</div><div>מצרף לכאן את פירוט העבודות לחודש ${label}</div>`
+    + (sig ? `<br><div dir="rtl" style="text-align:right">${sig}</div>` : '')
+    + `</div>`;
   const attachments = atts.map((a, i) => ({
     filename: String(a.filename || `פירוט עבודות ${i + 1}.pdf`),
     content: Buffer.from(String(a.base64 || ''), 'base64'),
@@ -1927,7 +1933,7 @@ add('POST', /^\/api\/payroll\/send-report$/, async (req, res, _p, q, body) => {
   const totalBytes = attachments.reduce((s, a) => s + a.content.length, 0);
   if (totalBytes > 23 * 1024 * 1024) return json(res, { error: `הקבצים כבדים מדי לשליחה במייל (${Math.round(totalBytes / 1048576)}MB, המגבלה ~25MB). נסה לשלוח פחות עובדים בבת אחת או פנה אליי.` }, 413);
   try {
-    await mailer.sendMailFrom(creds, { to, subject, text, attachments });
+    await mailer.sendMailFrom(creds, { to, subject, text, html, attachments });
     json(res, { ok: true, to, count: attachments.length, subject });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
@@ -2534,6 +2540,8 @@ function bizProfile(db, cid) {
   if (p.senderEmail === undefined) p.senderEmail = '';
   // כתובת רו"ח לשליחת פירוט עבודות / תלושי משכורת של העובדים — פר-חברה, נפרד לחלוטין מהעברת הוצאות. ריק = לא מוגדר.
   if (p.payrollEmail === undefined) p.payrollEmail = '';
+  // חתימת מייל (HTML) — מודבקת מה-Gmail, כולל חותמת/תמונה. מצורפת בתחתית מיילים שנשלחים מהמערכת (פירוט עבודות). ריק = בלי חתימה.
+  if (p.emailSignature === undefined) p.emailSignature = '';
   // חשבון מייל שולח פר-חברה (Gmail + App Password) — כל חברה שולחת מהתיבה שלה
   if (p.mailUser === undefined) p.mailUser = '';
   if (p.mailPass === undefined) p.mailPass = '';
@@ -2622,6 +2630,7 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   if ('accountantEmail' in b) p.accountantEmail = String(b.accountantEmail || '').trim();
   if ('senderEmail' in b) p.senderEmail = String(b.senderEmail || '').trim();
   if ('payrollEmail' in b) p.payrollEmail = String(b.payrollEmail || '').trim();
+  if ('emailSignature' in b) p.emailSignature = String(b.emailSignature || '');
   // חשבון מייל שולח פר-חברה (Gmail). הסיסמה מתעדכנת רק אם נשלח ערך חדש לא-ריק (כדי לאפשר עדכון שאר השדות בלי לשלוח סיסמה שוב).
   if ('mailUser' in b) p.mailUser = String(b.mailUser || '').trim();
   if ('mailFromName' in b) p.mailFromName = String(b.mailFromName || '').trim();
