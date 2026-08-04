@@ -1887,6 +1887,49 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// תווית חודש בעברית מ-YYYY-MM → "יולי 2026"
+const _MONTHS_HE = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+function monthLabelHe(month) {
+  const m = String(month || '').match(/^(\d{4})-(\d{2})$/);
+  if (!m) return String(month || '');
+  const idx = Number(m[2]) - 1;
+  return `${_MONTHS_HE[idx] || m[2]} ${m[1]}`;
+}
+
+// POST /api/payroll/send-report?companyId= { month, attachments:[{filename, base64}] }
+// שולח לרו"ח (payrollEmail של החברה) מייל עם PDF נפרד לכל עובד — פירוט עבודות חודשי.
+add('POST', /^\/api\/payroll\/send-report$/, async (req, res, _p, q, body) => {
+  const b = body || {};
+  const cid = (q && q.companyId) || b.companyId || giCompanyId();
+  const month = String(b.month || '').trim();
+  const db = load();
+  const p = bizProfile(db, cid);
+  const to = String(p.payrollEmail || '').trim();
+  const _isEmail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
+  if (!_isEmail(to)) return json(res, { error: 'לא הוגדר מייל לשליחת פירוט עבודות — הגדר אותו בפרטי העסק.' }, 400);
+  const atts = Array.isArray(b.attachments) ? b.attachments : [];
+  if (!atts.length) return json(res, { error: 'אין קבצים לשליחה — אין עובדים עם עבודות בחודש זה.' }, 400);
+  const creds = companyMailCreds(db, cid);
+  if (!mailer.companyMailConfigured(creds) && !mailer.mailerConfigured()) {
+    return json(res, { error: 'לחברה זו אין חשבון מייל מוגדר — הגדר חשבון מייל (Gmail App Password) בפרטי העסק.' }, 400);
+  }
+  const comp = (db.companies || []).find(c => c.id === cid);
+  const companyName = (p.name || (comp && comp.name) || '').trim();
+  const label = monthLabelHe(month);
+  const subject = `${companyName} - פירוט עבודות ${label} - תלושי משכורת`;
+  const text = `היי מה נשמע?\nמצרף לכאן את פירוט העבודות לחודש ${label}`;
+  const attachments = atts.map((a, i) => ({
+    filename: String(a.filename || `פירוט עבודות ${i + 1}.pdf`),
+    content: Buffer.from(String(a.base64 || ''), 'base64'),
+    contentType: 'application/pdf',
+  })).filter(a => a.content && a.content.length);
+  if (!attachments.length) return json(res, { error: 'הקבצים ריקים.' }, 400);
+  try {
+    await mailer.sendMailFrom(creds, { to, subject, text, attachments });
+    json(res, { ok: true, to, count: attachments.length, subject });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // GET /api/documents/:id/client-email — כתובות המייל השמורות ללקוח על המסמך (למילוי אוטומטי בחלונית השליחה)
 add('GET', /^\/api\/documents\/([^/]+)\/client-email$/, async (req, res, params) => {
   // מסמך שהועלה ידנית — אין לקוח בחשבונית ירוקה
@@ -2487,6 +2530,8 @@ function bizProfile(db, cid) {
   if (p.accountantEmail === undefined) p.accountantEmail = (cid === 'co_bpm') ? (process.env.FORWARD_EXPENSE_EMAIL || '516942349@rivh.it') : '';
   // כתובת "מאת" לשליחת מיילים (העברת הוצאות לרו"ח) — פר-חברה. ריק = ברירת המחדל של ה-SMTP.
   if (p.senderEmail === undefined) p.senderEmail = '';
+  // כתובת רו"ח לשליחת פירוט עבודות / תלושי משכורת של העובדים — פר-חברה, נפרד לחלוטין מהעברת הוצאות. ריק = לא מוגדר.
+  if (p.payrollEmail === undefined) p.payrollEmail = '';
   // חשבון מייל שולח פר-חברה (Gmail + App Password) — כל חברה שולחת מהתיבה שלה
   if (p.mailUser === undefined) p.mailUser = '';
   if (p.mailPass === undefined) p.mailPass = '';
@@ -2574,6 +2619,7 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   if ('docRemark' in b) p.docRemark = String(b.docRemark || ''); // הערה קבועה לכל המסמכים (פר-חברה)
   if ('accountantEmail' in b) p.accountantEmail = String(b.accountantEmail || '').trim();
   if ('senderEmail' in b) p.senderEmail = String(b.senderEmail || '').trim();
+  if ('payrollEmail' in b) p.payrollEmail = String(b.payrollEmail || '').trim();
   // חשבון מייל שולח פר-חברה (Gmail). הסיסמה מתעדכנת רק אם נשלח ערך חדש לא-ריק (כדי לאפשר עדכון שאר השדות בלי לשלוח סיסמה שוב).
   if ('mailUser' in b) p.mailUser = String(b.mailUser || '').trim();
   if ('mailFromName' in b) p.mailFromName = String(b.mailFromName || '').trim();

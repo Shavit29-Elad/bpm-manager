@@ -5218,6 +5218,134 @@ window.printJobsReport = () => {
   w.document.close();
   setTimeout(() => { w.focus(); w.print(); }, 350);
 };
+
+// ===== ייצוא/שליחת פירוט עבודות לכל עובד (PDF נפרד) =====
+// טוען html2canvas + jsPDF פעם אחת (רק כשצריך), כדי לא להעמיס על טעינת הדף.
+function _loadScriptOnce(src) {
+  return new Promise((res, rej) => {
+    if ([...document.scripts].some(s => s.src === src)) return res();
+    const s = document.createElement('script'); s.src = src; s.onload = () => res(); s.onerror = () => rej(new Error('טעינת ספרייה נכשלה')); document.head.appendChild(s);
+  });
+}
+async function _ensurePdfLibs() {
+  if (!window.html2canvas) await _loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+  if (!(window.jspdf && window.jspdf.jsPDF)) await _loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+}
+// בונה את דוח העבודות של עובד מנתוני ה-jobs (זהה למבנה שבמודל), עם שורות ידניות של אותו חודש.
+function _reportFromJobs(emp, r, month, name) {
+  const shifts = (r && r.pay && r.pay.shifts) || [];
+  const allManual = (emp.manualLines && typeof emp.manualLines === 'object') ? emp.manualLines : {};
+  const monthManual = Array.isArray(allManual[month]) ? allManual[month] : [];
+  return {
+    empName: name, month, salaryType: emp.salaryType || 'gross', empTravel: Number(emp.travel) || 0,
+    rows: [
+      ...shifts.map(s => ({ artist: s.artist || '', date: s.date, location: s.location || '', payment: Number(s.base) || 0, bonus: Number(s.bonus) || 0, food: Number(s.food) || 0, travel: Number(s.travel) || 0, note: s.note || '', manual: false })),
+      ...monthManual.map(ml => ({ artist: ml.artist || '', date: ml.date || '', location: ml.location || '', payment: Number(ml.payment) || 0, bonus: Number(ml.bonus) || 0, food: Number(ml.food) || 0, travel: Number(ml.travel) || 0, note: ml.note || '', manual: true })),
+    ],
+  };
+}
+// אותו פורמט של הדוח, אבל סטטי (טקסט במקום שדות קלט) — להמרה ל-PDF.
+function _reportHtmlStatic(rep) {
+  const rows = rep.rows;
+  const label = rep.salaryType === 'net' ? 'נטו' : 'ברוטו';
+  const th = (t, w) => `<th style="border:1px solid #d8dced;padding:7px 8px;text-align:right;background:#eef0fb;font-size:12.5px;font-weight:700${w ? `;width:${w}` : ''}">${t}</th>`;
+  const cell = (inner, opt = '') => `<td style="border:1px solid #d8dced;padding:6px 8px;text-align:right;font-size:13px;${opt}">${inner}</td>`;
+  const sum = (k) => rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const showTravel = (Number(rep.empTravel) || 0) > 0;
+  const grand = sum('payment') + sum('bonus') + sum('food') + (showTravel ? sum('travel') : 0);
+  const head = `<div style="font-size:17px;font-weight:800;margin-bottom:2px">${escapeHtml(rep.empName)}</div>
+    <div style="color:#6b7488;font-size:13px;margin-bottom:12px">דוח עבודות חודשי · ${monthLabelFromKey(rep.month)} · ${label}</div>`;
+  if (!rows.length) return head + `<div style="color:#6b7488">אין עבודות לחודש זה.</div>`;
+  return head + `<table style="width:100%;border-collapse:collapse;background:#fff;table-layout:fixed">
+      <thead><tr>${th('#', '30px')}${th('אמן', '19%')}${th('תאריך', '78px')}${th('מיקום', '22%')}${th('תשלום', '68px')}${th('בונוס', '62px')}${th('אוכל', '60px')}${showTravel ? th('נסיעות', '66px') : ''}${th('הערות', '15%')}</tr></thead>
+      <tbody>
+        ${rows.map((r, i) => `<tr style="${r.manual ? 'background:#fff7ed' : (i % 2 ? 'background:#fafbff' : '')}">${cell(i + 1)}${cell(escapeHtml(r.artist))}${cell(dmy(r.date), 'white-space:nowrap')}${cell(escapeHtml(r.location))}${cell(_nisFmt(r.payment))}${cell(_nisFmt(r.bonus))}${cell(_nisFmt(r.food))}${showTravel ? cell(_nisFmt(r.travel)) : ''}${cell(escapeHtml(r.note))}</tr>`).join('')}
+        <tr><td style="border:1px solid #d8dced;border-top:2px solid #c7cce0;padding:6px 8px;text-align:center;font-size:13px"><b>סה"כ</b></td><td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0')}${showTravel ? cell('<b>' + _nisFmt(sum('travel')) + '</b>', 'border-top:2px solid #c7cce0') : ''}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
+        <tr style="background:#eef0fb"><td colspan="4" style="border:1px solid #d8dced;padding:8px 10px;text-align:start;white-space:nowrap"><b>סה"כ כולל הכל (${label})</b></td><td colspan="${showTravel ? 5 : 4}" style="border:1px solid #d8dced;padding:8px 10px;text-align:right"><b style="color:#4338ca;font-size:15.5px">${_nisFmt(grand)}</b></td></tr>
+      </tbody>
+    </table>`;
+}
+async function _htmlToPdfBlob(innerHtml) {
+  await _ensurePdfLibs();
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed;left:-10000px;top:0;width:900px;background:#fff;padding:26px;font-family:Heebo,Arial,sans-serif;color:#1c2333;direction:rtl';
+  holder.innerHTML = innerHtml;
+  document.body.appendChild(holder);
+  let canvas;
+  try { canvas = await window.html2canvas(holder, { scale: 2, backgroundColor: '#ffffff' }); }
+  finally { document.body.removeChild(holder); }
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
+  const margin = 20, imgWpt = pw - margin * 2, scale = imgWpt / canvas.width, pageH = ph - margin * 2;
+  const imgHpt = canvas.height * scale;
+  if (imgHpt <= pageH) { pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, imgWpt, imgHpt); }
+  else {
+    const pagePx = Math.floor(pageH / scale); let sPos = 0, first = true;
+    while (sPos < canvas.height) {
+      const sliceH = Math.min(pagePx, canvas.height - sPos);
+      const c2 = document.createElement('canvas'); c2.width = canvas.width; c2.height = sliceH;
+      c2.getContext('2d').drawImage(canvas, 0, sPos, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+      if (!first) pdf.addPage();
+      pdf.addImage(c2.toDataURL('image/png'), 'PNG', margin, margin, imgWpt, sliceH * scale);
+      sPos += sliceH; first = false;
+    }
+  }
+  return pdf.output('blob');
+}
+function _blobToBase64(blob) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onloadend = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(blob); }); }
+// בונה PDF אחד לכל עובד שיש לו עבודות בחודש הנבחר
+async function _buildEmployeePdfs(month, prog) {
+  const emps = window._payEmps || [];
+  const list = await api(`/api/payroll?companyId=${state.company}&month=${month}`).catch(() => []);
+  const out = [];
+  for (let i = 0; i < (list || []).length; i++) {
+    const p = list[i];
+    const emp = emps.find(e => e.name === p.name);
+    if (!emp) continue;
+    if (prog) prog(`מכין PDF… ${i + 1}/${list.length} (${p.name})`);
+    const jobs = await api(`/api/employees/${emp.id}/jobs?month=${month}`).catch(() => null);
+    const rep = _reportFromJobs(emp, jobs, month, p.name);
+    if (!rep.rows.length) continue;
+    const blob = await _htmlToPdfBlob(_reportHtmlStatic(rep));
+    out.push({ name: p.name, filename: `${p.name} - פירוט עבודות חודש ${monthLabelFromKey(month)}.pdf`, blob });
+  }
+  return out;
+}
+window.downloadEmployeeReports = async (btn) => {
+  const month = state.payMonth; const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; }
+  const setT = (t) => { if (btn) btn.textContent = t; };
+  setT('מכין PDF…');
+  try {
+    const pdfs = await _buildEmployeePdfs(month, setT);
+    if (!pdfs.length) { alert('אין עובדים עם עבודות בחודש זה.'); }
+    for (const p of pdfs) { const url = URL.createObjectURL(p.blob); const a = document.createElement('a'); a.href = url; a.download = p.filename; document.body.appendChild(a); a.click(); a.remove(); await new Promise(r => setTimeout(r, 500)); URL.revokeObjectURL(url); }
+  } catch (e) { alert('שגיאה בהכנת ה-PDF: ' + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = orig || '📄 הורד פירוט עבודות עובדים'; }
+};
+window.sendEmployeeReports = async (btn) => {
+  const month = state.payMonth; const orig = btn ? btn.textContent : '';
+  const bp = await api('/api/business-profile').catch(() => ({}));
+  const to = (bp && bp.payrollEmail) ? String(bp.payrollEmail).trim() : '';
+  if (!to) { alert('לא הוגדר מייל לשליחת פירוט עבודות. הגדר אותו ב"פרטי העסק" ← "מייל לשליחת פירוט עבודות".'); return; }
+  if (!confirm(`לשלוח את פירוט העבודות ל-${to}\nעבור ${monthLabelFromKey(month)}?`)) return;
+  if (btn) { btn.disabled = true; }
+  const setT = (t) => { if (btn) btn.textContent = t; };
+  setT('מכין ושולח…');
+  try {
+    const pdfs = await _buildEmployeePdfs(month, setT);
+    if (!pdfs.length) { alert('אין עובדים עם עבודות בחודש זה.'); if (btn) { btn.disabled = false; btn.textContent = orig; } return; }
+    const attachments = [];
+    for (const p of pdfs) attachments.push({ filename: p.filename, base64: await _blobToBase64(p.blob) });
+    setT('שולח מייל…');
+    const r = await fetch(`/api/payroll/send-report?companyId=${state.company}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, month, attachments }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (r.ok) alert(`✓ נשלח ל-${r.to || to}\n${attachments.length} עובדים · ${monthLabelFromKey(month)}`);
+    else alert('שגיאה בשליחה: ' + (r.error || ''));
+  } catch (e) { alert('שגיאה: ' + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = orig || '📧 שלח פירוט עבודות לרו״ח'; }
+};
+
 function empDocChip(e, kind, label) {
   const fid = e.docs && e.docs[kind];
   return fid
@@ -5278,6 +5406,11 @@ async function renderPayroll(c) {
     <div class="panel">
       <div class="warn-banner">מסך פנימי — נתוני שכר של עובד אינם נחשפים לעובדים אחרים.</div>
       <div class="row-between"><h2>שכר לתשלום — ${monthLabelFromKey(month)}</h2>${payPeriodControls()}</div>
+      ${list.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 10px">
+        <button class="btn ghost" onclick="downloadEmployeeReports(this)">📄 הורד פירוט עבודות עובדים</button>
+        <button class="btn primary" onclick="sendEmployeeReports(this)">📧 שלח פירוט עבודות לרו״ח</button>
+        <span class="muted" style="font-size:11.5px;align-self:center">PDF נפרד לכל עובד לחודש ${monthLabelFromKey(month)} · הכתובת נקבעת ב"פרטי העסק"</span>
+      </div>` : ''}
       ${list.length ? `<div style="overflow-x:auto"><table style="min-width:680px"><thead><tr><th>עובד</th><th>שכר בסיס</th><th>משמרות</th><th>בסיס מצטבר</th><th>בונוס</th><th>סה"כ לתשלום</th></tr></thead>
         <tbody>${list.map(e => `<tr><td><a onclick="empJobsByName('${encodeURIComponent(e.name)}')" style="cursor:pointer;color:var(--accent);font-weight:600">${escapeHtml(e.name)}</a></td><td>${e.baseRate ? money(e.baseRate) : '<span class="muted">—</span>'}</td><td>${e.shifts.length}</td><td>${money(e.base)}</td><td>${money(e.bonus)}</td><td><b>${money(e.total)}</b></td></tr>`).join('')}
         <tr style="border-top:2px solid var(--line)"><td colspan="3"><b>סה"כ</b></td><td><b>${money(tot('base'))}</b></td><td><b>${money(tot('bonus'))}</b></td><td><b style="color:var(--accent)">${money(tot('total'))}</b></td></tr>
@@ -5440,6 +5573,7 @@ async function renderBusiness(c) {
       <label>כתובת עסק<input id="biz_address" value="${escapeHtml(p.address || '')}"></label>
       <label>אימייל רו״ח (למי נשלחות ההוצאות)<input id="biz_acct" type="email" dir="ltr" placeholder="ריק = לא מעביר לאף אחד" value="${escapeHtml(p.accountantEmail || '')}"></label>
       <label>אימייל שולח (מאיזה מייל נשלח)<input id="biz_sender" type="email" dir="ltr" placeholder="ריק = ברירת המחדל של המערכת" value="${escapeHtml(p.senderEmail || '')}"></label>
+      <label>מייל לשליחת פירוט עבודות<input id="biz_payroll" type="email" dir="ltr" placeholder="לרו״ח — אליו נשלחים תלושי/פירוט העבודות של העובדים" value="${escapeHtml(p.payrollEmail || '')}"></label>
       <label>ניכוי מס במקור (%)<input id="biz_wh" type="number" step="0.5" min="0" max="30" dir="ltr" placeholder="0" value="${(Number(p.withholdingRate) || 0) * 100}"></label>
     </div>
     <div class="muted" style="font-size:12px;margin-top:6px">שיעור ניכוי המס במקור של החברה. משפיע על כל חישובי ההתאמות בבנק, הפקת מסמכי המשך/קבלות, וסיווג ההכנסות. 0 = ללא ניכוי.</div>
@@ -5649,7 +5783,7 @@ window.bizSave = async () => {
   const g = (id) => (document.getElementById(id)?.value || '').trim();
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
-    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), senderEmail: g('biz_sender'), docRemark: g('biz_docremark'),
+    name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), senderEmail: g('biz_sender'), payrollEmail: g('biz_payroll'), docRemark: g('biz_docremark'),
     mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'), mailBodyTemplate: (document.getElementById('biz_mailBody')?.value || ''), mailSubjectTemplate: (document.getElementById('biz_mailSubject')?.value || ''),
     withholdingPct: Number(g('biz_wh')) || 0,
     managers: [
