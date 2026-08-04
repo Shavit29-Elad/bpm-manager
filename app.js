@@ -5126,7 +5126,7 @@ function openEmpJobsModal(name, r) {
       <div><h3 style="margin:0">${escapeHtml(fullName)}</h3><span class="muted" style="font-size:13.5px">דוח עבודות · ${monthLabelFromKey(_report.month)} · ${_report.salaryType === 'net' ? 'נטו' : 'ברוטו'} · לחיצה על תא לעריכה</span></div>
       <div style="display:flex;gap:8px">
         <button class="btn ghost" style="padding:6px 13px" onclick="addManualLine()">+ הוסף שורה ידנית</button>
-        <button class="btn ghost" style="padding:6px 13px" onclick="printJobsReport()">🖨 הדפס / PDF</button>
+        <button class="btn ghost" style="padding:6px 13px" onclick="downloadCurrentReportPdf(this)">📄 הורד PDF</button>
       </div>
     </div>
     <div id="jobsReport" style="margin-top:14px;background:#fff;border-radius:10px;padding:16px"></div>
@@ -5219,6 +5219,19 @@ window.printJobsReport = () => {
     <body>${clone.innerHTML}</body></html>`);
   w.document.close();
   setTimeout(() => { w.focus(); w.print(); }, 350);
+};
+// הורדת PDF של הדוח הנוכחי (העובד הפתוח) — קובץ קל (JPEG דחוס), משקף גם עריכות שנעשו במודל
+window.downloadCurrentReportPdf = async (btn) => {
+  if (!_report) return;
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'מכין PDF…'; }
+  try {
+    const blob = await _htmlToPdfBlob(_reportHtmlStatic(_report));
+    const fname = `${_report.empName} - פירוט עבודות חודש ${monthLabelFromKey(_report.month)}.pdf`;
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  } catch (e) { alert('שגיאה בהכנת ה-PDF: ' + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = orig || '📄 הורד PDF'; }
 };
 
 // ===== ייצוא/שליחת פירוט עבודות לכל עובד (PDF נפרד) =====
