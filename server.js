@@ -86,17 +86,27 @@ async function ingestText(text, companyId) {
     if (!nameCache.has(nm)) nameCache.set(nm, await resolveClientByName(nm));
     return nameCache.get(nm);
   };
+  const isOfek = cid === 'co_ofek';
   const created = [];
   for (const parsed of list) {
-    const ctrDetails = (parsed.contractorDetails && parsed.contractorDetails.length)
-      ? parsed.contractorDetails
-      : (parsed.contractors || []).map(name => ({ name, amount: null }));
-    // מיפוי זמר → לקוח ברירת-מחדל
+    // אצל אופק "קבלן" = הלקוח שמשלם (לא ספק/הוצאה). לכן כשאין "איש קשר" והקבלן מולא — הוא הופך ללקוח,
+    // ולא יוצרים ממנו שורת ספק. בשאר החברות קבלן נשאר ספק/הוצאה כרגיל.
+    const contractorIsClient = isOfek && !parsed.contact && Array.isArray(parsed.contractors) && parsed.contractors.length > 0;
+    const ctrDetails = contractorIsClient ? []
+      : (parsed.contractorDetails && parsed.contractorDetails.length)
+        ? parsed.contractorDetails
+        : (parsed.contractors || []).map(name => ({ name, amount: null }));
+    // ---- קביעת הלקוח לחיוב: איש קשר > קבלן(אופק) > מיפוי אמן ----
+    // כל מקור עובר קודם דרך מיפוי הכינוי→שם-מלא (למשל "הפרויקט"→"סינגולד בע״מ"), ואם אין מיפוי — הערך עצמו.
     let clientName = null, clientId = null;
-    const mapped = mappedClientName(db, parsed.artist, cid);
-    if (mapped) {
-      const r = await resolveCached(mapped);
+    const clientSrc = parsed.contact || (contractorIsClient ? parsed.contractors[0] : null);
+    if (clientSrc) {
+      const full = mappedClientName(db, clientSrc, cid) || clientSrc;
+      const r = await resolveCached(full);
       clientName = r.clientName; clientId = r.clientId;
+    } else {
+      const mapped = mappedClientName(db, parsed.artist, cid);
+      if (mapped) { const r = await resolveCached(mapped); clientName = r.clientName; clientId = r.clientId; }
     }
     const event = {
       id: id('ev'), companyId: cid,
@@ -4561,6 +4571,29 @@ function runMigrations() {
     let c = db.companies.find(x => x.id === seed.id);
     if (!c) { c = { id: seed.id, name: seed.name, active: seed.active }; db.companies.push(c); changed = true; console.log('מיגרציה: נוספה חברה ' + seed.name); }
     if (c.accounting !== seed.accounting) { c.accounting = seed.accounting; changed = true; }
+  }
+  // זריעה חד-פעמית של מיפויי אמן/איש-קשר → לקוח לאופק (שם שהמנהל כותב בהודעת הווטסאפ → שם הלקוח בחשבונית ירוקה).
+  // מוגן בדגל כדי לא לדרוס עריכות/מחיקות שהמשתמש יעשה מאוחר יותר במסך המיפוי.
+  if (!db._ofekArtistMapSeededV1) {
+    const OFEK_MAP = [
+      ['הפרויקט', 'סינגולד בע״מ'], ['הפרוייקט של רביבו', 'סינגולד בע״מ'],
+      ['מאור אדרי', 'מאור אדרי הפקות בע״מ'],
+      ['טומי', 'טומי לי הגברה ותאורה בע״מ'],
+      ['Bpm', 'בי פי אם הגברה ותאורה בע״מ'], ['בי פי אם', 'בי פי אם הגברה ותאורה בע״מ'],
+      ['איציק ריקן', 'איציק ריקן'],
+      ['נועם חורב', 'הליקון כנען בע״מ'],
+      ['אריאל אזולאי', 'אודם קישורים עסקיים בע״מ'],
+      ['נטלי פרץ', 'פרץ נטלי'],
+      ['יניב בן משיח', 'יניב בן משיח הפקות בע״מ'],
+    ];
+    db.artistClientMap = db.artistClientMap || [];
+    for (const [artist, clientName] of OFEK_MAP) {
+      const exists = db.artistClientMap.some(m => (m.companyId || 'co_bpm') === 'co_ofek' && normName(m.artist) === normName(artist));
+      if (!exists) db.artistClientMap.push({ artist, clientName, companyId: 'co_ofek' });
+    }
+    db._ofekArtistMapSeededV1 = true;
+    changed = true;
+    console.log('מיגרציה: נזרעו מיפויי אמן→לקוח לאופק');
   }
   if (changed) save(db);
 }

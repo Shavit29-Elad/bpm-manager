@@ -13,24 +13,26 @@
 // מיפוי כותרות בעברית -> שם שדה באנגלית. כולל וריאציות נפוצות.
 const FIELD_MAP = [
   { keys: ['תאריך'], field: 'dateRaw' },
-  { keys: ['זמר', 'אמן', 'מופע'], field: 'artist' },
+  { keys: ['שם אמן', 'שם האמן', 'זמר', 'אמן', 'מופע'], field: 'artist' },
   { keys: ['תמחור', 'מחיר', 'תשלום ללקוח', 'סכום'], field: 'priceRaw' },
   { keys: ['מיקום', 'אולם', 'כתובת', 'עיר'], field: 'location' },
   { keys: ['סאונד', 'הגברה', 'sound'], field: 'sound' },
   { keys: ['עובדים', 'צוות'], field: 'employeesRaw' },
   { keys: ['תוספת לעובדים', 'תוספת עובדים', 'תוספת'], field: 'employeeBonusRaw' },
   { keys: ['קבלן', 'קבלנים', 'ספק'], field: 'contractorsRaw' },
+  { keys: ['איש קשר', 'איש הקשר', 'קשר', 'לקוח'], field: 'contactRaw' },
 ];
 
 function normalizeLine(line) {
   return line.replace(/‏|‎/g, '').trim(); // הסרת סימני כיווניות RTL/LTR
 }
 
-// מזהה את השדה לפי תחילת השורה "כותרת:"
+// מזהה את השדה לפי תחילת השורה "כותרת:" או "כותרת -" (אופק משתמש במקף)
 function matchField(line) {
-  const m = line.match(/^\s*\*?\s*([֐-׿'"\s]+?)\s*\*?\s*[:：]\s*(.*)$/);
+  // מפריד: נקודתיים או מקף (אחרי המקף יכול להיות רווח או צמוד). התווית מוכרחה להתחיל בעברית.
+  const m = line.match(/^\s*[_*]*\s*([֐-׿"'\s]+?)\s*[_*]*\s*[:：\-]\s*(.*)$/);
   if (!m) return null;
-  const label = m[1].replace(/[*"']/g, '').trim();
+  const label = m[1].replace(/[*_"']/g, '').trim();
   const value = m[2].trim();
   for (const entry of FIELD_MAP) {
     if (entry.keys.some(k => label === k || label.startsWith(k))) {
@@ -82,7 +84,10 @@ export function parseEventMessage(text) {
   const fields = {};
   for (const line of lines) {
     const match = matchField(line);
-    if (match) fields[match.field] = match.value;
+    if (match) { fields[match.field] = match.value; continue; }
+    // כותרת שירות עצמאית (ללא מפריד), למשל "*הגברה*" אצל אופק — נשמרת כסוג/סאונד
+    const hdr = line.replace(/[_*"'\s]/g, '');
+    if (!fields.sound && /^(הגברה|סאונד|תאורה)$/.test(hdr)) fields.sound = hdr;
   }
 
   const date = parseDate(fields.dateRaw);
@@ -100,6 +105,7 @@ export function parseEventMessage(text) {
     employees: splitNames(fields.employeesRaw),
     employeeBonusRaw: fields.employeeBonusRaw || null,
     contractors: splitNames(fields.contractorsRaw),
+    contact: fields.contactRaw || null,   // איש קשר = הלקוח לחיוב (אופק). גובר על מיפוי הזמר.
     source: 'whatsapp',
     rawText: text,
   };
@@ -120,13 +126,13 @@ export function parseEventMessage(text) {
 // גם אם יש שגיאת כתיב כמו "אתאריך:" — מנקים את הקידומת. מחזיר מערך אירועים.
 export function parseEventMessages(text) {
   const lines = String(text || '').split(/\r?\n/);
-  const isDateLine = (l) => /תאריך\s*[:：]/.test(l);
+  const isDateLine = (l) => /תאריך\s*[:：\-]/.test(l);
   const blocks = [];
   let cur = null;
   for (const line of lines) {
     if (isDateLine(line)) {
       if (cur) blocks.push(cur);
-      cur = [line.replace(/^[^\n]*?(תאריך\s*[:：])/, '$1')]; // מנקה קידומת לפני "תאריך:"
+      cur = [line.replace(/^[^\n]*?(תאריך\s*[:：\-])/, '$1')]; // מנקה קידומת לפני "תאריך:"/"תאריך -"
     } else if (cur) {
       cur.push(line);
     }
