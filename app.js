@@ -1181,11 +1181,12 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען שורות מהמסמך…</div></div>`;
   // שולפים במקביל: שורות המקור + התאריך של המסמך האחרון *מסוג היעד* (כמו שחשבונית ירוקה בודקת לכל סוג בנפרד)
-  const [r, ld, , su] = await Promise.all([
+  const [r, ld, , su, ce] = await Promise.all([
     api(`/api/documents/${id}/lines`).catch(() => ({ error: 'שגיאת רשת' })),
     api(`/api/documents/last-date?type=${Number(type)}`).catch(() => ({})),
     (state.whRate === undefined ? loadWhRate() : Promise.resolve()),
     api(`/api/documents/${id}/url`).catch(() => ({})),
+    api(`/api/documents/${id}/client-email`).catch(() => ({})),   // מייל שמור ללקוח — למילוי שדה השליחה האוטומטית
   ]);
   if (!r || !r.ok) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת השורות: ${escapeHtml(String(r?.error || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">סגור</button></div></div>`; return; }
   const needsPay = DER_PAYMENT_DOCS.has(Number(type));
@@ -1197,6 +1198,7 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
   _derEdit = {
     id, type: Number(type), linked: isLinked,
     clientName: r.client?.name || '', date,
+    sendEmail: (ce && Array.isArray(ce.emails) ? (ce.emails.filter(Boolean)[0] || '') : ''),   // מייל הלקוח לשליחה אוטומטית — ניתן לעריכה בעורך
     lastDocDate: (ld && ld.lastDocDate) || null, lastDocTypeName: DOC_TYPE_NAMES[Number(type)] || 'מסוג זה', allowBackdate: false,
     description: r.description || '', remarks,
     items,
@@ -1399,7 +1401,13 @@ function renderDeriveEditor() {
 
     <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית${e.linked ? ' (כולל התייחסות למקור ופרטי חשבון להעברה — ניתן לעריכה)' : ' (לא חובה)'}<textarea class="der-rem" rows="${e.linked ? 6 : 2}" style="width:100%;padding:6px 8px;margin-top:3px;font-family:inherit;resize:vertical">${escapeHtml(e.remarks)}</textarea></label>
 
-    <label style="display:flex;gap:7px;align-items:center;font-size:13px;color:var(--muted);margin-top:12px"><input type="checkbox" id="derAutoSend" ${autoSendPref() ? 'checked' : ''} onchange="setAutoSendPref(this.checked)"> שלח אוטומטית למייל הלקוח בעת ההפקה</label>
+    <div style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:8px">
+      <label style="display:flex;gap:7px;align-items:center;font-size:13px"><input type="checkbox" id="derAutoSend" ${autoSendPref() ? 'checked' : ''} onchange="setAutoSendPref(this.checked);derToggleSendEmail()"> שלח אוטומטית למייל הלקוח בעת ההפקה</label>
+      <div id="derSendEmailWrap" style="margin-top:8px;${autoSendPref() ? '' : 'display:none'}">
+        <label style="font-size:12.5px;display:block;margin-bottom:3px;color:var(--muted)">כתובת מייל לשליחה (מוגדרת ללקוח — ניתן לשנות)</label>
+        <input id="derSendEmail" dir="ltr" value="${escAttr(e.sendEmail || '')}" placeholder="name@example.com" style="width:100%;padding:6px 8px" oninput="if(_derEdit)_derEdit.sendEmail=this.value">
+      </div>
+    </div>
     <div id="derEditStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">ביטול</button>
@@ -1502,7 +1510,7 @@ window.derConfirm = async () => {
       await linkDocToBankTx(_derBankLink.txId, entry);
       _derBankLink = null;
       const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');
-      showDocReadyPopup(r.doc, typeName);
+      showDocReadyPopup(r.doc, typeName, (document.getElementById('derSendEmail') || {}).value || (e.sendEmail || ''));
       loadOpenInvoices && loadOpenInvoices();
       if (typeof _docActionRefresh === 'function') _docActionRefresh();
     } else {
@@ -1515,7 +1523,7 @@ window.derConfirm = async () => {
       }
       // סוגרים את העורך ומציגים חלונית עם 3 כפתורים: הורדה / שליחה למייל הלקוח / צפייה
       const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');
-      showDocReadyPopup(r.doc, typeName);
+      showDocReadyPopup(r.doc, typeName, (document.getElementById('derSendEmail') || {}).value || (e.sendEmail || ''));
       loadOpenInvoices && loadOpenInvoices();
       if (typeof _docActionRefresh === 'function') _docActionRefresh();
     }
@@ -1527,20 +1535,24 @@ window.derConfirm = async () => {
 // העדפת "שלח אוטומטית למייל הלקוח בעת הפקה" — נשמרת מקומית, ברירת מחדל: מופעל
 function autoSendPref() { try { return localStorage.getItem('autoSendDocEmail') !== '0'; } catch { return true; } }
 window.setAutoSendPref = (v) => { try { localStorage.setItem('autoSendDocEmail', v ? '1' : '0'); } catch {} };
+// הצג/הסתר את שדה כתובת המייל בעורך ההפקה לפי מצב הצ'קבוקס
+window.derToggleSendEmail = () => { const w = document.getElementById('derSendEmailWrap'); if (w) w.style.display = autoSendPref() ? '' : 'none'; };
 // חלונית אחרי הפקת מסמך: הורדה למחשב / שליחה למייל הלקוח / צפייה
-function showDocReadyPopup(doc, typeName) {
+function showDocReadyPopup(doc, typeName, presetEmail) {
   if (!doc) return;
   const url = String(doc.url || '').replace(/'/g, '%27');
+  const pe = (presetEmail || '').replace(/'/g, '%27');
   let m = document.getElementById('docReadyModal');
   if (!m) { m = document.createElement('div'); m.id = 'docReadyModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(400px,94vw);text-align:center">
     <h3 style="margin-top:0">✓ ${escapeHtml(typeName)} #${doc.number || ''} הופק</h3>
     <p class="muted" style="font-size:13px;margin:2px 0 12px">מה תרצה לעשות עכשיו?</p>
+    <input id="docReadyEmail" dir="ltr" value="${escAttr(presetEmail || '')}" placeholder="מייל הלקוח (ניתן לשנות)" style="width:100%;margin-bottom:9px;padding:6px 8px;font-size:13px">
     <div style="display:flex;flex-direction:column;gap:9px">
       ${url ? `<button class="btn primary" onclick="autoDownloadDoc('${url}')">⬇ הורדה למחשב</button>` : ''}
       <a id="waSendBtn" class="btn" style="background:#25D366;color:#fff;pointer-events:none;opacity:.6;text-decoration:none" target="_blank" rel="noopener">📱 טוען וואטסאפ…</a>
-      <button class="btn success" onclick="docReadySend('${doc.id}',this)">✉️ שליחה למייל הלקוח</button>
+      <button class="btn success" onclick="docReadySend('${doc.id}',this,(document.getElementById('docReadyEmail')||{}).value||'')">✉️ שליחה למייל הלקוח</button>
       ${url ? `<button class="btn ghost" onclick="previewDoc('${url}')">👁 צפייה</button>` : ''}
     </div>
     <label style="display:flex;gap:7px;align-items:center;justify-content:center;font-size:12.5px;color:var(--muted);margin-top:10px"><input type="checkbox" id="docReadyAuto" ${autoSendPref() ? 'checked' : ''} onchange="setAutoSendPref(this.checked)"> שלח אוטומטית למייל הלקוח בעת הפקה</label>
@@ -1567,7 +1579,8 @@ function showDocReadyPopup(doc, typeName) {
     setTimeout(() => {
       const st = document.getElementById('docReadyStatus');
       if (st) st.innerHTML = '<span class="muted">שולח אוטומטית למייל הלקוח…</span>';
-      docReadySend(doc.id, null);
+      const em = (document.getElementById('docReadyEmail') || {}).value || presetEmail || '';
+      docReadySend(doc.id, null, em);
     }, 80);
   }
 }
@@ -1579,11 +1592,14 @@ window.waSendManual = async (docId) => {
   if (r && r.waUrl) { if (w) w.location = r.waUrl; else window.open(r.waUrl, '_blank', 'noopener'); }
   else { if (w) w.close(); alert('לא ניתן לבנות קישור וואטסאפ' + (r && r.error ? ': ' + r.error : '')); }
 };
-window.docReadySend = async (docId, btn) => {
+window.docReadySend = async (docId, btn, email) => {
   const st = document.getElementById('docReadyStatus');
+  const em = String(email || '').trim();
+  if (em && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { if (st) st.innerHTML = '<span style="color:var(--danger)">כתובת המייל אינה תקינה.</span>'; return; }
   if (btn) btn.disabled = true;
-  if (st) st.innerHTML = '<span class="muted">שולח למייל הלקוח…</span>';
-  const r = await fetch(`/api/documents/${docId}/send?companyId=${encodeURIComponent(state.company)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (st) st.innerHTML = `<span class="muted">שולח${em ? ' ל-' + escapeHtml(em) : ' למייל הלקוח'}…</span>`;
+  const body = em ? { emails: [em], companyId: state.company } : { companyId: state.company };
+  const r = await fetch(`/api/documents/${docId}/send?companyId=${encodeURIComponent(state.company)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
   if (st) st.innerHTML = r.ok
     ? `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml((r.sentTo || []).join(', '))}</span>`
