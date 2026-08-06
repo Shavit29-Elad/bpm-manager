@@ -454,6 +454,11 @@ window.closePreview = () => {
   const m = document.getElementById('docPreview'); if (m) m.classList.add('hidden');
   if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
 };
+// תצוגה מקדימה של מסמך + כפתור "שלח במייל" בראש החלונית (ליד ההורדה) — המייל השמור ללקוח, ניתן לעריכה לפני שליחה
+window.previewDocSend = (url, id, number, typeName, clientNameEnc) => {
+  const btn = `<button class="btn success" style="padding:6px 13px" onclick="openSendDoc('${id}','${String(number == null ? '' : number).replace(/'/g, '%27')}','${String(typeName || 'מסמך').replace(/'/g, '%27')}','${clientNameEnc || ''}')">✉️ שלח במייל</button>`;
+  previewDoc(url, { extraActions: btn });
+};
 // פתיחת מסמך משוייך לפי מזהה בחלונית תצוגה מקדימה (צפייה + הורדה + מסמך המשך אם רלוונטי) — לא הורדה אוטומטית
 window.previewLinkedDoc = async (docId, el, eventId) => {
   if (!docId) return;
@@ -557,6 +562,7 @@ window.openSendDoc = (id, number, typeName, clientNameEnc) => {
   let m = document.getElementById('sendDocModal');
   if (!m) { m = document.createElement('div'); m.id = 'sendDocModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
+  m.style.zIndex = '300'; // מעל חלונית התצוגה המקדימה (z-index 200) — כדי שיפתח מעליה כשמפעילים מתוך התצוגה
   m.innerHTML = `<div class="modal-card" style="width:min(440px,94vw)">
     <div class="row-between" style="margin:0"><h3 style="margin:0">✉️ שליחת ${escapeHtml(typeName || 'מסמך')} #${escapeHtml(String(number))}</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('sendDocModal').classList.add('hidden')">✕</button></div>
@@ -1393,6 +1399,7 @@ function renderDeriveEditor() {
 
     <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית${e.linked ? ' (כולל התייחסות למקור ופרטי חשבון להעברה — ניתן לעריכה)' : ' (לא חובה)'}<textarea class="der-rem" rows="${e.linked ? 6 : 2}" style="width:100%;padding:6px 8px;margin-top:3px;font-family:inherit;resize:vertical">${escapeHtml(e.remarks)}</textarea></label>
 
+    <label style="display:flex;gap:7px;align-items:center;font-size:13px;color:var(--muted);margin-top:12px"><input type="checkbox" id="derAutoSend" ${autoSendPref() ? 'checked' : ''} onchange="setAutoSendPref(this.checked)"> שלח אוטומטית למייל הלקוח בעת ההפקה</label>
     <div id="derEditStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">ביטול</button>
@@ -1490,13 +1497,14 @@ window.derConfirm = async () => {
       const box = document.getElementById('evLinkedDocs'); if (box) box.innerHTML = evLinkedDocsHtml(_evEditing);
     }
     if (_derBankLink && r.doc) {
-      // הופק מתוך "צור הכנסה" בבנק — קישור לתנועה + הורדה + סגירה (התנהגות קיימת)
-      if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
-      autoDownloadDoc(r.doc?.url);
+      // הופק מתוך "צור הכנסה" בבנק — קישור לתנועה, ואז אותה חלונית פעולות כמו בכל הפקה (הורדה / מייל / צפייה / וואטסאפ). ללא הורדה אוטומטית.
       const entry = { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: t.total, url: r.doc.url || null };
       await linkDocToBankTx(_derBankLink.txId, entry);
       _derBankLink = null;
-      setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); if (typeof _docActionRefresh === 'function') _docActionRefresh(); }, 1200);
+      const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');
+      showDocReadyPopup(r.doc, typeName);
+      loadOpenInvoices && loadOpenInvoices();
+      if (typeof _docActionRefresh === 'function') _docActionRefresh();
     } else {
       // הופק מתוך "שיוך מסמך לאירוע" (מהצעת מחיר) — נשייך את מסמך ההמשך שנוצר לאותו אירוע
       if (window._deriveEventLink && r.doc) {
@@ -6526,8 +6534,14 @@ function bankTr(t) {
   const covered = isMatched ? (t.matchStatus === 'approved' || bankRowCovered(t)) : false;
   const notesInput = `<input value="${(t.notes || '').replace(/"/g, '&quot;')}" placeholder="הערה…" onchange="saveBankNotes('${t.id}', this.value)" style="width:90px;padding:4px 6px;font-size:12px"/>`;
   const stack = (arr) => arr.map(x => `<div style="padding:2px 0${arr.length > 1 ? ';border-bottom:1px dashed var(--line)' : ''}">${x}</div>`).join('');
-  // תצוגה 👁 + הורדה ↓ צמודים לשם המסמך (במקום עמודות נפרדות)
-  const act = (url) => url ? ` <button class="btn ghost" title="תצוגה" style="padding:1px 6px;font-size:12px" onclick="previewDoc('${esc(url)}')">👁</button><a href="${url}" target="_blank" title="הורדה" class="btn ghost" style="padding:1px 6px;font-size:12px;text-decoration:none">⬇</a>` : '';
+  // תצוגה 👁 + הורדה ↓ צמודים לשם המסמך. למסמכי הכנסה (doc עם id) — התצוגה נפתחת עם כפתור "שלח במייל" בראש החלונית.
+  const act = (url, doc) => {
+    if (!url) return '';
+    const view = (doc && doc.id)
+      ? `previewDocSend('${esc(url)}','${doc.id}','${escAttr(String(doc.number || ''))}','${escAttr(DOC_TYPE_NAMES[Number(doc.type)] || 'מסמך')}','${encodeURIComponent(doc.clientName || '')}')`
+      : `previewDoc('${esc(url)}')`;
+    return ` <button class="btn ghost" title="תצוגה" style="padding:1px 6px;font-size:12px" onclick="${view}">👁</button><a href="${url}" target="_blank" title="הורדה" class="btn ghost" style="padding:1px 6px;font-size:12px;text-decoration:none">⬇</a>`;
+  };
   let biz = '<span class="muted">—</span>', invNo = '—', recNo = '—', invAmt = '—', wh = '—', action = '';
 
   if (isMatched) {
@@ -6540,15 +6554,15 @@ function bankTr(t) {
       const i = u.inv;
       if (i.kind === 'expense') return `<span style="white-space:nowrap">חשבונית #${i.number}${act(i.url)}</span>`;
       if (Number(i.type) === 400) return '<span class="muted">—</span>';
-      const main = `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url)}</span>`;
+      const main = `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url, i)}</span>`;
       const creditLines = (u.credits || []).map(c => `<div class="muted" style="font-size:11px;color:var(--warn);white-space:nowrap">➖ זיכוי #${c.number} · −${money(c.amount)}${act(c.url)}</div>`).join('');
       return main + creditLines;
     }));
     recNo = stack(units.map(u => {
       const i = u.inv;
       if (i.kind === 'expense') return '—';
-      if (Number(i.type) === 400) return `<span style="white-space:nowrap">קבלה #${i.number}${act(i.url)}</span>`;
-      if (u.receipt) return `<span style="white-space:nowrap">קבלה #${u.receipt.number}${act(u.receipt.url)}</span>`;
+      if (Number(i.type) === 400) return `<span style="white-space:nowrap">קבלה #${i.number}${act(i.url, i)}</span>`;
+      if (u.receipt) return `<span style="white-space:nowrap">קבלה #${u.receipt.number}${act(u.receipt.url, { id: u.receipt.id, number: u.receipt.number, type: 400, clientName: i.clientName })}</span>`;
       if (Number(i.type) === 320) return '<span class="muted" style="font-size:11px">כלול בחשבונית</span>';
       // חשבונית מס (305) ששולמה בבנק אך אין לה קבלה — התראה + כפתור הפקת קבלה מקושרת לתנועה
       if (Number(i.type) === 305) return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start"><span class="tag" style="background:#fef3c7;color:#92400e;font-size:10px;white-space:nowrap" title="התקבל תשלום בבנק אך עדיין לא הופקה קבלה">💰 התקבל תשלום · חסרה קבלה</span><button class="btn primary" style="padding:2px 9px;font-size:11px;white-space:nowrap" onclick="event.stopPropagation();incProduce('${i.id}',305,'${t.id}',${Number(i.amount) || 0},false)" title="הפקת קבלה למסמך זה בחשבונית ירוקה">🧾 הפק קבלה</button></div>`;
