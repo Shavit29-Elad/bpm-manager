@@ -6455,13 +6455,25 @@ function bankMatchedNet(t) {
     return s + (Number(u.net != null ? u.net : (u.inv ? u.inv.amount : 0)) || 0);
   }, 0);
 }
+// סכום ההקצאות המותאם — כמו bankMatchedNet אבל מכבד allocated ידני, ולא סופר קבלה מקוננת (400 מתחת לחשבונית) פעמיים.
+// תיקון: כשחשבונית (305) וקבלה (400) על אותו כסף משויכות לאותה תנועה, אין לספור את שתיהן (זה גרם ל"חסר" שגוי).
+function bankAllocatedTotal(t) {
+  const mis = t.matchedInvoices || [];
+  if (!mis.some(i => i.allocated != null)) return bankMatchedNet(t);
+  const units = groupBankUnits(mis);
+  const hasInvoiceUnit = units.some(u => u.inv && u.inv.kind !== 'expense' && [305, 300, 320].includes(Number(u.inv.type)));
+  return units.reduce((s, u) => {
+    const isReceipt = u.standaloneReceipt || (u.inv && u.inv.kind !== 'expense' && Number(u.inv.type) === 400);
+    if (isReceipt && hasInvoiceUnit) return s;   // קבלה מקוננת/כפולה כשיש חשבונית — לא נספרת שוב
+    const a = (u.inv && u.inv.allocated != null) ? Number(u.inv.allocated) : (Number(u.net != null ? u.net : (u.inv ? u.inv.amount : 0)) || 0);
+    return s + (a || 0);
+  }, 0);
+}
 function bankRowCovered(t) {
   const invs = t.matchedInvoices || [];
   if (!invs.length) return false;
-  // אם יש הקצאות ידניות (allocated) — לפיהן; אחרת לפי סכום הנטו של היחידות (קבלה מקוננת לא נספרת פעמיים)
-  const sum = invs.some(i => i.allocated != null)
-    ? invs.reduce((s, inv) => s + (Number(inv.allocated != null ? inv.allocated : inv.amount) || 0), 0)
-    : bankMatchedNet(t);
+  // סכום ההקצאות (קבלה מקוננת לא נספרת פעמיים)
+  const sum = bankAllocatedTotal(t);
   const bank = Math.abs(Number(t.absAmount) || 0);
   const tol = Math.max(3, bank * 0.004);
   if (Math.abs(sum - bank) <= tol) return true;
@@ -6553,9 +6565,7 @@ function bankTr(t) {
     const whAmt = sumInv - t.absAmount;
     wh = (whRate() > 0 && whAmt > 1 && whAmt < sumInv * (whRate() + 0.03)) ? `<span style="color:var(--warn)">${money(whAmt)}</span>` : '—';
     const conf = bankConfidence(t);
-    const matchedTot = mis.some(i => i.allocated != null)
-      ? mis.reduce((s, i) => s + (Number(i.allocated != null ? i.allocated : i.amount) || 0), 0)
-      : bankMatchedNet(t);
+    const matchedTot = bankAllocatedTotal(t);   // קבלה מקוננת מתחת לחשבונית לא נספרת פעמיים (מונע "חסר" שגוי)
     const shortAmt = Math.abs(Number(t.absAmount) || 0) - matchedTot;
     const confBadge = !covered
       ? `<span class="tag miss" style="font-size:10px;margin-inline-end:4px">חסר ${money(shortAmt)}</span>`
