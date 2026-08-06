@@ -1019,11 +1019,25 @@ add('GET', /^\/api\/expense-drafts$/, async (req, res, _p, q) => {
   if (q.fresh) greenInvoice.clearDataCache();
   try {
     const db = load();
+    const cid = q.companyId || giCompanyId();
     const approved = db.approvedDrafts || {};
     const dismissed = db.dismissedDrafts || [];
     const all = await greenInvoice.expenseDrafts();
+    // מסנן החוצה טיוטות שכבר קיימות כהוצאה במערכת (הוצאה בחשבונית ירוקה / רשומת ספק) — כדי שלא תגיע לאשר מסמך שכבר נקלט
+    const nrm = (s) => String(s == null ? '' : s).replace(/\s+/g, '').replace(/^0+/, '').toLowerCase();
+    const amtEq = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) < 1;
+    const existing = [];
+    try { const _to = new Date().toISOString().slice(0, 10); for (const e of (await greenInvoice.expensesInRange('2026-01-01', _to))) if (e.number) existing.push({ num: nrm(e.number), amt: Number(e.amount) || 0, sup: nrm(e.supplierName) }); } catch { }
+    for (const p of (db.supplierPayables || []).filter(x => (x.companyId || giCompanyId()) === cid)) if (p.number) existing.push({ num: nrm(p.number), amt: Number(p.amount) || 0, sup: nrm(p.supplierName) });
+    // כבר קיים כהוצאה = אותו מספר + אותו סכום, ואם לשתי הרשומות יש שם ספק — גם הוא חייב להתאים (כדי לא לפסול בטעות ספקים שונים עם אותו מספר)
+    const alreadyExpense = (d) => {
+      const num = nrm(d.number); if (!num) return false;
+      const amt = d.amount != null ? Number(d.amount) : null;
+      const sup = nrm(d.supplierName);
+      return existing.some(x => x.num === num && (amt == null || amtEq(x.amt, amt)) && (!sup || !x.sup || sup === x.sup));
+    };
     const drafts = all
-      .filter(d => !approved[d.id] && !dismissed.includes(d.id))
+      .filter(d => !approved[d.id] && !dismissed.includes(d.id) && !alreadyExpense(d))
       .map(d => ({ ...d, raw: undefined }));
     json(res, { drafts });
   } catch (e) { json(res, { drafts: [], error: e.message }, 500); }
