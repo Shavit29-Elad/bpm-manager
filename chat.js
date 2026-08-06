@@ -252,6 +252,8 @@ export async function interpretBonuses(note, names) {
 }
 
 // ===== קליטת חשבונית ספק עם AI — קורא את ה-PDF/תמונה ומחלץ את השדות =====
+// כשמזוהה ש-Claude ללא קרדיט/הרשאה — מדלגים עליו זמנית וניגשים ישר ל-Gemini (חוסך קריאה מיותרת פר-מסמך ולוגים).
+let _claudeOutUntil = 0;
 // קריאה מולטימודלית ל-Claude (מסמך/תמונה) — עם fallback למודלים
 async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = {}) {
   const key = process.env.ANTHROPIC_API_KEY;
@@ -282,7 +284,14 @@ async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = 
         await sleep(wait);
         continue;
       }
-      if (!res.ok) throw new Error(`שגיאת AI (${res.status}): ${text.slice(0, 300)}`);
+      if (!res.ok) {
+        // אין קרדיט / הרשאה — אין טעם לנסות מודלים נוספים או מסמכים נוספים ב-Claude; מדלגים עליו ל-15 דק' ועוברים ל-Gemini
+        if ((res.status === 400 && /credit balance is too low/i.test(text)) || res.status === 401 || res.status === 403) {
+          _claudeOutUntil = Date.now() + 15 * 60 * 1000;
+          throw new Error(`Claude ללא קרדיט/הרשאה (${res.status})`);
+        }
+        throw new Error(`שגיאת AI (${res.status}): ${text.slice(0, 300)}`);
+      }
       let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מ-AI'); }
       return (data.content || []).map(c => c.text).filter(Boolean).join('');
     }
@@ -296,7 +305,8 @@ async function visionExtract(system, prompt, fileBase64, mediaType) {
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
     : { type: 'image', source: { type: 'base64', media_type: mediaType, data: fileBase64 } };
   const hasA = !!process.env.ANTHROPIC_API_KEY, hasG = !!process.env.GEMINI_API_KEY;
-  if (hasA) {
+  // מדלגים על Claude אם זוהה שאין לו קרדיט/הרשאה (עד שהחלון עובר) — ישר ל-Gemini, בלי לבזבז קריאה פר-מסמך
+  if (hasA && Date.now() > _claudeOutUntil) {
     try { return await callAnthropicVision(system, [block, { type: 'text', text: prompt }]); }
     catch (e) {
       if (!hasG) throw e;
