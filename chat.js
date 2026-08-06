@@ -255,13 +255,14 @@ export async function interpretBonuses(note, names) {
 // קריאה מולטימודלית ל-Claude (מסמך/תמונה) — עם fallback למודלים
 async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = {}) {
   const key = process.env.ANTHROPIC_API_KEY;
+  // מהירות: Haiku ראשון — מודל מהיר וזול שמספיק לחילוץ שדות מחשבונית; Sonnet רק כגיבוי אם Haiku נכשל.
   const candidates = process.env.VISION_MODEL
     ? [process.env.VISION_MODEL]
-    : ['claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-latest'];
+    : ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-3-5-sonnet-20241022'];
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   let lastErr = '';
   for (const model of candidates) {
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {   // פחות ניסיונות → מעבר מהיר למודל הבא/Gemini במקום המתנות ארוכות
       let res, text;
       try {
         res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -270,13 +271,14 @@ async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = 
           body: JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: 'user', content: contentBlocks }] }),
         });
         text = await res.text();
-      } catch (e) { lastErr = 'network: ' + e.message; await sleep(1500 * (attempt + 1)); continue; } // שגיאת רשת — ניסיון חוזר
+      } catch (e) { lastErr = 'network: ' + e.message; await sleep(1000 * (attempt + 1)); continue; } // שגיאת רשת — ניסיון חוזר
       if (res.status === 404) { lastErr = `(404) ${text.slice(0, 120)}`; break; } // מודל לא קיים — למודל הבא
-      // הגבלת קצב (429) / עומס (529) / שגיאות שרת זמניות — המתנה עם backoff וניסיון חוזר על אותו מודל
+      // הגבלת קצב (429) / עומס (529) / שגיאות שרת זמניות — המתנה קצרה עם backoff; אחרי ניסיון אחד עוברים למודל הבא
       if (res.status === 429 || res.status === 529 || res.status === 500 || res.status === 502 || res.status === 503) {
         const ra = Number(res.headers.get('retry-after'));
-        const wait = (ra > 0 ? ra * 1000 : 0) || Math.min(32000, 2000 * Math.pow(2, attempt));
+        const wait = (ra > 0 ? Math.min(ra * 1000, 6000) : 0) || Math.min(6000, 1500 * Math.pow(2, attempt));
         lastErr = `(${res.status}) rate/overload`;
+        if (attempt >= 1) break;   // כבר חיכינו פעם — לא לתקוע; נעבור למודל הבא
         await sleep(wait);
         continue;
       }
@@ -317,20 +319,21 @@ async function callGeminiVision(system, prompt, fileBase64, mime, { maxTokens = 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   let lastErr = '';
   for (const model of candidates) {
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       let res, text;
       try {
         res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
           method: 'POST', headers: { 'content-type': 'application/json' }, body,
         });
         text = await res.text();
-      } catch (e) { lastErr = 'network: ' + e.message; await sleep(2000 * (attempt + 1)); continue; }
+      } catch (e) { lastErr = 'network: ' + e.message; await sleep(1500 * (attempt + 1)); continue; }
       if (res.status === 404) { lastErr = '(404)'; break; } // מודל לא קיים — למודל הבא
-      // 429 = חריגה ממגבלת קצב (Gemini free). ממתין וניסיון חוזר (מכבד retryDelay אם מוחזר).
+      // 429 = חריגה ממגבלת קצב (Gemini free). המתנה קצרה (מכבד retryDelay אם קטן), אחרת עוברים למודל הבא במהירות.
       if (res.status === 429 || res.status === 503 || res.status === 500) {
-        let wait = Math.min(60000, 5000 * Math.pow(2, attempt));
-        const m = String(text).match(/"retryDelay"\s*:\s*"(\d+)s"/); if (m) wait = Math.max(wait, (Number(m[1]) + 1) * 1000);
+        let wait = Math.min(8000, 2000 * Math.pow(2, attempt));
+        const m = String(text).match(/"retryDelay"\s*:\s*"(\d+)s"/); if (m) wait = Math.min(10000, Math.max(wait, (Number(m[1]) + 1) * 1000));
         lastErr = `(${res.status}) rate`;
+        if (attempt >= 1) break;
         await sleep(wait);
         continue;
       }
