@@ -2536,9 +2536,15 @@ add('POST', /^\/api\/employees\/sync$/, (req, res, _p, q, body) => {
   const cid = (body && body.companyId) || q.companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
   const names = new Set();
   for (const ev of companyEvents(db, cid)) for (const w of (ev.employeeDetails || [])) if (w.name) names.add(String(w.name).trim());
-  const existing = new Set((db.employees || []).filter(e => !e.companyId || e.companyId === cid).map(e => e.name));
+  // "כבר קיים" = לפי שם פרטי או לפי שם מלא (פרטי+משפחה) — כדי שלא ייווצר עובד כפול בשם המלא כשקיים כבר עובד בשם הפרטי
+  const nrm = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const existing = new Set();
+  for (const e of (db.employees || []).filter(e => !e.companyId || e.companyId === cid)) {
+    if (e.name) existing.add(nrm(e.name));
+    if (e.name && e.lastName) existing.add(nrm(e.name + ' ' + e.lastName));
+  }
   let added = 0;
-  for (const name of names) { if (name && !existing.has(name)) { db.employees.push({ id: id('emp'), companyId: cid, name, baseRate: null, salaryType: 'gross', active: true }); added++; } }
+  for (const name of names) { if (name && !existing.has(nrm(name))) { db.employees.push({ id: id('emp'), companyId: cid, name, baseRate: null, salaryType: 'gross', active: true }); added++; existing.add(nrm(name)); } }
   save(db); json(res, { added });
 });
 

@@ -5135,7 +5135,7 @@ function openEmpJobsModal(name, r) {
   const allManual = (emp.manualLines && typeof emp.manualLines === 'object') ? JSON.parse(JSON.stringify(emp.manualLines)) : {};
   const monthManual = Array.isArray(allManual[state.payMonth]) ? allManual[state.payMonth] : [];
   _report = {
-    empId: emp.id, empName: fullName, month: state.payMonth,
+    empId: emp.id, empName: fullName, empFirst: name, month: state.payMonth,   // empFirst = השם הפרטי — המפתח לזיהוי באירועים (empName/fullName הוא לתצוגה בלבד)
     salaryType: emp.salaryType || 'gross',
     empTravel: Number(emp.travel) || 0,
     allManual,
@@ -5205,8 +5205,10 @@ window.editReport = async (i, f, val) => {
   if (f === 'artist' || f === 'location') { ev[f] = val; }
   else {
     ev.employeeDetails = ev.employeeDetails || [];
-    let d = ev.employeeDetails.find(x => x.name === _report.empName);
-    if (!d) { d = { name: _report.empName }; ev.employeeDetails.push(d); ev.employees = ev.employees || []; if (!ev.employees.includes(_report.empName)) ev.employees.push(_report.empName); }
+    // התאמה לפי השם הפרטי (כפי שמופיע באירוע), לא לפי השם המלא — אחרת נוצר עובד כפול בשם המלא
+    const key = _report.empFirst || _report.empName;
+    let d = ev.employeeDetails.find(x => x.name === key || x.name === _report.empName);
+    if (!d) { d = { name: key }; ev.employeeDetails.push(d); ev.employees = ev.employees || []; if (!ev.employees.includes(key)) ev.employees.push(key); }
     if (f === 'payment') d.rate = val === '' ? null : +val;
     else if (f === 'bonus') d.bonus = val === '' ? null : +val;
     else if (f === 'food') d.food = val === '' ? null : +val;
