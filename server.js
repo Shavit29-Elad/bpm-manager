@@ -2246,6 +2246,20 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
         });
       }
     }
+    // סימון חשבוניות מס (305) ששולמו בבנק אך חסרה להן קבלה — התראה + כפתור הפקת קבלה
+    const _nrm = (s) => String(s == null ? '' : s).replace(/\s+/g, '').replace(/^0+/, '');
+    const _paidNoRcpt = new Set();
+    for (const t of (db.bankTx || [])) {
+      if (cid && t.companyId !== cid) continue;
+      if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
+      for (const inv of (t.matchedInvoices || [])) {
+        if (Number(inv.type) === 305 && !inv.receipt) {
+          if (inv.number != null) _paidNoRcpt.add('num:' + _nrm(inv.number));
+          if (inv.id != null) _paidNoRcpt.add('id:' + inv.id);
+        }
+      }
+    }
+    docs.forEach(d => { if (Number(d.type) === 305 && (_paidNoRcpt.has('num:' + _nrm(d.number)) || _paidNoRcpt.has('id:' + d.id))) d.paidNoReceipt = true; });
   } catch {}
   json(res, { docs, error: (docs.length ? null : giErr) });
 });

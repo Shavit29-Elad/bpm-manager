@@ -1022,6 +1022,7 @@ function openInvClientHtml(cl) {
     <span style="white-space:nowrap">${d.number ? '#' + d.number : ''}</span><span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</span>
     <span style="font-weight:600;white-space:nowrap">${d.amountDue != null || d.amount != null ? money(d.amountDue != null ? d.amountDue : d.amount) : '<span class="muted">—</span>'}</span>
+    ${d.paidNoReceipt ? `<span class="tag" style="background:#fef3c7;color:#92400e;white-space:nowrap" title="התקבל תשלום בבנק אך עדיין לא הופקה קבלה">💰 התקבל תשלום · חסרה קבלה</span><button class="btn primary" style="padding:2px 10px;font-size:12px;white-space:nowrap" onclick="event.stopPropagation();openDerive('${d.id}','${escAttr(String(d.number || ''))}',305,'followup')" title="הפקת קבלה למסמך זה בחשבונית ירוקה">🧾 הפק קבלה</button>` : ''}
     ${d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
     <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : ''}
     ${d.uploaded
@@ -6530,6 +6531,8 @@ function bankTr(t) {
       if (Number(i.type) === 400) return `<span style="white-space:nowrap">קבלה #${i.number}${act(i.url)}</span>`;
       if (u.receipt) return `<span style="white-space:nowrap">קבלה #${u.receipt.number}${act(u.receipt.url)}</span>`;
       if (Number(i.type) === 320) return '<span class="muted" style="font-size:11px">כלול בחשבונית</span>';
+      // חשבונית מס (305) ששולמה בבנק אך אין לה קבלה — התראה + כפתור הפקת קבלה מקושרת לתנועה
+      if (Number(i.type) === 305) return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start"><span class="tag" style="background:#fef3c7;color:#92400e;font-size:10px;white-space:nowrap" title="התקבל תשלום בבנק אך עדיין לא הופקה קבלה">💰 התקבל תשלום · חסרה קבלה</span><button class="btn primary" style="padding:2px 9px;font-size:11px;white-space:nowrap" onclick="event.stopPropagation();incProduce('${i.id}',305,'${t.id}',${Number(i.amount) || 0},false)" title="הפקת קבלה למסמך זה בחשבונית ירוקה">🧾 הפק קבלה</button></div>`;
       return '—';
     }));
     invAmt = stack(units.map(u => {
