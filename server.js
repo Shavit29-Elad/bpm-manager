@@ -3863,7 +3863,10 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
     const bankAbs = Math.abs(Number(t.absAmount) || 0);
     const whRate = bizProfile(db, t.companyId).withholdingRate || 0;   // שיעור ניכוי מס במקור של החברה
     const whFactor = 1 - whRate;
-    const rem = body.matchedInvoices.map(inv => ({ inv, r: Math.max(0, (Number(inv.amount) || 0) - allocatedElsewhere(inv.id)) }));
+    // קבלה (400) שיש לה חשבונית מקור (305/300/320) באותה שורה = אותו כסף — לא מקצים לה בנפרד (מונע ספירה כפולה שמעוותת את הסכום שנותר להקצאה)
+    const _hasInv = body.matchedInvoices.some(x => x.kind !== 'expense' && [305, 300, 320].includes(Number(x.type)));
+    const _allocatable = body.matchedInvoices.filter(inv => !(Number(inv.type) === 400 && inv.kind !== 'expense' && _hasInv));
+    const rem = _allocatable.map(inv => ({ inv, r: Math.max(0, (Number(inv.amount) || 0) - allocatedElsewhere(inv.id)) }));
     const totalRem = rem.reduce((s, x) => s + x.r, 0);
     const tol = Math.max(3, bankAbs * 0.004);
     if (whRate > 0 && totalRem > 0 && Math.abs(bankAbs - totalRem * whFactor) <= Math.max(3, totalRem * 0.004)) {
