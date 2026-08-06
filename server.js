@@ -544,8 +544,13 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
         const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
-        if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum);
-        if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName);
+        if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum); // צ'ק
+        // פרטי חשבון המשלם (העברה בנקאית / צ'ק): בנק, סניף, חשבון — חשבונית ירוקה מחייבת זאת לתקבול צ'ק (שגיאה 2443)
+        if ([2, 4].includes(Number(p.type))) {
+          if (p.bankName) row.bankName = String(p.bankName).replace(/\s*\(\d+\)\s*$/, '').trim(); // מנקים "(קוד)" מהשם
+          if (p.bankBranch) row.bankBranch = String(p.bankBranch);
+          if (p.bankAccount) row.bankAccount = String(p.bankAccount);
+        }
         return row;
       }).filter(p => Math.abs(p.price) > 0);
     }

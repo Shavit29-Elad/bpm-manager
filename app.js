@@ -6464,7 +6464,14 @@ function bankRowCovered(t) {
     : bankMatchedNet(t);
   const bank = Math.abs(Number(t.absAmount) || 0);
   const tol = Math.max(3, bank * 0.004);
-  return Math.abs(sum - bank) <= tol || (t.direction === 'credit' && whFactor() < 1 && Math.abs(sum * whFactor() - bank) <= tol);
+  if (Math.abs(sum - bank) <= tol) return true;
+  // זכות עם ניכוי מס במקור: הבנק מקבל פחות מסכום החשבונית כי הלקוח ניכה מס במקור.
+  // נחשב מכוסה כשההפרש חיובי ובטווח הניכוי הצפוי (שיעור החברה + מרווח שסופג בסיס לפני-מע״מ/עיגול) — עקבי עם עמודת "ניכוי" שכבר מזהה זאת.
+  if (t.direction === 'credit' && whRate() > 0) {
+    const short = sum - bank;
+    if (short > 0 && short <= sum * (whRate() + 0.03) + tol) return true;
+  }
+  return false;
 }
 // שיעור ניכוי מס במקור של החברה הפעילה (fraction) — נטען מפרטי העסק. משמש בכל חישובי הניכוי.
 function whRate() { return Math.min(0.3, Math.max(0, Number(state.whRate) || 0)); }
