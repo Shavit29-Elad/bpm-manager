@@ -2817,8 +2817,21 @@ async function runMailScanFull(cid, since, maxBatches = 400) {
   }
   return tot;
 }
-// ניקוי כפילויות: אחרי הקליטה, מוחק טיוטות הוצאה שכבר קיימות במערכת (הוצאה שנקלטה / רשומה קיימת) — לפי מספר+סכום.
-// טיוטה בלי מספר (OCR עוד לא הסתיים) לעולם לא נמחקת. פר-חברה (withCompany).
+// טביעת אצבע של קובץ הטיוטה (מהקישור בחשבונית ירוקה) — לזיהוי שתי טיוטות מאותו קובץ בדיוק, גם כשאין מספר OCR.
+async function _draftFileHash(url) {
+  if (!url) return '';
+  const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const r = await fetch(url, { redirect: 'follow', signal: ctrl.signal });
+    clearTimeout(to);
+    if (!r || !r.ok) return '';
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!buf.length) return '';
+    return crypto.createHash('sha1').update(buf).digest('hex');
+  } catch { clearTimeout(to); return ''; }
+}
+// ניקוי כפילויות: מוחק טיוטות הוצאה שכבר קיימות במערכת (הוצאה שנקלטה / רשומה) — לפי מספר+סכום,
+// וגם שתי טיוטות זהות זו-לזו: לפי מספר+סכום, ואם אין מספר — לפי טביעת אצבע של תוכן הקובץ. פר-חברה (withCompany).
 async function dedupeCompanyDrafts(cid, fromDate) {
   return await greenInvoice.withCompany(cid, async () => {
     let deleted = 0;
@@ -2837,12 +2850,20 @@ async function dedupeCompanyDrafts(cid, fromDate) {
       const db = load();
       for (const p of (db.supplierPayables || []).filter(x => (x.companyId || giCompanyId()) === cid)) if (p.number) existing.push({ num: nrm(p.number), amt: Number(p.amount) || 0 });
       const seenDraft = new Set();
+      const hashCache = {};   // id → file hash, כדי לא להוריד פעמיים
       for (const d of drafts) {
         const num = nrm(d.number);
-        if (!num) continue; // אין מספר עדיין — לא נוגעים
-        const amt = d.amount != null ? Number(d.amount) : null;
-        const isDupExisting = existing.some(x => x.num === num && (amt == null || amtEq(x.amt, amt)));
-        const dk = num + '|' + (amt != null ? Math.round(amt) : 'x');
+        let dk, isDupExisting = false;
+        if (num) {
+          const amt = d.amount != null ? Number(d.amount) : null;
+          isDupExisting = existing.some(x => x.num === num && (amt == null || amtEq(x.amt, amt)));
+          dk = num + '|' + (amt != null ? Math.round(amt) : 'x');
+        } else {
+          // אין מספר OCR — מזהים כפילות לפי טביעת אצבע של תוכן הקובץ
+          const h = await _draftFileHash(d.url); hashCache[d.id] = h;
+          if (!h) continue;           // לא הצלחנו להוריד/לגבב — משאירים ולא נוגעים
+          dk = 'h:' + h;
+        }
         const isDupDraft = seenDraft.has(dk);
         if (isDupExisting || isDupDraft) {
           try { await greenInvoice.deleteExpenseDraft(d.id); deleted++; }
