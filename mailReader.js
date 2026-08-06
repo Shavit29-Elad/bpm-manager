@@ -96,9 +96,9 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
     try {
       const uids = (await client.search({ since: new Date(since) }, { uid: true })) || []; // עולה — ישן→חדש
       const exclude = new Set(excludeUids.map(String));
-      const fresh = uids.filter(u => !exclude.has(String(u)));
+      const fresh = uids.filter(u => !exclude.has(String(u))).reverse(); // הופכים לסדר יורד — מעבדים מהחדש לישן (חשבוניות אחרונות נקלטות קודם)
       remaining = fresh.length;
-      const use = fresh.slice(0, Math.max(1, limit)); // מעבדים מהישן לחדש
+      const use = fresh.slice(0, Math.max(1, limit)); // אצווה של החדשים ביותר שטרם נסרקו
       if (use.length) {
         for await (const msg of client.fetch(use, { source: true }, { uid: true })) {
           processedUids.push(msg.uid);
