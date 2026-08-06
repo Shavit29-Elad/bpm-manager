@@ -6480,16 +6480,19 @@ function bankAllocatedTotal(t) {
 function bankRowCovered(t) {
   const invs = t.matchedInvoices || [];
   if (!invs.length) return false;
-  // סכום ההקצאות (קבלה מקוננת לא נספרת פעמיים)
-  const sum = bankAllocatedTotal(t);
   const bank = Math.abs(Number(t.absAmount) || 0);
   const tol = Math.max(3, bank * 0.004);
-  if (Math.abs(sum - bank) <= tol) return true;
-  // זכות עם ניכוי מס במקור: הבנק מקבל פחות מסכום החשבונית כי הלקוח ניכה מס במקור.
-  // נחשב מכוסה כשההפרש חיובי ובטווח הניכוי הצפוי (שיעור החברה + מרווח שסופג בסיס לפני-מע״מ/עיגול) — עקבי עם עמודת "ניכוי" שכבר מזהה זאת.
-  if (t.direction === 'credit' && whRate() > 0) {
-    const short = sum - bank;
-    if (short > 0 && short <= sum * (whRate() + 0.03) + tol) return true;
+  // שני בסיסים: לפי הקצאות (allocated) ולפי הסכום ברוטו של החשבוניות (יציב — לא תלוי בהקצאה חמדנית שגויה). מספיק שאחד מהם מכסה.
+  const allocSum = bankAllocatedTotal(t);
+  const grossNet = bankMatchedNet(t);
+  for (const sum of new Set([allocSum, grossNet])) {
+    if (Math.abs(sum - bank) <= tol) return true;
+    // זכות עם ניכוי מס במקור: הבנק מקבל פחות מסכום החשבונית כי הלקוח ניכה מס במקור.
+    // מכוסה כשההפרש חיובי ובטווח הניכוי הצפוי (שיעור החברה + מרווח לבסיס לפני-מע״מ/עיגול) — עקבי עם עמודת "ניכוי".
+    if (t.direction === 'credit' && whRate() > 0) {
+      const short = sum - bank;
+      if (short > 0 && short <= sum * (whRate() + 0.03) + tol) return true;
+    }
   }
   return false;
 }
