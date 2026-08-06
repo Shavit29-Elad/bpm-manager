@@ -2246,20 +2246,26 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
         });
       }
     }
-    // סימון חשבוניות מס (305) ששולמו בבנק אך חסרה להן קבלה — התראה + כפתור הפקת קבלה
+    // סימון חשבוניות מס (305) ששולמו בבנק אך חסרה להן קבלה — התראה + כפתור הפקת קבלה (בתאריך כניסת הכסף)
     const _nrm = (s) => String(s == null ? '' : s).replace(/\s+/g, '').replace(/^0+/, '');
-    const _paidNoRcpt = new Set();
+    const _toIso = (s) => { s = String(s || '').trim(); if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10); const m = s.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})/); if (m) { let [, dd, mm, yy] = m; if (yy.length === 2) yy = '20' + yy; return `${yy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`; } return null; };
+    const _paidNoRcpt = new Map(); // key -> { date, txId, amount }
     for (const t of (db.bankTx || [])) {
       if (cid && t.companyId !== cid) continue;
       if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
       for (const inv of (t.matchedInvoices || [])) {
         if (Number(inv.type) === 305 && !inv.receipt) {
-          if (inv.number != null) _paidNoRcpt.add('num:' + _nrm(inv.number));
-          if (inv.id != null) _paidNoRcpt.add('id:' + inv.id);
+          const info = { date: _toIso(t.date), txId: t.id, amount: inv.amount != null ? Number(inv.amount) : (t.absAmount != null ? Number(t.absAmount) : null) };
+          if (inv.number != null && !_paidNoRcpt.has('num:' + _nrm(inv.number))) _paidNoRcpt.set('num:' + _nrm(inv.number), info);
+          if (inv.id != null && !_paidNoRcpt.has('id:' + inv.id)) _paidNoRcpt.set('id:' + inv.id, info);
         }
       }
     }
-    docs.forEach(d => { if (Number(d.type) === 305 && (_paidNoRcpt.has('num:' + _nrm(d.number)) || _paidNoRcpt.has('id:' + d.id))) d.paidNoReceipt = true; });
+    docs.forEach(d => {
+      if (Number(d.type) !== 305) return;
+      const info = _paidNoRcpt.get('num:' + _nrm(d.number)) || _paidNoRcpt.get('id:' + d.id);
+      if (info) { d.paidNoReceipt = true; d.paidDate = info.date || null; d.paidTxId = info.txId || null; d.paidAmount = info.amount != null ? info.amount : null; }
+    });
   } catch {}
   json(res, { docs, error: (docs.length ? null : giErr) });
 });

@@ -1022,7 +1022,7 @@ function openInvClientHtml(cl) {
     <span style="white-space:nowrap">${d.number ? '#' + d.number : ''}</span><span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</span>
     <span style="font-weight:600;white-space:nowrap">${d.amountDue != null || d.amount != null ? money(d.amountDue != null ? d.amountDue : d.amount) : '<span class="muted">—</span>'}</span>
-    ${d.paidNoReceipt ? `<span class="tag" style="background:#fef3c7;color:#92400e;white-space:nowrap" title="התקבל תשלום בבנק אך עדיין לא הופקה קבלה">💰 התקבל תשלום · חסרה קבלה</span><button class="btn primary" style="padding:2px 10px;font-size:12px;white-space:nowrap" onclick="event.stopPropagation();openDerive('${d.id}','${escAttr(String(d.number || ''))}',305,'followup')" title="הפקת קבלה למסמך זה בחשבונית ירוקה">🧾 הפק קבלה</button>` : ''}
+    ${d.paidNoReceipt ? `<span class="tag" style="background:#fef3c7;color:#92400e;white-space:nowrap" title="התקבל תשלום בבנק${d.paidDate ? ' בתאריך ' + fmtDate(d.paidDate) : ''} אך עדיין לא הופקה קבלה">💰 התקבל תשלום${d.paidDate ? ' · ' + fmtDate(d.paidDate) : ''} · חסרה קבלה</span><button class="btn primary" style="padding:2px 10px;font-size:12px;white-space:nowrap" onclick="event.stopPropagation();issuePaidReceipt('${d.id}','${escAttr(String(d.paidDate || ''))}','${escAttr(String(d.paidTxId || ''))}',${d.paidAmount != null ? Number(d.paidAmount) : 0})" title="הפקת קבלה בתאריך שבו התקבל הכסף בבנק">🧾 הפק קבלה</button>` : ''}
     ${d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
     <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : ''}
     ${d.uploaded
@@ -6997,6 +6997,11 @@ window.incSearch = (q) => { _incQuery = q || ''; const box = document.getElement
 window.incProduce = (docId, srcType, txId, X, isWh) => {
   const im = document.getElementById('incModal'); if (im) im.classList.add('hidden');
   openDeriveEditor(docId, incTargetFor(srcType), true, { date: txIsoDate(txId) || todayIso(), bankReceived: Number(X) || 0, withholding: isWh === true || isWh === 'true', bankTxId: txId, sourceDocId: docId });
+};
+// הפקת קבלה לחשבונית מס ששולמה בבנק — תאריך המסמך והתקבול נקבעים אוטומטית לתאריך כניסת הכסף (מגיע מהשרת, ללא תלות ברשימת הבנק שנטענה)
+window.issuePaidReceipt = (docId, paidDate, txId, amount) => {
+  const date = (paidDate && String(paidDate).trim()) || txIsoDate(txId) || todayIso();
+  openDeriveEditor(docId, 400, true, { date, bankReceived: Number(amount) || undefined, bankTxId: txId || undefined, sourceDocId: docId });
 };
 // מסמך הכנסה חדש מאפס (מס-קבלה/קבלה) — דרך עורך המסמך החדש, עם קישור לבנק
 window.incNewDoc = async (txId, type, X) => {
