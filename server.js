@@ -2761,7 +2761,9 @@ add('POST', /^\/api\/mail-scan\/test$/, async (req, res, _p, q, body) => {
 function mailScanState(db, cid) {
   db.mailScan = db.mailScan || {};
   if (!db.mailScan[cid]) db.mailScan[cid] = { seenUids: [], lastScanAt: null, since: null, uploadedHashes: [] };
-  if (!Array.isArray(db.mailScan[cid].uploadedHashes)) db.mailScan[cid].uploadedHashes = []; // טביעות אצבע של קבצים שכבר הועלו — לא מעלים אותו קובץ פעמיים
+  if (!Array.isArray(db.mailScan[cid].uploadedHashes)) db.mailScan[cid].uploadedHashes = []; // טביעות אצבע של קבצים שכבר עובדו (הועלו/נדחו/לא-חשבונית) — לא שולחים אותו קובץ ל-AI פעמיים
+  // ה-backfill מתחילת 2026 רץ פעם אחת בלבד. אם כבר נסרקו הודעות בעבר — נחשב שהושלם (לא סורקים שוב מתחילת השנה).
+  if (db.mailScan[cid].backfillDone == null) db.mailScan[cid].backfillDone = (db.mailScan[cid].seenUids || []).length > 0;
   return db.mailScan[cid];
 }
 // טביעת אצבע יציבה של תוכן הקובץ (לא תלויה ב-AI) — מזהה את אותו מסמך בדיוק גם בין הרצות
@@ -2828,7 +2830,8 @@ async function mailScanBatchFor(cid, since, limit) {
       }
       if (st.errCounts[String(it.uid)]) delete st.errCounts[String(it.uid)]; // הצליח — מאפסים מונה כשלונות
       await sleep(250); // קצב — למנוע חריגה ממגבלת ה-AI
-      if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; continue; }
+      // לא חשבונית (לוגו/חתימה/מסמך שאינו פיננסי) — מדלגים, ושומרים טביעת אצבע כדי לא לנתח את אותו קובץ שוב לעולם (חוסך קרדיט בכל ריצה עתידית).
+      if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; }
       if (isExisting(ai)) { duplicates++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; } // כבר קיים במערכת — לא מעלים, וגם מסמנים את הקובץ כדי לא לנתח אותו שוב
       if (ai.route === 'expense') {
         try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; existing.push({ num: nrm(ai.invoiceNumber), amt: Number(ai.amountInclVat) || 0, sup: nrm(ai.supplierName) }); if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } }
@@ -2836,6 +2839,7 @@ async function mailScanBatchFor(cid, since, limit) {
       } else if (ai.route === 'record') {
         const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-record', filename: it.filename, mime: it.mime, data: it.contentBase64 });
         db.mailRecords[cid].push({ id: 'mr_' + Math.random().toString(16).slice(2, 10), fileId: saved.id, filename: it.filename, mime: it.mime, from: it.from, subject: it.subject, receivedDate: it.receivedDate, documentType: ai.documentType, supplierName: ai.supplierName, number: ai.invoiceNumber, date: ai.date, amountInclVat: ai.amountInclVat, description: ai.description, recordedAt: new Date().toISOString() });
+        if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } // נשמר — לא לנתח שוב את אותו קובץ
         recorded++;
       } else { skipped++; }
     }
@@ -2860,7 +2864,7 @@ add('POST', /^\/api\/mail-scan\/run$/, async (req, res, _p, q, body) => {
 // ===== סריקה לילית אוטומטית לכל החברות =====
 // סורק את כל טווח הזמן (מ-since) עד שאין עוד — באצוות קטנות כדי לא להעמיס. seenUids מונע כפילויות בין לילות.
 async function runMailScanFull(cid, since, maxBatches = 400) {
-  const tot = { uploaded: 0, recorded: 0, duplicates: 0, skipped: 0, errors: 0, unreadable: 0, links: 0, batches: 0 };
+  const tot = { uploaded: 0, recorded: 0, duplicates: 0, skipped: 0, errors: 0, unreadable: 0, links: 0, batches: 0, completed: false };
   let done = false, i = 0;
   while (!done && i++ < maxBatches) {
     let r;
@@ -2870,6 +2874,7 @@ async function runMailScanFull(cid, since, maxBatches = 400) {
     tot.skipped += r.skipped || 0; tot.errors += r.errors || 0; tot.unreadable += r.unreadable || 0; tot.links += r.links || 0; tot.batches++;
     done = !!r.done;
   }
+  tot.completed = done; // הגענו לסוף הטווח (אין עוד הודעות) — אפשר לסמן backfill כהושלם
   return tot;
 }
 // טביעת אצבע של קובץ הטיוטה (מהקישור בחשבונית ירוקה) — לזיהוי שתי טיוטות מאותו קובץ בדיוק, גם כשאין מספר OCR.
@@ -2944,21 +2949,29 @@ async function runNightlyMailScan(sinceOverride, resetSeen) {
   const per = {};
   try {
     const db = load();
-    const since = sinceOverride || (db.mailAutoScan && db.mailAutoScan.since) || '2026-01-01';
+    // טווח ה-backfill החד-פעמי (מתחילת 2026). אחרי שהושלם — סורקים רק חלון קצר של מייל חדש.
+    const backfillSince = sinceOverride || (db.mailAutoScan && db.mailAutoScan.since) || '2026-01-01';
+    const INCREMENTAL_DAYS = 21; // חלון מתגלגל למייל חדש (עם חפיפה קטנה לביטחון; seenUids/hash מונעים כפילויות)
+    const incSince = (() => { const d = new Date(); d.setDate(d.getDate() - INCREMENTAL_DAYS); return d.toISOString().slice(0, 10); })();
     const companies = (db.companies || []).map(c => c.id);
-    // איפוס "נסרקו" — כדי לעבד מחדש הודעות שנכשלו בהרצה קודמת (למשל בגלל מגבלת AI)
-    if (resetSeen) { const d = load(); for (const cid of companies) { const s = mailScanState(d, cid); s.seenUids = []; } save(d); console.log('[mail-nightly] אופס seenUids לכל החברות'); }
+    // reset ידני = בקשה מפורשת ל-backfill מלא מחדש: מאפסים "נסרקו" וגם את דגל ה-backfill.
+    if (resetSeen) { const d = load(); for (const cid of companies) { const s = mailScanState(d, cid); s.seenUids = []; s.backfillDone = false; } save(d); console.log('[mail-nightly] reset מלא — seenUids + backfillDone אופסו לכל החברות'); }
     for (const cid of companies) {
       const creds = companyMailCreds(load(), cid);
       if (!creds.user || !creds.pass) { per[cid] = { skipped: 'אין חשבון מייל' }; continue; }
-      try { per[cid] = await runMailScanFull(cid, since); }
+      const st0 = mailScanState(load(), cid);
+      // backfill מתחילת השנה — פעם אחת בלבד; אחר כך רק מייל חדש (חלון מתגלגל). חוסך את עיקר הקרדיט.
+      const effSince = st0.backfillDone ? incSince : backfillSince;
+      try { per[cid] = await runMailScanFull(cid, effSince); if (per[cid]) per[cid].mode = st0.backfillDone ? 'incremental' : 'backfill'; }
       catch (e) { per[cid] = { error: e.message }; }
+      // סימון שה-backfill הושלם — כדי שלא נסרוק שוב מתחילת השנה (רק אם הריצה הגיעה לסוף הטווח בהצלחה)
+      if (!st0.backfillDone && per[cid] && per[cid].completed) { const d2 = load(); mailScanState(d2, cid).backfillDone = true; save(d2); console.log(`[mail-nightly] ${cid}: backfill הושלם — מכאן סריקה מצטברת בלבד`); }
       // אחרי הקליטה — ניקוי כפילויות מול מסמכים שכבר קיימים במערכת (פר-חברה)
-      try { const del = await dedupeCompanyDrafts(cid, since); if (per[cid] && typeof per[cid] === 'object') per[cid].dupsDeleted = del; } catch { }
+      try { const del = await dedupeCompanyDrafts(cid, backfillSince); if (per[cid] && typeof per[cid] === 'object') per[cid].dupsDeleted = del; } catch { }
       try { console.log(`[mail-nightly] ${cid}:`, JSON.stringify(per[cid])); } catch { }
     }
     const db2 = load();
-    db2.mailAutoScan = { ...(db2.mailAutoScan || {}), enabled: true, since, lastRun: { at: new Date().toISOString(), per } };
+    db2.mailAutoScan = { ...(db2.mailAutoScan || {}), enabled: true, since: backfillSince, lastRun: { at: new Date().toISOString(), per } };
     save(db2);
     console.log('[mail-nightly] הסתיים', new Date().toISOString());
   } catch (e) { console.error('[mail-nightly] נכשל:', e.message); }
