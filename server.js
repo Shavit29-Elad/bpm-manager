@@ -2793,7 +2793,7 @@ async function mailScanBatchFor(cid, since, limit) {
       const num = nrm(ai.invoiceNumber), amt = ai.amountInclVat, sup = nrm(ai.supplierName);
       return existing.some(x => (num && x.num === num && (amt == null || _amtEq(x.amt, amt))) || (amt != null && _amtEq(x.amt, amt) && sup && x.sup && x.sup === sup));
     };
-    let uploaded = 0, recorded = 0, duplicates = 0, skipped = 0, errors = 0, links = 0, unreadable = 0;
+    let uploaded = 0, recorded = 0, duplicates = 0, skipped = 0, errors = 0, links = 0, unreadable = 0, aiCalls = 0;
     const erroredUids = new Set();               // הודעות שנכשלו זמנית — לא נסמן כ"נסרקו" כדי שינוסו שוב בהרצה הבאה
     const db = load();
     const st = mailScanState(db, cid);
@@ -2807,6 +2807,7 @@ async function mailScanBatchFor(cid, since, limit) {
       const h = _fileHash(it.contentBase64);
       if (h && uploadedSet.has(h)) { duplicates++; continue; }
       let ai;
+      aiCalls++; // מונה קריאות AI בפועל — משמש לבלם הביטחון (תקרה לכל ריצה)
       try { ai = await classifyExpenseAttachment(it.contentBase64, it.mime, suppliers); }
       catch (e) {
         errors++;
@@ -2833,6 +2834,10 @@ async function mailScanBatchFor(cid, since, limit) {
       // לא חשבונית (לוגו/חתימה/מסמך שאינו פיננסי) — מדלגים, ושומרים טביעת אצבע כדי לא לנתח את אותו קובץ שוב לעולם (חוסך קרדיט בכל ריצה עתידית).
       if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; }
       if (isExisting(ai)) { duplicates++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; } // כבר קיים במערכת — לא מעלים, וגם מסמנים את הקובץ כדי לא לנתח אותו שוב
+      // כלל: לא מעלים לאישור מסמך שתאריכו לפני 2026 (חשבוניות ישנות שנשלחו/הועברו במייל, או טעויות קריאה כמו 1976/2016).
+      // נשמר כטביעת אצבע כדי לא לנתח את אותו קובץ שוב.
+      const _docYear = (() => { const m = String(ai.date || '').match(/(20\d{2}|\d{4})/); return m ? +m[1] : null; })();
+      if (_docYear && _docYear < 2026) { skipped++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; }
       if (ai.route === 'expense') {
         try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; existing.push({ num: nrm(ai.invoiceNumber), amt: Number(ai.amountInclVat) || 0, sup: nrm(ai.supplierName) }); if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } }
         catch (e) { errors++; erroredUids.add(String(it.uid)); console.error(`[mail-scan] ${cid} העלאה נכשלה (uid ${it.uid}):`, String(e.message || e).slice(0, 160)); }
@@ -2848,7 +2853,7 @@ async function mailScanBatchFor(cid, since, limit) {
     (scan.processedUids || []).forEach(u => { const s = String(u); if (!seenUidSet.has(s) && !erroredUids.has(s)) st.seenUids.push(u); });
     st.since = since; st.lastScanAt = new Date().toISOString();
     save(db);
-    return { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, unreadable, links, remaining: scan.remaining, done: scan.remaining === 0 };
+    return { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, unreadable, links, aiCalls, remaining: scan.remaining, done: scan.remaining === 0 };
   });
 }
 
@@ -2863,16 +2868,18 @@ add('POST', /^\/api\/mail-scan\/run$/, async (req, res, _p, q, body) => {
 
 // ===== סריקה לילית אוטומטית לכל החברות =====
 // סורק את כל טווח הזמן (מ-since) עד שאין עוד — באצוות קטנות כדי לא להעמיס. seenUids מונע כפילויות בין לילות.
-async function runMailScanFull(cid, since, maxBatches = 400) {
-  const tot = { uploaded: 0, recorded: 0, duplicates: 0, skipped: 0, errors: 0, unreadable: 0, links: 0, batches: 0, completed: false };
+async function runMailScanFull(cid, since, maxBatches = 400, aiCap = 400) {
+  const tot = { uploaded: 0, recorded: 0, duplicates: 0, skipped: 0, errors: 0, unreadable: 0, links: 0, aiCalls: 0, batches: 0, completed: false, cappedAt: null };
   let done = false, i = 0;
   while (!done && i++ < maxBatches) {
     let r;
     try { r = await mailScanBatchFor(cid, since, 4); } catch { tot.errors++; break; }
     if (!r || !r.ok) break;
     tot.uploaded += r.uploaded || 0; tot.recorded += r.recorded || 0; tot.duplicates += r.duplicates || 0;
-    tot.skipped += r.skipped || 0; tot.errors += r.errors || 0; tot.unreadable += r.unreadable || 0; tot.links += r.links || 0; tot.batches++;
+    tot.skipped += r.skipped || 0; tot.errors += r.errors || 0; tot.unreadable += r.unreadable || 0; tot.links += r.links || 0; tot.aiCalls += r.aiCalls || 0; tot.batches++;
     done = !!r.done;
+    // בלם ביטחון — לא לחרוג ממכסת קריאות AI לריצה אחת. מה שלא עובד היום יעובד בריצה הבאה (לא סומן "נסרק"), אז שום מייל לא מתפספס.
+    if (tot.aiCalls >= aiCap) { tot.cappedAt = tot.aiCalls; console.log(`[mail-scan] ${cid}: הגיע לתקרת ${aiCap} קריאות AI לריצה — עוצר, ימשיך בריצה הבאה`); break; }
   }
   tot.completed = done; // הגענו לסוף הטווח (אין עוד הודעות) — אפשר לסמן backfill כהושלם
   return tot;

@@ -9,7 +9,7 @@ function conf(creds) {
 }
 
 // ===== PDF מאחורי קישור בגוף המייל =====
-// מזהה קישורים שנראים כמו חשבונית/PDF בגוף ההודעה, מוריד אותם בשרת, ומצרף אותם כאילו היו צרופה.
+// מזהה קישורים שנראים כמו חשבונית/PDF בגוף ההודעה, מוריד אותם בשרק, ומצרף אותם כאילו היו צרופה.
 function extractPdfLinks(text) {
   if (!text) return [];
   const out = new Set();
@@ -18,7 +18,6 @@ function extractPdfLinks(text) {
   while ((m = re.exec(text)) && out.size < 8) {
     let u = m[0].replace(/[.,;]+$/, '').replace(/&amp;/g, '&');
     if (!/^https?:\/\//i.test(u)) continue;
-    // מועמד: קישור שנגמר ב-.pdf, או שנראה כמו הורדת חשבונית/קבלה/מסמך
     if (/\.pdf(\?|#|$)/i.test(u) || (/(invoice|receipt|download|getfile|attachment|document|בחשבונית|חשבונית|קבלה)/i.test(u) && /(pdf|download|file|invoice|receipt|doc)/i.test(u))) out.add(u);
   }
   return [...out];
@@ -38,9 +37,9 @@ async function fetchPdfLink(url) {
     clearTimeout(to);
     if (!r || !r.ok) return null;
     const ct = String(r.headers.get('content-type') || '').toLowerCase().split(';')[0].trim();
-    if (!(ct.includes('pdf') || ct.startsWith('image/'))) return null; // רק אם באמת PDF/תמונה — לא דף HTML
+    if (!(ct.includes('pdf') || ct.startsWith('image/'))) return null;
     const buf = Buffer.from(await r.arrayBuffer());
-    if (!buf.length || buf.length > 8 * 1024 * 1024) return null; // עד 8MB
+    if (!buf.length || buf.length > 8 * 1024 * 1024) return null;
     let filename = 'link.pdf';
     const cd = r.headers.get('content-disposition') || '';
     const mm = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
@@ -51,7 +50,7 @@ async function fetchPdfLink(url) {
   } catch { clearTimeout(to); return null; }
 }
 
-// בדיקת חיבור: פותח INBOX, מחזיר ספירת הודעות כוללת + מאז תאריך, ומוודא שאפשר למשוך ולפרסר הודעה (imapflow+mailparser מקצה לקצה).
+// בדיקת חיבונ: פותח INBOX, מחזיר ספירת הודעות כוללת + מאז תאריך, ומוודא שאפשר למשפים ולפרסר הודעה (imapflow+mailparser מקצה לקצה).
 export async function imapTest(creds, since) {
   if (!creds || !creds.user || !creds.pass) return { ok: false, error: 'חסרים כתובת/סיסמת אפליקציה' };
   const ImapFlow = await imapflow();
@@ -65,7 +64,7 @@ export async function imapTest(creds, since) {
       if (since) { const uids = await client.search({ since: new Date(since) }, { uid: true }); sinceCount = (uids || []).length; }
       if (total > 0) {
         const simpleParser = await mailparser();
-        for await (const m of client.fetch('*', { source: true })) { // '*' = ההודעה האחרונה ברצף
+        for await (const m of client.fetch('*', { source: true })) {
           const parsed = await simpleParser(m.source);
           parserOk = !!parsed; lastSubject = (parsed && parsed.subject) || ''; break;
         }
@@ -81,7 +80,7 @@ export async function imapTest(creds, since) {
 }
 
 // סריקת INBOX: מחזיר צרופות PDF/תמונה מהודעות מאז תאריך, למעט הודעות שכבר טופלו (excludeUids).
-// עובד באצווה (limit הודעות) כדי לא לחרוג מ-timeout; מחזיר remaining כדי שהצד-לקוח יקרא שוב עד שיסיים.
+// עובד באצווה (limit הודעות) כדי לא לחרוג מ�timeout; מחזיר remaining כדי שהצד-לקוח יקרא שוב עד שיסיים.
 export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 } = {}) {
   if (!creds || !creds.user || !creds.pass) return { ok: false, error: 'חסרים כתובת/סיסמת אפליקציה' };
   const ImapFlow = await imapflow();
@@ -94,20 +93,24 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
     const lock = await client.getMailboxLock('INBOX');
     let remaining = 0;
     try {
-      const uids = (await client.search({ since: new Date(since) }, { uid: true })) || []; // עולה — ישן→חדש
+      const uids = (await client.search({ since: new Date(since) }, { uid: true })) || [];
       const exclude = new Set(excludeUids.map(String));
-      const fresh = uids.filter(u => !exclude.has(String(u))).reverse(); // הופכים לסדר יורד — מעבדים מהחדש לישן (חשבוניות אחרונות נקלטות קודם)
+      const fresh = uids.filter(u => !exclude.has(String(u))).reverse();
       remaining = fresh.length;
-      const use = fresh.slice(0, Math.max(1, limit)); // אצווה של החדשים ביותר שטרם נסרקו
+      const use = fresh.slice(0, Math.max(1, limit));
       if (use.length) {
         for await (const msg of client.fetch(use, { source: true }, { uid: true })) {
           processedUids.push(msg.uid);
           let parsed; try { parsed = await simpleParser(msg.source); } catch { continue; }
           const atts = (parsed.attachments || []).filter(a => {
             const ct = String(a.contentType || '').toLowerCase();
-            return ct.includes('pdf') || ct.startsWith('image/');
+            if (ct.includes('pdf')) return true;
+            if (!ct.startsWith('image/')) return false;
+            const inline = String(a.contentDisposition || '').toLowerCase() === 'inline' || a.related === true || !!a.cid;
+            const size = a.size || (a.content ? a.content.length : 0);
+            if (inline || (size && size < 20000)) return false;
+            return true;
           });
-          if (!atts.length) continue;
           const messageId = parsed.messageId || ('uid:' + msg.uid);
           const from = (parsed.from && parsed.from.text) || '';
           const subject = parsed.subject || '';
@@ -121,7 +124,6 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
               size: a.content.length, contentBase64: a.content.toString('base64'),
             });
           });
-          // אין צרופה? מנסים למצוא PDF מאחורי קישור בגוף המייל (חשבוניות שנשלחות כלינק). לעולם לא זורק שגיאה.
           if (!atts.length) {
             try {
               const urls = extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`);
@@ -136,7 +138,7 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
                   });
                 }
               }
-            } catch { /* קישורים — לא קריטי */ }
+            } catch { }
           }
         }
       }
