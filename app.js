@@ -5163,6 +5163,7 @@ window.handleExpenseFiles = async (fileList) => {
   if (!files.length) { alert('לא הועלה אף קובץ.\n' + (skipNotes.join('\n') || 'נדרש קובץ PDF או תמונה (JPG/PNG) עד 10MB.')); return; }
   const toast = _expToast();
   const baseline = (_drafts || []).length;
+  const pdfFiles = files.filter(f => /\.pdf$/i.test(f.name || '') || String(f.type || '').includes('pdf'));
   let uploaded = 0, failed = 0, lastErr = '';
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
@@ -5176,7 +5177,7 @@ window.handleExpenseFiles = async (fileList) => {
   }
   if (!uploaded) { toast.innerHTML = `<span style="color:var(--danger)">ההעלאה נכשלה${lastErr ? ': ' + escapeHtml(String(lastErr)) : ` (${failed})`}${skipNotes.length ? ' · ' + escapeHtml(skipNotes.join(' · ')) : ''}</span>`; setTimeout(() => { toast.style.display = 'none'; }, 12000); return; }
   toast.innerHTML = `✓ הועלו ${uploaded} קבצים${failed ? ` · ${failed} נכשלו` : ''}${skipped ? ` · ${skipped} דולגו` : ''}. מזהה כל חשבונית אוטומטית (OCR)… זה עשוי לקחת עד דקה.`;
-  let tries = 0;
+  let tries = 0, recovered = false;
   const poll = async () => {
     tries++;
     const dr = await api('/api/expense-drafts?fresh=1').catch(() => null);
@@ -5185,17 +5186,70 @@ window.handleExpenseFiles = async (fileList) => {
     const found = list ? Math.max(0, list.length - baseline) : 0;
     if (list && found >= uploaded) {
       toast.innerHTML = `✓ ${uploaded} חשבוניות זוהו ונוספו ל"טיוטות הוצאה לאישור". ה-AI קורא אותן עכשיו…`;
-      kickDraftsAi(); setTimeout(() => { toast.style.display = 'none'; }, 4500);
-    } else if (tries >= 24) {
-      toast.innerHTML = `הקבצים הועלו. חלק מהזיהוי עדיין מתעבד (${found}/${uploaded}) — לחץ "↻ רענן" בעוד רגע.`;
-      if (list) kickDraftsAi(); setTimeout(() => { toast.style.display = 'none'; }, 6000);
-    } else {
-      toast.innerHTML = `✓ הועלו ${uploaded} קבצים · זוהו ${found}/${uploaded} (${tries * 5} שנ')…`;
-      setTimeout(poll, 5000);
+      kickDraftsAi(); setTimeout(() => { toast.style.display = 'none'; }, 4500); return;
     }
+    // המרה אוטומטית ("שטח והעלה מחדש"): אם אחרי ~40 שניות שום קובץ לא זוהה — ממירים כל PDF לתמונה נקייה ומעלים מחדש.
+    // מטפל ב-PDF חתום דיגיטלית / מבנה מיוחד שהקורא האוטומטי של חשבונית ירוקה לא מסתדר איתו, כדי שלא ילך לאיבוד אף קובץ.
+    if (found === 0 && !recovered && pdfFiles.length && tries >= 8) {
+      recovered = true;
+      toast.innerHTML = '⚙️ הקבצים לא זוהו — ממיר אותם לתמונה ומעלה מחדש אוטומטית…';
+      let re = 0;
+      for (const f of pdfFiles) {
+        try { const png = await flattenPdfToImage(f); if (png && await uploadBlobExpense(png, (f.name || 'expense').replace(/\.pdf$/i, '') + ' (מומר).png')) re++; } catch (e) { }
+      }
+      if (re) { toast.innerHTML = `⚙️ הומרו ${re} קבצים לתמונה והועלו מחדש · ממתין לזיהוי…`; tries = 0; setTimeout(poll, 5000); return; }
+      toast.innerHTML = '<span style="color:var(--warn)">לא ניתן היה להמיר אוטומטית — נסה שוב, או השתמש בקובץ המשוטח שהוכן.</span>';
+      setTimeout(() => { toast.style.display = 'none'; }, 9000); return;
+    }
+    if (tries >= 24) {
+      toast.innerHTML = `הקבצים הועלו. חלק מהזיהוי עדיין מתעבד (${found}/${uploaded}) — לחץ "↻ רענן" בעוד רגע.`;
+      if (list) kickDraftsAi(); setTimeout(() => { toast.style.display = 'none'; }, 6000); return;
+    }
+    toast.innerHTML = `✓ הועלו ${uploaded} קבצים · זוהו ${found}/${uploaded} (${tries * 5} שנ')…`;
+    setTimeout(poll, 5000);
   };
   setTimeout(poll, 4000);
 };
+// ===== המרה אוטומטית של PDF שלא זוהה → תמונה נקייה, והעלאה מחדש (כדי ששום קובץ לא ילך לאיבוד) =====
+let _pdfjsReady = null;
+function ensurePdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (_pdfjsReady) return _pdfjsReady;
+  _pdfjsReady = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    s.onload = () => { try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; resolve(window.pdfjsLib); } catch (e) { reject(e); } };
+    s.onerror = () => reject(new Error('pdfjs load failed'));
+    document.head.appendChild(s);
+  });
+  return _pdfjsReady;
+}
+// מרנדר את כל עמודי ה-PDF לקנבס אחד ארוך ומחזיר PNG Blob (משטח חתימה דיגיטלית/מבנה מיוחד לתמונה פשוטה)
+async function flattenPdfToImage(file) {
+  const pdfjs = await ensurePdfJs();
+  const data = new Uint8Array(await file.arrayBuffer());
+  const pdf = await pdfjs.getDocument({ data }).promise;
+  const scale = 2.0, pages = [];
+  let totalH = 0, maxW = 0;
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const vp = page.getViewport({ scale });
+    const c = document.createElement('canvas'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    pages.push(c); totalH += c.height; maxW = Math.max(maxW, c.width);
+  }
+  const out = document.createElement('canvas'); out.width = maxW || 1; out.height = totalH || 1;
+  const ctx = out.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, out.width, out.height);
+  let y = 0; for (const c of pages) { ctx.drawImage(c, 0, y); y += c.height; }
+  return await new Promise(res => out.toBlob(res, 'image/png'));
+}
+// מעלה Blob (תמונה) כהוצאה לחשבונית ירוקה — כמו handleExpenseFiles אבל לקובץ בודד שכבר בזיכרון
+async function uploadBlobExpense(blob, name) {
+  if (!blob) return false;
+  const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = rej; fr.readAsDataURL(blob); });
+  const r = await fetch('/api/expenses/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileBase64: b64, fileName: name || 'flattened.png', mime: 'image/png' }) }).then(x => x.json()).catch(() => ({ error: 'net' }));
+  return !!(r && r.ok);
+}
 // רישום הוצאה של קבלן ישירות בחשבונית ירוקה
 const EXPENSE_DOC_TYPES = [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
 window.openExpenseForm = () => {
