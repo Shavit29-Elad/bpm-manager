@@ -4513,6 +4513,7 @@ window.checkAllocWarn = () => {
 };
 window.openApproveDraft = (id, fromBankTxId) => {
   _apLinkToBankTxId = fromBankTxId || null; // אם נפתח משיוך בנק — נשייך את ההוצאה שתיווצר לתנועה
+  _apAdded = []; _apAllEvents = null; _apLastSupName = ''; // איפוס מצב שיוך האירועים לטיוטה חדשה
   const d = (_drafts || []).find(x => x.id === id); if (!d) return;
   let m = document.getElementById('apprModal');
   if (!m) { m = document.createElement('div'); m.id = 'apprModal'; m.className = 'modal'; document.body.appendChild(m); }
@@ -4626,28 +4627,33 @@ window.onApprTypeChange = () => {
   const w = document.getElementById('apBusinessWarn'); if (w) w.style.display = isBiz ? 'block' : 'none';
   const cl = document.getElementById('apClass'); if (cl) cl.style.opacity = isBiz ? '0.5' : '1';
 };
-// טוען אירועים פתוחים של הקבלן ומציע קישור (עם הצעה חכמה מסומנת-מראש) + בורר סינון חודש/שנה
+// טוען אירועים פתוחים של הקבלן ומציע קישור (מסומן מראש) + בורר לשיוך כל אירוע לפי חודש/שנה + סכום (גם אם אין אירועים מוצעים)
 let _apLinkEventsData = [];
 let _apLinkFilter = { month: 'all', year: 'all' };
+let _apAllEvents = null;      // כל אירועי החברה (למאגר "הוסף אירוע")
+let _apAdded = [];            // אירועים שהמשתמש שייך ידנית: [{ev, amount}]
+let _apAddFilter = { month: 'all', year: 'all' };
+let _apLastSupName = '';
 window.loadApprLinkEvents = async () => {
   const box = document.getElementById('apLinkEvents'); if (!box) return;
   const supId = document.getElementById('apSup')?.value;
   const sup = (_suppliers || []).find(s => String(s.id) === String(supId));
   const name = sup ? sup.name : '';
   if (!name) { box.innerHTML = ''; _apLinkEventsData = []; return; }
+  // ספק חדש? מאפסים אירועים שהוספת ידנית ומאתחלים סינון "הוסף אירוע" לחודש הנוכחי
+  if (name !== _apLastSupName) { _apAdded = []; _apLastSupName = name; const now = new Date(); _apAddFilter = { month: String(now.getMonth() + 1).padStart(2, '0'), year: String(now.getFullYear()) }; }
   const amount = document.getElementById('apAmount')?.value || '';
   const date = document.getElementById('apDate')?.value || '';
   const desc = document.getElementById('apDesc')?.value || '';
-  box.innerHTML = '<div class="muted" style="font-size:12px">בודק אירועים פתוחים של הקבלן…</div>';
+  box.innerHTML = '<div class="muted" style="font-size:12px">בודק אירועים של הקבלן…</div>';
   const r = await fetch(`/api/contractors/open-events?name=${encodeURIComponent(name)}&amount=${encodeURIComponent(amount)}&date=${encodeURIComponent(date)}&desc=${encodeURIComponent(desc)}&companyId=${encodeURIComponent(state.company)}`).then(x => x.json()).catch(() => ({ events: [] }));
   const evs = r.events || [];
   _apLinkEventsData = evs;
-  if (!evs.length) { box.innerHTML = ''; return; }
-  // ברירת מחדל: מציג הכל כדי שהאירועים המוצעים (המסומנים מראש) יהיו גלויים; בוררי חודש/שנה זמינים לסינון ידני
+  if (_apAllEvents == null) { try { const ev = await api(`/api/events?companyId=${encodeURIComponent(state.company)}`); _apAllEvents = Array.isArray(ev) ? ev : []; } catch { _apAllEvents = []; } }
   _apLinkFilter = { month: 'all', year: 'all' };
-  const years = [...new Set(evs.map(e => String(e.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
-  const monthOpts = `<option value="all">כל החודשים</option>` + Array.from({ length: 12 }, (_, i) => { const mm = String(i + 1).padStart(2, '0'); return `<option value="${mm}">${MONTHS_HE[i]}</option>`; }).join('');
-  const yearOpts = `<option value="all">כל השנים</option>` + years.map(y => `<option value="${y}">${y}</option>`).join('');
+  const years = [...new Set([...evs, ...(_apAllEvents || [])].map(e => String(e.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  const monthSel = (id, f, on) => `<select id="${id}" onchange="${on}" style="flex:1;font-size:12px" title="חודש"><option value="all">כל החודשים</option>${Array.from({ length: 12 }, (_, i) => { const mm = String(i + 1).padStart(2, '0'); return `<option value="${mm}" ${f.month === mm ? 'selected' : ''}>${MONTHS_HE[i]}</option>`; }).join('')}</select>`;
+  const yearSel = (id, f, on) => `<select id="${id}" onchange="${on}" style="flex:1;font-size:12px" title="שנה"><option value="all">כל השנים</option>${years.map(y => `<option value="${y}" ${f.year === y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
   const rows = evs.map((e, i) => `<label data-m="${String(e.date || '').slice(5, 7)}" data-y="${String(e.date || '').slice(0, 4)}" style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:5px 8px;border-top:1px solid var(--line)">
     <input type="checkbox" class="ap-link-ev" data-i="${i}" ${e.suggested ? 'checked' : ''} onchange="updateApprLinkSum()">
     <span style="flex:1;min-width:0"><b>${ddmy(e.date)}</b> · ${escapeHtml(e.artist || '')}${e.location ? ' · ' + escapeHtml(e.location) : ''}</span>
@@ -4657,19 +4663,52 @@ window.loadApprLinkEvents = async () => {
   box.innerHTML = `<div style="border:1px solid var(--accent);border-radius:10px;overflow:hidden;background:var(--panel2)">
     <div style="padding:8px 10px;font-size:12.5px;font-weight:600;background:var(--panel)">
       <div style="display:flex;align-items:center;gap:8px">
-        <span style="flex:1">🔗 קישור לאירועים ב"קבלנים לתשלום" (${evs.length} פתוחים)</span>
-        <label style="display:flex;gap:5px;align-items:center;font-size:12px;font-weight:600;white-space:nowrap;cursor:pointer"><input type="checkbox" id="apLinkSelectAll" onchange="toggleApprLinkAll(this.checked)"> סמן הכל</label>
+        <span style="flex:1">🔗 שיוך אירועים ל"קבלנים לתשלום"${evs.length ? ` (${evs.length} פתוחים)` : ''}</span>
+        ${evs.length ? `<label style="display:flex;gap:5px;align-items:center;font-size:12px;font-weight:600;white-space:nowrap;cursor:pointer"><input type="checkbox" id="apLinkSelectAll" onchange="toggleApprLinkAll(this.checked)"> סמן הכל</label>` : ''}
       </div>
-      <div class="muted" style="font-size:11px;font-weight:400;margin-top:2px">סימנתי מראש הצעה — ודא ותקן. האירועים שתסמן ירדו מ"קבלנים לתשלום" (מכוסים ע״י החשבונית).</div>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <select id="apLinkMonth" onchange="filterApprLinkMonth()" style="flex:1;font-size:12px" title="חודש">${monthOpts}</select>
-        <select id="apLinkYear" onchange="filterApprLinkMonth()" style="flex:1;font-size:12px" title="שנה">${yearOpts}</select>
-      </div>
+      <div class="muted" style="font-size:11px;font-weight:400;margin-top:2px">${evs.length ? 'סימנתי מראש הצעה — ודא ותקן. ' : ''}האירועים שתשייך ירדו מ"קבלנים לתשלום" (מכוסים ע״י החשבונית).</div>
+      ${evs.length ? `<div style="display:flex;gap:6px;margin-top:6px">${monthSel('apLinkMonth', _apLinkFilter, 'filterApprLinkMonth()')}${yearSel('apLinkYear', _apLinkFilter, 'filterApprLinkMonth()')}</div>` : ''}
     </div>
     <div id="apLinkRows">${rows}</div>
+    <div style="padding:8px 10px;border-top:1px dashed var(--line);background:var(--panel)">
+      <div style="font-size:12px;font-weight:600;margin-bottom:4px">➕ שייך אירוע נוסף (לפי חודש) — גם אם הספק לא רשום בו</div>
+      <div style="display:flex;gap:6px;margin-bottom:6px">${monthSel('apAddMonth', _apAddFilter, 'apSetAddFilter()')}${yearSel('apAddYear', _apAddFilter, 'apSetAddFilter()')}</div>
+      <select id="apAddSelect" style="width:100%;font-size:12px"></select>
+      <div id="apAddedRows" style="margin-top:6px"></div>
+    </div>
     <div id="apLinkSum" style="padding:6px 10px;font-size:11.5px" class="muted"></div>
   </div>`;
+  apRenderAddOptions(); apRenderAdded();
+  const asel = document.getElementById('apAddSelect'); if (asel) asel.onchange = () => { if (asel.value) apAddEvent(asel.value); };
   updateApprLinkSum();
+};
+window.apSetAddFilter = () => { _apAddFilter = { month: document.getElementById('apAddMonth')?.value || 'all', year: document.getElementById('apAddYear')?.value || 'all' }; apRenderAddOptions(); };
+window.apRenderAddOptions = () => {
+  const sel = document.getElementById('apAddSelect'); if (!sel) return;
+  const usedOpen = new Set((_apLinkEventsData || []).map(e => String(e.eventId)));
+  const usedAdded = new Set((_apAdded || []).map(a => String(a.ev.id)));
+  const f = _apAddFilter || { month: 'all', year: 'all' };
+  const list = (_apAllEvents || []).filter(ev => !usedOpen.has(String(ev.id)) && !usedAdded.has(String(ev.id)))
+    .filter(ev => { const iso = String(ev.date || ''); return (f.month === 'all' || iso.slice(5, 7) === f.month) && (f.year === 'all' || iso.slice(0, 4) === f.year); })
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 400);
+  sel.innerHTML = `<option value="">➕ בחר אירוע לשיוך${list.length ? '' : ' (אין אירועים בחודש זה)'}…</option>` + list.map(ev => `<option value="${ev.id}">${escapeHtml(`${ddmy(ev.date)} · ${ev.artist || ev.clientName || 'אירוע'}${ev.location ? ' · ' + ev.location : ''}`)}</option>`).join('');
+};
+window.apAddEvent = (eventId) => {
+  const ev = (_apAllEvents || []).find(e => String(e.id) === String(eventId)); if (!ev) return;
+  if ((_apAdded || []).some(a => String(a.ev.id) === String(eventId))) return;
+  const supName = ((_suppliers || []).find(s => String(s.id) === String(document.getElementById('apSup')?.value)) || {}).name || '';
+  const cd = (ev.contractorDetails || []).find(c => (c.name || '').trim() === String(supName).trim());
+  _apAdded.push({ ev, amount: cd && cd.amount != null ? cd.amount : null });
+  apRenderAdded(); apRenderAddOptions(); updateApprLinkSum();
+};
+window.apRemoveAdded = (eventId) => { _apAdded = (_apAdded || []).filter(a => String(a.ev.id) !== String(eventId)); apRenderAdded(); apRenderAddOptions(); updateApprLinkSum(); };
+window.apRenderAdded = () => {
+  const box = document.getElementById('apAddedRows'); if (!box) return;
+  box.innerHTML = (_apAdded || []).map(a => `<div style="display:flex;gap:6px;align-items:center;font-size:12.5px;padding:4px 0;border-top:1px solid var(--line)">
+    <span style="flex:1;min-width:0">🆕 <b>${ddmy(a.ev.date)}</b> · ${escapeHtml(a.ev.artist || a.ev.clientName || 'אירוע')}${a.ev.location ? ' · ' + escapeHtml(a.ev.location) : ''}</span>
+    <input id="apAddAmt_${a.ev.id}" type="number" inputmode="decimal" dir="ltr" value="${a.amount == null ? '' : escAttr(String(a.amount))}" oninput="updateApprLinkSum()" style="width:95px" placeholder="₪ לספק">
+    <button type="button" class="btn ghost" style="padding:2px 7px;font-size:12px" onclick="apRemoveAdded('${a.ev.id}')">✕</button>
+  </div>`).join('');
 };
 // סינון שורות שיוך האירועים לפי חודש/שנה (רק מסתיר תצוגה — סימונים נשמרים גם למוסתרים)
 window.filterApprLinkMonth = () => {
@@ -4692,6 +4731,7 @@ window.updateApprLinkSum = () => {
   all.forEach(cb => { if (cb.checked) { sum += Number(_apLinkEventsData[+cb.dataset.i]?.amount) || 0; n++; } });
   const selAll = document.getElementById('apLinkSelectAll');
   if (selAll) selAll.checked = all.length > 0 && n === all.length;
+  (_apAdded || []).forEach(a => { const inp = document.getElementById('apAddAmt_' + a.ev.id); const v = inp && inp.value !== '' ? Number(inp.value) : (a.amount != null ? Number(a.amount) : 0); sum += v || 0; n++; });
   box.textContent = n ? `נבחרו ${n} אירועים · סה"כ ${money(sum)}` : 'לא נבחרו אירועים לקישור';
 };
 function apGetLinkedEvents() {
@@ -4835,7 +4875,25 @@ window.approveDraft = async (id, btn) => {
   const r = await fetch(`/api/expense-drafts/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ אשר וצור הוצאה';
   if (r.ok) {
-    const linkNote = r.linkedCount ? ` · 🔗 קושרו ${r.linkedCount} אירועים בקבלנים לתשלום` : '';
+    // אירועים נוספים ששויכו ידנית (הספק לא היה בהם) — מוסיפים את הספק כקבלן באירוע עם הסכום שהוזן
+    let addedLinked = 0;
+    try {
+      const giId = (r.expense && r.expense.id) || null, payId = r.payableId || null;
+      for (const a of (_apAdded || [])) {
+        const inp = document.getElementById('apAddAmt_' + a.ev.id);
+        const amt = inp && inp.value !== '' ? Number(inp.value) : (a.amount != null ? Number(a.amount) : null);
+        const ev = a.ev;
+        ev.contractorDetails = Array.isArray(ev.contractorDetails) ? ev.contractorDetails : [];
+        let cd = ev.contractorDetails.find(c => (c.name || '').trim() === supplierName.trim());
+        if (!cd) { cd = { name: supplierName, amount: amt }; ev.contractorDetails.push(cd); } else { cd.amount = amt; }
+        cd.paid = true; cd.paidInvoice = number || cd.paidInvoice || null; if (payId) cd.paidPayableId = payId; if (giId) cd.paidExpenseId = giId;
+        ev.contractors = Array.isArray(ev.contractors) ? ev.contractors : []; if (!ev.contractors.includes(supplierName)) ev.contractors.push(supplierName);
+        await fetch(`/api/events/${ev.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contractorDetails: ev.contractorDetails, contractors: ev.contractors }) }).catch(() => { });
+        addedLinked++;
+      }
+      _apAdded = [];
+    } catch { }
+    const linkNote = (r.linkedCount || addedLinked) ? ` · 🔗 קושרו ${(r.linkedCount || 0) + addedLinked} אירועים בקבלנים לתשלום` : '';
     let msg;
     if (r.duplicate) { alert('⚠ המסמך כבר קיים במערכת\n\nחשבונית זו כבר נקלטה קודם לכן. כדי למנוע כפילות, הקובץ הכפול נמחק ולא נוצרה הוצאה נוספת.'); msg = '✓ המסמך כבר קיים במערכת — לא נוצרה כפילות.'; }
     else if (r.businessDoc) msg = `✓ נרשם כ"חשבון עסקה" ב"הוצאות ספקים לתשלום" (לא נשלח לחשבונית ירוקה/רו״ח).${r.draftDeleted ? ' · 🗑 הוסר מ"הוצאות לקליטה" בחשבונית ירוקה' : ''}${linkNote}`;
