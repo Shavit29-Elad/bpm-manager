@@ -4897,20 +4897,56 @@ window.openExpenseEdit = async (id) => {
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const d = await api(`/api/expenses/${id}/details?fresh=1`).catch(() => ({ error: 'שגיאת רשת' }));
   if (!d || d.error) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת ההוצאה: ${escapeHtml(String((d && d.error) || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('expEditModal').classList.add('hidden')">סגור</button></div></div>`; return; }
+  // כתובת המסמך לתצוגה בצד ימין — מהרשימה של מסמכי הספק (אותו URL שכפתור "תצוגה" משתמש בו)
+  const docUrl = ((typeof _supDocs !== 'undefined' && _supDocs) || []).map(x => x).find(x => String(x.id) === String(id))?.url || `/api/files/${id}`;
+  // מציאת האירועים שבהם הספק הזה רשום כקבלן — כדי לערוך את הסכום שהוא מקבל לכל אירוע
+  const normSup = (s) => String(s || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[.,"'׳״()\-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  const supN = normSup(d.supplierName);
+  const matchSup = (a, b) => a && b && (a === b || a.includes(b) || b.includes(a));
+  let events = [];
+  try { events = await api(`/api/events?companyId=${encodeURIComponent(state.company)}`); } catch { }
+  const rows = [];
+  for (const ev of (Array.isArray(events) ? events : [])) {
+    const cds = Array.isArray(ev.contractorDetails) ? ev.contractorDetails : [];
+    for (let i = 0; i < cds.length; i++) { if (matchSup(normSup(cds[i].name), supN)) rows.push({ ev, idx: i }); }
+  }
+  rows.sort((a, b) => String(b.ev.date || '').localeCompare(String(a.ev.date || '')));
+  window._exeCtx = { id, rows, invoiceAmount: Number(d.amount) || 0 };
   const F = (l, i, v, extra = '') => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">${l}<input id="${i}" value="${escAttr(v == null ? '' : String(v))}" ${extra}></label>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(520px,95vw);max-height:92vh;overflow:auto">
+  const rowsHtml = rows.length ? rows.map(({ ev, idx }) => {
+    const amt = ev.contractorDetails[idx].amount;
+    const title = escapeHtml(`${ev.artist || ev.clientName || ev.client || 'אירוע'} · ${ev.date || ''}${ev.location ? ' · ' + ev.location : ''}`);
+    return `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)">
+      <span style="font-size:13px;flex:1">${title}</span>
+      <input id="exeEvAmt_${ev.id}_${idx}" type="number" inputmode="decimal" dir="ltr" value="${amt == null ? '' : escAttr(String(amt))}" oninput="exeRecalc()" style="width:105px" placeholder="₪ לספק">
+    </div>`;
+  }).join('') : '<div class="muted" style="font-size:13px;padding:6px 0">לא נמצאו אירועים שבהם הספק רשום כקבלן.</div>';
+  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:94vh;overflow:auto">
     <div class="row-between" style="margin:0"><h3 style="margin:0">✏️ עריכת הוצאה #${escapeHtml(String(d.number || ''))}</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('expEditModal').classList.add('hidden')">✕</button></div>
     <p class="muted" style="font-size:12px;margin:6px 0 12px">${escapeHtml(d.supplierName || '')} · השינויים נשמרים בחשבונית ירוקה.${d.reported ? ' ⚠ ההוצאה כבר דווחה — ייתכן שלא ניתן לעדכן/למחוק אותה.' : ''}</p>
-    <div style="display:flex;flex-direction:column;gap:11px">
-      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">תיאור (כולל מספר הקצאה)<textarea id="exeDesc" rows="3" style="font-family:inherit;resize:vertical">${escapeHtml(d.description || '')}</textarea></label>
-      <div class="biz-grid">
-        ${F('מספר מסמך', 'exeNum', d.number, 'dir="ltr"')}
-        ${F('תאריך', 'exeDate', d.date, 'type="date"')}
-        ${F('סכום כולל מע"מ ₪', 'exeAmt', d.amount, 'type="number" inputmode="decimal" dir="ltr"')}
-        ${F('סכום ללא מע"מ ₪ (ריק=18% אוטומטי)', 'exeNet', d.amountExcludeVat, 'type="number" inputmode="decimal" dir="ltr" placeholder="חישוב אוטומטי"')}
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1;min-width:320px;display:flex;flex-direction:column;gap:11px">
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">תיאור (כולל מספר הקצאה)<textarea id="exeDesc" rows="2" style="font-family:inherit;resize:vertical">${escapeHtml(d.description || '')}</textarea></label>
+        <div class="biz-grid">
+          ${F('מספר מסמך', 'exeNum', d.number, 'dir="ltr"')}
+          ${F('תאריך', 'exeDate', d.date, 'type="date"')}
+          ${F('סכום כולל מע"מ ₪', 'exeAmt', d.amount, 'type="number" inputmode="decimal" dir="ltr" oninput="exeRecalc()"')}
+          ${F('סכום ללא מע"מ ₪ (ריק=18% אוטומטי)', 'exeNet', d.amountExcludeVat, 'type="number" inputmode="decimal" dir="ltr" placeholder="חישוב אוטומטי"')}
+        </div>
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">סטטוס תשלום<select id="exePaid"><option value="unpaid" ${!d.paid ? 'selected' : ''}>עדיין לא שולם</option><option value="paid" ${d.paid ? 'selected' : ''}>שולם</option></select></label>
+        <div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--panel2)">
+          <div style="font-size:13px;font-weight:700;margin-bottom:4px">💰 סכום לספק לכל אירוע</div>
+          <div class="muted" style="font-size:11px;margin-bottom:6px">עריכה כאן מעדכנת גם את מחיר הקבלן באירוע עצמו.</div>
+          <div style="max-height:220px;overflow:auto">${rowsHtml}</div>
+          <div id="exeEvSum" style="font-size:12px;margin-top:8px"></div>
+        </div>
       </div>
-      <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">סטטוס תשלום<select id="exePaid"><option value="unpaid" ${!d.paid ? 'selected' : ''}>עדיין לא שולם</option><option value="paid" ${d.paid ? 'selected' : ''}>שולם</option></select></label>
+      <div style="flex:1.05;min-width:320px">
+        <div class="muted" style="font-size:12px;margin-bottom:4px">📄 המסמך של הספק</div>
+        ${docUrl ? `<iframe src="${escAttr(docUrl)}" style="width:100%;height:70vh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+        <div style="margin-top:6px"><a href="${escAttr(docUrl)}" target="_blank" rel="noopener" class="muted" style="font-size:12px">פתח בכרטיסייה חדשה ↗</a></div>` : '<div class="muted" style="font-size:13px">אין מסמך לתצוגה.</div>'}
+      </div>
     </div>
     <div id="exeStatus" style="font-size:13px;min-height:16px;margin-top:10px"></div>
     <div class="modal-actions" style="justify-content:space-between">
@@ -4919,6 +4955,19 @@ window.openExpenseEdit = async (id) => {
         <button class="btn primary" id="exeSaveBtn" onclick="saveExpenseEdit('${id}')">💾 שמור</button></div>
     </div>
   </div>`;
+  exeRecalc();
+};
+// חישוב מחדש של סכום הפירוט לספק מול סכום החשבונית
+window.exeRecalc = () => {
+  const ctx = window._exeCtx; if (!ctx) return;
+  let sum = 0;
+  for (const { ev, idx } of ctx.rows) { const inp = document.getElementById(`exeEvAmt_${ev.id}_${idx}`); if (inp && inp.value !== '') sum += Number(inp.value) || 0; }
+  const invEl = document.getElementById('exeAmt');
+  const inv = invEl && invEl.value !== '' ? (Number(invEl.value) || 0) : ctx.invoiceAmount;
+  const diff = Math.round((inv - sum) * 100) / 100;
+  const el = document.getElementById('exeEvSum'); if (!el) return;
+  const ok = Math.abs(diff) < 1;
+  el.innerHTML = `סה״כ פירוט לספק: <b>₪${sum.toLocaleString()}</b> · חשבונית: ₪${inv.toLocaleString()} · <b style="color:${ok ? 'var(--accent2)' : 'var(--danger)'}">${ok ? 'תואם ✓' : 'הפרש ₪' + diff.toLocaleString()}</b>`;
 };
 window.saveExpenseEdit = async (id) => {
   const g = (x) => document.getElementById(x);
@@ -4939,6 +4988,20 @@ window.saveExpenseEdit = async (id) => {
   if (r && r.ok) {
     _expenseNotes[id] = body.description.trim();
     for (const d of (_supDocs || [])) if (d.id === id) { d.category = body.description.trim(); if (amount != null) { d.amount = amount; d.amountIncVat = amount; } if (body.date) d.date = body.date; if (body.number) d.number = body.number; }
+    // עדכון הסכום שהספק מקבל לכל אירוע — משנה גם את מחיר הקבלן באירוע עצמו
+    try {
+      const ctx = window._exeCtx;
+      if (ctx && Array.isArray(ctx.rows)) {
+        const changed = new Set();
+        for (const { ev, idx } of ctx.rows) {
+          const inp = document.getElementById(`exeEvAmt_${ev.id}_${idx}`); if (!inp) continue;
+          const v = inp.value === '' ? null : Number(inp.value);
+          const cur = ev.contractorDetails[idx].amount;
+          if (String(v == null ? '' : v) !== String(cur == null ? '' : cur)) { ev.contractorDetails[idx].amount = v; changed.add(ev); }
+        }
+        for (const ev of changed) { await fetch(`/api/events/${ev.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contractorDetails: ev.contractorDetails }) }).catch(() => { }); }
+      }
+    } catch { }
     st.innerHTML = '<span style="color:var(--accent2)">נשמר ✓</span>';
     setTimeout(() => { const mm = document.getElementById('expEditModal'); if (mm) mm.classList.add('hidden'); if (state.tab === 'contractors') renderSupplierDetail(); }, 900);
   } else { if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; } st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String((r && r.error) || ''))}</span>`; }

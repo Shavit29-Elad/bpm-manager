@@ -2950,7 +2950,7 @@ add('POST', /^\/api\/mail-scan\/dedupe$/, async (req, res, _p, q, body) => {
 });
 
 let _nightlyMailRunning = false;
-async function runNightlyMailScan(sinceOverride, resetSeen) {
+async function runNightlyMailScan(sinceOverride, resetSeen, opts = {}) {
   if (_nightlyMailRunning) return { skipped: 'כבר רץ' };
   _nightlyMailRunning = true;
   const per = {};
@@ -2973,8 +2973,8 @@ async function runNightlyMailScan(sinceOverride, resetSeen) {
       catch (e) { per[cid] = { error: e.message }; }
       // סימון שה-backfill הושלם — כדי שלא נסרוק שוב מתחילת השנה (רק אם הריצה הגיעה לסוף הטווח בהצלחה)
       if (!st0.backfillDone && per[cid] && per[cid].completed) { const d2 = load(); mailScanState(d2, cid).backfillDone = true; save(d2); console.log(`[mail-nightly] ${cid}: backfill הושלם — מכאן סריקה מצטברת בלבד`); }
-      // אחרי הקליטה — ניקוי כפילויות מול מסמכים שכבר קיימים במערכת (פר-חברה)
-      try { const del = await dedupeCompanyDrafts(cid, backfillSince); if (per[cid] && typeof per[cid] === 'object') per[cid].dupsDeleted = del; } catch { }
+      // אחרי הקליטה — ניקוי כפילויות מול מסמכים שכבר קיימים במערכת (פר-חברה). מדלגים בסריקות התכופות (כל 15 דק') כדי לא להוריד קבצי טיוטה שוב ושוב — הניקוי רץ בלילה.
+      if (!opts.skipDedupe) { try { const del = await dedupeCompanyDrafts(cid, backfillSince); if (per[cid] && typeof per[cid] === 'object') per[cid].dupsDeleted = del; } catch { } }
       try { console.log(`[mail-nightly] ${cid}:`, JSON.stringify(per[cid])); } catch { }
     }
     const db2 = load();
@@ -2996,6 +2996,10 @@ function scheduleNightlyMailScan() {
   const arm = () => { setTimeout(async () => { await runNightlyMailScan(); arm(); }, msToNext()); };
   arm();
   console.log(`[mail-nightly] מתוזמן — ריצה ראשונה בעוד ~${Math.round(msToNext() / 60000)} דק'`);
+  // סריקה תכופה כל 15 דקות — קליטה "חיה" של מייל חדש. מצטברת בלבד (רק מייל חדש, בלי backfill, בלי dedupe כבד).
+  // ה-guard _nightlyMailRunning מונע חפיפה עם הריצה הלילית.
+  setInterval(() => { runNightlyMailScan(undefined, false, { skipDedupe: true }).catch(() => {}); }, 15 * 60 * 1000);
+  console.log('[mail-poll] סריקה תכופה מתוזמנת — כל 15 דקות (מצטברת)');
 }
 // POST /api/mail-scan/nightly-now { since? } — הפעלה ידנית של הסריקה המלאה לכל החברות (רקע). לא ממתין לסיום.
 add('POST', /^\/api\/mail-scan\/nightly-now$/, async (req, res, _p, q, body) => {
