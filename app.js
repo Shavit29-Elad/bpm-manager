@@ -4253,7 +4253,7 @@ function supplierPayablesSection(list) {
       <a class="btn ghost" style="padding:3px 10px;font-size:12px;text-decoration:none" href="/api/supplier-payables/${p.id}/file" download target="_blank" rel="noopener">הורדה ↓</a>` : ''}
       <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openPayableDetail('${p.id}')" title="פירוט מה כתוב על החשבונית">📄 פירוט</button>
       <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openLinkEventsToPayable('${p.id}')" title="שייך אירועים שההוצאה מכסה">🔗 שייך אירועים</button>
-      <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openEditPayable('${p.id}')" title="עריכת פרטים / השלמת מס׳ הקצאה">✏️ עריכה</button>
+      ${p.giExpenseId ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openExpenseEdit('${p.giExpenseId}')" title="עריכת סכום פר-אירוע + צפייה במסמך">✏️ עריכה</button>` : `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openEditPayable('${p.id}')" title="עריכת פרטים / השלמת מס׳ הקצאה">✏️ עריכה</button>`}
       <button class="btn success" style="padding:3px 10px;font-size:12px" onclick="markPayablePaid('${p.id}')">✓ סמן כשולם</button>
       <button class="btn ghost" style="padding:3px 8px;font-size:12px" onclick="deletePayable('${p.id}')" title="הסר רישום">✕</button>
     </div>
@@ -4907,7 +4907,7 @@ window.openExpenseEdit = async (id) => {
   const rows = [];
   for (const ev of events) {
     const cds = Array.isArray(ev.contractorDetails) ? ev.contractorDetails : [];
-    for (let i = 0; i < cds.length; i++) { if (matchSup(normSup(cds[i].name), supN)) rows.push({ ev, idx: i }); }
+    for (let i = 0; i < cds.length; i++) { if (matchSup(normSup(cds[i].name), supN) || (cds[i].paidExpenseId && String(cds[i].paidExpenseId) === String(id))) rows.push({ ev, idx: i }); }
   }
   rows.sort((a, b) => String(b.ev.date || '').localeCompare(String(a.ev.date || '')));
   window._exeCtx = { id, supplierName: d.supplierName || '', rows, added: [], allEvents: events, invoiceAmount: Number(d.amount) || 0 };
