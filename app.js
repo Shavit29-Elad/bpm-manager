@@ -4654,12 +4654,12 @@ window.loadApprLinkEvents = async () => {
   const years = [...new Set([...evs, ...(_apAllEvents || [])].map(e => String(e.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
   const monthSel = (id, f, on) => `<select id="${id}" onchange="${on}" style="flex:1;font-size:12px" title="חודש"><option value="all">כל החודשים</option>${Array.from({ length: 12 }, (_, i) => { const mm = String(i + 1).padStart(2, '0'); return `<option value="${mm}" ${f.month === mm ? 'selected' : ''}>${MONTHS_HE[i]}</option>`; }).join('')}</select>`;
   const yearSel = (id, f, on) => `<select id="${id}" onchange="${on}" style="flex:1;font-size:12px" title="שנה"><option value="all">כל השנים</option>${years.map(y => `<option value="${y}" ${f.year === y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
-  const rows = evs.map((e, i) => `<label data-m="${String(e.date || '').slice(5, 7)}" data-y="${String(e.date || '').slice(0, 4)}" style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:5px 8px;border-top:1px solid var(--line)">
+  const rows = evs.map((e, i) => `<div class="ap-open-row" data-m="${String(e.date || '').slice(5, 7)}" data-y="${String(e.date || '').slice(0, 4)}" style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:5px 8px;border-top:1px solid var(--line)">
     <input type="checkbox" class="ap-link-ev" data-i="${i}" ${e.suggested ? 'checked' : ''} onchange="updateApprLinkSum()">
     <span style="flex:1;min-width:0"><b>${ddmy(e.date)}</b> · ${escapeHtml(e.artist || '')}${e.location ? ' · ' + escapeHtml(e.location) : ''}</span>
-    <span style="font-weight:600;white-space:nowrap">${money(e.amount)}</span>
+    <input id="apOpenAmt_${i}" type="number" inputmode="decimal" dir="ltr" value="${e.amount == null ? '' : escAttr(String(e.amount))}" oninput="updateApprLinkSum()" style="width:90px" placeholder="₪ לספק" title="סכום לספק לאירוע — ניתן לתקן">
     ${e.suggested ? '<span class="tag" style="background:#e7f7ee;color:var(--accent2);font-size:10px">מוצע</span>' : ''}
-  </label>`).join('');
+  </div>`).join('');
   box.innerHTML = `<div style="border:1px solid var(--accent);border-radius:10px;overflow:hidden;background:var(--panel2)">
     <div style="padding:8px 10px;font-size:12.5px;font-weight:600;background:var(--panel)">
       <div style="display:flex;align-items:center;gap:8px">
@@ -4715,20 +4715,20 @@ window.filterApprLinkMonth = () => {
   const fm = document.getElementById('apLinkMonth')?.value || 'all';
   const fy = document.getElementById('apLinkYear')?.value || 'all';
   _apLinkFilter = { month: fm, year: fy };
-  document.querySelectorAll('#apLinkRows label').forEach(l => {
+  document.querySelectorAll('#apLinkRows .ap-open-row').forEach(l => {
     const show = (fm === 'all' || l.dataset.m === fm) && (fy === 'all' || l.dataset.y === fy);
     l.style.display = show ? '' : 'none';
   });
 };
 window.toggleApprLinkAll = (checked) => {
-  document.querySelectorAll('#apLinkEvents .ap-link-ev').forEach(cb => { const row = cb.closest('label'); if (!row || row.style.display !== 'none') cb.checked = checked; });
+  document.querySelectorAll('#apLinkEvents .ap-link-ev').forEach(cb => { const row = cb.closest('.ap-open-row'); if (!row || row.style.display !== 'none') cb.checked = checked; });
   updateApprLinkSum();
 };
 window.updateApprLinkSum = () => {
   const box = document.getElementById('apLinkSum'); if (!box) return;
   let sum = 0, n = 0;
   const all = document.querySelectorAll('#apLinkEvents .ap-link-ev');
-  all.forEach(cb => { if (cb.checked) { sum += Number(_apLinkEventsData[+cb.dataset.i]?.amount) || 0; n++; } });
+  all.forEach(cb => { if (cb.checked) { const i = +cb.dataset.i; const inp = document.getElementById('apOpenAmt_' + i); const v = inp && inp.value !== '' ? Number(inp.value) : (Number(_apLinkEventsData[i]?.amount) || 0); sum += v || 0; n++; } });
   const selAll = document.getElementById('apLinkSelectAll');
   if (selAll) selAll.checked = all.length > 0 && n === all.length;
   (_apAdded || []).forEach(a => { const inp = document.getElementById('apAddAmt_' + a.ev.id); const v = inp && inp.value !== '' ? Number(inp.value) : (a.amount != null ? Number(a.amount) : 0); sum += v || 0; n++; });
@@ -4736,7 +4736,7 @@ window.updateApprLinkSum = () => {
 };
 function apGetLinkedEvents() {
   const out = [];
-  document.querySelectorAll('#apLinkEvents .ap-link-ev').forEach(cb => { if (cb.checked) { const e = _apLinkEventsData[+cb.dataset.i]; if (e) out.push({ eventId: e.eventId, index: e.index }); } });
+  document.querySelectorAll('#apLinkEvents .ap-link-ev').forEach(cb => { if (cb.checked) { const i = +cb.dataset.i; const e = _apLinkEventsData[i]; if (e) { const inp = document.getElementById('apOpenAmt_' + i); const amount = inp && inp.value !== '' ? Number(inp.value) : undefined; out.push({ eventId: e.eventId, index: e.index, ...(amount != null ? { amount } : {}) }); } } });
   return out;
 }
 // ממלא את פרטי הספק הידועים מרשימת הספקים (ח.פ). overwrite=true דורס ערך קיים.

@@ -1065,9 +1065,11 @@ function applyLinkedEvents(db, linkedEvents, invoiceNumber, payableId) {
   for (const le of linkedEvents) {
     const ev = (db.events || []).find(e => String(e.id) === String(le.eventId));
     if (!ev || !Array.isArray(ev.contractorDetails) || !ev.contractorDetails[le.index]) continue;
-    ev.contractorDetails[le.index].paid = true;
-    ev.contractorDetails[le.index].paidInvoice = invoiceNumber || ev.contractorDetails[le.index].paidInvoice || null;
-    ev.contractorDetails[le.index].paidPayableId = payableId || null;
+    const cd = ev.contractorDetails[le.index];
+    cd.paid = true;
+    cd.paidInvoice = invoiceNumber || cd.paidInvoice || null;
+    cd.paidPayableId = payableId || null;
+    if (le.amount != null && le.amount !== '' && !isNaN(Number(le.amount))) cd.amount = Number(le.amount);  // תיקון סכום הספק פר-אירוע ישירות ממסך אישור הטיוטה
     n++;
   }
   return n;
