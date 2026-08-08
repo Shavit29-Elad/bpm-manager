@@ -4688,7 +4688,7 @@ window.apRenderAddOptions = () => {
   const usedOpen = new Set((_apLinkEventsData || []).map(e => String(e.eventId)));
   const usedAdded = new Set((_apAdded || []).map(a => String(a.ev.id)));
   const f = _apAddFilter || { month: 'all', year: 'all' };
-  const list = (_apAllEvents || []).filter(ev => !usedOpen.has(String(ev.id)) && !usedAdded.has(String(ev.id)))
+  const list = (_apAllEvents || []).filter(ev => ev.confirmed && !usedOpen.has(String(ev.id)) && !usedAdded.has(String(ev.id)))
     .filter(ev => { const iso = String(ev.date || ''); return (f.month === 'all' || iso.slice(5, 7) === f.month) && (f.year === 'all' || iso.slice(0, 4) === f.year); })
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 400);
   sel.innerHTML = `<option value="">➕ בחר אירוע לשיוך${list.length ? '' : ' (אין אירועים בחודש זה)'}…</option>` + list.map(ev => `<option value="${ev.id}">${escapeHtml(`${ddmy(ev.date)} · ${ev.artist || ev.clientName || 'אירוע'}${ev.location ? ' · ' + ev.location : ''}`)}</option>`).join('');
@@ -5085,7 +5085,7 @@ window.exeRenderAddOptions = () => {
   const sel = document.getElementById('exeAddSelect'); if (!sel) return;
   const used = new Set([...ctx.rows.map(r => r.ev.id), ...ctx.added.map(a => a.ev.id)]);
   const f = ctx.addFilter || { month: 'all', year: 'all' };
-  const list = ctx.allEvents.filter(ev => !used.has(ev.id))
+  const list = ctx.allEvents.filter(ev => ev.confirmed && !used.has(ev.id))
     .filter(ev => { const iso = String(ev.date || ''); return (f.month === 'all' || iso.slice(5, 7) === f.month) && (f.year === 'all' || iso.slice(0, 4) === f.year); })
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 400);
   const opts = list.map(ev => `<option value="${ev.id}">${escapeHtml(`${ddmy(ev.date)} · ${ev.artist || ev.clientName || 'אירוע'}${ev.location ? ' · ' + ev.location : ''}`)}</option>`).join('');
