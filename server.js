@@ -3578,7 +3578,29 @@ add('GET', /^\/api\/expenses\/([^/]+)\/details$/, async (req, res, params) => {
       reported: Number(e.status) === 20,
       url: (e.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e.url === 'string' ? e.url : null),
     });
-  } catch (e) { json(res, { error: e.message }, 500); }
+  } catch (err) {
+    // Fallback: אם חשבונית ירוקה לא מחזירה את ההוצאה (למשל מזהה שהתיישן / 404) — מציגים את הנתונים המקומיים כדי שהעורך ייפתח בכל זאת ואפשר יהיה לערוך סכום פר-אירוע
+    try {
+      const db = load();
+      const p = (db.supplierPayables || []).find(x => String(x.giExpenseId) === String(params[0]));
+      if (p) {
+        return json(res, {
+          ok: true, id: params[0], giUnavailable: true,
+          number: String(p.number || ''),
+          date: String(p.date || '').slice(0, 10),
+          description: p.description || (db.expenseNotes && db.expenseNotes[params[0]]) || '',
+          amount: Number(p.amount) || 0,
+          amountExcludeVat: p.amountExcludeVat != null ? Number(p.amountExcludeVat) : null,
+          supplierName: p.supplierName || '',
+          supplierId: p.supplierId || null,
+          paid: !!p.paid,
+          reported: false,
+          url: (p.giExpenseId || p.draftId || p.localFileId) ? `/api/supplier-payables/${p.id}/file` : null,
+        });
+      }
+    } catch { }
+    json(res, { error: err.message }, 500);
+  }
 });
 // PUT /api/expenses/:id — עדכון מלא של הוצאה (תיאור/מספר/תאריך/סכום/שולם) + סנכרון מקומי
 add('PUT', /^\/api\/expenses\/([^/]+)$/, async (req, res, params, _q, body) => {

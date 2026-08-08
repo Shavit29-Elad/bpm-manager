@@ -4937,12 +4937,13 @@ window.openExpenseEdit = async (id) => {
     for (let i = 0; i < cds.length; i++) { if (matchSup(normSup(cds[i].name), supN) || (cds[i].paidExpenseId && String(cds[i].paidExpenseId) === String(id))) rows.push({ ev, idx: i }); }
   }
   rows.sort((a, b) => String(b.ev.date || '').localeCompare(String(a.ev.date || '')));
-  window._exeCtx = { id, supplierName: d.supplierName || '', rows, added: [], allEvents: events, invoiceAmount: Number(d.amount) || 0 };
+  window._exeCtx = { id, supplierName: d.supplierName || '', rows, added: [], allEvents: events, invoiceAmount: Number(d.amount) || 0, giUnavailable: !!d.giUnavailable };
   const F = (l, i, v, extra = '') => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">${l}<input id="${i}" value="${escAttr(v == null ? '' : String(v))}" ${extra}></label>`;
   m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:94vh;overflow:auto">
     <div class="row-between" style="margin:0"><h3 style="margin:0">✏️ עריכת הוצאה #${escapeHtml(String(d.number || ''))}</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('expEditModal').classList.add('hidden')">✕</button></div>
     <p class="muted" style="font-size:12px;margin:6px 0 12px">${escapeHtml(d.supplierName || '')} · השינויים נשמרים בחשבונית ירוקה.${d.reported ? ' ⚠ ההוצאה כבר דווחה — ייתכן שלא ניתן לעדכן/למחוק אותה.' : ''}</p>
+    ${d.giUnavailable ? `<div style="font-size:12px;background:#fff4e5;border:1px solid var(--warn);color:#8a5a00;border-radius:8px;padding:7px 9px;margin:-6px 0 12px">⚠ חשבונית ירוקה אינה מחזירה כרגע את מסמך ההוצאה הזה — מוצגים הנתונים השמורים במערכת. עריכת הסכום לכל אירוע תישמר כרגיל; שדות ההוצאה עצמם (סכום/תאריך/תיאור) לא ייכתבו לחשבונית ירוקה עד שהמסמך יהיה זמין שוב.</div>` : ''}
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
       <div style="flex:1;min-width:320px;display:flex;flex-direction:column;gap:11px">
         <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">תיאור (כולל מספר הקצאה)<textarea id="exeDesc" rows="2" style="font-family:inherit;resize:vertical">${escapeHtml(d.description || '')}</textarea></label>
@@ -4970,6 +4971,11 @@ window.openExpenseEdit = async (id) => {
   exeRenderEvents();
   exeRecalc();
   exeLoadDoc(d.url);
+  // כשחשבונית ירוקה לא זמינה למסמך זה — נועלים את שדות ההוצאה ואת המחיקה, כדי שלא ייווצר מצב של "עריכה שלא נכתבה ל-GI". רק סכום פר-אירוע נשאר פעיל.
+  if (d.giUnavailable) {
+    ['exeDesc', 'exeNum', 'exeDate', 'exeAmt', 'exeNet', 'exePaid'].forEach(x => { const el = document.getElementById(x); if (el) { el.disabled = true; el.style.opacity = '0.55'; el.title = 'לא ניתן לעדכן שדה זה כרגע — חשבונית ירוקה אינה זמינה למסמך'; } });
+    const del = document.querySelector('#expEditModal .btn.danger'); if (del) { del.disabled = true; del.style.opacity = '0.5'; del.title = 'מחיקה אינה זמינה כרגע — חשבונית ירוקה אינה מחזירה את המסמך'; }
+  }
 };
 // טעינת מסמך ההוצאה לצד ימין — דרך fetch→blob (כמו previewDoc), כי כתובות חשבונית ירוקה חוסמות הטמעה ישירה ב-iframe
 window.exeLoadDoc = async (url) => {
@@ -5067,14 +5073,23 @@ window.saveExpenseEdit = async (id) => {
   if (amount != null) body.amount = amount;
   if (g('exeNet').value !== '') body.amountExcludeVat = Number(g('exeNet').value);
   if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
-  st.innerHTML = '<span class="muted">מעדכן בחשבונית ירוקה…</span>';
-  const r = await fetch(`/api/expenses/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (r && r.ok) {
-    _expenseNotes[id] = body.description.trim();
-    for (const d of (_supDocs || [])) if (d.id === id) { d.category = body.description.trim(); if (amount != null) { d.amount = amount; d.amountIncVat = amount; } if (body.date) d.date = body.date; if (body.number) d.number = body.number; }
+  const ctx = window._exeCtx;
+  const giDown = !!(ctx && ctx.giUnavailable);
+  let giOk = true, giErr = '';
+  if (!giDown) {
+    st.innerHTML = '<span class="muted">מעדכן בחשבונית ירוקה…</span>';
+    const r = await fetch(`/api/expenses/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    giOk = !!(r && r.ok); giErr = (r && r.error) || '';
+    if (giOk) {
+      _expenseNotes[id] = body.description.trim();
+      for (const d of (_supDocs || [])) if (d.id === id) { d.category = body.description.trim(); if (amount != null) { d.amount = amount; d.amountIncVat = amount; } if (body.date) d.date = body.date; if (body.number) d.number = body.number; }
+    }
+  } else {
+    st.innerHTML = '<span class="muted">שומר סכומים פר-אירוע…</span>';
+  }
+  if (giOk) {
     // עדכון הסכום שהספק מקבל לכל אירוע — משנה גם את מחיר הקבלן באירוע עצמו; וגם שיוך אירועים חדשים לספק
     try {
-      const ctx = window._exeCtx;
       if (ctx) {
         const changed = new Set();
         const sup = (ctx.supplierName || '').trim();
@@ -5100,9 +5115,11 @@ window.saveExpenseEdit = async (id) => {
         for (const ev of changed) { await fetch(`/api/events/${ev.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contractorDetails: ev.contractorDetails, contractors: ev.contractors }) }).catch(() => { }); }
       }
     } catch { }
-    st.innerHTML = '<span style="color:var(--accent2)">נשמר ✓</span>';
-    setTimeout(() => { const mm = document.getElementById('expEditModal'); if (mm) mm.classList.add('hidden'); if (state.tab === 'contractors') renderSupplierDetail(); }, 900);
-  } else { if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; } st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String((r && r.error) || ''))}</span>`; }
+    st.innerHTML = giDown
+      ? '<span style="color:var(--accent2)">הסכומים פר-אירוע נשמרו ✓</span> <span class="muted">· שדות ההוצאה לא עודכנו בחשבונית ירוקה (ההוצאה לא נמצאה שם כרגע)</span>'
+      : '<span style="color:var(--accent2)">נשמר ✓</span>';
+    setTimeout(() => { const mm = document.getElementById('expEditModal'); if (mm) mm.classList.add('hidden'); if (state.tab === 'contractors') renderSupplierDetail(); }, 1100);
+  } else { if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; } st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(giErr || ''))}</span>`; }
 };
 window.deleteExpenseDoc = async (id) => {
   if (!confirm('למחוק את ההוצאה לצמיתות מחשבונית ירוקה?\nלא ניתן לשחזר. אם ההוצאה כבר דווחה — ייתכן שהמחיקה תיכשל.')) return;
