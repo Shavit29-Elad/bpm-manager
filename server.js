@@ -3573,8 +3573,10 @@ add('GET', /^\/api\/expenses\/([^/]+)\/details$/, async (req, res, params) => {
       amount,
       amountExcludeVat: e.amountExcludeVat != null ? Number(e.amountExcludeVat) : null,
       supplierName: e.supplier?.name || '',
+      supplierId: e.supplier?.id || null,
       paid: pay != null && pay !== -1,
       reported: Number(e.status) === 20,
+      url: (e.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e.url === 'string' ? e.url : null),
     });
   } catch (e) { json(res, { error: e.message }, 500); }
 });

@@ -4897,30 +4897,21 @@ window.openExpenseEdit = async (id) => {
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const d = await api(`/api/expenses/${id}/details?fresh=1`).catch(() => ({ error: 'שגיאת רשת' }));
   if (!d || d.error) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת ההוצאה: ${escapeHtml(String((d && d.error) || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('expEditModal').classList.add('hidden')">סגור</button></div></div>`; return; }
-  // כתובת המסמך לתצוגה בצד ימין — מהרשימה של מסמכי הספק (אותו URL שכפתור "תצוגה" משתמש בו)
-  const docUrl = ((typeof _supDocs !== 'undefined' && _supDocs) || []).map(x => x).find(x => String(x.id) === String(id))?.url || `/api/files/${id}`;
   // מציאת האירועים שבהם הספק הזה רשום כקבלן — כדי לערוך את הסכום שהוא מקבל לכל אירוע
   const normSup = (s) => String(s || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[.,"'׳״()\-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
   const supN = normSup(d.supplierName);
   const matchSup = (a, b) => a && b && (a === b || a.includes(b) || b.includes(a));
   let events = [];
   try { events = await api(`/api/events?companyId=${encodeURIComponent(state.company)}`); } catch { }
+  events = Array.isArray(events) ? events : [];
   const rows = [];
-  for (const ev of (Array.isArray(events) ? events : [])) {
+  for (const ev of events) {
     const cds = Array.isArray(ev.contractorDetails) ? ev.contractorDetails : [];
     for (let i = 0; i < cds.length; i++) { if (matchSup(normSup(cds[i].name), supN)) rows.push({ ev, idx: i }); }
   }
   rows.sort((a, b) => String(b.ev.date || '').localeCompare(String(a.ev.date || '')));
-  window._exeCtx = { id, rows, invoiceAmount: Number(d.amount) || 0 };
+  window._exeCtx = { id, supplierName: d.supplierName || '', rows, added: [], allEvents: events, invoiceAmount: Number(d.amount) || 0 };
   const F = (l, i, v, extra = '') => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">${l}<input id="${i}" value="${escAttr(v == null ? '' : String(v))}" ${extra}></label>`;
-  const rowsHtml = rows.length ? rows.map(({ ev, idx }) => {
-    const amt = ev.contractorDetails[idx].amount;
-    const title = escapeHtml(`${ev.artist || ev.clientName || ev.client || 'אירוע'} · ${ev.date || ''}${ev.location ? ' · ' + ev.location : ''}`);
-    return `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)">
-      <span style="font-size:13px;flex:1">${title}</span>
-      <input id="exeEvAmt_${ev.id}_${idx}" type="number" inputmode="decimal" dir="ltr" value="${amt == null ? '' : escAttr(String(amt))}" oninput="exeRecalc()" style="width:105px" placeholder="₪ לספק">
-    </div>`;
-  }).join('') : '<div class="muted" style="font-size:13px;padding:6px 0">לא נמצאו אירועים שבהם הספק רשום כקבלן.</div>';
   m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:94vh;overflow:auto">
     <div class="row-between" style="margin:0"><h3 style="margin:0">✏️ עריכת הוצאה #${escapeHtml(String(d.number || ''))}</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('expEditModal').classList.add('hidden')">✕</button></div>
@@ -4935,17 +4926,11 @@ window.openExpenseEdit = async (id) => {
           ${F('סכום ללא מע"מ ₪ (ריק=18% אוטומטי)', 'exeNet', d.amountExcludeVat, 'type="number" inputmode="decimal" dir="ltr" placeholder="חישוב אוטומטי"')}
         </div>
         <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">סטטוס תשלום<select id="exePaid"><option value="unpaid" ${!d.paid ? 'selected' : ''}>עדיין לא שולם</option><option value="paid" ${d.paid ? 'selected' : ''}>שולם</option></select></label>
-        <div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--panel2)">
-          <div style="font-size:13px;font-weight:700;margin-bottom:4px">💰 סכום לספק לכל אירוע</div>
-          <div class="muted" style="font-size:11px;margin-bottom:6px">עריכה כאן מעדכנת גם את מחיר הקבלן באירוע עצמו.</div>
-          <div style="max-height:220px;overflow:auto">${rowsHtml}</div>
-          <div id="exeEvSum" style="font-size:12px;margin-top:8px"></div>
-        </div>
+        <div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--panel2)" id="exeEventsBox"></div>
       </div>
       <div style="flex:1.05;min-width:320px">
         <div class="muted" style="font-size:12px;margin-bottom:4px">📄 המסמך של הספק</div>
-        ${docUrl ? `<iframe src="${escAttr(docUrl)}" style="width:100%;height:70vh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
-        <div style="margin-top:6px"><a href="${escAttr(docUrl)}" target="_blank" rel="noopener" class="muted" style="font-size:12px">פתח בכרטיסייה חדשה ↗</a></div>` : '<div class="muted" style="font-size:13px">אין מסמך לתצוגה.</div>'}
+        <div id="exeDocPane"></div>
       </div>
     </div>
     <div id="exeStatus" style="font-size:13px;min-height:16px;margin-top:10px"></div>
@@ -4955,13 +4940,62 @@ window.openExpenseEdit = async (id) => {
         <button class="btn primary" id="exeSaveBtn" onclick="saveExpenseEdit('${id}')">💾 שמור</button></div>
     </div>
   </div>`;
+  exeRenderEvents();
   exeRecalc();
+  exeLoadDoc(d.url);
+};
+// טעינת מסמך ההוצאה לצד ימין — דרך fetch→blob (כמו previewDoc), כי כתובות חשבונית ירוקה חוסמות הטמעה ישירה ב-iframe
+window.exeLoadDoc = async (url) => {
+  const pane = document.getElementById('exeDocPane'); if (!pane) return;
+  if (!url) { pane.innerHTML = '<div class="muted" style="font-size:13px;padding:10px 0">אין מסמך מצורף לתצוגה.</div>'; return; }
+  pane.innerHTML = '<div class="muted" style="font-size:13px;padding:10px 0">טוען מסמך…</div>';
+  try {
+    const r = await fetch(url); const blob = await r.blob();
+    const t = (blob.type || r.headers.get('content-type') || '').toLowerCase();
+    if (window._exeDocBlob) URL.revokeObjectURL(window._exeDocBlob);
+    window._exeDocBlob = URL.createObjectURL(blob);
+    const inner = t.startsWith('image')
+      ? `<div style="height:70vh;overflow:auto;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid var(--line);border-radius:8px"><img src="${window._exeDocBlob}" style="max-width:100%;max-height:100%;object-fit:contain"></div>`
+      : `<iframe src="${window._exeDocBlob}#toolbar=1" style="width:100%;height:70vh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>`;
+    pane.innerHTML = inner + `<div style="margin-top:6px"><a href="${escAttr(url)}" target="_blank" rel="noopener" class="muted" style="font-size:12px">פתח בכרטיסייה חדשה ↗</a></div>`;
+  } catch {
+    pane.innerHTML = `<div class="empty" style="padding:14px;display:flex;flex-direction:column;gap:8px;align-items:center"><div>לא ניתן להציג את המסמך כאן.</div><a href="${escAttr(url)}" target="_blank" class="btn primary" style="text-decoration:none">פתח בכרטיסייה חדשה ↗</a></div>`;
+  }
+};
+// מציג את רשימת האירועים המשויכים לספק (עם סכום לעריכה) + בורר להוספת אירוע חדש לשיוך
+window.exeRenderEvents = () => {
+  const ctx = window._exeCtx; if (!ctx) return;
+  const box = document.getElementById('exeEventsBox'); if (!box) return;
+  const rowHtml = (ev, inputId, amt, isNew) => `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)">
+      <span style="font-size:13px;flex:1">${isNew ? '🆕 ' : ''}${escapeHtml(`${ev.artist || ev.clientName || ev.client || 'אירוע'} · ${ev.date || ''}${ev.location ? ' · ' + ev.location : ''}`)}</span>
+      <input id="${inputId}" type="number" inputmode="decimal" dir="ltr" value="${amt == null ? '' : escAttr(String(amt))}" oninput="exeRecalc()" style="width:105px" placeholder="₪ לספק"></div>`;
+  const matchedHtml = ctx.rows.map(({ ev, idx }) => rowHtml(ev, `exeEvAmt_${ev.id}_${idx}`, ev.contractorDetails[idx].amount)).join('');
+  const addedHtml = ctx.added.map(a => rowHtml(a.ev, `exeAddAmt_${a.ev.id}`, a.amount, true)).join('');
+  const used = new Set([...ctx.rows.map(r => r.ev.id), ...ctx.added.map(a => a.ev.id)]);
+  const opts = ctx.allEvents.filter(ev => !used.has(ev.id)).sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 400)
+    .map(ev => `<option value="${ev.id}">${escapeHtml(`${ev.date || ''} · ${ev.artist || ev.clientName || 'אירוע'}${ev.location ? ' · ' + ev.location : ''}`)}</option>`).join('');
+  box.innerHTML = `<div style="font-size:13px;font-weight:700;margin-bottom:4px">💰 סכום לספק לכל אירוע</div>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">עריכה כאן מעדכנת גם את מחיר הקבלן באירוע עצמו. אפשר גם לשייך אירוע נוסף לספק.</div>
+    <div style="max-height:230px;overflow:auto">${(matchedHtml + addedHtml) || '<div class="muted" style="font-size:13px;padding:6px 0">אין אירועים משויכים עדיין — הוסף למטה.</div>'}</div>
+    <div style="margin-top:8px"><select id="exeAddSelect" style="width:100%;font-size:12px"><option value="">➕ הוסף אירוע לשיוך לספק…</option>${opts}</select></div>
+    <div id="exeEvSum" style="font-size:12px;margin-top:8px"></div>`;
+  const sel = document.getElementById('exeAddSelect');
+  if (sel) sel.onchange = () => { if (sel.value) exeAddEvent(sel.value); };
+};
+// הוספת אירוע לשיוך לספק — יופיע ברשימה עם שדה סכום; בשמירה הספק יתווסף כקבלן באירוע
+window.exeAddEvent = (eventId) => {
+  const ctx = window._exeCtx; if (!ctx) return;
+  if (ctx.added.some(a => String(a.ev.id) === String(eventId)) || ctx.rows.some(r => String(r.ev.id) === String(eventId))) return;
+  const ev = ctx.allEvents.find(e => String(e.id) === String(eventId)); if (!ev) return;
+  ctx.added.push({ ev, amount: null });
+  exeRenderEvents(); exeRecalc();
 };
 // חישוב מחדש של סכום הפירוט לספק מול סכום החשבונית
 window.exeRecalc = () => {
   const ctx = window._exeCtx; if (!ctx) return;
   let sum = 0;
   for (const { ev, idx } of ctx.rows) { const inp = document.getElementById(`exeEvAmt_${ev.id}_${idx}`); if (inp && inp.value !== '') sum += Number(inp.value) || 0; }
+  for (const a of ctx.added) { const inp = document.getElementById(`exeAddAmt_${a.ev.id}`); if (inp && inp.value !== '') sum += Number(inp.value) || 0; }
   const invEl = document.getElementById('exeAmt');
   const inv = invEl && invEl.value !== '' ? (Number(invEl.value) || 0) : ctx.invoiceAmount;
   const diff = Math.round((inv - sum) * 100) / 100;
@@ -4988,18 +5022,32 @@ window.saveExpenseEdit = async (id) => {
   if (r && r.ok) {
     _expenseNotes[id] = body.description.trim();
     for (const d of (_supDocs || [])) if (d.id === id) { d.category = body.description.trim(); if (amount != null) { d.amount = amount; d.amountIncVat = amount; } if (body.date) d.date = body.date; if (body.number) d.number = body.number; }
-    // עדכון הסכום שהספק מקבל לכל אירוע — משנה גם את מחיר הקבלן באירוע עצמו
+    // עדכון הסכום שהספק מקבל לכל אירוע — משנה גם את מחיר הקבלן באירוע עצמו; וגם שיוך אירועים חדשים לספק
     try {
       const ctx = window._exeCtx;
-      if (ctx && Array.isArray(ctx.rows)) {
+      if (ctx) {
         const changed = new Set();
-        for (const { ev, idx } of ctx.rows) {
+        const sup = (ctx.supplierName || '').trim();
+        // אירועים קיימים שבהם הספק כבר רשום — עדכון סכום
+        for (const { ev, idx } of (ctx.rows || [])) {
           const inp = document.getElementById(`exeEvAmt_${ev.id}_${idx}`); if (!inp) continue;
           const v = inp.value === '' ? null : Number(inp.value);
           const cur = ev.contractorDetails[idx].amount;
           if (String(v == null ? '' : v) !== String(cur == null ? '' : cur)) { ev.contractorDetails[idx].amount = v; changed.add(ev); }
         }
-        for (const ev of changed) { await fetch(`/api/events/${ev.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contractorDetails: ev.contractorDetails }) }).catch(() => { }); }
+        // אירועים חדשים ששויכו לספק — הוספת הספק כקבלן באירוע
+        for (const a of (ctx.added || [])) {
+          const inp = document.getElementById(`exeAddAmt_${a.ev.id}`);
+          const v = inp && inp.value !== '' ? Number(inp.value) : null;
+          const ev = a.ev;
+          ev.contractorDetails = Array.isArray(ev.contractorDetails) ? ev.contractorDetails : [];
+          const exist = ev.contractorDetails.find(c => (c.name || '').trim() === sup);
+          if (exist) exist.amount = v; else ev.contractorDetails.push({ name: sup, amount: v });
+          ev.contractors = Array.isArray(ev.contractors) ? ev.contractors : [];
+          if (!ev.contractors.includes(sup)) ev.contractors.push(sup);
+          changed.add(ev);
+        }
+        for (const ev of changed) { await fetch(`/api/events/${ev.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contractorDetails: ev.contractorDetails, contractors: ev.contractors }) }).catch(() => { }); }
       }
     } catch { }
     st.innerHTML = '<span style="color:var(--accent2)">נשמר ✓</span>';
