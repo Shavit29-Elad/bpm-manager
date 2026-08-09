@@ -5052,8 +5052,12 @@ window.approveDraft = async (id, btn) => {
       }
       const newExp = { id: (r.expense && r.expense.id) || r.payableId || ('exp_' + number), number, type: docType, clientName: supplierName || 'ספק', amount, date: g('apDate').value || todayIso(), url: null, kind: 'expense', description: g('apDesc').value.trim() };
       try {
-        await fetch(`/api/bank/${bankTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual', matchedInvoices: [newExp] }) });
-        const bt = (_bankList || []).find(t => t.id === bankTxId); if (bt) { bt.matchStatus = 'manual'; bt.matchedInvoices = [newExp]; }
+        // הוספה (לא דריסה): שומרים את המסמכים שכבר שויכו לתנועה ומצרפים את החדש — כדי שאפשר לשייך כמה מסמכים לאותה שורת בנק
+        const bt0 = (_bankList || []).find(t => t.id === bankTxId);
+        const existing = (bt0 && Array.isArray(bt0.matchedInvoices)) ? bt0.matchedInvoices.slice() : [];
+        const merged = existing.some(x => String(x.id) === String(newExp.id)) ? existing : existing.concat([newExp]);
+        await fetch(`/api/bank/${bankTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual', matchedInvoices: merged }) });
+        const bt = (_bankList || []).find(t => t.id === bankTxId); if (bt) { bt.matchStatus = 'manual'; bt.matchedInvoices = merged; }
       } catch { }
       st.innerHTML = `<span style="color:var(--accent2)">${msg} · 🔗 שויך לתנועת הבנק</span>`;
       setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); if (state.tab === 'bank') renderBank($('#content'), true); }, 1600);
@@ -7320,7 +7324,11 @@ function linkedDocIds() {
       if (inv.receipt && inv.receipt.number) recs.add(String(inv.receipt.number));
     }
   }
-  for (const d of _linkSel) ids.add(d.id);                      // מה שכבר נבחר כאן
+  for (const d of _linkSel) {
+    ids.add(d.id);                                             // מה שכבר נבחר כאן
+    // קבלה שצורפה לחשבונית נשמרת מקוננת (inv.receipt) — יש להוריד גם אותה מ"מסמכים פנויים"
+    if (d.receipt) { if (d.receipt.id != null) ids.add(String(d.receipt.id)); if (d.receipt.number) recs.add(String(d.receipt.number)); }
+  }
   return { ids, recs, used };
 }
 // הצגת כל המסמכים הפתוחים (עסקה / מס / מס-קבלה) לשיוך — בלי לבחור לקוח מראש
@@ -7387,7 +7395,7 @@ window.linkAdd = (j) => {
   if (Number(d.type) === 400) {
     // קבלה — לצרף לחשבונית שנבחרה ללא קבלה, לפי סכום; אחרת להוסיף כשורה נפרדת
     const inv = _linkSel.find(x => Number(x.type) !== 400 && !x.receipt && _amtClose(x.amount, d.amount));
-    if (inv) inv.receipt = { number: d.number, url: d.url || null, amount: d.amount };
+    if (inv) inv.receipt = { id: d.id, number: d.number, url: d.url || null, amount: d.amount };
     else _linkSel.push(d);
   } else {
     // חשבונית — לצרף אליה קבלה תואמת שכבר נבחרה (אם יש)
