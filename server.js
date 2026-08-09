@@ -1420,10 +1420,10 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/detail$/, async (req, res, param
 add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params) => {
   try {
     const db = load();
+    // המזהה יכול להיות payable מקומי, או ישירות מזהה הוצאה בחשבונית ירוקה (התאמות בנק ישנות שמרו את מזהה ההוצאה)
     const p = (db.supplierPayables || []).find(x => x.id === params[0]);
-    if (!p) return json(res, { error: 'לא נמצא' }, 404);
     // עותק מקומי (הוצאת אופק / חשבון עסקה פנימי) — מוגש ישירות, גם ללא חיבור לחשבונית ירוקה
-    if (p.localFileId) {
+    if (p && p.localFileId) {
       try {
         const f = await getFile(p.localFileId);
         if (f && f.data) {
@@ -1437,8 +1437,10 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params)
     // עבור קובץ מחשבונית ירוקה (הוצאה/טיוטה) — נדרש חיבור פעיל
     if (!greenInvoice.haveCredentials()) return json(res, { error: 'אין קובץ מקומי למסמך זה, וחשבונית ירוקה אינה מחוברת' }, 400);
     let fileUrl = null;
-    if (p.giExpenseId) { try { const e = await greenInvoice.getExpense(p.giExpenseId); fileUrl = (e?.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e?.url === 'string' ? e.url : null); } catch { } }
-    if (!fileUrl && p.draftId) { try { const d = await greenInvoice.getExpenseDraft(p.draftId); fileUrl = d?.url || null; } catch { } }
+    // מזהה ההוצאה ב-GI: מה-payable אם קיים, אחרת המזהה עצמו (fallback להתאמות בנק ישנות)
+    const giExpId = (p && p.giExpenseId) || (!p ? params[0] : null);
+    if (giExpId) { try { const e = await greenInvoice.getExpense(giExpId); fileUrl = (e?.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e?.url === 'string' ? e.url : null); } catch { } }
+    if (!fileUrl && p && p.draftId) { try { const d = await greenInvoice.getExpenseDraft(p.draftId); fileUrl = d?.url || null; } catch { } }
     if (!fileUrl) return json(res, { error: 'אין קובץ למסמך זה' }, 404);
     const r = await fetch(fileUrl, { redirect: 'follow' });
     if (!r.ok) return json(res, { error: `שגיאה בטעינת הקובץ: ${r.status}` }, 502);

@@ -7124,7 +7124,7 @@ function bankTr(t) {
     // הכנסות: מסמך מסוג קבלה (400) תמיד בעמודת "קבלה". שאר הסוגים (מס/מס-קבלה/זיכוי) בעמודת החשבונית — עם הזיכוי מקונן.
     invNo = stack(units.map(u => {
       const i = u.inv;
-      if (i.kind === 'expense') return `<span style="white-space:nowrap">חשבונית #${i.number}${act(i.url)}</span>`;
+      if (i.kind === 'expense') { const eu = i.url || (i.payableId ? `/api/supplier-payables/${i.payableId}/file` : (i.id ? `/api/supplier-payables/${i.id}/file` : null)); return `<span style="white-space:nowrap">חשבונית #${i.number}${act(eu)}</span>`; }
       if (Number(i.type) === 400) return '<span class="muted">—</span>';
       const main = `<span style="white-space:nowrap">${DOC_TYPE_SHORT[i.type] || 'מסמך'} #${i.number}${act(i.url, i)}</span>`;
       const creditLines = (u.credits || []).map(c => `<div class="muted" style="font-size:11px;color:var(--warn);white-space:nowrap">➖ זיכוי #${c.number} · −${money(c.amount)}${act(c.url)}</div>`).join('');
