@@ -4991,11 +4991,12 @@ window.approveDraft = async (id, btn) => {
   if (!amount || amount <= 0) { st.innerHTML = '<span style="color:var(--danger)">חסר סכום תקין.</span>'; return; }
   const docType = +g('apType').value;
   const isBiz = docType === 20; // חשבון עסקה — רישום פנימי
+  const isOfek = state.company === 'co_ofek'; // אופק: רשומה מקומית + מייל בלבד (בלי חשבונית ירוקה, בלי דרישת סיווג)
   const alloc = (g('apAlloc')?.value || '').trim();
   const classId = (g('apClass')?.value || '').trim();
   const saveClass = !!(g('apClassSave') && g('apClassSave').checked);
-  // סיווג נדרש רק למסמך מס אמיתי (לא לחשבון עסקה)
-  if (!isBiz && !classId && _classifications && _classifications.length) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור סיווג הוצאה (חשבונית ירוקה דורשת סיווג).</span>'; return; }
+  // סיווג נדרש רק למסמך מס אמיתי שנוצר בחשבונית ירוקה (לא לחשבון עסקה ולא לאופק)
+  if (!isBiz && !isOfek && !classId && _classifications && _classifications.length) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור סיווג הוצאה (חשבונית ירוקה דורשת סיווג).</span>'; return; }
   // אזהרה רכה: מספר הקצאה חסר לחשבונית מס/מס-קבלה מעל 5,000 ₪
   const needsAlloc = [305, 320].includes(docType) && Math.max(amount, net || 0) > 5000;
   if (needsAlloc && !alloc && !confirm('חסר מספר הקצאה לחשבונית מס/מס-קבלה מעל 5,000 ₪.\nלהמשיך בכל זאת ולקלוט בלי מספר הקצאה?')) return;
@@ -5003,7 +5004,7 @@ window.approveDraft = async (id, btn) => {
   const supplierName = (_suppliers || []).find(s => String(s.id) === String(supplierId))?.name || '';
   const linkedEvents = apGetLinkedEvents();
   const body = { supplierId, supplierName, number, amount, amountExcludeVat: net, taxId: g('apTax').value.trim() || null, date: g('apDate').value || todayIso(), documentType: docType, description: g('apDesc').value.trim(), allocationNumber: alloc || null, accountingClassificationId: classId, saveClassToSupplier: saveClass, paid, linkedEvents };
-  btn.disabled = true; btn.textContent = 'מאשר…'; st.innerHTML = `<span class="muted">${isBiz ? 'רושם חשבון עסקה (פנימי)…' : 'יוצר הוצאה בחשבונית ירוקה…'}</span>`;
+  btn.disabled = true; btn.textContent = 'מאשר…'; st.innerHTML = `<span class="muted">${isBiz ? 'רושם חשבון עסקה (פנימי)…' : isOfek ? 'שומר רשומה + שולח למייל ההוצאות…' : 'יוצר הוצאה בחשבונית ירוקה…'}</span>`;
   const r = await fetch(`/api/expense-drafts/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ אשר וצור הוצאה';
   if (r.ok) {
@@ -5028,6 +5029,11 @@ window.approveDraft = async (id, btn) => {
     const linkNote = (r.linkedCount || addedLinked) ? ` · 🔗 קושרו ${(r.linkedCount || 0) + addedLinked} אירועים בקבלנים לתשלום` : '';
     let msg;
     if (r.duplicate) { alert('⚠ המסמך כבר קיים במערכת\n\nחשבונית זו כבר נקלטה קודם לכן. כדי למנוע כפילות, הקובץ הכפול נמחק ולא נוצרה הוצאה נוספת.'); msg = '✓ המסמך כבר קיים במערכת — לא נוצרה כפילות.'; }
+    else if (r.localOnly && !r.businessDoc) {
+      // אופק: רשומה מקומית + מייל לפייפרלס (בלי חשבונית ירוקה)
+      const fwdNote = r.forwarded ? ' · 📧 נשלח למייל ההוצאות (פייפרלס)' : (r.forwardError ? ` · <span style="color:var(--warn)">שליחת המייל נכשלה: ${escapeHtml(String(r.forwardError))}</span>` : '');
+      msg = `✓ ההוצאה נשמרה באתר — נצפית בכל שלב בספקים/הוצאות${r.draftDeleted ? ' · 🗑 הוסרה מ"הוצאות לקליטה"' : ''}${fwdNote}${linkNote}<br><span class="muted" style="font-size:12px">רשומה מקומית בלבד — לא נוצרה בחשבונית ירוקה.</span>`;
+    }
     else if (r.businessDoc) msg = `✓ נרשם כ"חשבון עסקה" ב"הוצאות ספקים לתשלום" (לא נשלח לחשבונית ירוקה/רו״ח).${r.draftDeleted ? ' · 🗑 הוסר מ"הוצאות לקליטה" בחשבונית ירוקה' : ''}${linkNote}`;
     else {
       const fwdNote = r.forwarded ? ` · 📧 נשלח גם לרו"ח` : (r.forwardError ? ` · <span style="color:var(--warn)">שליחת המייל לרו"ח נכשלה</span>` : '');

@@ -909,6 +909,8 @@ add('POST', /^\/api\/old-invoices\/([^/]+)\/attach-doc$/, async (req, res, param
   const db = load(); db.oldInvoices = db.oldInvoices || [];
   const rec = db.oldInvoices.find(r => r.id === params[0]);
   if (!rec) return json(res, { error: 'לא נמצא' }, 404);
+  const _cid = (_q && _q.companyId) || (body && body.companyId) || giCompanyId();
+  if (rec.companyId && rec.companyId !== _cid) return json(res, { error: 'המסמך שייך לחברה אחרת' }, 403); // בידוד
   if (!body || !body.data) return json(res, { error: 'חסר קובץ' }, 400);
   const type = Number(body.type) || null;
   const saved = await saveFile({ employeeId: 'oldinv', kind: 'old-invoice', filename: body.filename || 'document', mime: body.mime || 'application/octet-stream', data: body.data });
@@ -1092,16 +1094,17 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     const draft = await greenInvoice.getExpenseDraft(draftId);
     if (!draft) return json(res, { error: 'הטיוטה לא נמצאה (ייתכן שכבר טופלה)' }, 404);
     const supplierId = body.supplierId || draft.supplierId;
-    if (!supplierId) return json(res, { error: 'יש לבחור ספק עבור ההוצאה' }, 400);
-
-    // חשבון עסקה (20) = רישום פנימי בלבד — לא נוצר בחשבונית ירוקה ולא נשלח לרו"ח
+    // חשבון עסקה (20) = רישום פנימי. אופק = רשומה מקומית בלבד + מייל (ה-GI של אופק אינו מסיים הוצאות דרך ה-API — POST /expenses מחזיר 404).
     const isBusiness = Number(body.documentType) === 20;
+    const _activeCid = q.companyId || giCompanyId();
+    const localOnly = isBusiness || _activeCid === 'co_ofek';
+    if (!localOnly && !supplierId) return json(res, { error: 'יש לבחור ספק עבור ההוצאה' }, 400);
     const paidFlag = body.paid !== false; // ברירת מחדל שולם (הפרונט שולח במפורש)
     const linkedEvents = Array.isArray(body.linkedEvents) ? body.linkedEvents : [];
 
-    // סיווג חשבונאי — נדרש רק למסמך מס אמיתי (לא לחשבון עסקה)
+    // סיווג חשבונאי — נדרש רק למסמך מס אמיתי שנוצר ב-GI (לא לרישום מקומי)
     let classId = body.accountingClassificationId || draft.accountingClassificationId || null;
-    if (!isBusiness) {
+    if (!localOnly) {
       if (!classId) {
         try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { }
       }
@@ -1139,35 +1142,52 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       ...extra,
     });
 
-    // ===== חשבון עסקה — רישום פנימי בלבד (לא בחשבונית ירוקה, לא לרו"ח) =====
-    if (isBusiness) {
-      // מורידים עותק מקומי של קובץ החשבונית לפני מחיקת הטיוטה — כדי לשמור צפייה/הורדה אצלנו גם אחרי המחיקה
-      let localFileId = null;
+    // ===== רישום מקומי בלבד (חשבון עסקה, או חברת אופק) — לא נוצר בחשבונית ירוקה. הקובץ נשמר באתר לצפייה בכל שלב, ומועבר במייל ההוצאות (פייפרלס/רו"ח) =====
+    if (localOnly) {
+      // מורידים עותק מקומי של קובץ החשבונית (לצפייה/הורדה אצלנו גם אחרי מחיקת הטיוטה), ושומרים את ה-buffer להעברה במייל
+      let localFileId = null, fileBuf = null, fileCt = 'application/pdf', fileExt = 'pdf';
       try {
         if (draft.url) {
           const fr = await fetch(draft.url, { redirect: 'follow' });
           if (fr.ok) {
-            const buf = Buffer.from(await fr.arrayBuffer());
-            const ct = fr.headers.get('content-type') || 'application/pdf';
-            const ext = /pdf/i.test(ct) ? 'pdf' : (/png/i.test(ct) ? 'png' : (/jpe?g/i.test(ct) ? 'jpg' : 'pdf'));
-            const saved = await saveFile({ employeeId: 'payable', kind: 'expense', filename: `expense-${String(number).replace(/[^\w.-]/g, '_')}.${ext}`, mime: ct, data: buf.toString('base64') });
+            fileBuf = Buffer.from(await fr.arrayBuffer());
+            fileCt = fr.headers.get('content-type') || 'application/pdf';
+            fileExt = /pdf/i.test(fileCt) ? 'pdf' : (/png/i.test(fileCt) ? 'png' : (/jpe?g/i.test(fileCt) ? 'jpg' : 'pdf'));
+            const saved = await saveFile({ employeeId: 'payable', kind: 'expense', filename: `expense-${String(number).replace(/[^\w.-]/g, '_')}.${fileExt}`, mime: fileCt, data: fileBuf.toString('base64') });
             localFileId = saved.id;
           }
         }
       } catch { }
-      // מוחקים את הטיוטה מחשבונית ירוקה — כדי שלא תישאר ב"הוצאות לקליטה" גם שם (רישום פנימי בלבד)
+      // העברת קובץ ההוצאה למייל ההוצאות של החברה (פייפרלס/רו"ח) — רק לאופק (חשבון עסקה פנימי של BPM נשאר בלי מייל, כמו קודם)
+      let forwarded = false, forwardError = null;
+      if (_activeCid === 'co_ofek') try {
+        const _mcreds = companyMailCreds(load(), _activeCid);
+        if (!_acctEmail) forwardError = 'לא הוגדר מייל להעברת הוצאות בפרטי העסק';
+        else if (!fileBuf) forwardError = 'הורדת קובץ ההוצאה נכשלה';
+        else if (!mailer.companyMailConfigured(_mcreds) && !mailer.mailerConfigured()) forwardError = 'לא הוגדר חשבון מייל לחברה';
+        else {
+          const safeNum = String(number).replace(/[^\w.-]/g, '_');
+          await mailer.sendMailFrom(_mcreds, {
+            to: _acctEmail,
+            subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
+            text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nספק: ${body.supplierName || draft.supplierName || ''}\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
+            attachments: [{ filename: `expense-${safeNum}.${fileExt}`, content: fileBuf, contentType: fileCt }],
+          });
+          forwarded = true;
+        }
+      } catch (e) { forwardError = e.message; }
+      // מחיקת הטיוטה מחשבונית ירוקה — הטיפול הושלם אצלנו (רישום מקומי). אם המחיקה נכשלת — מסמנים כמטופלת אצלנו כדי שלא תופיע שוב.
       let draftDeleted = false;
       try { await greenInvoice.deleteExpenseDraft(draftId); draftDeleted = true; } catch { }
       const db = load();
       db.supplierPayables = db.supplierPayables || [];
-      // אם המחיקה הצליחה — הקובץ מוגש מהעותק המקומי (localFileId); אם נכשלה — נשארת הפניה לטיוטה כגיבוי
-      const payable = newPayable({ isBusinessDoc: true, giExpenseId: null, draftId: draftDeleted ? null : draftId, localFileId });
+      const payable = newPayable({ isBusinessDoc: isBusiness || undefined, localOnly: true, giExpenseId: null, draftId: draftDeleted ? null : draftId, localFileId });
       db.supplierPayables.push(payable);
       const linked = applyLinkedEvents(db, linkedEvents, number, payable.id);
       db.approvedDrafts = db.approvedDrafts || {};
-      db.approvedDrafts[draftId] = { businessPayableId: payable.id, at: new Date().toISOString(), draftDeleted };
+      db.approvedDrafts[draftId] = { businessPayableId: payable.id, at: new Date().toISOString(), draftDeleted, localOnly: true, forwarded };
       save(db);
-      return json(res, { ok: true, businessDoc: true, payableId: payable.id, linkedCount: linked, draftDeleted });
+      return json(res, { ok: true, localOnly: true, businessDoc: isBusiness, payableId: payable.id, linkedCount: linked, draftDeleted, forwarded, forwardError });
     }
 
     // ===== מסמך מס אמיתי — נוצר בחשבונית ירוקה =====
