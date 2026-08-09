@@ -37,12 +37,20 @@ const api = (p) => {
     return data;
   }));
 };
-// כל כתיבה (POST/PUT/DELETE) ל-API מנקה את המטמון כדי שהנתונים יישארו טריים
+// בידוד חברות + ניקוי מטמון: עוטף כל fetch.
+//  1) הזרקת companyId לכל בקשת /api/ (מלבד auth) שאין בה כבר — כך שאף בקשה, כולל כתיבות (POST/PUT/DELETE),
+//     לא תיפול לחברת ברירת המחדל בשרת. זו שכבת ההגנה המרכזית מפני זליגה בין חברות.
+//  2) כל כתיבה מנקה את מטמון ה-GET כדי שהנתונים יישארו טריים.
 (() => {
   const _origFetch = window.fetch.bind(window);
   window.fetch = (input, init) => {
-    const method = ((init && init.method) || 'GET').toUpperCase();
-    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+    let url = typeof input === 'string' ? input : (input && input.url) || '';
+    // הזרקת companyId רק לכתובות /api/ יחסיות (מחרוזת) שאינן auth ואין בהן כבר companyId
+    if (typeof input === 'string' && state.company && url.indexOf('/api/') === 0 && url.indexOf('/api/auth/') !== 0 && url.indexOf('companyId=') === -1) {
+      input = url + (url.indexOf('?') === -1 ? '?' : '&') + 'companyId=' + encodeURIComponent(state.company);
+      url = input;
+    }
     const pr = _origFetch(input, init);
     if (method !== 'GET' && url.indexOf('/api/') !== -1) pr.then(() => clearApiCache()).catch(() => {});
     return pr;
@@ -2030,7 +2038,9 @@ window.saveContactEdit = async (kind, id) => {
   if (tax) body.taxId = tax;
   if (!Object.keys(body).length) { if (st) st.innerHTML = '<span class="muted">אין מה לשמור.</span>'; return; }
   if (st) st.innerHTML = '<span class="muted">שומר בחשבונית ירוקה…</span>';
-  const url = kind === 'client' ? `/api/clients/${id}/details` : `/api/suppliers/${id}/details`;
+  // חובה לצרף companyId — אחרת השרת נופל לחברת ברירת המחדל (BPM) והעדכון הולך לחשבון הלא-נכון ולא נשמר
+  const base = kind === 'client' ? `/api/clients/${id}/details` : `/api/suppliers/${id}/details`;
+  const url = `${base}?companyId=${encodeURIComponent(state.company || '')}`;
   const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r && r.ok) {
     if (st) st.innerHTML = '<span style="color:var(--accent2)">נשמר ✓</span>';

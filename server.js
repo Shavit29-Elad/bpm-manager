@@ -148,7 +148,7 @@ add('GET', /^\/api\/companies$/, (req, res) => {
 // GET /api/events?companyId=
 add('GET', /^\/api\/events$/, (req, res, _p, q) => {
   const db = load();
-  const events = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  const events = companyEvents(db, q.companyId || giCompanyId());
   json(res, events.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
 });
 
@@ -176,11 +176,13 @@ add('POST', /^\/api\/artist-map$/, (req, res, _p, q, body) => {
   save(db); json(res, { ok: true, map: db.artistClientMap.filter(m => (m.companyId || 'co_bpm') === cid) });
 });
 // DELETE /api/artist-map/:artist — הסרת מיפוי
-add('DELETE', /^\/api\/artist-map\/(.+)$/, (req, res, params) => {
+add('DELETE', /^\/api\/artist-map\/(.+)$/, (req, res, params, q) => {
   const db = load();
+  const cid = q.companyId || 'co_bpm';
   const target = normName(decodeURIComponent(params[0]));
-  db.artistClientMap = (db.artistClientMap || []).filter(m => normName(m.artist) !== target);
-  save(db); json(res, { ok: true, map: db.artistClientMap });
+  // בידוד: מוחקים רק את המיפוי של החברה הנוכחית, ומחזירים רק את המיפויים שלה
+  db.artistClientMap = (db.artistClientMap || []).filter(m => !((m.companyId || 'co_bpm') === cid && normName(m.artist) === target));
+  save(db); json(res, { ok: true, map: db.artistClientMap.filter(m => (m.companyId || 'co_bpm') === cid) });
 });
 
 // POST /api/events  — יצירה ידנית או "אימוץ" אירוע מיומן גוגל לרשומה שניתן לערוך
@@ -241,9 +243,10 @@ add('POST', /^\/api\/events\/([^/]+)\/duplicate$/, (req, res, params, _q, body) 
 });
 
 // GET /api/events/:id — אירוע בודד
-add('GET', /^\/api\/events\/([^/]+)$/, (req, res, params) => {
+add('GET', /^\/api\/events\/([^/]+)$/, (req, res, params, q) => {
   const ev = load().events.find(e => e.id === params[0]);
   if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  if ((ev.companyId || 'co_bpm') !== (q.companyId || giCompanyId())) return json(res, { error: 'האירוע שייך לחברה אחרת' }, 403); // בידוד
   json(res, ev);
 });
 
@@ -252,16 +255,18 @@ add('PUT', /^\/api\/events\/([^/]+)$/, (req, res, params, _q, body) => {
   const db = load();
   const ev = db.events.find(e => e.id === params[0]);
   if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  if ((ev.companyId || 'co_bpm') !== ((_q && _q.companyId) || (body && body.companyId) || giCompanyId())) return json(res, { error: 'האירוע שייך לחברה אחרת' }, 403); // בידוד
   const b = { ...(body || {}) };
   delete b.id; delete b.companyId; delete b.createdAt;   // שדות מוגנים — עריכה לא מזיזה אירוע בין חברות ולא משנה מזהה
   Object.assign(ev, b); save(db); json(res, ev);
 });
 
 // DELETE /api/events/:id — מוחק רק מרשימת האירועים שלנו (לא מיומן גוגל)
-add('DELETE', /^\/api\/events\/([^/]+)$/, (req, res, params) => {
+add('DELETE', /^\/api\/events\/([^/]+)$/, (req, res, params, q) => {
   const db = load();
   const ev = db.events.find(e => e.id === params[0]);
   if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  if ((ev.companyId || 'co_bpm') !== (q.companyId || giCompanyId())) return json(res, { error: 'האירוע שייך לחברה אחרת' }, 403); // בידוד
   // אם האירוע הגיע מיומן גוגל — נרשום את מזהה-היומן ברשימת "מודחקים", כדי שרענון/אימוץ יומי לא יקלוט אותו שוב.
   if (ev.gcalId && ev.companyId) {
     db.calendarDismissed = db.calendarDismissed || {};
@@ -277,7 +282,7 @@ const MATCH_START = process.env.MATCH_START_DATE || '2026-07-01';
 // GET /api/calendar/match?companyId=
 add('GET', /^\/api\/calendar\/match$/, async (req, res, _p, q) => {
   const db = load();
-  const allWa = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  const allWa = companyEvents(db, q.companyId || giCompanyId());
   const waEvents = allWa.filter(e => (e.date || '') >= MATCH_START); // רק מיולי 2026 והלאה
   try {
     const dates = waEvents.map(e => e.date).filter(Boolean).sort();
@@ -407,7 +412,7 @@ add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
     if (q.from && q.to) return d >= q.from && d <= q.to;
     return d.startsWith(q.month || new Date().toISOString().slice(0, 7));
   };
-  const dbEvents = (q.companyId ? companyEvents(db, q.companyId) : db.events);
+  const dbEvents = (companyEvents(db, q.companyId || giCompanyId()));
   const adoptedGcal = new Set(dbEvents.map(e => e.gcalId).filter(Boolean));
   // מפענח את מזהה היומן מתוך gcalId בפורמט 'c<index>_...' — כך שאירוע שאומץ מיומן נצבע לפי היומן שלו.
   const calIdxOf = (gcalId) => { const m = String(gcalId || '').match(/^c(\d+)_/); return m ? +m[1] : null; };
@@ -1259,7 +1264,7 @@ add('GET', /^\/api\/contractors\/open-events$/, (req, res, _p, q) => {
   const amount = Number(q.amount) || 0;
   const invDate = (q.date || '').slice(0, 10);
   const desc = String(q.desc || '');
-  const evs = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  const evs = companyEvents(db, q.companyId || giCompanyId());
   const norm = (s) => String(s || '').trim();
   const items = [];
   for (const ev of (evs || [])) {
@@ -1347,6 +1352,8 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/link-events$/, (req, res, param
   const db = load();
   const p = (db.supplierPayables || []).find(x => x.id === params[0]);
   if (!p) return json(res, { error: 'לא נמצא' }, 404);
+  const _cid = (_q && _q.companyId) || (body && body.companyId) || giCompanyId();
+  if ((p.companyId || giCompanyId()) !== _cid) return json(res, { error: 'ההוצאה שייכת לחברה אחרת' }, 403); // בידוד
   const items = Array.isArray(body?.items) ? body.items : [];
   let n = 0;
   for (const it of items) {
@@ -1443,6 +1450,8 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/update$/, (req, res, params, _q
   const db = load();
   const p = (db.supplierPayables || []).find(x => x.id === params[0]);
   if (!p) return json(res, { error: 'לא נמצא' }, 404);
+  const _cid = (_q && _q.companyId) || (body && body.companyId) || giCompanyId();
+  if ((p.companyId || giCompanyId()) !== _cid) return json(res, { error: 'ההוצאה שייכת לחברה אחרת' }, 403); // בידוד
   const b = body || {};
   if (b.number != null) p.number = String(b.number).trim();
   if (b.date) p.date = String(b.date).slice(0, 10);
@@ -1476,11 +1485,14 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/update$/, (req, res, params, _q
 });
 
 // POST /api/supplier-payables/:id/delete — הסרת רשומת הוצאת ספק פנימית
-add('POST', /^\/api\/supplier-payables\/([^/]+)\/delete$/, (req, res, params) => {
+add('POST', /^\/api\/supplier-payables\/([^/]+)\/delete$/, (req, res, params, q, body) => {
   const db = load();
-  const before = (db.supplierPayables || []).length;
+  const _cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
+  const p = (db.supplierPayables || []).find(x => x.id === params[0]);
+  if (!p) return json(res, { error: 'לא נמצא' }, 404);
+  if ((p.companyId || giCompanyId()) !== _cid) return json(res, { error: 'ההוצאה שייכת לחברה אחרת' }, 403); // בידוד
   db.supplierPayables = (db.supplierPayables || []).filter(x => x.id !== params[0]);
-  save(db); json(res, { ok: true, removed: before - (db.supplierPayables || []).length });
+  save(db); json(res, { ok: true, removed: 1 });
 });
 
 // GET /api/mail/status — האם שליחת מייל מוגדרת ולאן מועברות הוצאות
@@ -2455,7 +2467,7 @@ add('POST', /^\/api\/contractors\/dismiss-supplier$/, (req, res, _p, _q, body) =
 // GET /api/contractors/names — שמות קבלנים ייחודיים מתוך האירועים (עם ספירה וסכום)
 add('GET', /^\/api\/contractors\/names$/, (req, res, _p, q) => {
   const db = load();
-  const evs = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  const evs = companyEvents(db, q.companyId || giCompanyId());
   const map = {};
   for (const ev of evs) {
     for (const c of (ev.contractorDetails || [])) {
@@ -2538,7 +2550,7 @@ add('POST', /^\/api\/sync-names$/, async (req, res, _p, q) => {
     return cand.length === 1 ? cand[0] : null;
   };
   const db = load();
-  const evs = q.companyId ? companyEvents(db, q.companyId) : db.events;
+  const evs = companyEvents(db, q.companyId || giCompanyId());
   let clientsFixed = 0, clientIdFixed = 0, ctrFixed = 0;
   const applied = { clients: {}, contractors: {} };
   for (const ev of evs) {
@@ -2572,15 +2584,19 @@ add('GET', /^\/api\/contractors\/([^/]+)\/documents$/, async (req, res, params) 
 // GET /api/payroll?companyId=&month=
 add('GET', /^\/api\/payroll$/, (req, res, _p, q) => {
   const db = load();
-  const emps = (db.employees || []).filter(e => !e.companyId || e.companyId === q.companyId);
-  json(res, employeePayForMonth(companyEvents(db, q.companyId), q.month, emps));
+  const _cid = q.companyId || giCompanyId();
+  // בידוד: עובד ללא תיוג חברה = BPM (מוסכמה). לא להחזיר עובדי BPM לחברות אחרות.
+  const emps = (db.employees || []).filter(e => (e.companyId || 'co_bpm') === _cid);
+  json(res, employeePayForMonth(companyEvents(db, _cid), q.month, emps));
 });
 
 // ---- עובדים (רשימה מרכזית עם שכר בסיס) ----
 // GET /api/employees?companyId=
 add('GET', /^\/api\/employees$/, (req, res, _p, q) => {
   const db = load();
-  json(res, (db.employees || []).filter(e => !e.companyId || e.companyId === q.companyId)
+  const _cid = q.companyId || giCompanyId();
+  // בידוד: עובד ללא תיוג חברה = BPM. חברה אחרת לא רואה עובדי BPM.
+  json(res, (db.employees || []).filter(e => (e.companyId || 'co_bpm') === _cid)
     .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he')));
 });
 // POST /api/employees  { name, baseRate }
@@ -2589,7 +2605,7 @@ add('POST', /^\/api\/employees$/, (req, res, _p, _q, body) => {
   const cid = body.companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
   const name = (body.name || '').trim();
   if (!name) return json(res, { error: 'חסר שם עובד' }, 400);
-  let emp = (db.employees || []).find(e => e.name === name && (!e.companyId || e.companyId === cid));
+  let emp = (db.employees || []).find(e => e.name === name && (e.companyId || 'co_bpm') === cid);
   if (emp) { emp.baseRate = body.baseRate ?? emp.baseRate; }
   else { emp = { id: id('emp'), companyId: cid, name, baseRate: body.baseRate ?? null, salaryType: body.salaryType || 'gross', active: true }; db.employees.push(emp); }
   save(db); json(res, emp);
@@ -2599,14 +2615,20 @@ add('PUT', /^\/api\/employees\/([^/]+)$/, (req, res, params, _q, body) => {
   const db = load();
   const emp = (db.employees || []).find(e => e.id === params[0]);
   if (!emp) return json(res, { error: 'עובד לא נמצא' }, 404);
-  Object.assign(emp, body); save(db); json(res, emp);
+  // בידוד: אסור לערוך עובד של חברה אחרת
+  const _cid = (body && body.companyId) || _q.companyId || giCompanyId();
+  if ((emp.companyId || 'co_bpm') !== _cid) return json(res, { error: 'העובד שייך לחברה אחרת' }, 403);
+  const { companyId, id: _bid, ...safe } = body || {}; // לא לאפשר העברת עובד בין חברות דרך העדכון
+  Object.assign(emp, safe); save(db); json(res, emp);
 });
 // DELETE /api/employees/:id
-add('DELETE', /^\/api\/employees\/([^/]+)$/, (req, res, params) => {
+add('DELETE', /^\/api\/employees\/([^/]+)$/, (req, res, params, q) => {
   const db = load();
-  const before = (db.employees || []).length;
+  const _cid = q.companyId || giCompanyId();
+  const emp = (db.employees || []).find(e => e.id === params[0]);
+  if (!emp) return json(res, { error: 'עובד לא נמצא' }, 404);
+  if ((emp.companyId || 'co_bpm') !== _cid) return json(res, { error: 'העובד שייך לחברה אחרת' }, 403); // בידוד
   db.employees = (db.employees || []).filter(e => e.id !== params[0]);
-  if (db.employees.length === before) return json(res, { error: 'עובד לא נמצא' }, 404);
   save(db); json(res, { ok: true });
 });
 
@@ -2619,7 +2641,7 @@ add('POST', /^\/api\/employees\/sync$/, (req, res, _p, q, body) => {
   // "כבר קיים" = לפי שם פרטי או לפי שם מלא (פרטי+משפחה) — כדי שלא ייווצר עובד כפול בשם המלא כשקיים כבר עובד בשם הפרטי
   const nrm = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
   const existing = new Set();
-  for (const e of (db.employees || []).filter(e => !e.companyId || e.companyId === cid)) {
+  for (const e of (db.employees || []).filter(e => (e.companyId || 'co_bpm') === cid)) {
     if (e.name) existing.add(nrm(e.name));
     if (e.name && e.lastName) existing.add(nrm(e.name + ' ' + e.lastName));
   }
