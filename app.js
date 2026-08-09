@@ -1656,6 +1656,10 @@ window.openCreditModal = (id, number, srcType, grossAmount) => {
       <input id="creditAmount" type="number" inputmode="decimal" dir="ltr" placeholder="זיכוי מלא" oninput="creditRecalc()" style="width:160px;padding:6px 8px;margin-inline-start:6px"></label>
     <div id="creditAmtNote" style="font-size:12px;margin:2px 0 6px"></div>
     <p class="muted" style="font-size:12px">המסמכים נוצרים בחשבונית ירוקה ולא ניתנים למחיקה.</p>
+    <label style="font-size:12.5px;display:inline-flex;gap:6px;align-items:center;cursor:pointer;margin:2px 0 4px">
+      <input type="checkbox" id="creditSendMail"><span>✉️ שלח את הזיכוי במייל ללקוח לאחר ההפקה</span></label>
+    <input id="creditEmail" dir="ltr" placeholder="מייל הלקוח (יימשך אוטומטית) — ניתן לערוך" style="width:100%;padding:6px 8px;margin-bottom:2px">
+    <div class="muted" style="font-size:11px;margin-bottom:4px">אפשר לערוך ולשלוח לכתובת אחרת. שליחה נוספת/הורדה יתאפשרו גם אחרי ההפקה.</div>
     <div id="creditStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('creditModal').classList.add('hidden')">ביטול</button>
@@ -1679,6 +1683,12 @@ window.openCreditModal = (id, number, srcType, grossAmount) => {
     window._creditEvents = (r && r.events) || [];
     creditRenderEvents();
   }).catch(() => { const b = document.getElementById('creditEventsBox'); if (b) b.innerHTML = ''; });
+  // מילוי אוטומטי של מייל הלקוח (מחשבונית ירוקה) — ניתן לצפייה ולעריכה
+  fetch(`/api/documents/${id}/client-email`).then(x => x.json()).then(r => {
+    const saved = (r && Array.isArray(r.emails)) ? r.emails.filter(Boolean) : [];
+    const inp = document.getElementById('creditEmail');
+    if (inp && !inp.value && saved[0]) inp.value = saved[0];
+  }).catch(() => {});
 };
 // רשימת אירועים מקושרים לבחירה — סימון אירוע ← זיכוי חלקי עליו + החזרתו ל"ממתין"
 window.creditRenderEvents = () => {
@@ -1758,20 +1768,33 @@ window.doCredit = async (id, srcType) => {
   const st = document.getElementById('creditStatus'); if (st) st.innerHTML = '<span class="muted">מפיק זיכוי…</span>';
   const r = await fetch(`/api/documents/${id}/credit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date, skipDateValidation, ...(partial ? { amount: creditNet } : {}), ...(revertEventIds.length ? { revertEventIds } : {}) }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
-    const parts = [`✓ חשבונית זיכוי #${r.credit?.number || ''}`];
-    if (r.negativeReceipt) parts.push(`קבלה שלילית #${r.negativeReceipt?.number || ''}`);
-    if (st) st.innerHTML = `<span style="color:var(--accent2)">${parts.join(' · ')} · מוריד קבצים…</span>`;
-    autoDownloadDoc(r.credit?.url);
-    if (r.negativeReceipt?.url) setTimeout(() => autoDownloadDoc(r.negativeReceipt.url), 900);
     const revN = Array.isArray(r.revertedEvents) ? r.revertedEvents.length : 0;
-    if (st) st.innerHTML = `<span style="color:var(--accent2)">${parts.join(' · ')}${revN ? ` · ${revN} אירוע הוחזר ל״ממתין״` : ''} · מוריד קבצים…</span>`;
-    setTimeout(() => {
-      document.getElementById('creditModal').classList.add('hidden');
-      if (typeof clearApiCache === 'function') clearApiCache();
-      if (state.tab === 'events' || state.tab === 'invoicing') renderCombined($('#content'));
-      else if (typeof reloadClientDocs === 'function') reloadClientDocs();
-      if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices(); // רענון "חשבוניות פתוחות" בדף הבית אחרי זיכוי
-    }, 1900);
+    // רענון נתונים ברקע — בלי לסגור את החלונית, כדי לאפשר הורדה/שליחה ידנית
+    if (typeof clearApiCache === 'function') clearApiCache();
+    if (state.tab === 'events' || state.tab === 'invoicing') renderCombined($('#content'));
+    else if (typeof reloadClientDocs === 'function') reloadClientDocs();
+    if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices();
+    // שליחה אוטומטית במייל אם התבקש (למייל שהוצג/נערך)
+    const isMail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
+    const wantMail = !!document.getElementById('creditSendMail')?.checked;
+    const mail = (document.getElementById('creditEmail')?.value || '').trim();
+    let sentNote = '';
+    if (wantMail && r.credit?.id) {
+      if (!isMail(mail)) sentNote = '<div style="color:var(--danger);font-size:12px;margin-top:4px">לא נשלח מייל — הכתובת אינה תקינה.</div>';
+      else {
+        const sr = await fetch(`/api/documents/${r.credit.id}/send?companyId=${encodeURIComponent(state.company)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emails: [mail], companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+        sentNote = (sr && sr.ok) ? `<div style="color:var(--accent2);font-size:12px;margin-top:4px">✓ נשלח במייל ל-${escapeHtml(mail)}</div>` : `<div style="color:var(--danger);font-size:12px;margin-top:4px">שליחת המייל נכשלה: ${escapeHtml(String((sr && sr.error) || ''))}</div>`;
+      }
+    }
+    // חלונית פעולות אחרי ההפקה — הורדה ידנית (לא אוטומטית) + שליחה חוזרת/עריכה
+    const cNum = r.credit?.number || '', cId = r.credit?.id || '';
+    const dlCredit = r.credit?.url ? `<a href="${r.credit.url}" target="_blank" rel="noopener" class="btn ghost" style="text-decoration:none">⬇ הורד זיכוי #${escapeHtml(String(cNum))}</a>` : '';
+    const dlNeg = r.negativeReceipt?.url ? `<a href="${r.negativeReceipt.url}" target="_blank" rel="noopener" class="btn ghost" style="text-decoration:none">⬇ הורד קבלה שלילית #${escapeHtml(String(r.negativeReceipt.number || ''))}</a>` : '';
+    const sendBtn = cId ? `<button class="btn primary" onclick="openSendDoc('${cId}','${escAttr(String(cNum))}','חשבונית זיכוי','')">✉️ שלח / ערוך ושלח</button>` : '';
+    if (st) st.innerHTML = `<div style="color:var(--accent2);font-weight:600">✓ הופקה חשבונית זיכוי #${escapeHtml(String(cNum))}${r.negativeReceipt ? ` · קבלה שלילית #${escapeHtml(String(r.negativeReceipt.number || ''))}` : ''}${revN ? ` · ${revN} אירוע הוחזר ל״ממתין״` : ''}</div>${sentNote}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">${dlCredit}${dlNeg}${sendBtn}
+        <button class="btn ghost" onclick="document.getElementById('creditModal').classList.add('hidden')">סגור</button></div>`;
+    const acts = document.querySelector('#creditModal .modal-actions'); if (acts) acts.style.display = 'none'; // מונע הפקה חוזרת
   } else {
     if (btn) btn.disabled = false;
     if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
