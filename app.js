@@ -5060,9 +5060,21 @@ window.saveNewSupplierInline = async (btn) => {
   const name = g('nsName').value.trim();
   if (!name) { st.innerHTML = '<span style="color:var(--danger)">חובה להזין שם עסק.</span>'; return; }
   const tax = g('nsTax').value.trim();
-  const body = { name, taxId: tax || null, contactPerson: g('nsContact').value.trim() || null, phone: g('nsPhone').value.trim() || null, emails: [g('nsEmail').value.trim()].filter(Boolean) };
+  const phone = g('nsPhone').value.trim();
+  const contact = g('nsContact').value.trim();
+  // ניקוי מייל: הסרת רווחים ותווים בלתי-נראים (שמגיעים לפעמים מקריאת OCR), ואימות בסיסי
+  const emailRaw = (g('nsEmail').value || '').replace(/[​-‍﻿\s]/g, '');
+  const emailValid = !!emailRaw && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailRaw);
+  if (emailRaw && !emailValid) { st.innerHTML = '<span style="color:var(--danger)">כתובת המייל אינה תקינה — תקן אותה או מחק אותה כדי להמשיך.</span>'; return; }
+  const mkBody = (withEmail) => ({ name, taxId: tax || null, contactPerson: contact || null, phone: phone || null, emails: (withEmail && emailValid) ? [emailRaw] : [] });
   btn.disabled = true; btn.textContent = 'שומר…'; st.innerHTML = '<span class="muted">יוצר ספק בחשבונית ירוקה…</span>';
-  const r = await fetch('/api/suppliers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  let r = await fetch('/api/suppliers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mkBody(true)) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  // אם חשבונית ירוקה דחתה דווקא את המייל (1102) — ניצור את הספק בלי המייל כדי לא להיתקע, ונודיע למשתמש
+  let emailDropped = false;
+  if (!r.ok && emailValid && /מייל|email|1102/i.test(String(r.error || ''))) {
+    r = await fetch('/api/suppliers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mkBody(false)) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    emailDropped = !!(r && r.ok);
+  }
   btn.disabled = false; btn.textContent = 'שמור ובחר';
   if (!r.ok) { st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא נשמר'))}</span>`; return; }
   const sup = r.supplier || {};
@@ -5074,8 +5086,8 @@ window.saveNewSupplierInline = async (btn) => {
   const sel = g('apSup');
   if (sel && newId) { const o = document.createElement('option'); o.value = newId; o.textContent = newSup.name; sel.appendChild(o); sel.value = String(newId); }
   if (tax && g('apTax') && !g('apTax').value) g('apTax').value = tax;
-  st.innerHTML = '<span style="color:var(--accent2)">✓ הספק נוסף ונבחר</span>';
-  setTimeout(() => { closeAddSupplierPanel(); }, 800);
+  st.innerHTML = `<span style="color:var(--accent2)">✓ הספק נוסף ונבחר${emailDropped ? ' · <span style="color:var(--warn)">⚠ המייל לא נשמר (נדחה ע"י חשבונית ירוקה) — אפשר להוסיף ידנית בכרטיס הספק</span>' : ''}</span>`;
+  setTimeout(() => { closeAddSupplierPanel(); }, emailDropped ? 2200 : 800);
 };
 window.deleteDraft = async (id) => {
   if (!confirm('למחוק את מסמך ההוצאה הזה? הפעולה תמחק את הטיוטה ולא תיווצר הוצאה.')) return;
