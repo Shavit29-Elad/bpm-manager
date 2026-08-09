@@ -3284,6 +3284,24 @@ add('POST', /^\/api\/suppliers$/, async (req, res, _p, _q, body) => {
   }
 });
 
+// GET /api/clients/:id/details — פרטי לקוח מלאים (טלפון, ח.פ, מיילים) למילוי חלונית העריכה (הרשימה מחזירה רק שם/מייל)
+add('GET', /^\/api\/clients\/([^/]+)\/details$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const c = await greenInvoice.getClient(params[0]);
+    const emails = Array.isArray(c.emails) ? c.emails.filter(Boolean) : [];
+    json(res, { ok: true, client: { name: c.name || '', phone: c.phone || c.mobile || '', taxId: c.taxId || '', emails, email: emails[0] || '' } });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+// GET /api/suppliers/:id/details — פרטי ספק מלאים (למילוי חלונית העריכה)
+add('GET', /^\/api\/suppliers\/([^/]+)\/details$/, async (req, res, params) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const c = await greenInvoice.getSupplier(params[0]);
+    const emails = Array.isArray(c.emails) ? c.emails.filter(Boolean) : [];
+    json(res, { ok: true, client: { name: c.name || '', phone: c.phone || c.mobile || '', taxId: c.taxId || '', emails, email: emails[0] || '' } });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
 // PUT /api/clients/:id/details — עריכת פרטי לקוח (שם, מייל, טלפון, ח.פ) בחשבונית ירוקה
 add('PUT', /^\/api\/clients\/([^/]+)\/details$/, async (req, res, params, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);

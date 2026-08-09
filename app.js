@@ -2026,6 +2026,14 @@ window.openContactEdit = (kind, id) => {
       <button class="btn primary" onclick="saveContactEdit('${kind}','${id}')">💾 שמור</button></div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  // הרשימה מחזירה רק שם/מייל — טוענים את הפרטים המלאים (טלפון + ח.פ) מ-GI כדי שהחלונית תציג את הערכים השמורים
+  const dUrl = (kind === 'client' ? `/api/clients/${id}/details` : `/api/suppliers/${id}/details`);
+  fetch(dUrl).then(x => x.json()).then(r => {
+    if (!r || !r.client) return;
+    const c = r.client;
+    const fill = (fid, v) => { const el = document.getElementById(fid); if (el && !el.value) el.value = v || ''; }; // לא לדרוס מה שכבר הוקלד
+    fill('ceName', c.name); fill('ceEmail', c.email || (c.emails && c.emails[0]) || ''); fill('cePhone', c.phone); fill('ceTax', c.taxId);
+  }).catch(() => {});
 };
 window.saveContactEdit = async (kind, id) => {
   const g = (x) => (document.getElementById(x)?.value || '').trim();
