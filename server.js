@@ -1806,6 +1806,38 @@ add('GET', /^\/api\/documents\/([^/]+)\/events$/, async (req, res, params) => {
   json(res, { ok: true, events: out });
 });
 
+// POST /api/documents/:id/credit-preview { date?, amount?, skipDateValidation? } — תצוגה מקדימה מעוצבת (PDF) של חשבונית הזיכוי, ללא יצירה
+add('POST', /^\/api\/documents\/([^/]+)\/credit-preview$/, async (req, res, params, _q, body) => {
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const src = await greenInvoice.getDocument(params[0]);
+    const srcType = Number(src.type);
+    if (![305, 320].includes(srcType)) return json(res, { error: 'זיכוי אפשרי רק מחשבונית מס או חשבונית מס-קבלה' }, 400);
+    const client = src.client?.id ? { id: src.client.id } : { name: src.client?.name || 'לקוח' };
+    const items = (src.income || []).map(it => ({ description: it.description, quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 })).filter(it => it.description && String(it.description).trim());
+    if (!items.length) return json(res, { error: 'אין שורות במסמך המקור' }, 400);
+    const date = body && body.date ? String(body.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const skipDateValidation = Boolean(body && body.skipDateValidation);
+    const baseDesc = `זיכוי עבור ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`;
+    // אותה לוגיקת שורות בדיוק כמו בהפקה האמיתית — כדי שהתצוגה תשקף את המסמך שייווצר
+    const fullNet = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
+    const reqNet = (body && body.amount != null && Number(body.amount) > 0) ? +Number(body.amount).toFixed(2) : null;
+    const isPartial = reqNet != null && reqNet < fullNet - 0.5;
+    const creditItems = isPartial ? [{ description: `זיכוי חלקי — ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`, quantity: 1, price: reqNet }] : items;
+    const opts = { type: 330, client, items: creditItems, date, skipDateValidation, description: (isPartial ? `זיכוי חלקי (${reqNet} + מע"מ) — ` : '') + (src.description ? `${baseDesc} — ${src.description}` : baseDesc) };
+    let pv;
+    try { pv = await greenInvoice.previewDocument(opts); }
+    catch (e) {
+      if (/2405|עתידי|מוקדם|תאריך|\bdate\b/i.test(String(e.message || ''))) { opts.date = new Date().toISOString().slice(0, 10); pv = await greenInvoice.previewDocument(opts); }
+      else throw e;
+    }
+    let pdfBase64 = pv.pdfBase64 || null;
+    if (!pdfBase64 && pv.url) { const fr = await fetch(pv.url, { redirect: 'follow' }).catch(() => null); if (fr && fr.ok) pdfBase64 = Buffer.from(await fr.arrayBuffer()).toString('base64'); }
+    if (!pdfBase64) return json(res, { error: 'לא התקבלה תצוגה מקדימה', debug: pv.raw || null });
+    json(res, { ok: true, pdfBase64, partial: isPartial, creditedNet: isPartial ? reqNet : fullNet });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // POST /api/documents/:id/credit { date?, revertEvents?, revertEventIds? } — הפקת זיכוי
 //   חשבונית מס (305) → חשבונית זיכוי אחת (330, linkType cancel)
 //   חשבונית מס-קבלה (320) → זיכוי דו-שלבי: חשבונית זיכוי (330) + קבלה שלילית (400 עם תקבול שלילי)

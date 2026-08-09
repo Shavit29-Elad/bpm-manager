@@ -1636,11 +1636,13 @@ window.docCloseOpen = async (id, action) => {
 window.openCreditModal = (id, number, srcType, grossAmount) => {
   const twoStage = Number(srcType) === 320;
   window._creditGross = Number(grossAmount) || 0;   // סכום החשבונית המקורית (כולל מע"מ) — לחישוב "יישאר לתשלום" בזיכוי חלקי
+  window._creditDocId = id;   // מזהה מסמך המקור — לתצוגה מקדימה של הזיכוי
   const srcName = srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס';
   let m = document.getElementById('creditModal');
   if (!m) { m = document.createElement('div'); m.id = 'creditModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(500px,95vw)">
+  m.innerHTML = `<div class="modal-card" id="creditCard" style="width:min(500px,95vw);max-height:92vh;overflow:auto;display:flex;gap:14px;align-items:stretch">
+    <div id="creditFormPane" style="flex:1 1 auto;min-width:330px">
     <h3 style="color:var(--danger)">הפקת זיכוי — ${srcName} #${escapeHtml(String(number))}</h3>
     <div class="warn-banner" style="margin:8px 0">${twoStage
       ? 'זיכוי לחשבונית מס-קבלה מפיק <b>שני מסמכים</b> לביטול מלא:<br>1) חשבונית זיכוי — לביטול חלק החשבונית.<br>2) קבלה שלילית — לביטול חלק הקבלה (התקבול).'
@@ -1657,7 +1659,14 @@ window.openCreditModal = (id, number, srcType, grossAmount) => {
     <div id="creditStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('creditModal').classList.add('hidden')">ביטול</button>
+      <button class="btn ghost" onclick="creditPreview()">👁 תצוגה מקדימה</button>
       <button class="btn" style="background:var(--danger);color:#fff" id="creditBtn" onclick="doCredit('${id}',${Number(srcType)})">⊖ הפק זיכוי</button>
+    </div>
+    </div>
+    <div id="creditPvPane" style="flex:0 0 46%;min-width:0;display:none;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
+      <div class="row-between" style="margin-bottom:6px"><b style="font-size:13px">👁 תצוגה מקדימה — חשבונית זיכוי</b>
+        <button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="creditPreview()">רענן ↻</button></div>
+      <div id="creditPvBody" style="flex:1;min-height:60vh;border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden"></div>
     </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
@@ -1704,6 +1713,31 @@ window.creditRecalc = () => {
   const g = +(net * 1.18).toFixed(2);
   const remain = gross ? +(gross - g).toFixed(2) : null;
   note.innerHTML = `<span style="color:var(--accent)">זיכוי חלקי: ${money(net)} + מע"מ = <b>${money(g)}</b> ברוטו.</span>` + (remain != null ? ` יישאר פתוח לתשלום: <b>${money(remain)}</b>.` : '');
+  creditPvMaybeRefresh(); // אם התצוגה המקדימה פתוחה — רענון חי לפי הסכום החדש
+};
+// רענון-חי מושהה של התצוגה המקדימה כשהסכום/הבחירה משתנים (רק אם הפאנל פתוח)
+let _creditPvTimer = null;
+function creditPvMaybeRefresh() {
+  const pane = document.getElementById('creditPvPane');
+  if (!pane || pane.style.display === 'none') return;
+  clearTimeout(_creditPvTimer);
+  _creditPvTimer = setTimeout(() => creditPreview(), 700);
+}
+// תצוגה מקדימה מעוצבת (PDF מחשבונית ירוקה) של חשבונית הזיכוי — נפתחת מצד ימין של החלונית
+window.creditPreview = async () => {
+  const card = document.getElementById('creditCard'), pane = document.getElementById('creditPvPane'), pbody = document.getElementById('creditPvBody');
+  if (!pane || !pbody) return;
+  pane.style.display = 'flex';
+  if (card) card.style.width = 'min(1080px,97vw)';
+  pbody.innerHTML = '<div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">טוען תצוגה מקדימה…</div>';
+  const id = window._creditDocId;
+  const date = document.getElementById('creditDate')?.value || todayIso();
+  const skip = !!document.getElementById('creditSkipSeq')?.checked;
+  const amtRaw = document.getElementById('creditAmount')?.value;
+  const amt = (amtRaw === '' || amtRaw == null) ? null : Number(amtRaw);
+  const r = await fetch(`/api/documents/${id}/credit-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date, skipDateValidation: skip, ...(amt != null && amt > 0 ? { amount: amt } : {}) }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r.ok && r.pdfBase64) pbody.innerHTML = `<iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:100%;border:0" title="תצוגה מקדימה"></iframe>`;
+  else pbody.innerHTML = `<div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--danger);padding:12px;text-align:center">${escapeHtml(String(r.error || 'שגיאה בתצוגה המקדימה'))}</div>`;
 };
 window.doCredit = async (id, srcType) => {
   const twoStage = Number(srcType) === 320;
