@@ -2079,7 +2079,15 @@ add('GET', /^\/api\/documents\/([^/]+)\/client-email$/, async (req, res, params)
   try {
     const doc = await greenInvoice.getDocument(params[0]);
     const ce = (doc && doc.client && doc.client.emails) || [];
-    const emails = (Array.isArray(ce) ? ce : []).map(String).map(s => s.trim()).filter(Boolean);
+    let emails = (Array.isArray(ce) ? ce : []).map(String).map(s => s.trim()).filter(Boolean);
+    // אם אין מיילים על המסמך עצמו — נופלים לכתובות השמורות בכרטיס הלקוח (getClient), כדי שהמילוי האוטומטי יעבוד גם בזיכוי
+    if (!emails.length && doc && doc.client && doc.client.id) {
+      try {
+        const cl = await greenInvoice.getClient(doc.client.id);
+        const ce2 = (cl && cl.emails) || [];
+        emails = (Array.isArray(ce2) ? ce2 : []).map(String).map(s => s.trim()).filter(Boolean);
+      } catch { /* לא חוסם */ }
+    }
     json(res, { ok: true, emails, clientName: (doc && doc.client && doc.client.name) || '' });
   } catch (e) { json(res, { ok: false, emails: [], error: e.message }); }
 });
