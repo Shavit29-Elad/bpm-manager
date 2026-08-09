@@ -5168,7 +5168,8 @@ window.approveDraft = async (id, btn) => {
         setTimeout(() => { document.getElementById('apprModal').classList.add('hidden'); if (state.tab === 'bank') renderBank($('#content'), true); }, 2400);
         return;
       }
-      const newExp = { id: (r.expense && r.expense.id) || r.payableId || ('exp_' + number), number, type: docType, clientName: supplierName || 'ספק', amount, date: g('apDate').value || todayIso(), url: null, kind: 'expense', description: g('apDesc').value.trim() };
+      const _expFileUrl = r.payableId ? `/api/supplier-payables/${r.payableId}/file` : null;   // קובץ ההוצאה (מקומי אצל אופק / חשבונית ירוקה) — כדי שתהיה צפייה/הורדה בשורת הבנק
+      const newExp = { id: (r.expense && r.expense.id) || r.payableId || ('exp_' + number), payableId: r.payableId || null, number, type: docType, clientName: supplierName || 'ספק', amount, date: g('apDate').value || todayIso(), url: _expFileUrl, kind: 'expense', description: g('apDesc').value.trim() };
       try {
         // הוספה (לא דריסה): שומרים את המסמכים שכבר שויכו לתנועה ומצרפים את החדש — כדי שאפשר לשייך כמה מסמכים לאותה שורת בנק
         const bt0 = (_bankList || []).find(t => t.id === bankTxId);

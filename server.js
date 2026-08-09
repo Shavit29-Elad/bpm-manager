@@ -1418,12 +1418,11 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/detail$/, async (req, res, param
 
 // GET /api/supplier-payables/:id/file — צפייה/הורדה של קובץ החשבונית (מההוצאה בחשבונית ירוקה או מהטיוטה)
 add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params) => {
-  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
     const db = load();
     const p = (db.supplierPayables || []).find(x => x.id === params[0]);
     if (!p) return json(res, { error: 'לא נמצא' }, 404);
-    // עותק מקומי (חשבון עסקה פנימי שהטיוטה שלו נמחקה מחשבונית ירוקה) — מוגש ישירות
+    // עותק מקומי (הוצאת אופק / חשבון עסקה פנימי) — מוגש ישירות, גם ללא חיבור לחשבונית ירוקה
     if (p.localFileId) {
       try {
         const f = await getFile(p.localFileId);
@@ -1435,6 +1434,8 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params)
         }
       } catch { }
     }
+    // עבור קובץ מחשבונית ירוקה (הוצאה/טיוטה) — נדרש חיבור פעיל
+    if (!greenInvoice.haveCredentials()) return json(res, { error: 'אין קובץ מקומי למסמך זה, וחשבונית ירוקה אינה מחוברת' }, 400);
     let fileUrl = null;
     if (p.giExpenseId) { try { const e = await greenInvoice.getExpense(p.giExpenseId); fileUrl = (e?.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e?.url === 'string' ? e.url : null); } catch { } }
     if (!fileUrl && p.draftId) { try { const d = await greenInvoice.getExpenseDraft(p.draftId); fileUrl = d?.url || null; } catch { } }
@@ -3670,8 +3671,28 @@ add('GET', /^\/api\/clients\/([^/]+)\/documents$/, async (req, res, params) => {
 });
 
 // GET /api/suppliers/:id/documents — מסמכי ההוצאה של ספק (לשיוך ידני בבנק)
-add('GET', /^\/api\/suppliers\/([^/]+)\/documents$/, async (req, res, params) => {
-  try { json(res, await greenInvoice.supplierExpenses(params[0])); } catch (e) { json(res, { error: e.message }, 500); }
+add('GET', /^\/api\/suppliers\/([^/]+)\/documents$/, async (req, res, params, q) => {
+  const supId = params[0];
+  let docs = [];
+  try { const r = await greenInvoice.supplierExpenses(supId); docs = Array.isArray(r) ? r : ((r && r.items) || []); }
+  catch (e) { docs = []; }
+  // מיזוג רשומות הוצאה מקומיות (אופק / חשבון עסקה פנימי) של אותו ספק — אינן קיימות בחשבונית ירוקה,
+  // ולכן בלי זה הן לא מופיעות במודל השיוך של הבנק. הקובץ מוגש מ-/api/supplier-payables/:id/file.
+  try {
+    const db = load();
+    const cid = q.companyId || giCompanyId();
+    const already = new Set(docs.map(d => String(d.id)));
+    const locals = (db.supplierPayables || []).filter(p => p.localOnly && String(p.supplierId) === String(supId) && (p.companyId || 'co_bpm') === cid && !already.has(String(p.id)));
+    for (const p of locals) {
+      docs.push({
+        id: p.id, number: p.number, type: Number(p.documentType) || 305,
+        date: String(p.date || '').slice(0, 10), amount: p.amount, amountIncVat: p.amount,
+        supplierName: p.supplierName || '', description: p.description || '',
+        url: `/api/supplier-payables/${p.id}/file`, localOnly: true,
+      });
+    }
+  } catch { }
+  json(res, docs);
 });
 
 // GET /api/expenses/notes — מפת תיאורים מותאמים להוצאות (override) לשימוש בהתאמות הבנק
