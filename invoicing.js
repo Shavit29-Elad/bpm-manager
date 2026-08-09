@@ -32,9 +32,10 @@ export function isNoInvoice(ev) {
 // בונה שורות חשבונית מאירוע יחיד לפי הפורמט הנלמד
 export function eventInvoiceLines(ev) {
   const date = ddmyDots(ev.date || ev.dateRaw);
-  const loc = (ev.location || ev.artist || '').trim();
-  const suffix = `${date}${loc ? ' - ' + loc : ''}`.trim();
-  const line = (label, price, qty = 1) => ({ description: `${label} ${suffix}`.trim(), quantity: qty, price: num(price), eventId: ev.id });
+  const artist = (ev.artist || '').trim();
+  const location = (ev.location || '').trim();
+  // פורמט שורת פירוט: "סוג - אמן - תאריך - מיקום" (שדות חסרים מדולגים)
+  const line = (label, price, qty = 1) => ({ description: [label, artist, date, location].filter(Boolean).join(' - '), quantity: qty, price: num(price), eventId: ev.id });
   const lines = [];
   if (num(ev.price)) lines.push(line('הגברה', ev.price));
   if (num(ev.priceLighting)) lines.push(line('תאורה', ev.priceLighting));
