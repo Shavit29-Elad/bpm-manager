@@ -1036,7 +1036,7 @@ function openInvClientHtml(cl) {
     <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number || ''))}','${escAttr(DOC_TYPE_NAMES[d.type] || 'מסמך')}','${encodeURIComponent(cl.name || '')}')" title="שליחת המסמך במייל ללקוח">✉️ שלח</button>${d.oldInvoiceId ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="delOldInvoice('${d.oldInvoiceId}')" title="מחק חשבונית ישנה">✕</button>` : ''}`
       : `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number))}','${escAttr(DOC_TYPE_NAMES[d.type] || 'מסמך')}','${encodeURIComponent(cl.name || '')}')">✉️ שלח</button>
     ${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'followup')">מסמך המשך ↪</button>` : ''}
-    <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'duplicate')">שכפול ⧉</button>${[305, 320].includes(Number(d.type)) ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="openCreditModal('${d.id}','${escAttr(String(d.number))}',${Number(d.type)})" title="הפקת זיכוי — ביטול החשבונית והחזרת האירוע ל״ממתין״">זיכוי ⊖</button>` : ''}`}
+    <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'duplicate')">שכפול ⧉</button>${Number(d.type) === 300 ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="docCloseOpen('${d.id}','close')" title="סגירת חשבון עסקה — יסומן כטופל וייצא מ״חשבוניות פתוחות״">סגור ⊗</button>` : ''}${[305, 320].includes(Number(d.type)) ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="openCreditModal('${d.id}','${escAttr(String(d.number))}',${Number(d.type)})" title="הפקת זיכוי — ביטול החשבונית והחזרת האירוע ל״ממתין״">זיכוי ⊖</button>` : ''}`}
   </div>`).join('');
   return `<div class="card" style="padding:0;overflow:hidden">
     <div class="row-between" style="margin:0;padding:11px 13px;cursor:pointer" onclick="document.getElementById('${rid}').classList.toggle('hidden')">
@@ -1628,7 +1628,7 @@ window.docCloseOpen = async (id, action) => {
     ? 'לסמן את המסמך כטופל (סגור)?\nניתן לפתוח אותו מחדש בכל עת.'
     : 'לפתוח מחדש את המסמך הסגור?')) return;
   const r = await fetch(`/api/documents/${id}/${action}`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (r.ok) { if (typeof reloadClientDocs === 'function') reloadClientDocs(); }
+  if (r.ok) { if (typeof reloadClientDocs === 'function') reloadClientDocs(); if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices(); }
   else alert('שגיאה: ' + (r.error || 'הפעולה נכשלה'));
 };
 
