@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 import { init as initStore, load, save, id, upsertEvent, companyEvents, saveFile, getFile, deleteFile } from './store.js';
 import { parseEventMessage, parseEventMessages } from './whatsappParser.js';
 import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar, calendarCompanies, setDbIcal } from './googleCalendar.js';
-import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents } from './invoicing.js';
+import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents, eventTotal } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
 import paperless from './paperless.js';
@@ -1758,13 +1758,17 @@ add('POST', /^\/api\/documents\/([^/]+)\/open$/, async (req, res, params) => {
 
 // זיכוי מלא — מחזיר את כל האירועים שחויבו ע"י המסמך הזה חזרה ל"ממתין" (לא מחויב), כדי שיופיעו שוב להפקת חשבונית חדשה.
 // מסמן את מסמך המקור כ-credited (לא נספר יותר כחיוב), מצרף רשומת מסמך הזיכוי לתיעוד, ומאפס "הלקוח שילם" אם לא נותר חיוב פעיל.
-function revertEventsForCreditedInvoice(db, srcId, credit) {
+// onlyEventIds (אופציונלי): כשמסופק — מזכה/מחזיר רק את האירועים שנבחרו (זיכוי חלקי לפי אירוע),
+// והמסמך המקורי נשאר פתוח ליתר האירועים. ללא הפרמטר — מחזיר את כל האירועים המקושרים (זיכוי מלא).
+function revertEventsForCreditedInvoice(db, srcId, credit, onlyEventIds) {
   const REAL = [300, 305, 320, 400];
+  const onlySet = Array.isArray(onlyEventIds) && onlyEventIds.length ? new Set(onlyEventIds.map(String)) : null;
   const out = [];
   for (const e of (db.events || [])) {
     const links = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
     const references = links.some(d => String(d.id) === String(srcId)) || String(e.invoiceId || '') === String(srcId);
     if (!references) continue;
+    if (onlySet && !onlySet.has(String(e.id))) continue; // זיכוי חלקי לפי אירוע — מדלגים על אירועים שלא נבחרו
     links.forEach(d => { if (String(d.id) === String(srcId)) d.credited = true; });
     if (credit && credit.id && !links.some(d => String(d.id) === String(credit.id))) {
       links.push({ id: credit.id, number: credit.number || null, type: 330, credit: true });
@@ -1785,7 +1789,24 @@ function revertEventsForCreditedInvoice(db, srcId, credit) {
   return out;
 }
 
-// POST /api/documents/:id/credit { date?, revertEvents? } — הפקת זיכוי
+// GET /api/documents/:id/events — האירועים המקושרים למסמך (לבחירת זיכוי חלקי לפי אירוע)
+add('GET', /^\/api\/documents\/([^/]+)\/events$/, async (req, res, params) => {
+  const srcId = params[0];
+  const db = load();
+  const out = [];
+  for (const e of (db.events || [])) {
+    const links = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
+    // מקושר למסמך זה כחיוב פעיל (לא זוכה/הומר כבר דרך המסמך הזה)
+    const link = links.find(d => String(d.id) === String(srcId));
+    const isActive = String(e.invoiceId || '') === String(srcId) || (link && !link.credited && !link.credit && !link.converted);
+    if (!isActive) continue;
+    out.push({ id: e.id, date: e.date || e.dateRaw || null, artist: e.artist || e.title || '', location: e.location || '', net: +Number(eventTotal(e)).toFixed(2) });
+  }
+  out.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  json(res, { ok: true, events: out });
+});
+
+// POST /api/documents/:id/credit { date?, revertEvents?, revertEventIds? } — הפקת זיכוי
 //   חשבונית מס (305) → חשבונית זיכוי אחת (330, linkType cancel)
 //   חשבונית מס-קבלה (320) → זיכוי דו-שלבי: חשבונית זיכוי (330) + קבלה שלילית (400 עם תקבול שלילי)
 //   זיכוי מלא (ברירת מחדל) מחזיר את האירועים ל"ממתין". revertEvents:false = זיכוי חלקי (לא משנה סטטוס אירועים).
@@ -1805,36 +1826,51 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
     const skipDateValidation = Boolean(body && body.skipDateValidation); // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     const baseDesc = `זיכוי עבור ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`;
 
-    // שלב 1 — חשבונית זיכוי (330), מקושרת כביטול המסמך המקורי
+    // זיכוי חלקי: אם התבקש סכום (לפני מע"מ) קטן מסך המסמך — מזכים רק אותו, בשורה אחת, בלי לבטל את המקור ובלי להחזיר אירועים.
+    const fullNet = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
+    const reqNet = (body && body.amount != null && Number(body.amount) > 0) ? +Number(body.amount).toFixed(2) : null;
+    const isPartial = reqNet != null && reqNet < fullNet - 0.5;
+    const creditItems = isPartial ? [{ description: `זיכוי חלקי — ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`, quantity: 1, price: reqNet }] : items;
+
+    // שלב 1 — חשבונית זיכוי (330). זיכוי מלא מקושר כ"ביטול"; זיכוי חלקי מקושר כקישור רגיל (לא מבטל את המקור).
     const credit = await greenInvoice.createDocument({
-      type: 330, client, items, date, skipDateValidation,
-      description: src.description ? `${baseDesc} — ${src.description}` : baseDesc,
-      linkedDocumentIds: [params[0]], linkType: 'cancel',
+      type: 330, client, items: creditItems, date, skipDateValidation,
+      description: (isPartial ? `זיכוי חלקי (${reqNet} + מע"מ) — ` : '') + (src.description ? `${baseDesc} — ${src.description}` : baseDesc),
+      linkedDocumentIds: [params[0]], ...(isPartial ? {} : { linkType: 'cancel' }),
     });
 
-    // זיכוי מלא — החזרת האירועים שחויבו ע"י המסמך ל"ממתין" (אלא אם revertEvents:false = זיכוי חלקי)
+    // החזרת אירועים ל"ממתין":
+    //  • revertEventIds (זיכוי חלקי לפי אירוע) — מחזיר רק את האירועים שנבחרו, גם כשהמסמך נשאר פתוח ליתר.
+    //  • אחרת: זיכוי מלא מחזיר את כל האירועים; זיכוי חלקי-לפי-סכום אינו משנה סטטוס אירועים.
     let revertedEvents = [];
-    if (!(body && body.revertEvents === false)) {
+    const revertIds = Array.isArray(body && body.revertEventIds) ? body.revertEventIds.map(String).filter(Boolean) : null;
+    if (revertIds && revertIds.length) {
+      const _db = load();
+      revertedEvents = revertEventsForCreditedInvoice(_db, params[0], credit, revertIds);
+      if (revertedEvents.length) save(_db);
+    } else if (!isPartial && !(body && body.revertEvents === false)) {
       const _db = load();
       revertedEvents = revertEventsForCreditedInvoice(_db, params[0], credit);
       if (revertedEvents.length) save(_db);
     }
 
-    if (srcType === 305) return json(res, { ok: true, mode: 'single', credit, revertedEvents });
+    if (srcType === 305) return json(res, { ok: true, mode: 'single', credit, revertedEvents, partial: isPartial, creditedNet: isPartial ? reqNet : fullNet });
 
     // שלב 2 (רק ל-320) — קבלה שלילית לביטול חלק התקבול
     const srcPay = Array.isArray(src.payment) ? src.payment : [];
-    const negPayment = (srcPay.length ? srcPay : [{ type: 4, price: Number(src.amount) || 0 }]).map(p => {
-      const row = { type: Number(p.type) || 4, price: -Math.abs(Number(p.price) || 0), date, currency: 'ILS' };
-      if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum);
-      if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName);
-      return row;
-    }).filter(p => Math.abs(p.price) > 0);
+    const negPayment = isPartial
+      ? [{ type: 4, price: -Math.abs(+(reqNet * 1.18).toFixed(2)), date, currency: 'ILS' }]  // ביטול חלקי של התקבול לפי הסכום שנבחר + מע"מ
+      : (srcPay.length ? srcPay : [{ type: 4, price: Number(src.amount) || 0 }]).map(p => {
+        const row = { type: Number(p.type) || 4, price: -Math.abs(Number(p.price) || 0), date, currency: 'ILS' };
+        if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum);
+        if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName);
+        return row;
+      }).filter(p => Math.abs(p.price) > 0);
     const negativeReceipt = await greenInvoice.createDocument({
       type: 400, client, items: [], payment: negPayment, date, skipDateValidation,
-      description: `ביטול קבלה — חשבונית מס-קבלה #${src.number}`,
+      description: `${isPartial ? 'ביטול חלקי של קבלה' : 'ביטול קבלה'} — חשבונית מס-קבלה #${src.number}`,
     });
-    json(res, { ok: true, mode: 'two-stage', credit, negativeReceipt, revertedEvents });
+    json(res, { ok: true, mode: 'two-stage', credit, negativeReceipt, revertedEvents, partial: isPartial, creditedNet: isPartial ? reqNet : fullNet });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 

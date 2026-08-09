@@ -523,7 +523,7 @@ function docsTable(docs, opts = {}) {
     b.push(`<button class="btn ghost" style="${bs};color:var(--accent)" onclick="openSendDoc('${id}','${num}','${escAttr(DOC_TYPE_NAMES[tp] || 'מסמך')}','${encodeURIComponent(d.clientName || '')}')">✉️ שלח</button>`);
     if (FOLLOWUP_FOR[tp]?.length) b.push(`<button class="btn ghost" style="${bs}" onclick="openDerive('${id}','${num}',${tp},'followup',true)">מסמך המשך ↪</button>`);
     b.push(`<button class="btn ghost" style="${bs}" onclick="openDerive('${id}','${num}',${tp},'duplicate',true)">שכפול ⧉</button>`);
-    if (tp === 305 || tp === 320) b.push(`<button class="btn ghost" style="${bs};color:var(--danger)" onclick="openCreditModal('${id}','${num}',${tp})">זיכוי ⊖</button>`);
+    if (tp === 305 || tp === 320) b.push(`<button class="btn ghost" style="${bs};color:var(--danger)" onclick="openCreditModal('${id}','${num}',${tp},${d.amount != null ? Number(d.amount) : 0})">זיכוי ⊖</button>`);
     if ([10, 300, 305, 320].includes(tp)) {
       if (stt === 0) b.push(`<button class="btn ghost" style="${bs};color:var(--accent2)" onclick="docCloseOpen('${id}','close')">סמן טופל ✓</button>`);
       else if (stt === 1 || stt === 2) b.push(`<button class="btn ghost" style="${bs}" onclick="docCloseOpen('${id}','open')">פתח מחדש ↺</button>`);
@@ -1036,7 +1036,7 @@ function openInvClientHtml(cl) {
     <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number || ''))}','${escAttr(DOC_TYPE_NAMES[d.type] || 'מסמך')}','${encodeURIComponent(cl.name || '')}')" title="שליחת המסמך במייל ללקוח">✉️ שלח</button>${d.oldInvoiceId ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="delOldInvoice('${d.oldInvoiceId}')" title="מחק חשבונית ישנה">✕</button>` : ''}`
       : `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number))}','${escAttr(DOC_TYPE_NAMES[d.type] || 'מסמך')}','${encodeURIComponent(cl.name || '')}')">✉️ שלח</button>
     ${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'followup')">מסמך המשך ↪</button>` : ''}
-    <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'duplicate')">שכפול ⧉</button>${Number(d.type) === 300 ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="docCloseOpen('${d.id}','close')" title="סגירת חשבון עסקה — יסומן כטופל וייצא מ״חשבוניות פתוחות״">סגור ⊗</button>` : ''}${[305, 320].includes(Number(d.type)) ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="openCreditModal('${d.id}','${escAttr(String(d.number))}',${Number(d.type)})" title="הפקת זיכוי — ביטול החשבונית והחזרת האירוע ל״ממתין״">זיכוי ⊖</button>` : ''}`}
+    <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},'duplicate')">שכפול ⧉</button>${Number(d.type) === 300 ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="docCloseOpen('${d.id}','close')" title="סגירת חשבון עסקה — יסומן כטופל וייצא מ״חשבוניות פתוחות״">סגור ⊗</button>` : ''}${[305, 320].includes(Number(d.type)) ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="openCreditModal('${d.id}','${escAttr(String(d.number))}',${Number(d.type)},${d.amountDue != null ? Number(d.amountDue) : (d.amount != null ? Number(d.amount) : 0)})" title="הפקת זיכוי — מלא או חלקי לפי אירוע/סכום">זיכוי ⊖</button>` : ''}`}
   </div>`).join('');
   return `<div class="card" style="padding:0;overflow:hidden">
     <div class="row-between" style="margin:0;padding:11px 13px;cursor:pointer" onclick="document.getElementById('${rid}').classList.toggle('hidden')">
@@ -1633,8 +1633,9 @@ window.docCloseOpen = async (id, action) => {
 };
 
 // ============ זיכוי (חד-שלבי מחשבונית מס / דו-שלבי מחשבונית מס-קבלה) ============
-window.openCreditModal = (id, number, srcType) => {
+window.openCreditModal = (id, number, srcType, grossAmount) => {
   const twoStage = Number(srcType) === 320;
+  window._creditGross = Number(grossAmount) || 0;   // סכום החשבונית המקורית (כולל מע"מ) — לחישוב "יישאר לתשלום" בזיכוי חלקי
   const srcName = srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס';
   let m = document.getElementById('creditModal');
   if (!m) { m = document.createElement('div'); m.id = 'creditModal'; m.className = 'modal'; document.body.appendChild(m); }
@@ -1648,7 +1649,11 @@ window.openCreditModal = (id, number, srcType) => {
       <input id="creditDate" type="date" value="${todayIso()}" style="padding:6px 8px;margin-inline-start:6px"></label>
     <label style="font-size:12px;display:inline-flex;gap:6px;align-items:center;cursor:pointer;margin-bottom:8px">
       <input type="checkbox" id="creditSkipSeq"><span>אפשר תאריך מוקדם מהמסמך האחרון (הפקה מחוץ לרצף)</span></label>
-    <p class="muted" style="font-size:12px">המסמכים ייווצרו בחשבונית ירוקה עם אותן שורות/סכומים כמו המקור, ולא ניתנים למחיקה.</p>
+    <div id="creditEventsBox" style="margin:6px 0"></div>
+    <label style="font-size:13px;display:block;margin:2px 0 4px">💰 סכום הזיכוי לפני מע״מ <span class="muted" style="font-weight:400">(השאר ריק לזיכוי מלא)</span>
+      <input id="creditAmount" type="number" inputmode="decimal" dir="ltr" placeholder="זיכוי מלא" oninput="creditRecalc()" style="width:160px;padding:6px 8px;margin-inline-start:6px"></label>
+    <div id="creditAmtNote" style="font-size:12px;margin:2px 0 6px"></div>
+    <p class="muted" style="font-size:12px">המסמכים נוצרים בחשבונית ירוקה ולא ניתנים למחיקה.</p>
     <div id="creditStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('creditModal').classList.add('hidden')">ביטול</button>
@@ -1656,17 +1661,68 @@ window.openCreditModal = (id, number, srcType) => {
     </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  window._creditEvents = []; window._creditSelIds = new Set();
+  creditRecalc();
+  // טעינת האירועים המקושרים למסמך — לבחירת זיכוי חלקי לפי אירוע
+  const box = document.getElementById('creditEventsBox');
+  if (box) box.innerHTML = '<span class="muted" style="font-size:12px">טוען אירועים מקושרים…</span>';
+  fetch(`/api/documents/${id}/events`).then(x => x.json()).then(r => {
+    window._creditEvents = (r && r.events) || [];
+    creditRenderEvents();
+  }).catch(() => { const b = document.getElementById('creditEventsBox'); if (b) b.innerHTML = ''; });
+};
+// רשימת אירועים מקושרים לבחירה — סימון אירוע ← זיכוי חלקי עליו + החזרתו ל"ממתין"
+window.creditRenderEvents = () => {
+  const box = document.getElementById('creditEventsBox'); if (!box) return;
+  const evs = window._creditEvents || [];
+  if (evs.length < 2) { box.innerHTML = ''; return; } // אירוע יחיד/ללא — בחירה לפי אירוע לא רלוונטית
+  const sel = window._creditSelIds || new Set();
+  box.innerHTML = `<div style="font-size:13px;font-weight:600;margin-bottom:4px">זיכוי לפי אירוע <span class="muted" style="font-weight:400">(סמן אירוע לזיכוי — יחזור ל״ממתין לחיוב״)</span></div>`
+    + evs.map(ev => `<label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
+        <input type="checkbox" ${sel.has(String(ev.id)) ? 'checked' : ''} onchange="creditToggleEvent('${ev.id}')">
+        <span>${ddmy(ev.date)} · ${escapeHtml(ev.artist || '')}${ev.location ? ' · ' + escapeHtml(ev.location) : ''}</span>
+        <span style="margin-inline-start:auto;color:var(--muted)">${money(ev.net)}</span>
+      </label>`).join('');
+};
+window.creditToggleEvent = (eid) => {
+  const sel = window._creditSelIds || (window._creditSelIds = new Set());
+  const k = String(eid);
+  if (sel.has(k)) sel.delete(k); else sel.add(k);
+  const evs = window._creditEvents || [];
+  const sum = evs.filter(e => sel.has(String(e.id))).reduce((s, e) => s + (Number(e.net) || 0), 0);
+  const amt = document.getElementById('creditAmount');
+  if (amt) amt.value = sel.size ? +sum.toFixed(2) : '';
+  creditRecalc();
+};
+// חישוב חי במודל הזיכוי: מלא מול חלקי + מע"מ + יתרה שתישאר לתשלום
+window.creditRecalc = () => {
+  const note = document.getElementById('creditAmtNote'); if (!note) return;
+  const raw = document.getElementById('creditAmount')?.value;
+  const net = (raw === '' || raw == null) ? null : Number(raw);
+  const gross = window._creditGross || 0;
+  if (net == null || !(net > 0)) { note.innerHTML = '<span class="muted">זיכוי מלא — יבטל את כל החשבונית' + (gross ? ` (${money(gross)})` : '') + ' ויחזיר את האירוע ל״ממתין״.</span>'; return; }
+  const g = +(net * 1.18).toFixed(2);
+  const remain = gross ? +(gross - g).toFixed(2) : null;
+  note.innerHTML = `<span style="color:var(--accent)">זיכוי חלקי: ${money(net)} + מע"מ = <b>${money(g)}</b> ברוטו.</span>` + (remain != null ? ` יישאר פתוח לתשלום: <b>${money(remain)}</b>.` : '');
 };
 window.doCredit = async (id, srcType) => {
   const twoStage = Number(srcType) === 320;
   const date = (document.getElementById('creditDate')?.value || todayIso());
   const skipDateValidation = !!document.getElementById('creditSkipSeq')?.checked;
-  if (!confirm(twoStage
-    ? 'להפיק חשבונית זיכוי + קבלה שלילית לביטול מלא של החשבונית?\nהפעולה יוצרת מסמכים אמיתיים בחשבונית ירוקה.'
-    : 'להפיק חשבונית זיכוי לביטול החשבונית?\nהפעולה יוצרת מסמך אמיתי בחשבונית ירוקה.')) return;
+  const amtRaw = document.getElementById('creditAmount')?.value;
+  const creditNet = (amtRaw === '' || amtRaw == null) ? null : Number(amtRaw);
+  if (creditNet != null && !(creditNet > 0)) { const st0 = document.getElementById('creditStatus'); if (st0) st0.innerHTML = '<span style="color:var(--danger)">סכום זיכוי לא תקין.</span>'; return; }
+  const partial = creditNet != null;
+  const revertEventIds = Array.from(window._creditSelIds || []);
+  const evNote = revertEventIds.length ? `\n${revertEventIds.length} אירוע יוחזר ל״ממתין לחיוב״.` : '';
+  if (!confirm(partial
+    ? `להפיק זיכוי חלקי על ${money(creditNet)} + מע"מ?\nהמסמך המקורי יישאר פתוח ליתרה.${evNote}\nהפעולה יוצרת מסמך אמיתי בחשבונית ירוקה.`
+    : (twoStage
+      ? `להפיק חשבונית זיכוי + קבלה שלילית לביטול מלא של החשבונית?${evNote}\nהפעולה יוצרת מסמכים אמיתיים בחשבונית ירוקה.`
+      : `להפיק חשבונית זיכוי לביטול החשבונית?${evNote}\nהפעולה יוצרת מסמך אמיתי בחשבונית ירוקה.`))) return;
   const btn = document.getElementById('creditBtn'); if (btn) btn.disabled = true;
   const st = document.getElementById('creditStatus'); if (st) st.innerHTML = '<span class="muted">מפיק זיכוי…</span>';
-  const r = await fetch(`/api/documents/${id}/credit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date, skipDateValidation }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const r = await fetch(`/api/documents/${id}/credit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date, skipDateValidation, ...(partial ? { amount: creditNet } : {}), ...(revertEventIds.length ? { revertEventIds } : {}) }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
     const parts = [`✓ חשבונית זיכוי #${r.credit?.number || ''}`];
     if (r.negativeReceipt) parts.push(`קבלה שלילית #${r.negativeReceipt?.number || ''}`);
