@@ -6954,11 +6954,11 @@ window.setBankGroup = (id, val) => bankAction(id, { group: val });
 window.rematchBank = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'מרענן…'; }
   const r = await fetch(`/api/bank/rematch?companyId=${state.company}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (btn) { btn.disabled = false; btn.textContent = '↻ רענן הצעות חובה'; }
+  if (btn) { btn.disabled = false; btn.textContent = '↻ רענן הצעות (חובה + זכות)'; }
   if (r.error) { alert('שגיאה: ' + r.error); return; }
   _bankList = null; // לרענן מהשרת
   const y = window.scrollY; await renderBank($('#content')); window.scrollTo(0, y);
-  alert(`רועננו ${r.updated ?? 0} תנועות חובה — במצב "לא מותאם" עם הצעות לאישור ידני (ללא התאמה אוטומטית, לפי סכום זהה + תאריך).`);
+  alert(`רועננו ${r.updated ?? 0} תנועות (חובה + זכות). שורות שכבר אושרו/שויכו ידנית לא שונו.`);
 };
 window.approveAllStrong = async (btn) => {
   let strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
@@ -7005,7 +7005,7 @@ async function renderBank(c, soft) {
     <div class="row-between">
       <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמה אוטומטית: תנועות זכות ↔ חשבוניות הכנסה · תנועות חובה ↔ חשבוניות ספקים</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn ghost" onclick="rematchBank(this)">↻ רענן הצעות חובה</button>
+        <button class="btn ghost" onclick="rematchBank(this)">↻ רענן הצעות (חובה + זכות)</button>
         <button class="btn success" onclick="approveAllStrong(this)">✓ אשר את כל ההתאמות המדויקות</button>
         <button class="btn primary" onclick="openBankImport()">ייבא תנועות</button>
       </div>

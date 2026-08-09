@@ -3945,30 +3945,46 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   json(res, { ok: true, added, backfilled, total: parsed.length, matching: matchBg ? 'background' : 'none', accountBalance: acctBal || null });
 });
 
-// POST /api/bank/rematch { companyId } — הרצת התאמה אוטומטית מחדש של תנועות חובה על התנועות הקיימות (בלי העלאה חוזרת)
+// POST /api/bank/rematch { companyId } — הרצת התאמה אוטומטית מחדש של תנועות זכות+חובה על התנועות הקיימות (בלי העלאה חוזרת).
+// חשוב: לא נוגעים בשורות שכבר אושרו/שויכו ידנית/הוסתרו (approved/manual/ignored) — כדי שהרענון לא יבטל אישורים קיימים.
 add('POST', /^\/api\/bank\/rematch$/, async (req, res, _p, _q, body) => {
   const companyId = body?.companyId || null;
-  const db = load();
-  const txns = (db.bankTx || []).filter(t => !companyId || t.companyId === companyId);
+  const snap = load();
+  const txns = (snap.bankTx || []).filter(t => !companyId || t.companyId === companyId);
   if (!txns.length) return json(res, { ok: true, updated: 0, message: 'אין תנועות' });
   const iso = txns.map(t => ddmmyyyyToISO(t.date)).filter(Boolean).sort();
-  let expenses = [];
+  let invoices = [], receipts = [], expenses = [];
   if (iso.length && giEnabled(companyId)) {
     const from = shiftISODays(iso[0], -75), to = shiftISODays(iso[iso.length - 1], 5);
-    try { expenses = await greenInvoice.expensesInRange(from, to); } catch { /* בלי התאמה */ }
+    await greenInvoice.withCompany(companyId, async () => {
+      try { const inc = await greenInvoice.incomeForRange(from, to); invoices = inc.docs || []; } catch { }
+      try { receipts = await greenInvoice.receiptsForRange(from, to); } catch { }
+      try { expenses = await greenInvoice.expensesInRange(from, to); } catch { }
+    });
   }
-  try { const _notes = db.expenseNotes || {}; if (Object.keys(_notes).length) expenses.forEach(e => { if (_notes[e.id]) e.description = _notes[e.id]; }); } catch { }
+  try { const _notes = snap.expenseNotes || {}; if (Object.keys(_notes).length) expenses.forEach(e => { if (_notes[e.id]) e.description = _notes[e.id]; }); } catch { }
+  const whRate = bizProfile(snap, companyId).withholdingRate || 0;   // ניכוי מס במקור (לזכות)
+  const cmatched = attachReceipts(matchCredits(txns, invoices, whRate), receipts);   // התאמת זכות (הכנסות + קבלות)
   const dmap = new Map();
-  for (const dm of matchDebits(txns, expenses)) dmap.set(dm.i, dm);
+  try { for (const dm of matchDebits(txns, expenses)) dmap.set(dm.i, dm); } catch { }
+  const db2 = load();
+  const byId = new Map((db2.bankTx || []).map(r => [r.id, r]));
   let updated = 0;
   txns.forEach((t, i) => {
-    if (t.direction !== 'debit' || t.matchStatus === 'manual' || t.matchStatus === 'ignored') return; // לא נוגעים בידני/מסומן
-    const dm = dmap.get(i);
-    if (dm) { t.matchStatus = dm.matchStatus; t.matchedInvoices = dm.matchedInvoices || []; t.suggestions = dm.suggestions || []; updated++; }
+    const row = byId.get(t.id);
+    // מדלגים על שורות מאושרות/ידניות/מוסתרות — לא נוגעים בהן בכלל
+    if (!row || row.matchStatus === 'manual' || row.matchStatus === 'ignored' || row.matchStatus === 'approved') return;
+    if (row.direction === 'credit') {
+      const cm = cmatched[i];
+      if (cm) { row.matchStatus = cm.matchStatus; row.matchedInvoices = cm.matchedInvoices || []; row.suggestions = cm.suggestions || []; updated++; }
+    } else {
+      const dm = dmap.get(i);
+      if (dm) { row.matchStatus = dm.matchStatus; row.matchedInvoices = dm.matchedInvoices || []; row.suggestions = dm.suggestions || []; updated++; }
+    }
   });
-  save(db);
-  const debits = txns.filter(t => t.direction === 'debit');
-  json(res, { ok: true, updated, debits: debits.length, debitMatched: debits.filter(t => t.matchStatus === 'auto').length, expensesLoaded: expenses.length });
+  applyGroupRules(db2, companyId);
+  save(db2);
+  json(res, { ok: true, updated });
 });
 
 // GET /api/bank/balance?companyId= — יתרת עו"ש הרשמית האחרונה שנקלטה
