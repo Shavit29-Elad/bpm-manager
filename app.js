@@ -6950,6 +6950,13 @@ function bankGroupOk(id) {
   if (t.direction === 'credit' && defaultIncomeGroup()) return true;
   alert('יש לבחור קבוצת שיוך לפני אישור התנועה.'); return false;
 }
+// האם לשורה יש קבוצת שיוך (או הכנסה עם ברירת מחדל) — משמש לקביעת "מכוסה/מאושר": בלי קבוצה השורה נשארת ממתינה.
+function bankRowGroupOk(t) {
+  if (!hasGroups()) return true;
+  if (t && t.group) return true;
+  if (t && t.direction === 'credit' && defaultIncomeGroup()) return true;
+  return false;
+}
 window.setBankGroup = (id, val) => bankAction(id, { group: val });
 window.rematchBank = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'מרענן…'; }
@@ -7103,7 +7110,10 @@ function bankTr(t) {
   const mis = t.matchedInvoices || [];
   const isMatched = mis.length && ['auto', 'manual', 'approved'].includes(t.matchStatus); // זכות או חובה
   // שורה נחשבת "מכוסה" רק אם המסמכים משלימים את הסכום, או שאושרה ידנית (approved). אחרת — אדומה עד השלמה/אישור.
-  const covered = isMatched ? (t.matchStatus === 'approved' || bankRowCovered(t)) : false;
+  // "מכוסה/מאושר" דורש גם קבוצת שיוך (בחברה עם קבוצות) — כך ששיוך מסמך בלי קבוצה יישמר אך יישאר ממתין עד לבחירת קבוצה.
+  const _amtOk = isMatched ? (t.matchStatus === 'approved' || bankRowCovered(t)) : false;
+  const _grpOk = bankRowGroupOk(t);
+  const covered = _amtOk && _grpOk;
   const notesInput = `<input value="${(t.notes || '').replace(/"/g, '&quot;')}" placeholder="הערה…" onchange="saveBankNotes('${t.id}', this.value)" style="width:90px;padding:4px 6px;font-size:12px"/>`;
   const stack = (arr) => arr.map(x => `<div style="padding:2px 0${arr.length > 1 ? ';border-bottom:1px dashed var(--line)' : ''}">${x}</div>`).join('');
   // תצוגה 👁 + הורדה ↓ צמודים לשם המסמך. למסמכי הכנסה (doc עם id) — התצוגה נפתחת עם כפתור "שלח במייל" בראש החלונית.
@@ -7154,7 +7164,9 @@ function bankTr(t) {
     const matchedTot = bankAllocatedTotal(t);   // קבלה מקוננת מתחת לחשבונית לא נספרת פעמיים (מונע "חסר" שגוי)
     const shortAmt = Math.abs(Number(t.absAmount) || 0) - matchedTot;
     const confBadge = !covered
-      ? `<span class="tag miss" style="font-size:10px;margin-inline-end:4px">חסר ${money(shortAmt)}</span>`
+      ? ((_amtOk && !_grpOk)
+        ? '<span class="tag miss" style="font-size:10px;margin-inline-end:4px">בחר קבוצה</span>'   // הסכום מכוסה — חסרה רק קבוצת שיוך
+        : `<span class="tag miss" style="font-size:10px;margin-inline-end:4px">חסר ${money(shortAmt)}</span>`)
       : (t.matchStatus === 'approved' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">מאושר</span>'
         : (t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'מדויק' : 'לבדיקה'}</span>`
           : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '')));
@@ -7238,7 +7250,8 @@ function invChip(inv) {
     ${src}${receipt}</div>`;
 }
 // פעולות מתעדכנות במקום (בלי לרנדר מחדש את כל הטבלה ובלי לקפוץ למעלה)
-window.matchBank = (id, j) => { if (!bankGroupOk(id)) return; bankAction(id, { matchStatus: 'manual', matchedInvoices: [JSON.parse(decodeURIComponent(j))] }); };
+// שיוך מסמך (הצעה) — מותר גם בלי קבוצה. השורה תישאר "ממתינה לקבוצה" (לא מאושרת) עד לבחירת קבוצה.
+window.matchBank = (id, j) => { bankAction(id, { matchStatus: 'manual', matchedInvoices: [JSON.parse(decodeURIComponent(j))] }); };
 window.confirmBank = (id) => { if (!bankGroupOk(id)) return; bankAction(id, { matchStatus: 'manual' }); };
 // אישור תנועה ללא מסמך (למשל עמלה) — דורש שיוך לקבוצה אצל משה
 window.approveBank = (id) => { if (!bankGroupOk(id)) return; bankAction(id, { matchStatus: 'approved' }); };

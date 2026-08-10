@@ -4086,14 +4086,13 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
     }
   }
   if (body.group !== undefined) t.group = body.group || null;
-  // חובת שיוך לקבוצה לפני אישור תנועה — לכל חברה שהגדירה קבוצות. הכנסה ללא קבוצה → ברירת מחדל "הכנסות עסק"; הוצאה → חובה לבחור.
+  // קבוצות שיוך של החברה. הכנסה ללא קבוצה → משויכת אוטומטית לברירת המחדל "הכנסות עסק".
+  // הערה: שיוך מסמך (matchStatus:'manual') מותר גם בלי קבוצה — כדי לא לחסום את שמירת המסמך.
+  // דרישת הקבוצה נאכפת בממשק: השורה תיחשב "מכוסה/מאושרת" רק אחרי בחירת קבוצה (הסדר לא משנה).
   const companyGroups = (db.txGroups || []).filter(g => g.companyId === t.companyId);
-  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && companyGroups.length && !t.group) {
-    if (t.direction === 'credit') {
-      const def = companyGroups.find(g => g.isDefaultIncome) || companyGroups.find(g => g.kind === 'income');
-      if (def) t.group = def.id;   // הכנסה — משויכת אוטומטית לקבוצת ברירת המחדל
-    }
-    if (!t.group) return json(res, { error: 'יש לשייך קבוצה לפני אישור התנועה.' }, 400);
+  if ((body.matchStatus === 'manual' || body.matchStatus === 'approved') && companyGroups.length && !t.group && t.direction === 'credit') {
+    const def = companyGroups.find(g => g.isDefaultIncome) || companyGroups.find(g => g.kind === 'income');
+    if (def) t.group = def.id;   // הכנסה — ברירת מחדל
   }
   // #1 — קבלה (400) משויכת: משיכת חשבונית המס המקורית וקינון תחתיה (מונע ספירה כפולה)
   if (greenInvoice.haveCredentials() && Array.isArray(body.matchedInvoices) && body.matchedInvoices.length) {
