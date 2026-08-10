@@ -459,6 +459,7 @@ add('POST', /^\/api\/invoicing\/create$/, async (req, res, _p, _q, body) => {
     const doc = await greenInvoice.createInvoice({
       client: { name: group.client }, items: invoiceItemsFromGroup(group),
       remarks: `אירועים לחודש ${group.month}` });
+    try { forwardOfekIncomeDoc(doc); } catch { }   // העברה אוטומטית ברקע למייל ההוצאות (אופק בלבד)
     group.events.forEach(ev => { const e = db.events.find(x => x.id === ev.id); if (e) e.invoiceStatus = 'invoiced'; });
     save(db); json(res, { ok: true, doc });
   } catch (e) { json(res, { error: e.message }, 500); }
@@ -614,7 +615,7 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
   }
   try {
     const client = body.clientId ? { id: body.clientId } : { name: body.clientName || 'לקוח' };
-    const doc = await greenInvoice.createDocument({
+    const doc = await createDocFwd({
       type, client, items,
       description: body.description || subjectForEvents(evs),
       remarks: body.remarks || null,
@@ -860,7 +861,7 @@ add('POST', /^\/api\/events\/([^/]+)\/create-followup$/, async (req, res, params
         return row;
       }).filter(p => Math.abs(p.price) > 0);
     }
-    const doc = await greenInvoice.createDocument(opts);
+    const doc = await createDocFwd(opts);
     // קישור המסמך החדש (חשבונית ירוקה) לאירוע + סימון המסמך הישן שממנו נגזר כ"הומר" (יורד מחשבוניות פתוחות)
     const merged = Array.isArray(ev.linkedDocs) ? ev.linkedDocs.slice() : [];
     merged.push({ id: doc.id, number: doc.number, type, uploaded: false });
@@ -945,7 +946,7 @@ add('POST', /^\/api\/old-invoices\/([^/]+)\/create-followup$/, async (req, res, 
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => { const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' }; if (Number(p.type) === 2 && p.chequeNum) row.chequeNum = String(p.chequeNum); if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName); return row; }).filter(p => Math.abs(p.price) > 0);
     }
-    const doc = await greenInvoice.createDocument(opts);
+    const doc = await createDocFwd(opts);
     const merged = (rec.linkedDocs || []).slice();
     merged.push({ id: doc.id, number: doc.number, type, uploaded: false });
     if (body.uploadedDocId) { const s = merged.find(d => String(d.id) === String(body.uploadedDocId)); if (s) s.converted = true; }
@@ -978,7 +979,7 @@ add('POST', /^\/api\/quotes\/create$/, async (req, res, _p, _q, body) => {
     if (body.discount && Number(body.discount.amount) > 0) opts.discount = body.discount; // הנחה (סכום/אחוז) — כבר מומרת ל-net
     if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
-    const doc = await greenInvoice.createDocument(opts);
+    const doc = await createDocFwd(opts);
     json(res, { ok: true, doc });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
@@ -1009,7 +1010,7 @@ add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
         return row;
       }).filter(p => Math.abs(p.price) > 0);
     }
-    const doc = await greenInvoice.createDocument(opts);
+    const doc = await createDocFwd(opts);
     json(res, { ok: true, doc });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
@@ -1695,7 +1696,7 @@ add('POST', /^\/api\/quotes\/([^/]+)\/followup$/, async (req, res, params, _q, b
       quantity: it.quantity ?? 1, price: it.price ?? 0,
     }));
     if (!items.length) return json(res, { error: 'אין שורות בהצעה' }, 400);
-    const doc = await greenInvoice.createDocument({
+    const doc = await createDocFwd({
       type, client: src.client?.id ? { id: src.client.id } : { name: src.client?.name || 'לקוח' },
       items, description: src.description || '', remarks: followupRemarks(src.type, src.number),
       linkedDocumentIds: [params[0]],
@@ -1900,7 +1901,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
     const creditItems = isPartial ? [{ description: `זיכוי חלקי — ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`, quantity: 1, price: reqNet }] : items;
 
     // שלב 1 — חשבונית זיכוי (330). זיכוי מלא מקושר כ"ביטול"; זיכוי חלקי מקושר כקישור רגיל (לא מבטל את המקור).
-    const credit = await greenInvoice.createDocument({
+    const credit = await createDocFwd({
       type: 330, client, items: creditItems, date, skipDateValidation,
       description: (isPartial ? `זיכוי חלקי (${reqNet} + מע"מ) — ` : '') + (src.description ? `${baseDesc} — ${src.description}` : baseDesc),
       linkedDocumentIds: [params[0]], ...(isPartial ? {} : { linkType: 'cancel' }),
@@ -1933,7 +1934,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
         if (Number(p.type) === 4 && p.bankName) row.bankName = String(p.bankName);
         return row;
       }).filter(p => Math.abs(p.price) > 0);
-    const negativeReceipt = await greenInvoice.createDocument({
+    const negativeReceipt = await createDocFwd({
       type: 400, client, items: [], payment: negPayment, date, skipDateValidation,
       description: `${isPartial ? 'ביטול חלקי של קבלה' : 'ביטול קבלה'} — חשבונית מס-קבלה #${src.number}`,
     });
@@ -2161,7 +2162,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
       const cur = (body.remarks != null) ? String(body.remarks).trim() : '';
       opts.remarks = cur.includes(ref) ? cur : (cur ? `${ref}\n\n${cur}` : ref);
     }
-    const doc = await greenInvoice.createDocument(opts);
+    const doc = await createDocFwd(opts);
     json(res, { ok: true, doc });
   } catch (e) {
     const msg = String(e.message || '');
@@ -2270,7 +2271,7 @@ add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) =>
     }
     if (type === 320 && !(opts.payment && opts.payment.length)) return json(res, { error: 'חשבונית מס-קבלה מחייבת פירוט תקבול (סכום ואמצעי תשלום).' }, 400);
     if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
-    const doc = await greenInvoice.createDocument(opts);
+    const doc = await createDocFwd(opts);
     // סימון אירועים מקושרים למקורות שנסגרו — עדכון למסמך המסכם החדש
     try {
       const db = load();
@@ -4668,6 +4669,46 @@ const COMPANY_SEED = [
 ];
 // מזהה חברת ה-GI הראשית (ברירת מחדל BPM) — לשם תאימות לאחור בלבד
 function giCompanyId() { const c = (load().companies || []).find(x => x.accounting === 'greenInvoice'); return c ? c.id : 'co_bpm'; }
+
+// ============ העברה אוטומטית של מסמכי הכנסה של אופק למייל ההוצאות (פייפרלס/רו"ח) ============
+// אך ורק אצל אופק, ואך ורק לסוגים: 305 חשבונית מס · 320 חשבונית מס-קבלה · 400 קבלה (כולל קבלה שלילית) · 330 חשבונית זיכוי.
+// רץ אוטומטית וברקע (fire-and-forget), ללא קשר לשליחת המסמך ללקוח.
+const OFEK_INCOME_FWD_TYPES = new Set([305, 320, 400, 330]);
+const _OFEK_DOC_NAME = { 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 330: 'חשבונית זיכוי' };
+async function forwardOfekIncomeDoc(doc, type) {
+  try {
+    const cid = (greenInvoice.activeCompany ? greenInvoice.activeCompany() : null) || giCompanyId();
+    if (cid !== paperlessCompanyId()) return;                          // רק אופק
+    const t = Number(type != null ? type : (doc && (doc.type ?? doc.documentType)));
+    if (!OFEK_INCOME_FWD_TYPES.has(t)) return;                         // רק הסוגים שהוגדרו
+    if (!doc || !doc.id) return;
+    const db = load();
+    const acct = String(bizProfile(db, cid).accountantEmail || '').trim();
+    if (!acct) return;                                                 // לא הוגדר מייל הוצאות — לא מעבירים
+    const creds = companyMailCreds(db, cid);
+    if (!mailer.companyMailConfigured(creds) && !mailer.mailerConfigured()) return;
+    let url = extractGiUrl(doc);
+    if (!url) { try { const full = await greenInvoice.getDocument(doc.id); url = extractGiUrl(full); } catch { } }
+    if (!url) return;
+    const fr = await fetch(url, { redirect: 'follow' });
+    if (!fr.ok) return;
+    const buf = Buffer.from(await fr.arrayBuffer());
+    const name = _OFEK_DOC_NAME[t] || 'מסמך';
+    const num = String(doc.number || doc.id || '').replace(/[^\w.-]/g, '_');
+    await mailer.sendMailFrom(creds, {
+      to: acct,
+      subject: `${name} #${doc.number || ''} — מסמך הכנסה (אופק)`,
+      text: `מצורף מסמך הכנסה שהופק במערכת (אופק).\nסוג: ${name}\nמספר: ${doc.number || ''}`,
+      attachments: [{ filename: `${name}-${num}.pdf`, content: buf, contentType: 'application/pdf' }],
+    });
+  } catch { /* ברקע בלבד — לא חוסם ולא משפיע על יצירת המסמך */ }
+}
+// עוטף את greenInvoice.createDocument: יוצר את המסמך כרגיל, ומעביר אותו אוטומטית ברקע למייל ההוצאות של אופק (אם רלוונטי).
+async function createDocFwd(opts) {
+  const doc = await greenInvoice['createDocument'](opts);   // קריאה ישירה (bracket) כדי לא להתנגש עם ההחלפה הגלובלית
+  try { forwardOfekIncomeDoc(doc, opts && opts.type); } catch { }   // ללא await — רץ ברקע
+  return doc;
+}
 // האם החברה מחוברת לחשבונית ירוקה בפועל (סוג חשבונאי greenInvoice + יש מפתחות משלה)?
 function giEnabled(companyId) {
   const c = (load().companies || []).find(x => x.id === companyId);

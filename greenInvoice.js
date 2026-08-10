@@ -27,6 +27,7 @@ const DEFAULT_CO = 'co_bpm';
 const als = new AsyncLocalStorage();
 export function withCompany(companyId, fn) { return als.run({ companyId: companyId || DEFAULT_CO }, fn); }
 function curCompany() { const s = als.getStore(); return (s && s.companyId) || DEFAULT_CO; }
+export function activeCompany() { return curCompany(); }   // החברה הפעילה בהקשר הבקשה הנוכחית (מתוך ה-ALS)
 // הערה קבועה פר-חברה (מוגדרת בפרטי העסק) — מוזרקת להערות של כל מסמך שנוצר בחברה
 const _companyRemark = new Map();
 export function setCompanyRemark(companyId, text) { if (text && String(text).trim()) _companyRemark.set(companyId || DEFAULT_CO, String(text).trim()); else _companyRemark.delete(companyId || DEFAULT_CO); }
@@ -787,5 +788,5 @@ export async function updateSupplierDetails(id, data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, withCompany, setCompanyRemark, giCompanies, setDbCreds, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, documentDownloadLinks, getDocumentPdf, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, withCompany, activeCompany, setCompanyRemark, giCompanies, setDbCreds, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, documentDownloadLinks, getDocumentPdf, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;
