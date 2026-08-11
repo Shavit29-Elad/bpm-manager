@@ -1230,7 +1230,7 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
       _derEdit.payments = [{ type: 4, price: 0, date, chequeNum: '', bankName: '' }];
     }
   }
-  _derBankLink = opts.bankTxId ? { txId: opts.bankTxId, sourceId: opts.sourceDocId || null } : null;
+  _derBankLink = opts.bankTxId ? { txId: opts.bankTxId, sourceId: opts.sourceDocId || null, sourceEntry: opts.sourceEntry || null } : null;
   renderDeriveEditor();
 };
 // סנכרון ערכי ה-DOM לתוך ה-state לפני רינדור מחדש
@@ -1516,7 +1516,7 @@ window.derConfirm = async () => {
     if (_derBankLink && r.doc) {
       // הופק מתוך "צור הכנסה" בבנק — קישור לתנועה, ואז אותה חלונית פעולות כמו בכל הפקה (הורדה / מייל / צפייה / וואטסאפ). ללא הורדה אוטומטית.
       const entry = { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: t.total, url: r.doc.url || null };
-      await linkDocToBankTx(_derBankLink.txId, entry);
+      await linkDocToBankTx(_derBankLink.txId, entry, _derBankLink.sourceId, _derBankLink.sourceEntry);
       _derBankLink = null;
       const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');
       showDocReadyPopup(r.doc, typeName, (document.getElementById('derSendEmail') || {}).value || (e.sendEmail || ''));
@@ -1615,13 +1615,17 @@ window.docReadySend = async (docId, btn, email) => {
     : `<span style="color:var(--danger)">${escapeHtml(String(r.error || 'שליחה נכשלה — ייתכן שאין מייל שמור ללקוח'))}</span>`;
 };
 // קישור מסמך שהופק לתנועת בנק (מוסיף ל-matchedInvoices ומעדכן את השורה)
-async function linkDocToBankTx(txId, entry, sourceId) {
+async function linkDocToBankTx(txId, entry, sourceId, sourceEntry) {
   const tx = (_bankList || []).find(t => t.id === txId); if (!tx) return;
   const matched = JSON.parse(JSON.stringify(tx.matchedInvoices || []));
+  const receiptOf = () => ({ number: entry.number, url: entry.url || null, amount: entry.amount });
   // #3 — אם המסמך החדש הוא קבלה (400) וחשבונית המקור כבר משויכת לשורה — מצרפים אותה כקבלה מקוננת תחת החשבונית, לא כשורה נפרדת
   const src = sourceId ? matched.find(x => String(x.id) === String(sourceId)) : null;
   if (src && Number(entry.type) === 400) {
-    src.receipt = { number: entry.number, url: entry.url || null, amount: entry.amount };
+    src.receipt = receiptOf();
+  } else if (Number(entry.type) === 400 && sourceEntry && sourceEntry.id && !matched.find(x => String(x.id) === String(sourceEntry.id))) {
+    // המקור עדיין לא משויך לתנועה — מצרפים אוטומטית גם את חשבונית המקור (שבגללה הופקה הקבלה) עם הקבלה מקוננת תחתיה
+    matched.push({ id: sourceEntry.id, number: sourceEntry.number, type: sourceEntry.type, clientName: sourceEntry.clientName || '', amount: sourceEntry.amount, url: sourceEntry.url || null, receipt: receiptOf() });
   } else if (!matched.find(x => x.id === entry.id)) {
     matched.push(entry);
   }
@@ -5213,8 +5217,10 @@ function renderSupplierDetail() {
 function supDocRow(d) {
   const desc = (_expenseNotes[d.id] != null ? _expenseNotes[d.id] : d.category) || '';
   const isAdmin = state.user && state.user.role === 'admin';
-  const viewDl = d.url ? `<a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">תצוגה 👁</a>
-    <a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" download target="_blank" rel="noopener">הורדה ↓</a>` : '';
+  // תצוגה דרך ה-proxy הפנימי (מגיש inline) במקום קישור ישיר לחשבונית ירוקה שמאלץ הורדה. הורדה נשארת קישור ישיר.
+  const viewDl = (d.id || d.url) ? `${d.id
+      ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="previewDoc('/api/supplier-payables/${d.id}/file')">תצוגה 👁</button>`
+      : `<a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">תצוגה 👁</a>`}${d.url ? `<a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" download target="_blank" rel="noopener">הורדה ↓</a>` : ''}` : '';
   const editBtn = (d.id && isAdmin) ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="openExpenseEdit('${d.id}')">✏️ עריכה</button>` : '';
   const acts = (viewDl || editBtn) ? `<div style="display:flex;gap:6px;flex-wrap:wrap">${viewDl}${editBtn}</div>` : '<span class="muted">—</span>';
   return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>${escapeHtml(String(d.number || '—'))}</td>
@@ -7644,7 +7650,10 @@ window.incSearch = (q) => { _incQuery = q || ''; const box = document.getElement
 // הפקת מסמך-המשך מחשבונית פתוחה, עם תאריך+תקבול לפי התנועה, וקישור לבנק
 window.incProduce = (docId, srcType, txId, X, isWh) => {
   const im = document.getElementById('incModal'); if (im) im.classList.add('hidden');
-  openDeriveEditor(docId, incTargetFor(srcType), true, { date: txIsoDate(txId) || todayIso(), bankReceived: Number(X) || 0, withholding: isWh === true || isWh === 'true', bankTxId: txId, sourceDocId: docId });
+  // מעבירים את פרטי חשבונית המקור כדי שתשויך אוטומטית לתנועת הבנק יחד עם הקבלה שמופקת ממנה
+  const sd = (_incOpenDocs || []).find(d => String(d.id) === String(docId));
+  const sourceEntry = sd ? { id: sd.id, number: sd.number, type: sd.type, clientName: sd.clientName || '', amount: Number(sd.amountDue ?? sd.amount) || 0, url: sd.url || null } : null;
+  openDeriveEditor(docId, incTargetFor(srcType), true, { date: txIsoDate(txId) || todayIso(), bankReceived: Number(X) || 0, withholding: isWh === true || isWh === 'true', bankTxId: txId, sourceDocId: docId, sourceEntry });
 };
 // הפקת קבלה לחשבונית מס ששולמה בבנק — תאריך המסמך והתקבול נקבעים אוטומטית לתאריך כניסת הכסף (מגיע מהשרת, ללא תלות ברשימת הבנק שנטענה)
 window.issuePaidReceipt = (docId, paidDate, txId, amount) => {
