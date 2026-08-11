@@ -19,7 +19,7 @@ const money = (n) => (n == null ? '—' : '₪' + Number(n).toLocaleString('he-I
 
 // ---- מטמון בזיכרון לבקשות GET: מעבר חוזר ללשונית מציג מיד מהמטמון (מתרענן אחרי כתיבה) ----
 const _apiCache = new Map(); // url -> { t, txt }
-const API_TTL = 60000;       // תוקף 60 שניות
+const API_TTL = 8000;        // תוקף 8 שניות — מונע נתונים "תקועים". מעבר בין לשוניות/חברות מנקה מטמון מיידית (ראה למטה)
 function clearApiCache() { _apiCache.clear(); }
 const api = (p) => {
   // בידוד חברות: צירוף companyId אוטומטי לכל קריאת GET (למעט auth), אם לא צוין כבר
@@ -144,6 +144,7 @@ async function startApp() {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
     t.classList.add('active'); state.tab = t.dataset.tab;
     if ((location.hash || '').replace('#', '') !== state.tab) location.hash = state.tab; // שמירה ב-URL (רענון/אחורה)
+    clearApiCache();   // מעבר לשונית → תמיד נתונים טריים מהשרת (בלי צורך ב-Cmd+Shift+R)
     render();
   });
   // ניווט אחורה/קדימה בדפדפן + רענון — מכבד את הלשונית ב-URL
@@ -153,7 +154,7 @@ async function startApp() {
     const el = [...document.querySelectorAll('.tab')].find(x => x.dataset.tab === h && x.style.display !== 'none');
     if (!el) return;
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-    el.classList.add('active'); state.tab = h; render();
+    el.classList.add('active'); state.tab = h; clearApiCache(); render();
   });
   setupModal();
   await renderStatus();
@@ -1337,7 +1338,7 @@ function renderDeriveEditor() {
   const t = derTotals();
   const typeName = DOC_TYPE_SHORT[e.type] || 'מסמך';
   const itemRows = e.items.map((it, i) => `<div class="der-item" style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;align-items:center;margin-bottom:6px">
-    <input class="der-desc" value="${escAttr(it.description)}" placeholder="תיאור" style="padding:6px 8px">
+    <textarea class="der-desc doc-desc" rows="1" placeholder="תיאור" oninput="taGrow(this)">${escapeHtml(it.description)}</textarea>
     <input class="der-qty" type="number" step="any" value="${it.quantity}" oninput="derRecalc()" style="padding:6px 6px;text-align:center" title="כמות">
     <input class="der-price" type="number" step="any" value="${it.price}" oninput="derRecalc()" style="padding:6px 6px;text-align:left" title="מחיר יחידה (ללא מע״מ)">
     <button class="btn ghost" style="padding:4px 8px;font-size:14px" onclick="derDelItem(${i})" title="מחק שורה">✕</button>
@@ -3494,7 +3495,7 @@ function renderInvoicePreviewModal() {
   const needDue = [300, 305].includes(+p.type);
   const isReceipt = [320, 400].includes(+p.type);
   const rows = p.items.map((it, i) => `<tr>
-    <td><input value="${escAttr(it.description)}" oninput="invEdit(${i},'description',this.value)" style="width:100%"/></td>
+    <td><textarea class="doc-desc" rows="1" oninput="invEdit(${i},'description',this.value);taGrow(this)" style="width:100%">${escapeHtml(it.description)}</textarea></td>
     <td><input type="number" value="${it.quantity ?? 1}" oninput="invEdit(${i},'quantity',this.value)" style="width:56px" dir="ltr"/></td>
     <td><input type="number" value="${it.price ?? 0}" oninput="invEdit(${i},'price',this.value)" style="width:96px" dir="ltr"/></td>
     <td id="rt_${i}" style="white-space:nowrap">${money((Number(it.price) || 0) * (Number(it.quantity) || 1))}</td>
@@ -3866,7 +3867,7 @@ function renderNewQuote() {
   const clients = (_evClients || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he'));
   const clientOpts = clients.map(c => `<option value="${escAttr(c.name)}">`).join(''); // אפשרויות ל-datalist (חיפוש חופשי לפי שם)
   const itemRows = e.items.map((it, i) => `<div class="nq-item" style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;align-items:center;margin-bottom:6px">
-    <input class="nq-desc" value="${escAttr(it.description)}" placeholder="תיאור" style="padding:6px 8px">
+    <textarea class="nq-desc doc-desc" rows="1" placeholder="תיאור" oninput="taGrow(this)">${escapeHtml(it.description)}</textarea>
     <input class="nq-qty" type="number" step="any" value="${it.quantity}" oninput="nqRecalc()" style="padding:6px 6px;text-align:center" title="כמות">
     <input class="nq-price" type="number" step="any" value="${it.price}" oninput="nqRecalc()" style="padding:6px 6px;text-align:left" title="מחיר יחידה (ללא מע״מ)">
     <button class="btn ghost" style="padding:4px 8px;font-size:14px" onclick="nqDelItem(${i})" title="מחק שורה">✕</button>
@@ -6646,6 +6647,8 @@ function showChatAttach() {
 // Enter שולח, Shift+Enter יורד שורה; הטקסטאריה גדלה לפי התוכן
 window.chatKeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } };
 window.chatAutoGrow = (el) => { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 150) + 'px'; };
+// גדילת שדה תיאור רב-שורתי במסמכים לפי התוכן (fallback לדפדפנים ללא field-sizing) — כדי שכל הטקסט נראה
+window.taGrow = (el) => { if (!el) return; el.style.height = 'auto'; el.style.height = (el.scrollHeight + 2) + 'px'; };
 
 window.sendChat = async () => {
   const inp = $('#chatInput'); if (!inp) return;
@@ -6967,22 +6970,33 @@ window.rematchBank = async (btn) => {
   const y = window.scrollY; await renderBank($('#content')); window.scrollTo(0, y);
   alert(`רועננו ${r.updated ?? 0} תנועות (חובה + זכות). שורות שכבר אושרו/שויכו ידנית לא שונו.`);
 };
+// אישור בכמות — רק הצעות חד-משמעיות: הצעה יחידה עם (סכום זהה/פחות-ניכוי + שם תואם) או מספר חשבונית.
+// תנועה שיש לה רק התאמת-סכום (או כמה מועמדות שוות) לא מאושרת בכמות — נשארת אדומה לבחירה ידנית.
+// זהו אישור יזום של המשתמש (לחיצה על הכפתור), ולכן מותר לו להסיר את הדגל האדום.
+function strongUniqueSugg(t) {
+  const strong = (t.suggestions || []).filter(x => {
+    const r = x.reasons || [];
+    return r.includes('מספר חשבונית') || (r.some(z => z.indexOf('סכום') === 0) && r.includes('שם לקוח'));
+  });
+  return strong.length === 1 ? strong[0] : null;
+}
 window.approveAllStrong = async (btn) => {
-  let strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
-  if (!strong.length) { alert('אין התאמות מדויקות שממתינות לאישור בתצוגה הנוכחית.'); return; }
+  let strong = bankVisibleRows().filter(t => t.direction === 'credit' && t.matchStatus === 'unmatched' && strongUniqueSugg(t));
+  if (!strong.length) { alert('אין התאמות חד-משמעיות (סכום זהה + שם תואם, או מספר חשבונית) שממתינות לאישור בתצוגה הנוכחית. שאר התנועות נשארות לאישור ידני.'); return; }
   // חברה עם קבוצות — אי אפשר לאשר בלי שיוך; הכנסה תשוייך אוטומטית לברירת המחדל, הוצאה חייבת קבוצה
   if (hasGroups()) {
     const dInc = defaultIncomeGroup();
     const needsGrp = (t) => !t.group && !(t.direction === 'credit' && dInc);
     const missing = strong.filter(needsGrp).length;
     strong = strong.filter(t => !needsGrp(t));
-    if (!strong.length) { alert(`יש ${missing} התאמות מדויקות ללא שיוך לקבוצה — שייך קבוצה (מוזיקה/דיגיטל/…) לפני אישור.`); return; }
+    if (!strong.length) { alert(`יש ${missing} התאמות ללא שיוך לקבוצה — שייך קבוצה (מוזיקה/דיגיטל/…) לפני אישור.`); return; }
     if (missing && !confirm(`${missing} התאמות ללא קבוצה ידלגו (יש לשייך אותן ידנית). לאשר ${strong.length} שכבר משויכות?`)) return;
-    else if (!missing && !confirm(`לאשר ${strong.length} התאמות מדויקות?`)) return;
-  } else if (!confirm(`לאשר ${strong.length} התאמות מדויקות (סכום זהה או מספר חשבונית)?`)) return;
+    else if (!missing && !confirm(`לאשר ${strong.length} התאמות חד-משמעיות?`)) return;
+  } else if (!confirm(`לאשר ${strong.length} התאמות חד-משמעיות (סכום זהה + שם תואם, או מספר חשבונית)?`)) return;
   if (btn) { btn.disabled = true; btn.textContent = 'מאשר…'; }
   for (const t of strong) {
-    const r = await fetch(`/api/bank/${t.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual' }) }).then(x => x.json()).catch(() => null);
+    const inv = strongUniqueSugg(t);
+    const r = await fetch(`/api/bank/${t.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual', matchedInvoices: [inv] }) }).then(x => x.json()).catch(() => null);
     if (r && r.tx) { const i = _bankList.findIndex(x => x.id === t.id); if (i >= 0) _bankList[i] = r.tx; }
   }
   const y = window.scrollY; await renderBank($('#content'), true); window.scrollTo(0, y);
@@ -7010,7 +7024,7 @@ async function renderBank(c, soft) {
     : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
   c.innerHTML = `<div class="panel">
     <div class="row-between">
-      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמה אוטומטית: תנועות זכות ↔ חשבוניות הכנסה · תנועות חובה ↔ חשבוניות ספקים</span></div>
+      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">הצעות בלבד — כל שורה נשארת אדומה עד שתאשר: זכות ↔ חשבוניות הכנסה · חובה ↔ חשבוניות ספקים</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost" onclick="rematchBank(this)">↻ רענן הצעות (חובה + זכות)</button>
         <button class="btn success" onclick="approveAllStrong(this)">✓ אשר את כל ההתאמות המדויקות</button>
@@ -7022,7 +7036,7 @@ async function renderBank(c, soft) {
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px">${bankDirControls()}${bankPeriodControls()}</div>
     ${bankSearchControls()}
     ${summary}
-    <p class="muted" style="font-size:12.5px;margin-top:10px">תגית ירוקה <b>"מדויק"</b> = סכום זהה או מספר חשבונית (בטוח לאישור) · צהובה <b>"לבדיקה"</b> = ניכוי 5% / צירוף / שם בלבד (כדאי לוודא בתצוגה) · שורות אדומות = לא מותאמות · 🔗 שייך לשיוך ידני.</p>
+    <p class="muted" style="font-size:12.5px;margin-top:10px">כל התנועות אדומות ("לא מותאם") עד שתאשר. ההצעות מדורגות — <b>שם+סכום או מספר חשבונית</b> קודמים לסכום-בלבד, כדי שמי שבאמת שילם יופיע ראשון. לחיצה על הצעה משייכת ומאשרת · הכפתור <b>"אשר את כל ההתאמות המדויקות"</b> מאשר רק הצעות חד-משמעיות (שם+סכום או מספר חשבונית) · 🔗 לשיוך ידני.</p>
     ${table}
   </div>`;
 }

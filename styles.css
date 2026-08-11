@@ -284,3 +284,17 @@ tbody tr:last-child td{border-bottom:none}
 @media (prefers-reduced-motion: reduce){
   *{transition:none !important; animation:none !important}
 }
+
+/* פירוט רב-שורתי במסמכים (הצעת מחיר / חשבונית עסקה / מס וכו') —
+   שדה תיאור שגדל לגובה אוטומטית כדי שכל הטקסט נראה. Shift+Enter (וגם Enter) יורדים שורה. */
+textarea.doc-desc {
+  width: 100%;
+  min-height: 34px;
+  resize: vertical;
+  overflow: hidden;
+  font: inherit;
+  line-height: 1.4;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  field-sizing: content; /* Chrome: גדילה אוטומטית לפי התוכן */
+}

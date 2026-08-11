@@ -66,52 +66,21 @@ function findCombo(target, invs) {
   return best;
 }
 
-// מתאים תנועות מול חשבוניות. חשבונית לא מותאמת פעמיים. תומך בצירוף חשבוניות.
+// מתאים תנועות זכות מול חשבוניות הכנסה — כהצעות בלבד.
+// לפי בקשת המנהל: אין יותר התאמה אוטומטית. גם התאמה שנראית "בטוחה" לא מורידה את הדגל האדום "לא מותאם".
+// כל תנועת זכות נשארת 'unmatched' עם רשימת הצעות מדורגת, והדגל יורד רק לאחר אישור המשתמש
+// (לחיצה על הצעה → 'manual', או כפתור "אשר את כל ההתאמות המדויקות" שמאשר רק הצעות חד-משמעיות).
+// דירוג ההצעות: מספר חשבונית / שם+סכום קודמים לסכום-בלבד — כדי ש"מי שבאמת שילם" (לפי השם) יופיע ראשון,
+// ולא חשבונית אחרת שרק במקרה זהה בסכום.
 export function matchCredits(txns, invoices, whRate = 0.05) {
   const wh = 1 - (Number(whRate) || 0);   // החלק שמתקבל בבנק אחרי ניכוי מס במקור
-  const usedInv = new Set();
-  const result = new Map();   // index -> {matchStatus, matchedInvoices, suggestions}
-  const credits = [];
-  txns.forEach((t, i) => { if (t.direction === 'credit') credits.push({ t, i }); });
-
-  // שלב 1: התאמות בודדות חמדניות. חובה הסכמה על סכום (מדויק/5%) או מספר חשבונית — לא שם בלבד.
-  const pairs = [];
-  credits.forEach(({ t, i }) => invoices.forEach(inv => {
-    const s = scoreMatch(t, inv, wh);
-    const strong = s.amountKind !== null || s.reasons.includes('מספר חשבונית');
-    if (strong && s.score >= 45) pairs.push({ i, inv, ...s });
-  }));
-  pairs.sort((a, b) => b.score - a.score);
-  for (const p of pairs) {
-    if (result.has(p.i) || usedInv.has(p.inv.id)) continue;
-    result.set(p.i, { matchStatus: 'auto', matchedInvoices: [toInv(p.inv, { reasons: p.reasons })], suggestions: [] });
-    usedInv.add(p.inv.id);
-  }
-
-  // שלב 2: צירוף חשבוניות לתנועות שנשארו (לפי שם לקוח)
-  for (const { t, i } of credits) {
-    if (result.has(i) || !t.nameHint) continue;
-    const cand = invoices.filter(inv => !usedInv.has(inv.id) && inv.clientName && nameMatch(t.nameHint, inv.clientName));
-    if (cand.length < 2) continue;
-    let combo = findCombo(t.absAmount, cand);
-    let reason = 'צירוף חשבוניות';
-    if (!combo && wh > 0 && wh < 1) { combo = findCombo(t.absAmount / wh, cand); reason = `צירוף חשבוניות פחות ${Math.round((1 - wh) * 100)}%`; }
-    if (combo) {
-      combo.forEach(inv => usedInv.add(inv.id));
-      result.set(i, { matchStatus: 'auto', matchedInvoices: combo.map(inv => toInv(inv, { reasons: [reason] })), suggestions: [] });
-    }
-  }
-
-  // בונים פלט לכל התנועות
   return txns.map((t, i) => {
     if (t.direction !== 'credit') return { ...t, matchStatus: 'skip' };
-    const r = result.get(i);
-    if (r) return { ...t, ...r };
-    // הצעות: חשבוניות בודדות עם ציון משמעותי שעדיין פנויות
-    const sugg = invoices.map(inv => ({ inv, ...scoreMatch(t, inv, wh) }))
-      .filter(s => s.score >= 40 && !usedInv.has(s.inv.id))
-      .sort((a, b) => b.score - a.score).slice(0, 5).map(s => toInv(s.inv, { reasons: s.reasons, score: s.score }));
-    return { ...t, matchStatus: 'unmatched', matchedInvoices: [], suggestions: sugg };
+    const scored = invoices.map(inv => ({ inv, ...scoreMatch(t, inv, wh) }))
+      .filter(s => s.score >= 40)                     // רלוונטי: התאמת סכום / שם / מספר חשבונית
+      .sort((a, b) => b.score - a.score);             // שם+סכום ומספר חשבונית קודמים לסכום-בלבד
+    const suggestions = scored.slice(0, 6).map(s => toInv(s.inv, { reasons: s.reasons, score: s.score }));
+    return { ...t, matchStatus: 'unmatched', matchedInvoices: [], suggestions };
   });
 }
 
