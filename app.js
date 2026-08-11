@@ -5256,7 +5256,7 @@ window.openExpenseEdit = async (id) => {
     for (let i = 0; i < cds.length; i++) { if (matchSup(normSup(cds[i].name), supN) || (cds[i].paidExpenseId && String(cds[i].paidExpenseId) === String(id))) rows.push({ ev, idx: i }); }
   }
   rows.sort((a, b) => String(b.ev.date || '').localeCompare(String(a.ev.date || '')));
-  window._exeCtx = { id, supplierName: d.supplierName || '', rows, added: [], allEvents: events, invoiceAmount: Number(d.amount) || 0, giUnavailable: !!d.giUnavailable };
+  window._exeCtx = { id, supplierName: d.supplierName || '', rows, added: [], allEvents: events, invoiceAmount: Number(d.amount) || 0, giUnavailable: !!d.giUnavailable, origType: Number(d.type) || 0 };
   const F = (l, i, v, extra = '') => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">${l}<input id="${i}" value="${escAttr(v == null ? '' : String(v))}" ${extra}></label>`;
   m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:94vh;overflow:auto">
     <div class="row-between" style="margin:0"><h3 style="margin:0">✏️ עריכת הוצאה #${escapeHtml(String(d.number || ''))}</h3>
@@ -5266,6 +5266,12 @@ window.openExpenseEdit = async (id) => {
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
       <div style="flex:1;min-width:320px;display:flex;flex-direction:column;gap:11px">
         <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">תיאור (כולל מספר הקצאה)<textarea id="exeDesc" rows="2" style="font-family:inherit;resize:vertical">${escapeHtml(d.description || '')}</textarea></label>
+        ${(() => {
+          const opts = [[305, 'חשבונית מס'], [320, 'מס-קבלה'], [400, 'קבלה'], [330, 'זיכוי'], [300, 'חשבון עסקה (מקומי — יוצא מחשבונית ירוקה)']];
+          const cur = Number(d.type) || 0;
+          const head = cur ? '' : '<option value="" selected>— בחר סוג —</option>';
+          return `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">סוג מסמך<select id="exeType">${head}${opts.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select><span class="muted" style="font-weight:400;font-size:11px">שינוי ל"חשבון עסקה" יוציא את ההוצאה מחשבונית ירוקה וישמור אותה כרשומה מקומית.</span></label>`;
+        })()}
         <div class="biz-grid">
           ${F('מספר מסמך', 'exeNum', d.number, 'dir="ltr"')}
           ${F('תאריך', 'exeDate', d.date, 'type="date"')}
@@ -5434,6 +5440,15 @@ window.saveExpenseEdit = async (id) => {
         for (const ev of changed) { await fetch(`/api/events/${ev.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contractorDetails: ev.contractorDetails, contractors: ev.contractors }) }).catch(() => { }); }
       }
     } catch { }
+    // שינוי סוג מסמך (אם נבחר סוג אחר) — כולל המרה ל"חשבון עסקה" (מוריד מחשבונית ירוקה ושומר מקומית)
+    const _typeSel = g('exeType'); const _newType = _typeSel ? (Number(_typeSel.value) || 0) : 0;
+    const _origType = Number(ctx && ctx.origType) || 0;
+    if (_newType && _newType !== _origType) {
+      st.innerHTML = '<span class="muted">מעדכן סוג מסמך…</span>';
+      const rt = await fetch(`/api/expenses/${id}/change-type?companyId=${encodeURIComponent(state.company)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ documentType: _newType, number: body.number, date: body.date, amount: (amount != null ? amount : undefined), amountExcludeVat: (g('exeNet').value !== '' ? Number(g('exeNet').value) : undefined), description: body.description, paid: body.paid, companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+      if (!rt || !rt.ok) { if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; } st.innerHTML = `<span style="color:var(--danger)">שגיאה בשינוי סוג המסמך: ${escapeHtml(String((rt && rt.error) || ''))}</span>`; return; }
+      if (rt.warning) { st.innerHTML = `<span style="color:var(--warn)">${escapeHtml(rt.warning)}</span>`; setTimeout(() => { const mm = document.getElementById('expEditModal'); if (mm) mm.classList.add('hidden'); if (state.tab === 'contractors') renderSupplierDetail(); }, 3500); return; }
+    }
     st.innerHTML = giDown
       ? '<span style="color:var(--accent2)">הסכומים פר-אירוע נשמרו ✓</span> <span class="muted">· שדות ההוצאה לא עודכנו בחשבונית ירוקה (ההוצאה לא נמצאה שם כרגע)</span>'
       : '<span style="color:var(--accent2)">נשמר ✓</span>';

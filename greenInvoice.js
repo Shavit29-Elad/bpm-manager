@@ -602,6 +602,7 @@ export async function updateExpense(id, fields = {}) {
   if (fields.paid != null) body.paymentType = fields.paid ? 4 : -1; // 4=העברה בנקאית (שולם), -1=לא שולם
   if (fields.supplierId) body.supplier = { id: fields.supplierId };
   if (fields.accountingClassificationId) body.accountingClassification = { id: fields.accountingClassificationId };
+  if (fields.documentType != null) { const _dt = Number(fields.documentType); if (_dt) { body.type = _dt; body.documentType = _dt; } }
   const r = await api(`/expenses/${encodeURIComponent(id)}`, { method: 'PUT', body });
   clearDataCache();
   return r;
