@@ -11,7 +11,26 @@ function conf(creds) {
 // ===== PDF מאחורי קישור בגוף המייל =====
 // מזהה קישורים שנראים כמו חשבונית/PDF בגוף ההודעה, מוריד אותם בשרק, ומצרף אותם כאילו היו צרופה.
 // ספקי חשבוניות ידועים — הקישור "לצפייה" במיילים שלהם מוביל ל-PDF (גם בלי סיומת .pdf/מילות מפתח)
-const INVOICE_PROVIDER_HOST = /(icount\.co\.il|ezcount|greeninvoice\.co\.il|mrng\.to|morning\.co\.il|sumit\.co\.il|invoice4u|morning|tranzila|cardcom|payplus|meshulam|rivhit|hashavshevet|ec-p\.co\.il|greeninvoice)/i;
+const INVOICE_PROVIDER_HOST = /(icount\.co\.il|ezcount|greeninvoice\.co\.il|mrng\.to|morning\.co\.il|paperless\.tax|paperless\.co\.il|invoice-one\.com|menahel4u|cosign|sumit\.co\.il|invoice4u|morning|tranzila|cardcom|payplus|meshulam|rivhit|hashavshevet|ec-p\.co\.il|greeninvoice)/i;
+// זיהוי כללי: קישור שכפתורו/הטקסט שלו הוא "לצפייה במסמך / למעבר למסמך / לחץ כאן לצפיה" וכו' — עובד לכל ספק חשבוניות,
+// בלי צורך ברשימת דומיינים. מדלגים במפורש על קישורי ביטול-הרשמה/הסרה/Adobe Reader.
+function extractDocLinksFromHtml(html) {
+  if (!html) return [];
+  const out = [];
+  const re = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  // ניסוח פעולה (צפייה/פתיחה/הורדה/מעבר/לחץ כאן) בסמיכות למילה "מסמך/חשבונית/קבלה" — בכל סדר. תופס כל ספק.
+  const VIEW = /((לצפי|צפי[יה]|לפתיח|פתיח|למעבר|להורד|הורד|להצג|הצג|לפתוח|לחץ\s*כאן|לחצו\s*כאן).{0,22}(מסמך|חשבונית|קבלה)|(מסמך|חשבונית|קבלה).{0,22}(לצפי|צפי[יה]|לפתיח|פתיח|למעבר|להורד|הורד|לחץ\s*כאן|לחצו\s*כאן|הצג)|open\s*(the\s*)?(document|invoice)|view\s*(the\s*)?(document|invoice)|download\s*(the\s*)?(document|invoice))/i;
+  const BAD = /(ביטול\s*הרשמה|הסרה|unsubscribe|preferences|adobe|reader|תלונה|report\s*abuse|להתנסות|הרשמה\s*חינם)/i;
+  let m;
+  while ((m = re.exec(html)) && out.length < 6) {
+    const href = String(m[1] || '').replace(/&amp;/g, '&');
+    const text = String(m[2] || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!/^https?:\/\//i.test(href)) continue;
+    if (BAD.test(text) || BAD.test(href)) continue;
+    if (VIEW.test(text)) out.push(href);
+  }
+  return [...new Set(out)];
+}
 function extractPdfLinks(text) {
   if (!text) return [];
   const out = new Set();
@@ -139,7 +158,7 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
           });
           if (!atts.length) {
             try {
-              const urls = extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`);
+              const urls = [...new Set([...extractDocLinksFromHtml(parsed.html || ''), ...extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`)])];
               let li = 0;
               for (const u of urls.slice(0, 8)) {
                 const got = await fetchPdfLink(u).catch(() => null);
