@@ -11,7 +11,7 @@ function conf(creds) {
 // ===== PDF מאחורי קישור בגוף המייל =====
 // מזהה קישורים שנראים כמו חשבונית/PDF בגוף ההודעה, מוריד אותם בשרק, ומצרף אותם כאילו היו צרופה.
 // ספקי חשבוניות ידועים — הקישור "לצפייה" במיילים שלהם מוביל ל-PDF (גם בלי סיומת .pdf/מילות מפתח)
-const INVOICE_PROVIDER_HOST = /(icount\.co\.il|ezcount|greeninvoice\.co\.il|sumit\.co\.il|invoice4u|morning|tranzila|cardcom|payplus|meshulam|rivhit|hashavshevet)/i;
+const INVOICE_PROVIDER_HOST = /(icount\.co\.il|ezcount|greeninvoice\.co\.il|mrng\.to|morning\.co\.il|sumit\.co\.il|invoice4u|morning|tranzila|cardcom|payplus|meshulam|rivhit|hashavshevet|ec-p\.co\.il|greeninvoice)/i;
 function extractPdfLinks(text) {
   if (!text) return [];
   const out = new Set();
