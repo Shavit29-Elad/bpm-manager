@@ -1109,7 +1109,8 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       if (!classId) {
         try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { }
       }
-      if (!classId) return json(res, { error: 'לספק אין סיווג הוצאה מוגדר בחשבונית ירוקה. הגדר לו "סיווג חשבונאי" בכרטיס הספק ונסה שוב.' }, 400);
+      if (!classId) classId = await defaultExpenseClassId(_activeCid);   // ברירת מחדל אוטומטית — אין צורך לבחור סיווג ידנית
+      if (!classId) return json(res, { error: 'לא נמצאו סיווגי הוצאה בחשבונית ירוקה. ודא שהחיבור פעיל ונסה שוב.' }, 400);
     }
 
     const amount = Number(body.amount != null ? body.amount : draft.amount) || 0; // כולל מע"מ
@@ -1644,7 +1645,8 @@ add('POST', /^\/api\/contractors\/([^/]+)\/expense$/, async (req, res, params, _
     if (!classId) {
       try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { }
     }
-    if (!classId) return json(res, { error: 'לקבלן אין סיווג הוצאה מוגדר בחשבונית ירוקה. הגדר לו "סיווג חשבונאי" בכרטיס הספק ונסה שוב.' }, 400);
+    if (!classId) classId = await defaultExpenseClassId(_q.companyId || giCompanyId());   // ברירת מחדל אוטומטית — אין צורך לבחור סיווג ידנית
+    if (!classId) return json(res, { error: 'לא נמצאו סיווגי הוצאה בחשבונית ירוקה. ודא שהחיבור פעיל ונסה שוב.' }, 400);
 
     const total = Number(body.amount) || 0;
     if (total <= 0) return json(res, { error: 'סכום לא תקין' }, 400);
@@ -4712,6 +4714,20 @@ async function createDocFwd(opts) {
 function giEnabled(companyId) {
   const c = (load().companies || []).find(x => x.id === companyId);
   return !!(c && c.accounting === 'greenInvoice' && greenInvoice.haveCredentials(companyId));
+}
+// סיווג הוצאה ברירת-מחדל (חשבונית ירוקה מחייבת סיווג לכל הוצאה). כדי שהמשתמש לא יצטרך לבחור בכל פעם —
+// בוחרים סיווג אחד קבוע פר-חברה בפעם הראשונה (מעדיפים "שונות/אחר/כללי/הוצאות", אחרת הראשון ברשימה) ושומרים אותו.
+async function defaultExpenseClassId(companyId) {
+  const db = load();
+  db.defaultExpenseClass = db.defaultExpenseClass || {};
+  if (db.defaultExpenseClass[companyId]) return db.defaultExpenseClass[companyId];
+  let list = [];
+  try { list = await greenInvoice.listAccountingClassifications(); } catch { }
+  if (!Array.isArray(list) || !list.length) return null;
+  const pick = list.find(c => /שונות|אחר|כללי|הוצאות|עלות|misc|other|general/i.test(String(c.name || ''))) || list[0];
+  const id = pick && (pick.id != null ? String(pick.id) : null);
+  if (id) { db.defaultExpenseClass[companyId] = id; save(db); }
+  return id;
 }
 // תשובה ריקה לכל endpoint שנשען על חשבונית ירוקה — עבור חברות שאינן חברת ה-GI (אופק/משה)
 function giEmptyFor(pathname) {

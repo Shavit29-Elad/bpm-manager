@@ -4772,7 +4772,7 @@ window.openApproveDraft = (id, fromBankTxId) => {
         <div id="apNewSupPanel" style="margin-bottom:2px"></div>
         <div style="padding-inline-start:2px">
           ${fld('שם הספק / קבלן *', `<div style="display:flex;flex-direction:column;gap:6px"><input id="apSupSearch" placeholder="🔍 חפש ספק לפי שם…" oninput="filterApSup(this.value)" style="font-size:12.5px;padding:6px 9px"><div style="display:flex;gap:6px;align-items:center"><select id="apSup" style="flex:1" onchange="onApprSupplierChange()"><option value="">— בחר ספק —</option>${supOpts}</select><button type="button" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap" onclick="openAddSupplier()">+ ספק חדש</button></div></div>`)}
-          ${fld('סיווג הוצאה (חשבונית ירוקה) *', `<select id="apClass"><option value="">— טוען סיווגים… —</option></select>`)}
+          ${fld('סיווג הוצאה (אוטומטי — אין צורך לבחור)', `<select id="apClass"><option value="">— אוטומטי (ברירת מחדל) —</option></select>`)}
           <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:-4px 0 9px"><input type="checkbox" id="apClassSave" checked/> שמור כברירת מחדל לספק זה (כדי שהקליטה הבאה תהיה אוטומטית)</label>
           ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
           ${fld('סוג המסמך *', `<select id="apType" onchange="onApprTypeChange()">${typeSel}</select>`)}
@@ -4833,7 +4833,7 @@ async function loadApprClassifications(d) {
     sel.innerHTML = '<option value="">— לא נמצאו סיווגים בחשבונית ירוקה —</option>';
     return;
   }
-  sel.innerHTML = '<option value="">— בחר סיווג הוצאה —</option>' + _classifications.map(c => `<option value="${escAttr(String(c.id))}">${escapeHtml(c.name)}</option>`).join('');
+  sel.innerHTML = '<option value="">— אוטומטי (ברירת מחדל) —</option>' + _classifications.map(c => `<option value="${escAttr(String(c.id))}">${escapeHtml(c.name)}</option>`).join('');
   syncApprClassForSupplier(d && d.accountingClassificationId);
 }
 // בוחר בבורר הסיווג את ברירת המחדל של הספק הנבחר
@@ -5114,8 +5114,7 @@ window.approveDraft = async (id, btn) => {
   const alloc = (g('apAlloc')?.value || '').trim();
   const classId = (g('apClass')?.value || '').trim();
   const saveClass = !!(g('apClassSave') && g('apClassSave').checked);
-  // סיווג נדרש רק למסמך מס אמיתי שנוצר בחשבונית ירוקה (לא לחשבון עסקה ולא לאופק)
-  if (!isBiz && !isOfek && !classId && _classifications && _classifications.length) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור סיווג הוצאה (חשבונית ירוקה דורשת סיווג).</span>'; return; }
+  // סיווג ההוצאה נקבע אוטומטית לברירת מחדל בשרת אם לא נבחר — אין צורך לבחור ידנית (חשבונית ירוקה מחייבת סיווג).
   // אזהרה רכה: מספר הקצאה חסר לחשבונית מס/מס-קבלה מעל 5,000 ₪
   const needsAlloc = [305, 320].includes(docType) && Math.max(amount, net || 0) > 5000;
   if (needsAlloc && !alloc && !confirm('חסר מספר הקצאה לחשבונית מס/מס-קבלה מעל 5,000 ₪.\nלהמשיך בכל זאת ולקלוט בלי מספר הקצאה?')) return;
