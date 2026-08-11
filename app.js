@@ -7137,6 +7137,16 @@ function groupBankUnits(mis) {
   for (const o of others) units.push({ inv: o, credits: [], net: Number(o.amount) || 0 });
   return units;
 }
+// חשבונית מס (305) ששולמה בבנק אך עדיין אין לה קבלה מקושרת — נחשבת "לא גמורה" (תיצבע אדום עד הפקת קבלה)
+function bankMissingReceipt(t) {
+  if (!['auto', 'manual', 'approved'].includes(t.matchStatus)) return false;
+  const mis = t.matchedInvoices || [];
+  if (!mis.length) return false;
+  try {
+    const units = groupBankUnits(mis);
+    return units.some(u => u.inv && u.inv.kind !== 'expense' && Number(u.inv.type) === 305 && !u.receipt);
+  } catch { return false; }
+}
 function bankTr(t) {
   const credit = t.direction === 'credit';
   const amt = `${credit ? '' : '−'}${money(t.absAmount)}`;
@@ -7147,7 +7157,8 @@ function bankTr(t) {
   // "מכוסה/מאושר" דורש גם קבוצת שיוך (בחברה עם קבוצות) — כך ששיוך מסמך בלי קבוצה יישמר אך יישאר ממתין עד לבחירת קבוצה.
   const _amtOk = isMatched ? (t.matchStatus === 'approved' || bankRowCovered(t)) : false;
   const _grpOk = bankRowGroupOk(t);
-  const covered = _amtOk && _grpOk;
+  const missingReceipt = credit && bankMissingReceipt(t); // חשבונית מס ששולמה אך חסרה לה קבלה — לא גמורה (אדום)
+  const covered = _amtOk && _grpOk && !missingReceipt;
   const notesInput = `<input value="${(t.notes || '').replace(/"/g, '&quot;')}" placeholder="הערה…" onchange="saveBankNotes('${t.id}', this.value)" style="width:90px;padding:4px 6px;font-size:12px"/>`;
   const stack = (arr) => arr.map(x => `<div style="padding:2px 0${arr.length > 1 ? ';border-bottom:1px dashed var(--line)' : ''}">${x}</div>`).join('');
   // תצוגה 👁 + הורדה ↓ צמודים לשם המסמך. למסמכי הכנסה (doc עם id) — התצוגה נפתחת עם כפתור "שלח במייל" בראש החלונית.
@@ -7198,16 +7209,20 @@ function bankTr(t) {
     const matchedTot = bankAllocatedTotal(t);   // קבלה מקוננת מתחת לחשבונית לא נספרת פעמיים (מונע "חסר" שגוי)
     const shortAmt = Math.abs(Number(t.absAmount) || 0) - matchedTot;
     const confBadge = !covered
-      ? ((_amtOk && !_grpOk)
+      ? (missingReceipt
+        ? '<span class="tag miss" style="font-size:10px;margin-inline-end:4px">חסרה קבלה</span>'
+        : (_amtOk && !_grpOk)
         ? '<span class="tag miss" style="font-size:10px;margin-inline-end:4px">בחר קבוצה</span>'   // הסכום מכוסה — חסרה רק קבוצת שיוך
         : `<span class="tag miss" style="font-size:10px;margin-inline-end:4px">חסר ${money(shortAmt)}</span>`)
       : (t.matchStatus === 'approved' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">מאושר</span>'
         : (t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'מדויק' : 'לבדיקה'}</span>`
           : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '')));
     // לא מכוסה → אדום, עם "אשר" (לאשר בכל זאת) ו-"בטל". מכוסה → כרגיל.
-    action = !covered
-      ? `${confBadge}<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="approveBank('${t.id}')">אשר</button> <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`
-      : `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
+    action = missingReceipt
+      ? `${confBadge}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`   // הפקת הקבלה נעשית מכפתור "🧾 הפק קבלה" בעמודת הקבלה
+      : (!covered
+        ? `${confBadge}<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="approveBank('${t.id}')">אשר</button> <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`
+        : `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`);
   } else if (t.matchStatus === 'approved') {
     // אושר ידנית ללא מסמך (למשל עמלות) — מסומן מאושר, לא אדום
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
