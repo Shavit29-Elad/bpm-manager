@@ -2338,12 +2338,24 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
   try {
     const db = load();
     const seenUp = new Set(); // דדופ: חשבונית שהועלתה וקושרה לכמה אירועים תופיע פעם אחת בלבד (לפי מספר+סוג)
+    // חשבוניות שכבר שויכו/כוסו בהתאמות הבנק (כולל המקרה שבו צירפת חשבונית+קבלה לאותה תנועה) — לא נחשבות "פתוחות" יותר
+    const bankMatchedKeys = new Set();
+    for (const t of (db.bankTx || [])) {
+      if (cid && t.companyId !== cid) continue;
+      if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
+      for (const inv of (t.matchedInvoices || [])) {
+        if (inv && inv.id != null) bankMatchedKeys.add('id:' + String(inv.id));
+        if (inv && inv.number != null && inv.type != null) bankMatchedKeys.add('nt:' + String(inv.number) + '|' + Number(inv.type));
+      }
+    }
+    const isBankSettled = (d) => bankMatchedKeys.has('id:' + String(d.id)) || (d.number != null && bankMatchedKeys.has('nt:' + String(d.number) + '|' + Number(d.type)));
     for (const ev of (db.events || [])) {
       if (cid && ev.companyId && ev.companyId !== cid) continue;
       const linked = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
       if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue; // נסגר בקבלה/מס-קבלה
       for (const d of linked) {
         if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
+        if (isBankSettled(d)) continue; // שויכה/כוסתה בהתאמות הבנק — לא נחשבת פתוחה
         const upKey = (d.number || d.id) + '|' + Number(d.type);
         if (seenUp.has(upKey)) continue; seenUp.add(upKey);
         docs.push({
@@ -2364,6 +2376,7 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
       if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue;
       for (const d of linked) {
         if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
+        if (isBankSettled(d)) continue; // שויכה/כוסתה בהתאמות הבנק — לא נחשבת פתוחה
         const upKey = (d.number || d.id) + '|' + Number(d.type);
         if (seenUp.has(upKey)) continue; seenUp.add(upKey);
         docs.push({
@@ -4726,6 +4739,20 @@ add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
       openDescPending = open.some(d => d.descStatus === 'pending' || d.descStatus === 'error');
       if (openDescPending) fillDescriptionsBg(dealsData);
     } else { openPending = true; refreshOpenDealsBg(to); }
+    // סינון עסקאות שכבר הותאמו/כוסו בהתאמות הבנק (למשל צירוף חשבונית+קבלה לתנועה) — לא נחשבות "פתוחות" יותר בדף הבית
+    try {
+      const _cid = q.companyId;
+      const _db = load();
+      const settledNums = new Set();
+      for (const t of (_db.bankTx || [])) {
+        if (_cid && t.companyId !== _cid) continue;
+        if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
+        for (const inv of (t.matchedInvoices || [])) {
+          if (inv && inv.number != null && [300, 305, 320].includes(Number(inv.type))) settledNums.add(String(inv.number).replace(/\s+/g, ''));
+        }
+      }
+      if (settledNums.size) open = open.filter(d => !settledNums.has(String(d.number || '').replace(/\s+/g, '')));
+    } catch { }
     const openByKind = { 'עסקה': 0, 'מס': 0 };
     for (const d of open) if (openByKind[d.kind] != null) openByKind[d.kind]++;
 

@@ -10,15 +10,17 @@ function conf(creds) {
 
 // ===== PDF מאחורי קישור בגוף המייל =====
 // מזהה קישורים שנראים כמו חשבונית/PDF בגוף ההודעה, מוריד אותם בשרק, ומצרף אותם כאילו היו צרופה.
+// ספקי חשבוניות ידועים — הקישור "לצפייה" במיילים שלהם מוביל ל-PDF (גם בלי סיומת .pdf/מילות מפתח)
+const INVOICE_PROVIDER_HOST = /(icount\.co\.il|ezcount|greeninvoice\.co\.il|sumit\.co\.il|invoice4u|morning|tranzila|cardcom|payplus|meshulam|rivhit|hashavshevet)/i;
 function extractPdfLinks(text) {
   if (!text) return [];
   const out = new Set();
   const re = /https?:\/\/[^\s"'<>()\]]+/gi;
   let m;
-  while ((m = re.exec(text)) && out.size < 8) {
+  while ((m = re.exec(text)) && out.size < 12) {
     let u = m[0].replace(/[.,;]+$/, '').replace(/&amp;/g, '&');
     if (!/^https?:\/\//i.test(u)) continue;
-    if (/\.pdf(\?|#|$)/i.test(u) || (/(invoice|receipt|download|getfile|attachment|document|בחשבונית|חשבונית|קבלה)/i.test(u) && /(pdf|download|file|invoice|receipt|doc)/i.test(u))) out.add(u);
+    if (/\.pdf(\?|#|$)/i.test(u) || (/(invoice|receipt|download|getfile|attachment|document|בחשבונית|חשבונית|קבלה)/i.test(u) && /(pdf|download|file|invoice|receipt|doc)/i.test(u)) || INVOICE_PROVIDER_HOST.test(u)) out.add(u);
   }
   return [...out];
 }
@@ -28,7 +30,7 @@ function linkHostBlocked(url) {
     return /^(localhost$|127\.|10\.|192\.168\.|169\.254\.|::1)/.test(h) || /\.(local|internal|lan)$/.test(h);
   } catch { return true; }
 }
-async function fetchPdfLink(url) {
+async function fetchPdfLink(url, depth = 0) {
   if (linkHostBlocked(url)) return null;
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), 12000);
@@ -37,16 +39,27 @@ async function fetchPdfLink(url) {
     clearTimeout(to);
     if (!r || !r.ok) return null;
     const ct = String(r.headers.get('content-type') || '').toLowerCase().split(';')[0].trim();
-    if (!(ct.includes('pdf') || ct.startsWith('image/'))) return null;
-    const buf = Buffer.from(await r.arrayBuffer());
-    if (!buf.length || buf.length > 8 * 1024 * 1024) return null;
-    let filename = 'link.pdf';
-    const cd = r.headers.get('content-disposition') || '';
-    const mm = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-    if (mm) { try { filename = decodeURIComponent(mm[1]); } catch { filename = mm[1]; } }
-    else { try { const p = new URL(url).pathname.split('/').pop(); if (p) filename = decodeURIComponent(p); } catch { } }
-    if (ct.includes('pdf') && !/\.pdf$/i.test(filename)) filename += '.pdf';
-    return { base64: buf.toString('base64'), mime: ct, size: buf.length, filename };
+    if (ct.includes('pdf') || ct.startsWith('image/')) {
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (!buf.length || buf.length > 8 * 1024 * 1024) return null;
+      let filename = 'link.pdf';
+      const cd = r.headers.get('content-disposition') || '';
+      const mm = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+      if (mm) { try { filename = decodeURIComponent(mm[1]); } catch { filename = mm[1]; } }
+      else { try { const p = new URL(r.url || url).pathname.split('/').pop(); if (p) filename = decodeURIComponent(p); } catch { } }
+      if (ct.includes('pdf') && !/\.pdf$/i.test(filename)) filename += '.pdf';
+      return { base64: buf.toString('base64'), mime: ct, size: buf.length, filename };
+    }
+    // עמוד HTML של ספק חשבוניות (למשל כפתור "לצפייה" של iCount שמוביל לעמוד שממנו יורד ה-PDF) — מחפשים בתוכו קישור ישיר ל-PDF ומנסים אותו פעם אחת
+    if (depth === 0 && ct.includes('html')) {
+      const html = await r.text().catch(() => '');
+      const cand = extractPdfLinks(html).filter(u => /\.pdf|download|getfile|\/file|\/doc|pdf=/i.test(u));
+      for (const u2 of cand.slice(0, 3)) {
+        const g = await fetchPdfLink(u2, 1).catch(() => null);
+        if (g && g.base64) return g;
+      }
+    }
+    return null;
   } catch { clearTimeout(to); return null; }
 }
 
@@ -80,7 +93,7 @@ export async function imapTest(creds, since) {
 }
 
 // סריקת INBOX: מחזיר צרופות PDF/תמונה מהודעות מאז תאריך, למעט הודעות שכבר טופלו (excludeUids).
-// עובד באצווה (limit הודעות) כדי לא לחרוג מ�timeout; מחזיר remaining כדי שהצד-לקוח יקרא שוב עד שיסיים.
+// עובד באצווה (limit הודעות) כדי לא לחרוג מ�timeout; מחזיר remaining כדי שהצד-לקוח יקרא שוב עד שיסיים.
 export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 } = {}) {
   if (!creds || !creds.user || !creds.pass) return { ok: false, error: 'חסרים כתובת/סיסמת אפליקציה' };
   const ImapFlow = await imapflow();
@@ -128,7 +141,7 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
             try {
               const urls = extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`);
               let li = 0;
-              for (const u of urls.slice(0, 4)) {
+              for (const u of urls.slice(0, 8)) {
                 const got = await fetchPdfLink(u).catch(() => null);
                 if (got && got.base64) {
                   items.push({
