@@ -1109,8 +1109,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       if (!classId) {
         try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { }
       }
-      if (!classId) classId = await defaultExpenseClassId(_activeCid);   // ברירת מחדל אוטומטית — אין צורך לבחור סיווג ידנית
-      if (!classId) return json(res, { error: 'לא נמצאו סיווגי הוצאה בחשבונית ירוקה. ודא שהחיבור פעיל ונסה שוב.' }, 400);
+      if (!classId) return json(res, { error: 'לספק אין סיווג הוצאה מוגדר בחשבונית ירוקה. הגדר לו "סיווג חשבונאי" בכרטיס הספק ונסה שוב.' }, 400);
     }
 
     const amount = Number(body.amount != null ? body.amount : draft.amount) || 0; // כולל מע"מ
@@ -1645,8 +1644,7 @@ add('POST', /^\/api\/contractors\/([^/]+)\/expense$/, async (req, res, params, _
     if (!classId) {
       try { const sup = await greenInvoice.getSupplier(supplierId); classId = sup?.accountingClassificationId || sup?.accountingClassification?.id || null; } catch { }
     }
-    if (!classId) classId = await defaultExpenseClassId(_q.companyId || giCompanyId());   // ברירת מחדל אוטומטית — אין צורך לבחור סיווג ידנית
-    if (!classId) return json(res, { error: 'לא נמצאו סיווגי הוצאה בחשבונית ירוקה. ודא שהחיבור פעיל ונסה שוב.' }, 400);
+    if (!classId) return json(res, { error: 'לקבלן אין סיווג הוצאה מוגדר בחשבונית ירוקה. הגדר לו "סיווג חשבונאי" בכרטיס הספק ונסה שוב.' }, 400);
 
     const total = Number(body.amount) || 0;
     if (total <= 0) return json(res, { error: 'סכום לא תקין' }, 400);
@@ -2338,24 +2336,12 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
   try {
     const db = load();
     const seenUp = new Set(); // דדופ: חשבונית שהועלתה וקושרה לכמה אירועים תופיע פעם אחת בלבד (לפי מספר+סוג)
-    // חשבוניות שכבר שויכו/כוסו בהתאמות הבנק (כולל המקרה שבו צירפת חשבונית+קבלה לאותה תנועה) — לא נחשבות "פתוחות" יותר
-    const bankMatchedKeys = new Set();
-    for (const t of (db.bankTx || [])) {
-      if (cid && t.companyId !== cid) continue;
-      if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
-      for (const inv of (t.matchedInvoices || [])) {
-        if (inv && inv.id != null) bankMatchedKeys.add('id:' + String(inv.id));
-        if (inv && inv.number != null && inv.type != null) bankMatchedKeys.add('nt:' + String(inv.number) + '|' + Number(inv.type));
-      }
-    }
-    const isBankSettled = (d) => bankMatchedKeys.has('id:' + String(d.id)) || (d.number != null && bankMatchedKeys.has('nt:' + String(d.number) + '|' + Number(d.type)));
     for (const ev of (db.events || [])) {
       if (cid && ev.companyId && ev.companyId !== cid) continue;
       const linked = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
       if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue; // נסגר בקבלה/מס-קבלה
       for (const d of linked) {
         if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
-        if (isBankSettled(d)) continue; // שויכה/כוסתה בהתאמות הבנק — לא נחשבת פתוחה
         const upKey = (d.number || d.id) + '|' + Number(d.type);
         if (seenUp.has(upKey)) continue; seenUp.add(upKey);
         docs.push({
@@ -2376,7 +2362,6 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
       if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue;
       for (const d of linked) {
         if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
-        if (isBankSettled(d)) continue; // שויכה/כוסתה בהתאמות הבנק — לא נחשבת פתוחה
         const upKey = (d.number || d.id) + '|' + Number(d.type);
         if (seenUp.has(upKey)) continue; seenUp.add(upKey);
         docs.push({
@@ -3101,7 +3086,9 @@ async function runNightlyMailScan(sinceOverride, resetSeen, opts = {}) {
     const incSince = (() => { const d = new Date(); d.setDate(d.getDate() - INCREMENTAL_DAYS); return d.toISOString().slice(0, 10); })();
     const companies = (db.companies || []).map(c => c.id);
     // reset ידני = בקשה מפורשת ל-backfill מלא מחדש: מאפסים "נסרקו" וגם את דגל ה-backfill.
-    if (resetSeen) { const d = load(); for (const cid of companies) { const s = mailScanState(d, cid); s.seenUids = []; s.backfillDone = false; } save(d); console.log('[mail-nightly] reset מלא — seenUids + backfillDone אופסו לכל החברות'); }
+    // reset ידני = בקשה מפורשת ל-backfill מלא מחדש: מאפסים "נסרקו", דגל ה-backfill, וגם את טביעות האצבע של הקבצים —
+    // כדי שמסמכים שדולגו בעבר (למשל עסקה/זיכוי שלא נקלטו קודם) ייסרקו מחדש. כפילויות אמיתיות נחסמות ע"י isExisting.
+    if (resetSeen) { const d = load(); for (const cid of companies) { const s = mailScanState(d, cid); s.seenUids = []; s.backfillDone = false; s.uploadedHashes = []; s.errCounts = {}; } save(d); console.log('[mail-nightly] reset מלא — seenUids + uploadedHashes + backfillDone אופסו לכל החברות'); }
     for (const cid of companies) {
       const creds = companyMailCreds(load(), cid);
       if (!creds.user || !creds.pass) { per[cid] = { skipped: 'אין חשבון מייל' }; continue; }
@@ -3751,7 +3738,6 @@ add('GET', /^\/api\/expenses\/([^/]+)\/details$/, async (req, res, params) => {
       amountExcludeVat: e.amountExcludeVat != null ? Number(e.amountExcludeVat) : null,
       supplierName: e.supplier?.name || '',
       supplierId: e.supplier?.id || null,
-      type: Number(e.type ?? e.documentType ?? e.expenseType) || null,
       paid: pay != null && pay !== -1,
       reported: Number(e.status) === 20,
       url: (e.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e.url === 'string' ? e.url : null),
@@ -3771,7 +3757,6 @@ add('GET', /^\/api\/expenses\/([^/]+)\/details$/, async (req, res, params) => {
           amountExcludeVat: p.amountExcludeVat != null ? Number(p.amountExcludeVat) : null,
           supplierName: p.supplierName || '',
           supplierId: p.supplierId || null,
-          type: Number(p.documentType) || null,
           paid: !!p.paid,
           reported: false,
           url: (p.giExpenseId || p.draftId || p.localFileId) ? `/api/supplier-payables/${p.id}/file` : null,
@@ -3815,108 +3800,6 @@ add('DELETE', /^\/api\/expenses\/([^/]+)$/, async (req, res, params) => {
   }
   save(db);
   json(res, { ok: true, id });
-});
-
-// POST /api/expenses/:id/change-type { documentType, number?, date?, amount?, amountExcludeVat?, description?, paid? }
-// שינוי סוג מסמך של הוצאה שנוצרה בחשבונית ירוקה. שני מסלולים:
-//  • סוג חשבונית-ירוקה אחר (מס/מס-קבלה/קבלה/זיכוי) → עדכון הסוג ישירות בחשבונית ירוקה.
-//  • "חשבון עסקה" (300) = סוג מקומי שאינו קיים כהוצאה בחשבונית ירוקה → הורדת הקובץ ושמירתו מקומית,
-//    יצירת/המרת רשומה מקומית, ואז מחיקת ההוצאה מחשבונית ירוקה (בסדר בטוח: קודם שומרים מקומית, אחר כך מוחקים).
-add('POST', /^\/api\/expenses\/([^/]+)\/change-type$/, async (req, res, _p, _q, body) => {
-  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
-  const id = _p[0];
-  const b = body || {};
-  const newType = Number(b.documentType) || 0;
-  if (!newType) return json(res, { error: 'סוג מסמך חסר' }, 400);
-  const GI_TYPES = [305, 320, 400, 330];
-  const LOCAL_BUSINESS = [300, 20];
-  const _cid = (_q && _q.companyId) || b.companyId || giCompanyId();
-
-  // ---- החלפה בין סוגי חשבונית ירוקה — עדכון ישיר ב-GI ----
-  if (GI_TYPES.includes(newType)) {
-    try { await greenInvoice.updateExpense(id, { documentType: newType }); }
-    catch (e) { return json(res, { error: 'חשבונית ירוקה לא אפשרה לשנות את סוג המסמך: ' + e.message }, 500); }
-    const db = load();
-    for (const p of (db.supplierPayables || [])) if (String(p.giExpenseId) === String(id)) { p.documentType = newType; p.updatedAt = new Date().toISOString(); }
-    save(db);
-    return json(res, { ok: true, giType: newType });
-  }
-
-  // ---- המרה ל"חשבון עסקה" (מקומי) — מוציאים מחשבונית ירוקה ושומרים מקומית ----
-  if (LOCAL_BUSINESS.includes(newType)) {
-    let e = null; try { e = await greenInvoice.getExpense(id); } catch { }
-    const db = load();
-    let payable = (db.supplierPayables || []).find(x => String(x.giExpenseId) === String(id)) || null;
-    const num = String(b.number || (e && (e.number ?? e.documentNumber)) || (payable && payable.number) || '').trim();
-    const date = String(b.date || (e && (e.documentDate || e.date)) || (payable && payable.date) || '').slice(0, 10);
-    const amount = Number(b.amount != null ? b.amount : ((e && (e.amount ?? e.total)) ?? (payable && payable.amount) ?? 0)) || 0;
-    const net = (b.amountExcludeVat != null && b.amountExcludeVat !== '') ? Number(b.amountExcludeVat)
-      : ((e && e.amountExcludeVat != null) ? Number(e.amountExcludeVat) : (payable && payable.amountExcludeVat != null ? Number(payable.amountExcludeVat) : +(amount / 1.18).toFixed(2)));
-    const supplierName = (e && e.supplier?.name) || (payable && payable.supplierName) || '';
-    const supplierId = (e && e.supplier?.id) || (payable && payable.supplierId) || null;
-    const description = (b.description != null ? String(b.description) : ((e && e.description) || (payable && payable.description) || (db.expenseNotes && db.expenseNotes[id]) || '')).trim();
-    const paid = (b.paid != null) ? !!b.paid : !!(payable && payable.paid);
-
-    // הורדת קובץ ההוצאה מחשבונית ירוקה ושמירתו מקומית (כדי שיישאר לצפייה אחרי המחיקה)
-    let localFileId = (payable && payable.localFileId) || null;
-    try {
-      const fileUrl = (e && e.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof (e && e.url) === 'string' ? e.url : null);
-      if (fileUrl && !localFileId) {
-        const fr = await fetch(fileUrl, { redirect: 'follow' });
-        if (fr.ok) {
-          const buf = Buffer.from(await fr.arrayBuffer());
-          const ct = fr.headers.get('content-type') || 'application/pdf';
-          const ext = /pdf/i.test(ct) ? 'pdf' : (/png/i.test(ct) ? 'png' : (/jpe?g/i.test(ct) ? 'jpg' : 'pdf'));
-          const saved = await saveFile({ employeeId: 'payable', kind: 'expense', filename: `expense-${num.replace(/[^\w.-]/g, '_')}.${ext}`, mime: ct, data: buf.toString('base64') });
-          localFileId = saved.id;
-        }
-      }
-    } catch { }
-
-    // יצירת/המרת הרשומה המקומית (נשמרת לפני המחיקה מ-GI, כדי שלא יאבד מידע אם המחיקה תיכשל)
-    if (payable) {
-      payable.documentType = 300; payable.isBusinessDoc = true;
-      payable.supplierName = supplierName || payable.supplierName; payable.supplierId = supplierId || payable.supplierId;
-      payable.number = num || payable.number; payable.date = date || payable.date;
-      payable.amount = amount || payable.amount; payable.amountExcludeVat = net; payable.vat = +(amount - net).toFixed(2);
-      payable.description = description; payable.paid = paid; payable.paidAt = paid ? (payable.paidAt || new Date().toISOString()) : null;
-      if (localFileId) payable.localFileId = localFileId;
-      payable.updatedAt = new Date().toISOString();
-    } else {
-      payable = {
-        id: 'pay_' + Math.random().toString(36).slice(2, 10), companyId: _cid,
-        supplierId, supplierName, documentType: 300, isBusinessDoc: true,
-        number: num, date, amount, amountExcludeVat: net, vat: +(amount - net).toFixed(2),
-        description, paid, paidAt: paid ? new Date().toISOString() : null,
-        localFileId, giExpenseId: id, createdAt: new Date().toISOString(),
-      };
-      db.supplierPayables = db.supplierPayables || []; db.supplierPayables.push(payable);
-    }
-    save(db);
-
-    // מחיקת ההוצאה מחשבונית ירוקה (אחרי שהרשומה המקומית כבר נשמרה)
-    let giDeleted = false, giErr = null;
-    try { await greenInvoice.deleteExpense(id); giDeleted = true; } catch (err) { giErr = err.message; }
-    const db2 = load();
-    const p2 = (db2.supplierPayables || []).find(x => x.id === payable.id);
-    if (p2) {
-      if (giDeleted) {
-        p2.giExpenseId = null;
-        if (db2.expenseNotes) delete db2.expenseNotes[id];
-        // שמירת שיוך בנק: מחליפים את מזהה ה-GI במזהה המקומי כדי שהשיוך לא יישבר
-        for (const t of (db2.bankTx || [])) for (const inv of (t.matchedInvoices || [])) if (String(inv.id) === String(id)) { inv.id = p2.id; inv.kind = 'expense'; }
-      } else {
-        p2.giExpenseId = id; // המחיקה נכשלה — עדיין קיים ב-GI
-      }
-      save(db2);
-    }
-    return json(res, {
-      ok: true, converted: true, giDeleted, payableId: payable.id,
-      warning: giDeleted ? null : 'הרשומה נשמרה מקומית כחשבון עסקה, אך מחיקת ההוצאה מחשבונית ירוקה נכשלה (ייתכן שכבר דווחה). מחק אותה ידנית בחשבונית ירוקה כדי למנוע כפילות. ' + (giErr || ''),
-    });
-  }
-
-  return json(res, { error: 'סוג מסמך לא נתמך לשינוי' }, 400);
 });
 
 // GET /api/expenses/quick-search?q= — חיפוש מסמכי הוצאה לפי מספר/תיאור
@@ -4739,20 +4622,6 @@ add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
       openDescPending = open.some(d => d.descStatus === 'pending' || d.descStatus === 'error');
       if (openDescPending) fillDescriptionsBg(dealsData);
     } else { openPending = true; refreshOpenDealsBg(to); }
-    // סינון עסקאות שכבר הותאמו/כוסו בהתאמות הבנק (למשל צירוף חשבונית+קבלה לתנועה) — לא נחשבות "פתוחות" יותר בדף הבית
-    try {
-      const _cid = q.companyId;
-      const _db = load();
-      const settledNums = new Set();
-      for (const t of (_db.bankTx || [])) {
-        if (_cid && t.companyId !== _cid) continue;
-        if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
-        for (const inv of (t.matchedInvoices || [])) {
-          if (inv && inv.number != null && [300, 305, 320].includes(Number(inv.type))) settledNums.add(String(inv.number).replace(/\s+/g, ''));
-        }
-      }
-      if (settledNums.size) open = open.filter(d => !settledNums.has(String(d.number || '').replace(/\s+/g, '')));
-    } catch { }
     const openByKind = { 'עסקה': 0, 'מס': 0 };
     for (const d of open) if (openByKind[d.kind] != null) openByKind[d.kind]++;
 
@@ -4845,20 +4714,6 @@ async function createDocFwd(opts) {
 function giEnabled(companyId) {
   const c = (load().companies || []).find(x => x.id === companyId);
   return !!(c && c.accounting === 'greenInvoice' && greenInvoice.haveCredentials(companyId));
-}
-// סיווג הוצאה ברירת-מחדל (חשבונית ירוקה מחייבת סיווג לכל הוצאה). כדי שהמשתמש לא יצטרך לבחור בכל פעם —
-// בוחרים סיווג אחד קבוע פר-חברה בפעם הראשונה (מעדיפים "שונות/אחר/כללי/הוצאות", אחרת הראשון ברשימה) ושומרים אותו.
-async function defaultExpenseClassId(companyId) {
-  const db = load();
-  db.defaultExpenseClass = db.defaultExpenseClass || {};
-  if (db.defaultExpenseClass[companyId]) return db.defaultExpenseClass[companyId];
-  let list = [];
-  try { list = await greenInvoice.listAccountingClassifications(); } catch { }
-  if (!Array.isArray(list) || !list.length) return null;
-  const pick = list.find(c => /שונות|אחר|כללי|הוצאות|עלות|misc|other|general/i.test(String(c.name || ''))) || list[0];
-  const id = pick && (pick.id != null ? String(pick.id) : null);
-  if (id) { db.defaultExpenseClass[companyId] = id; save(db); }
-  return id;
 }
 // תשובה ריקה לכל endpoint שנשען על חשבונית ירוקה — עבור חברות שאינן חברת ה-GI (אופק/משה)
 function giEmptyFor(pathname) {

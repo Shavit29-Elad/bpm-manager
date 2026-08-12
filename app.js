@@ -6081,7 +6081,8 @@ function bizDocRow(label, slot, meta) {
 
 // ================= סריקת מייל → טיוטות הוצאה/רישום לאישור =================
 // ===== סריקת מייל → טיוטות הוצאה בחשבונית ירוקה (נכנסות לאותו מקום כמו קובץ שנגרר/הועלה) =====
-let _mailScanSince = '2026-06-01';
+// ברירת מחדל לתאריך סריקת המייל = היום (ניתן לשינוי ידני בכל עת דרך שדה התאריך).
+let _mailScanSince = (() => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); })();
 window.scanMailNow = async () => {
   const scanCid = state.company; // מקבעים את החברה לכל הסריקה — מעבר לחברה אחרת יעצור בבטחה (מה שכבר נסרק נשמר)
   const prog0 = document.getElementById('mailScanProg');
