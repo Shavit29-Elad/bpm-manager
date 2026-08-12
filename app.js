@@ -433,12 +433,16 @@ window.previewDoc = async (url, opts = {}) => {
   m.style.zIndex = '200'; // תמיד מעל כל מודל אחר שפתוח (שיוך מסמך, עריכת אירוע וכו')
   m.classList.remove('hidden');
   const extra = opts.extraActions || '';
+  // כשמציגים טיוטת חשבונית לקליטה (URL של expense-drafts) — מוסיפים כפתור מחק ליד ההורדה.
+  const _draftId = opts.deleteDraftId || (String(url).match(/\/api\/expense-drafts\/([^/]+)\/file/) || [])[1] || null;
+  const delBtn = _draftId ? `<button class="btn ghost" style="padding:6px 13px;color:var(--danger)" onclick="closePreview();deleteDraft('${_draftId}')">🗑 מחק</button>` : '';
   const shell = (inner) => `<div class="modal-card" style="width:min(920px,95vw);height:90vh;padding:0;display:flex;flex-direction:column;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">
       <b>תצוגה מקדימה של המסמך</b>
       <div style="display:flex;gap:8px;align-items:center">
         ${extra}
         <a href="${url}" target="_blank" class="btn ghost" style="padding:6px 13px;text-decoration:none">הורדה ↓</a>
+        ${delBtn}
         <button class="btn primary" style="padding:6px 13px" onclick="closePreview()">סגור</button>
       </div>
     </div>${inner}</div>`;

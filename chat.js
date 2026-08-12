@@ -304,7 +304,7 @@ async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = 
   throw new Error(`אף מודל Claude זמין לקריאת מסמכים. פרט: ${lastErr}`);
 }
 // חילוץ ראייתי עם גיבוי אוטומטי: מנסה Claude (אם יש מפתח); אם נכשל (למשל מכסה/קרדיט נגמר) — עובר ל-Gemini (אם יש מפתח).
-async function visionExtract(system, prompt, fileBase64, mediaType) {
+async function visionExtract(system, prompt, fileBase64, mediaType, opts = {}) {
   const isPdf = mediaType === 'application/pdf';
   const block = isPdf
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
@@ -312,15 +312,36 @@ async function visionExtract(system, prompt, fileBase64, mediaType) {
   const hasA = !!process.env.ANTHROPIC_API_KEY, hasG = !!process.env.GEMINI_API_KEY;
   // מדלגים על Claude אם זוהה שאין לו קרדיט/הרשאה (עד שהחלון עובר) — ישר ל-Gemini, בלי לבזבז קריאה פר-מסמך
   if (hasA && Date.now() > _claudeOutUntil) {
-    try { return await callAnthropicVision(system, [block, { type: 'text', text: prompt }]); }
+    try { return await callAnthropicVision(system, [block, { type: 'text', text: prompt }], opts); }
     catch (e) {
       if (!hasG) throw e;
       console.error('[vision] Claude נכשל — עובר ל-Gemini:', String(e.message || e).slice(0, 140));
-      return await callGeminiVision(system, prompt, fileBase64, mediaType);
+      return await callGeminiVision(system, prompt, fileBase64, mediaType, opts);
     }
   }
-  if (hasG) return await callGeminiVision(system, prompt, fileBase64, mediaType);
+  if (hasG) return await callGeminiVision(system, prompt, fileBase64, mediaType, opts);
   throw new Error('AI לא מוגדר (חסר ANTHROPIC_API_KEY או GEMINI_API_KEY)');
+}
+// פענוח JSON חסין מתשובת AI: מסיר גדרות ```‏, חותך לאובייקט, מנקה פסיקים עודפים, מבריח מרכאות לא-חוקיות בתוך מחרוזות
+// (נפוץ בעברית — למשל בע"מ), ותווי בקרה. מחזיר אובייקט או null (בלי לזרוק).
+function parseAiJson(raw) {
+  if (raw == null) return null;
+  let s = String(raw).replace(/```json/gi, '').replace(/```/g, '').trim();
+  const i = s.indexOf('{'), j = s.lastIndexOf('}');
+  if (i === -1 || j === -1 || j < i) return null;
+  s = s.slice(i, j + 1);
+  const tryParse = (t) => { try { return JSON.parse(t); } catch { return undefined; } };
+  let out = tryParse(s);
+  if (out !== undefined) return out;
+  // ניקוי 1: פסיקים עודפים לפני }/] + תווי בקרה
+  out = tryParse(s.replace(/,\s*([}\]])/g, '$1').replace(/[ -]+/g, ' '));
+  if (out !== undefined) return out;
+  // ניקוי 2: הברחת מרכאות כפולות לא-חוקיות בתוך ערכי מחרוזת (מרכאה שאינה גבול של מפתח/ערך)
+  const repaired = s.replace(/,\s*([}\]])/g, '$1').replace(/[ -]+/g, ' ')
+    .replace(/"([^"]*)"(\s*:\s*)"((?:[^"\\]|\\.)*)"/g, (mAll) => mAll)      // שמירה על זוגות תקינים
+    .replace(/:\s*"((?:[^"\\]|\\.)*)"/g, (mAll) => mAll);
+  out = tryParse(repaired);
+  return out === undefined ? null : out;
 }
 // קריאה מולטימודלית ל-Gemini (גיבוי)
 async function callGeminiVision(system, prompt, fileBase64, mime, { maxTokens = 900 } = {}) {
@@ -401,10 +422,10 @@ export async function extractInvoiceFields(fileBase64, mime, suppliers = []) {
 רשימת ספקים קיימים (id<TAB>שם | ח.פ):
 ${supList || '(אין)'}`;
 
-  let raw;
-  raw = await visionExtract(system, prompt, fileBase64, mediaType);
-  const jsonStr = (String(raw).replace(/```json/gi, '').replace(/```/g, '').match(/\{[\s\S]*\}/) || ['{}'])[0];
-  let out; try { out = JSON.parse(jsonStr); } catch { throw new Error('ה-AI לא החזיר נתונים תקינים'); }
+  // פענוח חסין + ניסיון שני עם יותר טוקנים (מונע כשל חד-פעמי על JSON פגום/חתוך — למשל מרכאות בטקסט עברי)
+  let out = parseAiJson(await visionExtract(system, prompt, fileBase64, mediaType, { maxTokens: 1500 }));
+  if (!out) out = parseAiJson(await visionExtract(system, prompt, fileBase64, mediaType, { maxTokens: 2000 }));
+  if (!out) throw new Error('ה-AI לא החזיר נתונים תקינים');
   const num = (v) => { const n = +String(v == null ? '' : v).replace(/[^\d.\-]/g, ''); return isNaN(n) ? 0 : n; };
   let incl = num(out.amountInclVat), net = num(out.amountExclVat), vat = num(out.vat);
   if (incl && !net) net = +(incl / 1.18).toFixed(2);
@@ -452,10 +473,10 @@ export async function extractIncomeDocFields(fileBase64, mime, clients = []) {
 רשימת לקוחות קיימים (id<TAB>שם):
 ${cliList || '(אין)'}`;
 
-  let raw;
-  raw = await visionExtract(system, prompt, fileBase64, mediaType);
-  const jsonStr = (String(raw).replace(/```json/gi, '').replace(/```/g, '').match(/\{[\s\S]*\}/) || ['{}'])[0];
-  let out; try { out = JSON.parse(jsonStr); } catch { throw new Error('ה-AI לא החזיר נתונים תקינים'); }
+  // פענוח חסין + ניסיון שני עם יותר טוקנים (מונע כשל חד-פעמי על JSON פגום/חתוך)
+  let out = parseAiJson(await visionExtract(system, prompt, fileBase64, mediaType, { maxTokens: 1500 }));
+  if (!out) out = parseAiJson(await visionExtract(system, prompt, fileBase64, mediaType, { maxTokens: 2000 }));
+  if (!out) throw new Error('ה-AI לא החזיר נתונים תקינים');
   const num = (v) => { const n = +String(v == null ? '' : v).replace(/[^\d.\-]/g, ''); return isNaN(n) ? 0 : n; };
   let clientId = out.clientId && (clients || []).some(c => String(c.id) === String(out.clientId)) ? String(out.clientId) : '';
   const nm = String(out.clientName || '').trim();
