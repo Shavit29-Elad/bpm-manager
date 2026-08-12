@@ -19,14 +19,18 @@ const money = (n) => (n == null ? '—' : '₪' + Number(n).toLocaleString('he-I
 
 // ---- מטמון בזיכרון לבקשות GET: מעבר חוזר ללשונית מציג מיד מהמטמון (מתרענן אחרי כתיבה) ----
 const _apiCache = new Map(); // url -> { t, txt }
-const API_TTL = 8000;        // תוקף 8 שניות — מונע נתונים "תקועים". מעבר בין לשוניות/חברות מנקה מטמון מיידית (ראה למטה)
+const API_TTL = 60000;       // תוקף 60 שניות
+// אחרי כל פעולה (כתיבה) — חלון שבו כל הקריאות נשלפות טרי מהשרת ולא ממטמון. מטרתו לתפוס עדכוני חשבונית ירוקה מיד,
+// גם כשה-API של חשבונית ירוקה מאנדקס מסמך חדש בהשהיה של כמה שניות (אחרת נתפסת תשובה ישנה ומוקפאת ל-60 שניות).
+const POST_WRITE_FRESH_MS = 30000;
+let _lastWriteAt = 0;
 function clearApiCache() { _apiCache.clear(); }
 const api = (p) => {
   // בידוד חברות: צירוף companyId אוטומטי לכל קריאת GET (למעט auth), אם לא צוין כבר
   if (state.company && p.indexOf('/api/') === 0 && p.indexOf('/api/auth/') !== 0 && p.indexOf('companyId=') === -1) {
     p += (p.indexOf('?') === -1 ? '?' : '&') + 'companyId=' + encodeURIComponent(state.company);
   }
-  const noCache = p.indexOf('fresh=1') !== -1; // כפתורי "רענן" תמיד מהשרת
+  const noCache = p.indexOf('fresh=1') !== -1 || (Date.now() - _lastWriteAt < POST_WRITE_FRESH_MS); // "רענן", או חלון-טרי אחרי פעולה
   const hit = noCache ? null : _apiCache.get(p);
   if (hit && Date.now() - hit.t < API_TTL) {
     try { return Promise.resolve(JSON.parse(hit.txt)); } catch { /* נטען מחדש */ }
@@ -52,7 +56,7 @@ const api = (p) => {
       url = input;
     }
     const pr = _origFetch(input, init);
-    if (method !== 'GET' && url.indexOf('/api/') !== -1) pr.then(() => clearApiCache()).catch(() => {});
+    if (method !== 'GET' && url.indexOf('/api/') !== -1) pr.then(() => { _lastWriteAt = Date.now(); clearApiCache(); }).catch(() => {});
     return pr;
   };
 })();
@@ -144,7 +148,6 @@ async function startApp() {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
     t.classList.add('active'); state.tab = t.dataset.tab;
     if ((location.hash || '').replace('#', '') !== state.tab) location.hash = state.tab; // שמירה ב-URL (רענון/אחורה)
-    clearApiCache();   // מעבר לשונית → תמיד נתונים טריים מהשרת (בלי צורך ב-Cmd+Shift+R)
     render();
   });
   // ניווט אחורה/קדימה בדפדפן + רענון — מכבד את הלשונית ב-URL
@@ -154,7 +157,7 @@ async function startApp() {
     const el = [...document.querySelectorAll('.tab')].find(x => x.dataset.tab === h && x.style.display !== 'none');
     if (!el) return;
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-    el.classList.add('active'); state.tab = h; clearApiCache(); render();
+    el.classList.add('active'); state.tab = h; render();
   });
   setupModal();
   await renderStatus();
@@ -1230,7 +1233,7 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
       _derEdit.payments = [{ type: 4, price: 0, date, chequeNum: '', bankName: '' }];
     }
   }
-  _derBankLink = opts.bankTxId ? { txId: opts.bankTxId, sourceId: opts.sourceDocId || null, sourceEntry: opts.sourceEntry || null } : null;
+  _derBankLink = opts.bankTxId ? { txId: opts.bankTxId, sourceId: opts.sourceDocId || null } : null;
   renderDeriveEditor();
 };
 // סנכרון ערכי ה-DOM לתוך ה-state לפני רינדור מחדש
@@ -1338,7 +1341,7 @@ function renderDeriveEditor() {
   const t = derTotals();
   const typeName = DOC_TYPE_SHORT[e.type] || 'מסמך';
   const itemRows = e.items.map((it, i) => `<div class="der-item" style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;align-items:center;margin-bottom:6px">
-    <textarea class="der-desc doc-desc" rows="1" placeholder="תיאור" oninput="taGrow(this)">${escapeHtml(it.description)}</textarea>
+    <input class="der-desc" value="${escAttr(it.description)}" placeholder="תיאור" style="padding:6px 8px">
     <input class="der-qty" type="number" step="any" value="${it.quantity}" oninput="derRecalc()" style="padding:6px 6px;text-align:center" title="כמות">
     <input class="der-price" type="number" step="any" value="${it.price}" oninput="derRecalc()" style="padding:6px 6px;text-align:left" title="מחיר יחידה (ללא מע״מ)">
     <button class="btn ghost" style="padding:4px 8px;font-size:14px" onclick="derDelItem(${i})" title="מחק שורה">✕</button>
@@ -1516,7 +1519,7 @@ window.derConfirm = async () => {
     if (_derBankLink && r.doc) {
       // הופק מתוך "צור הכנסה" בבנק — קישור לתנועה, ואז אותה חלונית פעולות כמו בכל הפקה (הורדה / מייל / צפייה / וואטסאפ). ללא הורדה אוטומטית.
       const entry = { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: t.total, url: r.doc.url || null };
-      await linkDocToBankTx(_derBankLink.txId, entry, _derBankLink.sourceId, _derBankLink.sourceEntry);
+      await linkDocToBankTx(_derBankLink.txId, entry);
       _derBankLink = null;
       const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');
       showDocReadyPopup(r.doc, typeName, (document.getElementById('derSendEmail') || {}).value || (e.sendEmail || ''));
@@ -1615,17 +1618,13 @@ window.docReadySend = async (docId, btn, email) => {
     : `<span style="color:var(--danger)">${escapeHtml(String(r.error || 'שליחה נכשלה — ייתכן שאין מייל שמור ללקוח'))}</span>`;
 };
 // קישור מסמך שהופק לתנועת בנק (מוסיף ל-matchedInvoices ומעדכן את השורה)
-async function linkDocToBankTx(txId, entry, sourceId, sourceEntry) {
+async function linkDocToBankTx(txId, entry, sourceId) {
   const tx = (_bankList || []).find(t => t.id === txId); if (!tx) return;
   const matched = JSON.parse(JSON.stringify(tx.matchedInvoices || []));
-  const receiptOf = () => ({ number: entry.number, url: entry.url || null, amount: entry.amount });
   // #3 — אם המסמך החדש הוא קבלה (400) וחשבונית המקור כבר משויכת לשורה — מצרפים אותה כקבלה מקוננת תחת החשבונית, לא כשורה נפרדת
   const src = sourceId ? matched.find(x => String(x.id) === String(sourceId)) : null;
   if (src && Number(entry.type) === 400) {
-    src.receipt = receiptOf();
-  } else if (Number(entry.type) === 400 && sourceEntry && sourceEntry.id && !matched.find(x => String(x.id) === String(sourceEntry.id))) {
-    // המקור עדיין לא משויך לתנועה — מצרפים אוטומטית גם את חשבונית המקור (שבגללה הופקה הקבלה) עם הקבלה מקוננת תחתיה
-    matched.push({ id: sourceEntry.id, number: sourceEntry.number, type: sourceEntry.type, clientName: sourceEntry.clientName || '', amount: sourceEntry.amount, url: sourceEntry.url || null, receipt: receiptOf() });
+    src.receipt = { number: entry.number, url: entry.url || null, amount: entry.amount };
   } else if (!matched.find(x => x.id === entry.id)) {
     matched.push(entry);
   }
@@ -3499,7 +3498,7 @@ function renderInvoicePreviewModal() {
   const needDue = [300, 305].includes(+p.type);
   const isReceipt = [320, 400].includes(+p.type);
   const rows = p.items.map((it, i) => `<tr>
-    <td><textarea class="doc-desc" rows="1" oninput="invEdit(${i},'description',this.value);taGrow(this)" style="width:100%">${escapeHtml(it.description)}</textarea></td>
+    <td><input value="${escAttr(it.description)}" oninput="invEdit(${i},'description',this.value)" style="width:100%"/></td>
     <td><input type="number" value="${it.quantity ?? 1}" oninput="invEdit(${i},'quantity',this.value)" style="width:56px" dir="ltr"/></td>
     <td><input type="number" value="${it.price ?? 0}" oninput="invEdit(${i},'price',this.value)" style="width:96px" dir="ltr"/></td>
     <td id="rt_${i}" style="white-space:nowrap">${money((Number(it.price) || 0) * (Number(it.quantity) || 1))}</td>
@@ -3871,7 +3870,7 @@ function renderNewQuote() {
   const clients = (_evClients || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he'));
   const clientOpts = clients.map(c => `<option value="${escAttr(c.name)}">`).join(''); // אפשרויות ל-datalist (חיפוש חופשי לפי שם)
   const itemRows = e.items.map((it, i) => `<div class="nq-item" style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;align-items:center;margin-bottom:6px">
-    <textarea class="nq-desc doc-desc" rows="1" placeholder="תיאור" oninput="taGrow(this)">${escapeHtml(it.description)}</textarea>
+    <input class="nq-desc" value="${escAttr(it.description)}" placeholder="תיאור" style="padding:6px 8px">
     <input class="nq-qty" type="number" step="any" value="${it.quantity}" oninput="nqRecalc()" style="padding:6px 6px;text-align:center" title="כמות">
     <input class="nq-price" type="number" step="any" value="${it.price}" oninput="nqRecalc()" style="padding:6px 6px;text-align:left" title="מחיר יחידה (ללא מע״מ)">
     <button class="btn ghost" style="padding:4px 8px;font-size:14px" onclick="nqDelItem(${i})" title="מחק שורה">✕</button>
@@ -4776,7 +4775,7 @@ window.openApproveDraft = (id, fromBankTxId) => {
         <div id="apNewSupPanel" style="margin-bottom:2px"></div>
         <div style="padding-inline-start:2px">
           ${fld('שם הספק / קבלן *', `<div style="display:flex;flex-direction:column;gap:6px"><input id="apSupSearch" placeholder="🔍 חפש ספק לפי שם…" oninput="filterApSup(this.value)" style="font-size:12.5px;padding:6px 9px"><div style="display:flex;gap:6px;align-items:center"><select id="apSup" style="flex:1" onchange="onApprSupplierChange()"><option value="">— בחר ספק —</option>${supOpts}</select><button type="button" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap" onclick="openAddSupplier()">+ ספק חדש</button></div></div>`)}
-          ${fld('סיווג הוצאה (אוטומטי — אין צורך לבחור)', `<select id="apClass"><option value="">— אוטומטי (ברירת מחדל) —</option></select>`)}
+          ${fld('סיווג הוצאה (חשבונית ירוקה) *', `<select id="apClass"><option value="">— טוען סיווגים… —</option></select>`)}
           <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:-4px 0 9px"><input type="checkbox" id="apClassSave" checked/> שמור כברירת מחדל לספק זה (כדי שהקליטה הבאה תהיה אוטומטית)</label>
           ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
           ${fld('סוג המסמך *', `<select id="apType" onchange="onApprTypeChange()">${typeSel}</select>`)}
@@ -4837,7 +4836,7 @@ async function loadApprClassifications(d) {
     sel.innerHTML = '<option value="">— לא נמצאו סיווגים בחשבונית ירוקה —</option>';
     return;
   }
-  sel.innerHTML = '<option value="">— אוטומטי (ברירת מחדל) —</option>' + _classifications.map(c => `<option value="${escAttr(String(c.id))}">${escapeHtml(c.name)}</option>`).join('');
+  sel.innerHTML = '<option value="">— בחר סיווג הוצאה —</option>' + _classifications.map(c => `<option value="${escAttr(String(c.id))}">${escapeHtml(c.name)}</option>`).join('');
   syncApprClassForSupplier(d && d.accountingClassificationId);
 }
 // בוחר בבורר הסיווג את ברירת המחדל של הספק הנבחר
@@ -5118,7 +5117,8 @@ window.approveDraft = async (id, btn) => {
   const alloc = (g('apAlloc')?.value || '').trim();
   const classId = (g('apClass')?.value || '').trim();
   const saveClass = !!(g('apClassSave') && g('apClassSave').checked);
-  // סיווג ההוצאה נקבע אוטומטית לברירת מחדל בשרת אם לא נבחר — אין צורך לבחור ידנית (חשבונית ירוקה מחייבת סיווג).
+  // סיווג נדרש רק למסמך מס אמיתי שנוצר בחשבונית ירוקה (לא לחשבון עסקה ולא לאופק)
+  if (!isBiz && !isOfek && !classId && _classifications && _classifications.length) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור סיווג הוצאה (חשבונית ירוקה דורשת סיווג).</span>'; return; }
   // אזהרה רכה: מספר הקצאה חסר לחשבונית מס/מס-קבלה מעל 5,000 ₪
   const needsAlloc = [305, 320].includes(docType) && Math.max(amount, net || 0) > 5000;
   if (needsAlloc && !alloc && !confirm('חסר מספר הקצאה לחשבונית מס/מס-קבלה מעל 5,000 ₪.\nלהמשיך בכל זאת ולקלוט בלי מספר הקצאה?')) return;
@@ -5217,10 +5217,8 @@ function renderSupplierDetail() {
 function supDocRow(d) {
   const desc = (_expenseNotes[d.id] != null ? _expenseNotes[d.id] : d.category) || '';
   const isAdmin = state.user && state.user.role === 'admin';
-  // תצוגה דרך ה-proxy הפנימי (מגיש inline) במקום קישור ישיר לחשבונית ירוקה שמאלץ הורדה. הורדה נשארת קישור ישיר.
-  const viewDl = (d.id || d.url) ? `${d.id
-      ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="previewDoc('/api/supplier-payables/${d.id}/file')">תצוגה 👁</button>`
-      : `<a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">תצוגה 👁</a>`}${d.url ? `<a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" download target="_blank" rel="noopener">הורדה ↓</a>` : ''}` : '';
+  const viewDl = d.url ? `<a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" target="_blank" rel="noopener">תצוגה 👁</a>
+    <a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" download target="_blank" rel="noopener">הורדה ↓</a>` : '';
   const editBtn = (d.id && isAdmin) ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="openExpenseEdit('${d.id}')">✏️ עריכה</button>` : '';
   const acts = (viewDl || editBtn) ? `<div style="display:flex;gap:6px;flex-wrap:wrap">${viewDl}${editBtn}</div>` : '<span class="muted">—</span>';
   return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>${escapeHtml(String(d.number || '—'))}</td>
@@ -5262,7 +5260,7 @@ window.openExpenseEdit = async (id) => {
     for (let i = 0; i < cds.length; i++) { if (matchSup(normSup(cds[i].name), supN) || (cds[i].paidExpenseId && String(cds[i].paidExpenseId) === String(id))) rows.push({ ev, idx: i }); }
   }
   rows.sort((a, b) => String(b.ev.date || '').localeCompare(String(a.ev.date || '')));
-  window._exeCtx = { id, supplierName: d.supplierName || '', rows, added: [], allEvents: events, invoiceAmount: Number(d.amount) || 0, giUnavailable: !!d.giUnavailable, origType: Number(d.type) || 0 };
+  window._exeCtx = { id, supplierName: d.supplierName || '', rows, added: [], allEvents: events, invoiceAmount: Number(d.amount) || 0, giUnavailable: !!d.giUnavailable };
   const F = (l, i, v, extra = '') => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">${l}<input id="${i}" value="${escAttr(v == null ? '' : String(v))}" ${extra}></label>`;
   m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:94vh;overflow:auto">
     <div class="row-between" style="margin:0"><h3 style="margin:0">✏️ עריכת הוצאה #${escapeHtml(String(d.number || ''))}</h3>
@@ -5272,12 +5270,6 @@ window.openExpenseEdit = async (id) => {
     <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
       <div style="flex:1;min-width:320px;display:flex;flex-direction:column;gap:11px">
         <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">תיאור (כולל מספר הקצאה)<textarea id="exeDesc" rows="2" style="font-family:inherit;resize:vertical">${escapeHtml(d.description || '')}</textarea></label>
-        ${(() => {
-          const opts = [[305, 'חשבונית מס'], [320, 'מס-קבלה'], [400, 'קבלה'], [330, 'זיכוי'], [300, 'חשבון עסקה (מקומי — יוצא מחשבונית ירוקה)']];
-          const cur = Number(d.type) || 0;
-          const head = cur ? '' : '<option value="" selected>— בחר סוג —</option>';
-          return `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">סוג מסמך<select id="exeType">${head}${opts.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select><span class="muted" style="font-weight:400;font-size:11px">שינוי ל"חשבון עסקה" יוציא את ההוצאה מחשבונית ירוקה וישמור אותה כרשומה מקומית.</span></label>`;
-        })()}
         <div class="biz-grid">
           ${F('מספר מסמך', 'exeNum', d.number, 'dir="ltr"')}
           ${F('תאריך', 'exeDate', d.date, 'type="date"')}
@@ -5446,15 +5438,6 @@ window.saveExpenseEdit = async (id) => {
         for (const ev of changed) { await fetch(`/api/events/${ev.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contractorDetails: ev.contractorDetails, contractors: ev.contractors }) }).catch(() => { }); }
       }
     } catch { }
-    // שינוי סוג מסמך (אם נבחר סוג אחר) — כולל המרה ל"חשבון עסקה" (מוריד מחשבונית ירוקה ושומר מקומית)
-    const _typeSel = g('exeType'); const _newType = _typeSel ? (Number(_typeSel.value) || 0) : 0;
-    const _origType = Number(ctx && ctx.origType) || 0;
-    if (_newType && _newType !== _origType) {
-      st.innerHTML = '<span class="muted">מעדכן סוג מסמך…</span>';
-      const rt = await fetch(`/api/expenses/${id}/change-type?companyId=${encodeURIComponent(state.company)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ documentType: _newType, number: body.number, date: body.date, amount: (amount != null ? amount : undefined), amountExcludeVat: (g('exeNet').value !== '' ? Number(g('exeNet').value) : undefined), description: body.description, paid: body.paid, companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-      if (!rt || !rt.ok) { if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; } st.innerHTML = `<span style="color:var(--danger)">שגיאה בשינוי סוג המסמך: ${escapeHtml(String((rt && rt.error) || ''))}</span>`; return; }
-      if (rt.warning) { st.innerHTML = `<span style="color:var(--warn)">${escapeHtml(rt.warning)}</span>`; setTimeout(() => { const mm = document.getElementById('expEditModal'); if (mm) mm.classList.add('hidden'); if (state.tab === 'contractors') renderSupplierDetail(); }, 3500); return; }
-    }
     st.innerHTML = giDown
       ? '<span style="color:var(--accent2)">הסכומים פר-אירוע נשמרו ✓</span> <span class="muted">· שדות ההוצאה לא עודכנו בחשבונית ירוקה (ההוצאה לא נמצאה שם כרגע)</span>'
       : '<span style="color:var(--accent2)">נשמר ✓</span>';
@@ -6667,8 +6650,6 @@ function showChatAttach() {
 // Enter שולח, Shift+Enter יורד שורה; הטקסטאריה גדלה לפי התוכן
 window.chatKeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } };
 window.chatAutoGrow = (el) => { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 150) + 'px'; };
-// גדילת שדה תיאור רב-שורתי במסמכים לפי התוכן (fallback לדפדפנים ללא field-sizing) — כדי שכל הטקסט נראה
-window.taGrow = (el) => { if (!el) return; el.style.height = 'auto'; el.style.height = (el.scrollHeight + 2) + 'px'; };
 
 window.sendChat = async () => {
   const inp = $('#chatInput'); if (!inp) return;
@@ -6990,33 +6971,22 @@ window.rematchBank = async (btn) => {
   const y = window.scrollY; await renderBank($('#content')); window.scrollTo(0, y);
   alert(`רועננו ${r.updated ?? 0} תנועות (חובה + זכות). שורות שכבר אושרו/שויכו ידנית לא שונו.`);
 };
-// אישור בכמות — רק הצעות חד-משמעיות: הצעה יחידה עם (סכום זהה/פחות-ניכוי + שם תואם) או מספר חשבונית.
-// תנועה שיש לה רק התאמת-סכום (או כמה מועמדות שוות) לא מאושרת בכמות — נשארת אדומה לבחירה ידנית.
-// זהו אישור יזום של המשתמש (לחיצה על הכפתור), ולכן מותר לו להסיר את הדגל האדום.
-function strongUniqueSugg(t) {
-  const strong = (t.suggestions || []).filter(x => {
-    const r = x.reasons || [];
-    return r.includes('מספר חשבונית') || (r.some(z => z.indexOf('סכום') === 0) && r.includes('שם לקוח'));
-  });
-  return strong.length === 1 ? strong[0] : null;
-}
 window.approveAllStrong = async (btn) => {
-  let strong = bankVisibleRows().filter(t => t.direction === 'credit' && t.matchStatus === 'unmatched' && strongUniqueSugg(t));
-  if (!strong.length) { alert('אין התאמות חד-משמעיות (סכום זהה + שם תואם, או מספר חשבונית) שממתינות לאישור בתצוגה הנוכחית. שאר התנועות נשארות לאישור ידני.'); return; }
+  let strong = bankVisibleRows().filter(t => t.matchStatus === 'auto' && bankConfidence(t) === 'strong');
+  if (!strong.length) { alert('אין התאמות מדויקות שממתינות לאישור בתצוגה הנוכחית.'); return; }
   // חברה עם קבוצות — אי אפשר לאשר בלי שיוך; הכנסה תשוייך אוטומטית לברירת המחדל, הוצאה חייבת קבוצה
   if (hasGroups()) {
     const dInc = defaultIncomeGroup();
     const needsGrp = (t) => !t.group && !(t.direction === 'credit' && dInc);
     const missing = strong.filter(needsGrp).length;
     strong = strong.filter(t => !needsGrp(t));
-    if (!strong.length) { alert(`יש ${missing} התאמות ללא שיוך לקבוצה — שייך קבוצה (מוזיקה/דיגיטל/…) לפני אישור.`); return; }
+    if (!strong.length) { alert(`יש ${missing} התאמות מדויקות ללא שיוך לקבוצה — שייך קבוצה (מוזיקה/דיגיטל/…) לפני אישור.`); return; }
     if (missing && !confirm(`${missing} התאמות ללא קבוצה ידלגו (יש לשייך אותן ידנית). לאשר ${strong.length} שכבר משויכות?`)) return;
-    else if (!missing && !confirm(`לאשר ${strong.length} התאמות חד-משמעיות?`)) return;
-  } else if (!confirm(`לאשר ${strong.length} התאמות חד-משמעיות (סכום זהה + שם תואם, או מספר חשבונית)?`)) return;
+    else if (!missing && !confirm(`לאשר ${strong.length} התאמות מדויקות?`)) return;
+  } else if (!confirm(`לאשר ${strong.length} התאמות מדויקות (סכום זהה או מספר חשבונית)?`)) return;
   if (btn) { btn.disabled = true; btn.textContent = 'מאשר…'; }
   for (const t of strong) {
-    const inv = strongUniqueSugg(t);
-    const r = await fetch(`/api/bank/${t.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual', matchedInvoices: [inv] }) }).then(x => x.json()).catch(() => null);
+    const r = await fetch(`/api/bank/${t.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual' }) }).then(x => x.json()).catch(() => null);
     if (r && r.tx) { const i = _bankList.findIndex(x => x.id === t.id); if (i >= 0) _bankList[i] = r.tx; }
   }
   const y = window.scrollY; await renderBank($('#content'), true); window.scrollTo(0, y);
@@ -7044,7 +7014,7 @@ async function renderBank(c, soft) {
     : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
   c.innerHTML = `<div class="panel">
     <div class="row-between">
-      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">הצעות בלבד — כל שורה נשארת אדומה עד שתאשר: זכות ↔ חשבוניות הכנסה · חובה ↔ חשבוניות ספקים</span></div>
+      <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמה אוטומטית: תנועות זכות ↔ חשבוניות הכנסה · תנועות חובה ↔ חשבוניות ספקים</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost" onclick="rematchBank(this)">↻ רענן הצעות (חובה + זכות)</button>
         <button class="btn success" onclick="approveAllStrong(this)">✓ אשר את כל ההתאמות המדויקות</button>
@@ -7056,7 +7026,7 @@ async function renderBank(c, soft) {
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px">${bankDirControls()}${bankPeriodControls()}</div>
     ${bankSearchControls()}
     ${summary}
-    <p class="muted" style="font-size:12.5px;margin-top:10px">כל התנועות אדומות ("לא מותאם") עד שתאשר. ההצעות מדורגות — <b>שם+סכום או מספר חשבונית</b> קודמים לסכום-בלבד, כדי שמי שבאמת שילם יופיע ראשון. לחיצה על הצעה משייכת ומאשרת · הכפתור <b>"אשר את כל ההתאמות המדויקות"</b> מאשר רק הצעות חד-משמעיות (שם+סכום או מספר חשבונית) · 🔗 לשיוך ידני.</p>
+    <p class="muted" style="font-size:12.5px;margin-top:10px">תגית ירוקה <b>"מדויק"</b> = סכום זהה או מספר חשבונית (בטוח לאישור) · צהובה <b>"לבדיקה"</b> = ניכוי 5% / צירוף / שם בלבד (כדאי לוודא בתצוגה) · שורות אדומות = לא מותאמות · 🔗 שייך לשיוך ידני.</p>
     ${table}
   </div>`;
 }
@@ -7137,16 +7107,6 @@ function groupBankUnits(mis) {
   for (const o of others) units.push({ inv: o, credits: [], net: Number(o.amount) || 0 });
   return units;
 }
-// חשבונית מס (305) ששולמה בבנק אך עדיין אין לה קבלה מקושרת — נחשבת "לא גמורה" (תיצבע אדום עד הפקת קבלה)
-function bankMissingReceipt(t) {
-  if (!['auto', 'manual', 'approved'].includes(t.matchStatus)) return false;
-  const mis = t.matchedInvoices || [];
-  if (!mis.length) return false;
-  try {
-    const units = groupBankUnits(mis);
-    return units.some(u => u.inv && u.inv.kind !== 'expense' && Number(u.inv.type) === 305 && !u.receipt);
-  } catch { return false; }
-}
 function bankTr(t) {
   const credit = t.direction === 'credit';
   const amt = `${credit ? '' : '−'}${money(t.absAmount)}`;
@@ -7157,8 +7117,7 @@ function bankTr(t) {
   // "מכוסה/מאושר" דורש גם קבוצת שיוך (בחברה עם קבוצות) — כך ששיוך מסמך בלי קבוצה יישמר אך יישאר ממתין עד לבחירת קבוצה.
   const _amtOk = isMatched ? (t.matchStatus === 'approved' || bankRowCovered(t)) : false;
   const _grpOk = bankRowGroupOk(t);
-  const missingReceipt = credit && bankMissingReceipt(t); // חשבונית מס ששולמה אך חסרה לה קבלה — לא גמורה (אדום)
-  const covered = _amtOk && _grpOk && !missingReceipt;
+  const covered = _amtOk && _grpOk;
   const notesInput = `<input value="${(t.notes || '').replace(/"/g, '&quot;')}" placeholder="הערה…" onchange="saveBankNotes('${t.id}', this.value)" style="width:90px;padding:4px 6px;font-size:12px"/>`;
   const stack = (arr) => arr.map(x => `<div style="padding:2px 0${arr.length > 1 ? ';border-bottom:1px dashed var(--line)' : ''}">${x}</div>`).join('');
   // תצוגה 👁 + הורדה ↓ צמודים לשם המסמך. למסמכי הכנסה (doc עם id) — התצוגה נפתחת עם כפתור "שלח במייל" בראש החלונית.
@@ -7209,20 +7168,16 @@ function bankTr(t) {
     const matchedTot = bankAllocatedTotal(t);   // קבלה מקוננת מתחת לחשבונית לא נספרת פעמיים (מונע "חסר" שגוי)
     const shortAmt = Math.abs(Number(t.absAmount) || 0) - matchedTot;
     const confBadge = !covered
-      ? (missingReceipt
-        ? '<span class="tag miss" style="font-size:10px;margin-inline-end:4px">חסרה קבלה</span>'
-        : (_amtOk && !_grpOk)
+      ? ((_amtOk && !_grpOk)
         ? '<span class="tag miss" style="font-size:10px;margin-inline-end:4px">בחר קבוצה</span>'   // הסכום מכוסה — חסרה רק קבוצת שיוך
         : `<span class="tag miss" style="font-size:10px;margin-inline-end:4px">חסר ${money(shortAmt)}</span>`)
       : (t.matchStatus === 'approved' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">מאושר</span>'
         : (t.matchStatus === 'auto' && conf ? `<span class="tag ${conf === 'strong' ? 'match' : 'invoiced'}" style="font-size:10px;margin-inline-end:4px">${conf === 'strong' ? 'מדויק' : 'לבדיקה'}</span>`
           : (t.matchStatus === 'manual' ? '<span class="tag match" style="font-size:10px;margin-inline-end:4px">אושר</span>' : '')));
     // לא מכוסה → אדום, עם "אשר" (לאשר בכל זאת) ו-"בטל". מכוסה → כרגיל.
-    action = missingReceipt
-      ? `${confBadge}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`   // הפקת הקבלה נעשית מכפתור "🧾 הפק קבלה" בעמודת הקבלה
-      : (!covered
-        ? `${confBadge}<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="approveBank('${t.id}')">אשר</button> <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`
-        : `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`);
+    action = !covered
+      ? `${confBadge}<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="approveBank('${t.id}')">אשר</button> <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`
+      : `${confBadge}${t.matchStatus === 'auto' ? `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="confirmBank('${t.id}')">אשר</button> ` : ''}<button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="unmatchBank('${t.id}')">בטל</button>`;
   } else if (t.matchStatus === 'approved') {
     // אושר ידנית ללא מסמך (למשל עמלות) — מסומן מאושר, לא אדום
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
@@ -7665,10 +7620,7 @@ window.incSearch = (q) => { _incQuery = q || ''; const box = document.getElement
 // הפקת מסמך-המשך מחשבונית פתוחה, עם תאריך+תקבול לפי התנועה, וקישור לבנק
 window.incProduce = (docId, srcType, txId, X, isWh) => {
   const im = document.getElementById('incModal'); if (im) im.classList.add('hidden');
-  // מעבירים את פרטי חשבונית המקור כדי שתשויך אוטומטית לתנועת הבנק יחד עם הקבלה שמופקת ממנה
-  const sd = (_incOpenDocs || []).find(d => String(d.id) === String(docId));
-  const sourceEntry = sd ? { id: sd.id, number: sd.number, type: sd.type, clientName: sd.clientName || '', amount: Number(sd.amountDue ?? sd.amount) || 0, url: sd.url || null } : null;
-  openDeriveEditor(docId, incTargetFor(srcType), true, { date: txIsoDate(txId) || todayIso(), bankReceived: Number(X) || 0, withholding: isWh === true || isWh === 'true', bankTxId: txId, sourceDocId: docId, sourceEntry });
+  openDeriveEditor(docId, incTargetFor(srcType), true, { date: txIsoDate(txId) || todayIso(), bankReceived: Number(X) || 0, withholding: isWh === true || isWh === 'true', bankTxId: txId, sourceDocId: docId });
 };
 // הפקת קבלה לחשבונית מס ששולמה בבנק — תאריך המסמך והתקבול נקבעים אוטומטית לתאריך כניסת הכסף (מגיע מהשרת, ללא תלות ברשימת הבנק שנטענה)
 window.issuePaidReceipt = (docId, paidDate, txId, amount) => {

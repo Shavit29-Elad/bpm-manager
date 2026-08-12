@@ -100,17 +100,27 @@ async function api(pathName, { method = 'GET', body } = {}) {
 // ===== מטמון קריאה (מונע דפדוף חוזר על אלפי מסמכים בכל לחיצה) =====
 const _dataCache = new Map();       // "companyId|key" -> { at, val (Promise) }
 const DATA_TTL = 3 * 60 * 1000;     // 3 דקות
+// חלון-טרי אחרי כתיבה, פר-חברה: למשך זמן קצר אחרי כל פעולה לא מגישים/שומרים מטמון —
+// כדי לתפוס עדכון של חשבונית ירוקה מיד, גם כשה-API שלה מאנדקס מסמך חדש בהשהיה של כמה שניות
+// (אחרת הקריאה הראשונה שאחרי הכתיבה מקבלת רשימה ישנה וממטמנת אותה ל-3 דקות).
+const WRITE_FRESH_MS = 30000;
+const _lastWrite = new Map();       // companyId -> timestamp
 function cached(key, fn, ttl = DATA_TTL) {
-  const k = curCompany() + '|' + key;   // בידוד מטמון לפי חברה — לעולם לא לערבב נתונים בין חברות
-  const hit = _dataCache.get(k);
+  const co = curCompany();
+  const k = co + '|' + key;   // בידוד מטמון לפי חברה — לעולם לא לערבב נתונים בין חברות
+  const fresh = Date.now() - (_lastWrite.get(co) || 0) < WRITE_FRESH_MS;
+  const hit = fresh ? null : _dataCache.get(k);
   if (hit && Date.now() - hit.at < ttl) return hit.val;
   const p = Promise.resolve().then(fn);
-  _dataCache.set(k, { at: Date.now(), val: p });
-  p.catch(() => { if (_dataCache.get(k)?.val === p) _dataCache.delete(k); }); // בכשל — לא לשמור
+  if (!fresh) {   // בחלון-טרי לא שומרים — כדי שהקריאה הבאה תמשוך שוב עד שחשבונית ירוקה תעדכן
+    _dataCache.set(k, { at: Date.now(), val: p });
+    p.catch(() => { if (_dataCache.get(k)?.val === p) _dataCache.delete(k); }); // בכשל — לא לשמור
+  }
   return p;
 }
-// ניקוי מטמון: ללא ארגומנט — הכל; עם companyId — רק של אותה חברה
+// ניקוי מטמון: ללא ארגומנט — הכל; עם companyId — רק של אותה חברה. בכל מקרה מסמן חלון-טרי לחברה הפעילה.
 export function clearDataCache(companyId) {
+  _lastWrite.set(companyId || curCompany(), Date.now());
   if (!companyId) return _dataCache.clear();
   const pfx = companyId + '|';
   for (const k of [..._dataCache.keys()]) if (k.startsWith(pfx)) _dataCache.delete(k);
@@ -602,7 +612,6 @@ export async function updateExpense(id, fields = {}) {
   if (fields.paid != null) body.paymentType = fields.paid ? 4 : -1; // 4=העברה בנקאית (שולם), -1=לא שולם
   if (fields.supplierId) body.supplier = { id: fields.supplierId };
   if (fields.accountingClassificationId) body.accountingClassification = { id: fields.accountingClassificationId };
-  if (fields.documentType != null) { const _dt = Number(fields.documentType); if (_dt) { body.type = _dt; body.documentType = _dt; } }
   const r = await api(`/expenses/${encodeURIComponent(id)}`, { method: 'PUT', body });
   clearDataCache();
   return r;
