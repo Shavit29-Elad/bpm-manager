@@ -2,8 +2,10 @@
 // מחבר ל-API של חשבונית ירוקה (Green Invoice REST API v1).
 // מסמכים: https://www.greeninvoice.co.il/api-docs
 //
-// אימות: POST /account/token עם { id, secret } -> מחזיר JWT ל-30 דקות.
-// כל שאר הקריאות עם Authorization: Bearer <token>.
+// אימות (חדש, Morning OAuth 2.0): POST https://api.morning.co/idp/v1/oauth/token
+//   body: { grant_type:'client_credentials', client_id, client_secret } -> { accessToken, tokenType, expiresAt }
+//   התוקף ~שעה. נפילה-לאחור לנתיב הישן (POST /account/token עם { id, secret } -> { token }) בזמן המעבר.
+// כל שאר הקריאות עם Authorization: Bearer <token> על BASE (api.greeninvoice.co.il/api/v1).
 //
 // המפתחות נטענים ממשתני סביבה - לא נשמרים בקוד:
 //   GREENINVOICE_API_KEY_ID
@@ -12,6 +14,8 @@
 import { AsyncLocalStorage } from 'async_hooks';
 
 const BASE = process.env.GREENINVOICE_BASE || 'https://api.greeninvoice.co.il/api/v1';
+// שרת האימות החדש של Morning (OAuth 2.0). ניתן לעקוף במשתנה סביבה במקרה חירום.
+const AUTH_URL = process.env.GREENINVOICE_AUTH_URL || 'https://api.morning.co/idp/v1/oauth/token';
 
 // ---- ריבוי חברות: כל חברת חשבונית-ירוקה עם מפתחות משלה (משתני סביבה נפרדים) ----
 // מיפוי חברה → שמות משתני הסביבה של המפתחות. חברה ללא מיפוי/מפתחות = לא מחוברת.
@@ -69,15 +73,41 @@ async function getToken() {
   if (!creds) throw new Error(`חסרים מפתחות חשבונית ירוקה לחברה ${co}`);
   const hit = _tokens.get(co);
   if (hit && Date.now() < hit.exp - 60000) return hit.token;
-  const res = await fetch(`${BASE}/account/token`, {
+
+  // ---- נתיב חדש: Morning OAuth 2.0 (client_credentials) ----
+  // מנפיק accessToken תקף לשעה. זה הנתיב הנתמך; הישן ייחסם בעתיד.
+  let lastErr = '';
+  try {
+    const res = await fetch(AUTH_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'client_credentials', client_id: creds.id, client_secret: creds.secret }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const tok = data.accessToken || data.token;
+      if (tok) {
+        // expiresAt מגיע בשניות (unix). נשמור מרווח ביטחון של דקה; ברירת מחדל 55 דק'.
+        const expMs = data.expiresAt ? (Number(data.expiresAt) * 1000) : (Date.now() + 55 * 60 * 1000);
+        _tokens.set(co, { token: tok, exp: expMs });
+        return tok;
+      }
+      lastErr = 'OAuth הצליח אך ללא accessToken';
+    } else {
+      lastErr = `OAuth ${res.status} ${await res.text()}`;
+    }
+  } catch (e) { lastErr = `OAuth נכשל: ${e.message}`; }
+
+  // ---- נפילה-לאחור: נתיב ישן (/account/token) בזמן המעבר ----
+  const res2 = await fetch(`${BASE}/account/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: creds.id, secret: creds.secret }),
   });
-  if (!res.ok) throw new Error(`שגיאת אימות חשבונית ירוקה: ${res.status} ${await res.text()}`);
-  const data = await res.json();
-  _tokens.set(co, { token: data.token, exp: Date.now() + 25 * 60 * 1000 });
-  return data.token;
+  if (!res2.ok) throw new Error(`שגיאת אימות חשבונית ירוקה: OAuth[${lastErr}] | legacy[${res2.status} ${await res2.text()}]`);
+  const data2 = await res2.json();
+  _tokens.set(co, { token: data2.token, exp: Date.now() + 25 * 60 * 1000 });
+  return data2.token;
 }
 
 async function api(pathName, { method = 'GET', body } = {}) {

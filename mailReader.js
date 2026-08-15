@@ -10,36 +10,15 @@ function conf(creds) {
 
 // ===== PDF מאחורי קישור בגוף המייל =====
 // מזהה קישורים שנראים כמו חשבונית/PDF בגוף ההודעה, מוריד אותם בשרק, ומצרף אותם כאילו היו צרופה.
-// ספקי חשבוניות ידועים — הקישור "לצפייה" במיילים שלהם מוביל ל-PDF (גם בלי סיומת .pdf/מילות מפתח)
-const INVOICE_PROVIDER_HOST = /(icount\.co\.il|ezcount|greeninvoice\.co\.il|mrng\.to|morning\.co\.il|paperless\.tax|paperless\.co\.il|invoice-one\.com|menahel4u|cosign|sumit\.co\.il|invoice4u|morning|tranzila|cardcom|payplus|meshulam|rivhit|hashavshevet|ec-p\.co\.il|greeninvoice)/i;
-// זיהוי כללי: קישור שכפתורו/הטקסט שלו הוא "לצפייה במסמך / למעבר למסמך / לחץ כאן לצפיה" וכו' — עובד לכל ספק חשבוניות,
-// בלי צורך ברשימת דומיינים. מדלגים במפורש על קישורי ביטול-הרשמה/הסרה/Adobe Reader.
-function extractDocLinksFromHtml(html) {
-  if (!html) return [];
-  const out = [];
-  const re = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  // ניסוח פעולה (צפייה/פתיחה/הורדה/מעבר/לחץ כאן) בסמיכות למילה "מסמך/חשבונית/קבלה" — בכל סדר. תופס כל ספק.
-  const VIEW = /((לצפי|צפי[יה]|לפתיח|פתיח|למעבר|להורד|הורד|להצג|הצג|לפתוח|לחץ\s*כאן|לחצו\s*כאן).{0,22}(מסמך|חשבונית|קבלה)|(מסמך|חשבונית|קבלה).{0,22}(לצפי|צפי[יה]|לפתיח|פתיח|למעבר|להורד|הורד|לחץ\s*כאן|לחצו\s*כאן|הצג)|open\s*(the\s*)?(document|invoice)|view\s*(the\s*)?(document|invoice)|download\s*(the\s*)?(document|invoice))/i;
-  const BAD = /(ביטול\s*הרשמה|הסרה|unsubscribe|preferences|adobe|reader|תלונה|report\s*abuse|להתנסות|הרשמה\s*חינם)/i;
-  let m;
-  while ((m = re.exec(html)) && out.length < 6) {
-    const href = String(m[1] || '').replace(/&amp;/g, '&');
-    const text = String(m[2] || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-    if (!/^https?:\/\//i.test(href)) continue;
-    if (BAD.test(text) || BAD.test(href)) continue;
-    if (VIEW.test(text)) out.push(href);
-  }
-  return [...new Set(out)];
-}
 function extractPdfLinks(text) {
   if (!text) return [];
   const out = new Set();
   const re = /https?:\/\/[^\s"'<>()\]]+/gi;
   let m;
-  while ((m = re.exec(text)) && out.size < 12) {
+  while ((m = re.exec(text)) && out.size < 8) {
     let u = m[0].replace(/[.,;]+$/, '').replace(/&amp;/g, '&');
     if (!/^https?:\/\//i.test(u)) continue;
-    if (/\.pdf(\?|#|$)/i.test(u) || (/(invoice|receipt|download|getfile|attachment|document|בחשבונית|חשבונית|קבלה)/i.test(u) && /(pdf|download|file|invoice|receipt|doc)/i.test(u)) || INVOICE_PROVIDER_HOST.test(u)) out.add(u);
+    if (/\.pdf(\?|#|$)/i.test(u) || (/(invoice|receipt|download|getfile|attachment|document|בחשבונית|חשבונית|קבלה)/i.test(u) && /(pdf|download|file|invoice|receipt|doc)/i.test(u))) out.add(u);
   }
   return [...out];
 }
@@ -49,7 +28,7 @@ function linkHostBlocked(url) {
     return /^(localhost$|127\.|10\.|192\.168\.|169\.254\.|::1)/.test(h) || /\.(local|internal|lan)$/.test(h);
   } catch { return true; }
 }
-async function fetchPdfLink(url, depth = 0) {
+async function fetchPdfLink(url) {
   if (linkHostBlocked(url)) return null;
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), 12000);
@@ -58,27 +37,16 @@ async function fetchPdfLink(url, depth = 0) {
     clearTimeout(to);
     if (!r || !r.ok) return null;
     const ct = String(r.headers.get('content-type') || '').toLowerCase().split(';')[0].trim();
-    if (ct.includes('pdf') || ct.startsWith('image/')) {
-      const buf = Buffer.from(await r.arrayBuffer());
-      if (!buf.length || buf.length > 8 * 1024 * 1024) return null;
-      let filename = 'link.pdf';
-      const cd = r.headers.get('content-disposition') || '';
-      const mm = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-      if (mm) { try { filename = decodeURIComponent(mm[1]); } catch { filename = mm[1]; } }
-      else { try { const p = new URL(r.url || url).pathname.split('/').pop(); if (p) filename = decodeURIComponent(p); } catch { } }
-      if (ct.includes('pdf') && !/\.pdf$/i.test(filename)) filename += '.pdf';
-      return { base64: buf.toString('base64'), mime: ct, size: buf.length, filename };
-    }
-    // עמוד HTML של ספק חשבוניות (למשל כפתור "לצפייה" של iCount שמוביל לעמוד שממנו יורד ה-PDF) — מחפשים בתוכו קישור ישיר ל-PDF ומנסים אותו פעם אחת
-    if (depth === 0 && ct.includes('html')) {
-      const html = await r.text().catch(() => '');
-      const cand = extractPdfLinks(html).filter(u => /\.pdf|download|getfile|\/file|\/doc|pdf=/i.test(u));
-      for (const u2 of cand.slice(0, 3)) {
-        const g = await fetchPdfLink(u2, 1).catch(() => null);
-        if (g && g.base64) return g;
-      }
-    }
-    return null;
+    if (!(ct.includes('pdf') || ct.startsWith('image/'))) return null;
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!buf.length || buf.length > 8 * 1024 * 1024) return null;
+    let filename = 'link.pdf';
+    const cd = r.headers.get('content-disposition') || '';
+    const mm = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+    if (mm) { try { filename = decodeURIComponent(mm[1]); } catch { filename = mm[1]; } }
+    else { try { const p = new URL(url).pathname.split('/').pop(); if (p) filename = decodeURIComponent(p); } catch { } }
+    if (ct.includes('pdf') && !/\.pdf$/i.test(filename)) filename += '.pdf';
+    return { base64: buf.toString('base64'), mime: ct, size: buf.length, filename };
   } catch { clearTimeout(to); return null; }
 }
 
@@ -158,9 +126,9 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
           });
           if (!atts.length) {
             try {
-              const urls = [...new Set([...extractDocLinksFromHtml(parsed.html || ''), ...extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`)])];
+              const urls = extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`);
               let li = 0;
-              for (const u of urls.slice(0, 8)) {
+              for (const u of urls.slice(0, 4)) {
                 const got = await fetchPdfLink(u).catch(() => null);
                 if (got && got.base64) {
                   items.push({
@@ -185,4 +153,24 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
   }
 }
 
-export default { imapTest, scanMailbox };
+// סימון הודעות כ"נקראו" (\Seen) ב-INBOX — נקרא רק על הודעות שמהן נלקח מסמך לקליטה בפועל.
+export async function markMessagesSeen(creds, uids) {
+  const list = [...new Set((uids || []).map(Number).filter(Boolean))];
+  if (!creds || !creds.user || !creds.pass || !list.length) return { ok: false, count: 0 };
+  const ImapFlow = await imapflow();
+  const client = new ImapFlow(conf(creds));
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock('INBOX');
+    try { await client.messageFlagsAdd(list, ['\\Seen'], { uid: true }); }
+    finally { lock.release(); }
+    await client.logout();
+    return { ok: true, count: list.length };
+  } catch (e) {
+    try { await client.logout(); } catch { }
+    try { await client.close(); } catch { }
+    return { ok: false, error: e.message };
+  }
+}
+
+export default { imapTest, scanMailbox, markMessagesSeen };

@@ -2919,6 +2919,7 @@ async function mailScanBatchFor(cid, since, limit) {
     };
     let uploaded = 0, recorded = 0, duplicates = 0, skipped = 0, errors = 0, links = 0, unreadable = 0, aiCalls = 0;
     const erroredUids = new Set();               // הודעות שנכשלו זמנית — לא נסמן כ"נסרקו" כדי שינוסו שוב בהרצה הבאה
+    const takenUids = new Set();                 // הודעות שמהן נלקח מסמך לקליטה (הועלה/נרשם) — נסמן אותן כ"נקראו" ב-Gmail
     const db = load();
     const st = mailScanState(db, cid);
     st.errCounts = st.errCounts || {};           // מונה כשלונות פר-הודעה — כדי להפסיק לנסות מסמכים שנכשלים שוב ושוב
@@ -2963,12 +2964,13 @@ async function mailScanBatchFor(cid, since, limit) {
       const _docYear = (() => { const m = String(ai.date || '').match(/(20\d{2}|\d{4})/); return m ? +m[1] : null; })();
       if (_docYear && _docYear < 2026) { skipped++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; }
       if (ai.route === 'expense') {
-        try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; existing.push({ num: nrm(ai.invoiceNumber), amt: Number(ai.amountInclVat) || 0, sup: nrm(ai.supplierName) }); if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } }
+        try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; if (it.uid != null) takenUids.add(it.uid); existing.push({ num: nrm(ai.invoiceNumber), amt: Number(ai.amountInclVat) || 0, sup: nrm(ai.supplierName) }); if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } }
         catch (e) { errors++; erroredUids.add(String(it.uid)); console.error(`[mail-scan] ${cid} העלאה נכשלה (uid ${it.uid}):`, String(e.message || e).slice(0, 160)); }
       } else if (ai.route === 'record') {
         const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-record', filename: it.filename, mime: it.mime, data: it.contentBase64 });
         db.mailRecords[cid].push({ id: 'mr_' + Math.random().toString(16).slice(2, 10), fileId: saved.id, filename: it.filename, mime: it.mime, from: it.from, subject: it.subject, receivedDate: it.receivedDate, documentType: ai.documentType, supplierName: ai.supplierName, number: ai.invoiceNumber, date: ai.date, amountInclVat: ai.amountInclVat, description: ai.description, recordedAt: new Date().toISOString() });
         if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } // נשמר — לא לנתח שוב את אותו קובץ
+        if (it.uid != null) takenUids.add(it.uid);
         recorded++;
       } else { skipped++; }
     }
@@ -2977,7 +2979,10 @@ async function mailScanBatchFor(cid, since, limit) {
     (scan.processedUids || []).forEach(u => { const s = String(u); if (!seenUidSet.has(s) && !erroredUids.has(s)) st.seenUids.push(u); });
     st.since = since; st.lastScanAt = new Date().toISOString();
     save(db);
-    return { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, unreadable, links, aiCalls, remaining: scan.remaining, done: scan.remaining === 0 };
+    // סימון כ"נקרא" ב-Gmail — רק להודעות שמהן נלקח מסמך לקליטה בפועל (הועלה/נרשם). best-effort, לא חוסם.
+    let markedSeen = 0;
+    if (takenUids.size) { try { const mr = await mailReader.markMessagesSeen({ user: creds.user, pass: creds.pass }, [...takenUids]); markedSeen = (mr && mr.count) || 0; } catch { } }
+    return { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, unreadable, links, aiCalls, markedSeen, remaining: scan.remaining, done: scan.remaining === 0 };
   });
 }
 
