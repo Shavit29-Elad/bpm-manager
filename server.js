@@ -1391,6 +1391,51 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/link-events$/, (req, res, param
   save(db); json(res, { ok: true, linked: n });
 });
 
+// GET /api/supplier-payables/:id/linked-events — האירועים המשויכים כרגע להוצאה זו (לתצוגה + ביטול שיוך)
+add('GET', /^\/api\/supplier-payables\/([^/]+)\/linked-events$/, (req, res, params, _q) => {
+  const db = load();
+  const p = (db.supplierPayables || []).find(x => x.id === params[0]);
+  if (!p) return json(res, { error: 'לא נמצא' }, 404);
+  const _cid = (_q && _q.companyId) || giCompanyId();
+  if ((p.companyId || giCompanyId()) !== _cid) return json(res, { error: 'ההוצאה שייכת לחברה אחרת' }, 403);
+  const out = [];
+  for (const ev of (db.events || [])) {
+    const details = ev.contractorDetails || [];
+    for (let i = 0; i < details.length; i++) {
+      const c = details[i]; if (!c) continue;
+      const byId = c.paidPayableId && String(c.paidPayableId) === String(p.id);
+      const byExp = p.giExpenseId && c.paidExpenseId && String(c.paidExpenseId) === String(p.giExpenseId);
+      const byNum = p.number && c.paidInvoice && String(c.paidInvoice) === String(p.number) && (c.name || '').trim() === (p.supplierName || '').trim();
+      if (byId || byExp || byNum) out.push({ eventId: ev.id, index: i, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0, contractor: (c.name || '').trim() });
+    }
+  }
+  out.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+  json(res, { ok: true, events: out });
+});
+
+// POST /api/supplier-payables/:id/unlink-events { items:[{eventId,index}] } — ביטול שיוך אירועים מהוצאה (מחזיר אותם לרשימת הפתוחים)
+add('POST', /^\/api\/supplier-payables\/([^/]+)\/unlink-events$/, (req, res, params, _q, body) => {
+  const db = load();
+  const p = (db.supplierPayables || []).find(x => x.id === params[0]);
+  if (!p) return json(res, { error: 'לא נמצא' }, 404);
+  const _cid = (_q && _q.companyId) || (body && body.companyId) || giCompanyId();
+  if ((p.companyId || giCompanyId()) !== _cid) return json(res, { error: 'ההוצאה שייכת לחברה אחרת' }, 403); // בידוד
+  const items = Array.isArray(body?.items) ? body.items : [];
+  let n = 0;
+  for (const it of items) {
+    const ev = (db.events || []).find(e => String(e.id) === String(it.eventId));
+    if (ev && Array.isArray(ev.contractorDetails) && ev.contractorDetails[it.index]) {
+      const cd = ev.contractorDetails[it.index];
+      const here = (cd.paidPayableId && String(cd.paidPayableId) === String(p.id))
+        || (p.giExpenseId && cd.paidExpenseId && String(cd.paidExpenseId) === String(p.giExpenseId))
+        || (p.number && cd.paidInvoice && String(cd.paidInvoice) === String(p.number) && (cd.name || '').trim() === (p.supplierName || '').trim());
+      if (here) { cd.paid = false; cd.paidPayableId = null; cd.paidInvoice = null; cd.paidExpenseId = null; cd.paidExpenseUrl = null; n++; }
+    }
+  }
+  if (Array.isArray(p.linkedEvents)) p.linkedEvents = p.linkedEvents.filter(le => !items.some(it => String(it.eventId) === String(le.eventId) && Number(it.index) === Number(le.index)));
+  save(db); json(res, { ok: true, unlinked: n });
+});
+
 // GET /api/supplier-payables/:id/detail — פירוט ההוצאה מחשבונית ירוקה (מה כתוב על החשבונית: תיאור + שורות פריטים)
 add('GET', /^\/api\/supplier-payables\/([^/]+)\/detail$/, async (req, res, params) => {
   const db = load();

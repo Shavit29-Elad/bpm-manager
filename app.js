@@ -4524,7 +4524,7 @@ window.openLinkEventsToPayable = async (pid) => {
   const events = [];
   (pay || []).forEach(g => (g.events || []).forEach(ev => events.push({ ...ev, contractor: g.name })));
   _linkPay.events = events;
-  buildLinkEvShell(); renderLinkEvRows();
+  buildLinkEvShell(); renderLinkEvRows(); renderLinkedNow();
 };
 const _linkNorm = s => (s || '').replace(/בע["'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
 function buildLinkEvShell() {
@@ -4535,6 +4535,7 @@ function buildLinkEvShell() {
   m.querySelector('.modal-card').innerHTML = `
     <div class="row-between"><h3>🔗 שייך אירועים — ${escapeHtml(_linkPay.name)}</h3><button class="btn ghost" onclick="document.getElementById('linkEvModal').classList.add('hidden')">סגור</button></div>
     <p class="muted" style="font-size:12px;margin:2px 0 8px">בחר את האירועים שההוצאה מכסה. אפשר לחפש חופשי (זמר / מיקום / תאריך) או לסנן לפי חודש ושנה. אירועים של אותו ספק מודגשים.</p>
+    <div id="linkEvLinked"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
       <input id="linkEvSearch" placeholder="חיפוש — למשל: נסרין אמארה · 02/07" oninput="onLinkEvSearch(this.value)" style="flex:1;min-width:180px;padding:6px 9px" value="${escAttr(_linkPay.q || '')}"/>
       <select onchange="setLinkEvYM('year',this.value)" style="padding:6px 8px;font-size:13px">${yearOpts}</select>
@@ -4584,6 +4585,33 @@ window.confirmLinkEv = async (btn) => {
   await fetch(`/api/supplier-payables/${_linkPay.pid}/link-events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) }).catch(() => {});
   document.getElementById('linkEvModal').classList.add('hidden');
   renderContractors($('#content'));
+};
+// אירועים המשויכים כרגע להוצאה — מוצגים בראש חלונית השיוך עם ✕ לביטול שיוך
+async function renderLinkedNow() {
+  const box = document.getElementById('linkEvLinked'); if (!box || !_linkPay) return;
+  const r = await fetch(`/api/supplier-payables/${_linkPay.pid}/linked-events?companyId=${state.company}`).then(x => x.json()).catch(() => ({ events: [] }));
+  const evs = r.events || [];
+  if (!evs.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div style="border:1px solid var(--accent2);border-radius:10px;overflow:hidden;margin-bottom:10px;background:#f0fdf4">
+    <div style="padding:6px 10px;font-weight:700;font-size:12.5px;background:#dcfce7">🔗 משויכים כעת (${evs.length}) — ✕ לביטול שיוך</div>
+    ${evs.map(ev => `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:6px 10px;border-top:1px solid var(--line)">
+      <span style="white-space:nowrap">${ddmy(ev.date)}</span>
+      <span style="flex:1;min-width:0">${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''} <span class="muted">· ${escapeHtml(ev.contractor || '')}</span></span>
+      <span style="white-space:nowrap;font-weight:600">${money(ev.amount)}</span>
+      <button class="btn ghost" style="padding:2px 8px;font-size:12px;color:var(--danger)" onclick="unlinkOneEvent('${ev.eventId}',${ev.index},this)" title="בטל שיוך אירוע זה">✕</button>
+    </div>`).join('')}
+  </div>`;
+}
+window.unlinkOneEvent = async (eventId, index, btn) => {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  await fetch(`/api/supplier-payables/${_linkPay.pid}/unlink-events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [{ eventId, index }], companyId: state.company }) }).catch(() => {});
+  try { clearApiCache(); } catch {}
+  // רענון: האירוע חוזר לרשימת הפתוחים, ומוסר מרשימת המשויכים
+  const pay = await api(`/api/contractors/payables?companyId=${state.company}`).catch(() => []);
+  const events = []; (pay || []).forEach(g => (g.events || []).forEach(ev => events.push({ ...ev, contractor: g.name })));
+  _linkPay.events = events;
+  renderLinkedNow(); renderLinkEvRows();
+  try { renderContractors($('#content')); } catch {}
 };
 // פירוט ההוצאה — מה כתוב על החשבונית (תיאור + שורות פריטים מחשבונית ירוקה)
 window.openPayableDetail = async (pid) => {
