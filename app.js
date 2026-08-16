@@ -2138,12 +2138,17 @@ async function ensureNamesSynced(onChange) {
   } catch { /* לא חוסם */ }
 }
 // הוספה אוטומטית של אירועי יומן גוגל (עד אתמול) לרשימת האישור — פעם ביום. השרת מטפל באי-כפילות.
+let _autoAdoptInFlight = null; // מונע קריאה כפולה מקבילה (מרוץ שיוצר כפילויות אירועי יומן)
 async function autoAdoptCalendar() {
-  try {
-    const r = await fetch('/api/calendar/auto-adopt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => null);
-    if (r && r.adopted) clearApiCache(); // כדי שרשימת האירועים תיטען מחדש עם האירועים החדשים
-    return r;
-  } catch { return null; }
+  if (_autoAdoptInFlight) return _autoAdoptInFlight;
+  _autoAdoptInFlight = (async () => {
+    try {
+      const r = await fetch('/api/calendar/auto-adopt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => null);
+      if (r && r.adopted) clearApiCache(); // כדי שרשימת האירועים תיטען מחדש עם האירועים החדשים
+      return r;
+    } catch { return null; }
+  })();
+  try { return await _autoAdoptInFlight; } finally { _autoAdoptInFlight = null; }
 }
 // רענון ידני יזום — מושך מהיומן מיד (כולל אירועי היום), עוקף את מנגנון "פעם ביום"
 window.forceAdoptCalendar = async (btn) => {

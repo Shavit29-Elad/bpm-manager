@@ -353,16 +353,65 @@ function calendarAlreadyCaptured(idx, ce) {
   return list.some(words => words.every(w => hay.includes(w)));
 }
 
+// ניקוי כפילויות אירועי יומן: אירועים שנקלטו יותר מפעם אחת עבור אותו אירוע גוגל (gcalId) — מאחדים לאחד.
+// שומרים את ה"עשיר" ביותר (עם חשבונית/מסמכים/מחירים/עובדים), וממזגים אליו שדות ריקים מהכפילים לפני מחיקתם.
+function dedupeCalendarEventsByGcal(db, cid) {
+  const richness = (e) => {
+    let s = 0;
+    if (e.invoiceStatus && e.invoiceStatus !== 'pending') s += 100;
+    if (Array.isArray(e.linkedDocs) && e.linkedDocs.length) s += 60;
+    if (e.invoiceId || e.invoiceNumber) s += 40;
+    if (Array.isArray(e.contractorDetails) && e.contractorDetails.length) s += 20;
+    if (Array.isArray(e.employeeDetails) && e.employeeDetails.length) s += 20;
+    for (const k of ['price', 'priceSound', 'priceLighting', 'priceBackline', 'priceExtras', 'ledMeters']) if (Number(e[k])) s += 5;
+    if (e.clientId) s += 3; if (e.location) s += 1;
+    return s;
+  };
+  const fillEmpty = (win, lose) => {
+    for (const k of ['location', 'clientId', 'clientName', 'price', 'priceSound', 'priceLighting', 'priceBackline', 'priceExtras', 'ledMeters', 'ledPricePerMeter', 'employeeBonusRaw']) {
+      if ((win[k] == null || win[k] === '' || win[k] === 0) && lose[k] != null && lose[k] !== '' && lose[k] !== 0) win[k] = lose[k];
+    }
+    for (const k of ['linkedDocs', 'contractorDetails', 'employeeDetails', 'employees', 'contractors']) {
+      if ((!Array.isArray(win[k]) || !win[k].length) && Array.isArray(lose[k]) && lose[k].length) win[k] = lose[k];
+    }
+  };
+  const seen = new Map(); const remove = new Set();
+  for (const e of db.events) {
+    if (!e.gcalId) continue;
+    if (cid && e.companyId !== cid) continue;
+    const key = (e.companyId || '') + '|' + e.gcalId;
+    const cur = seen.get(key);
+    if (!cur) { seen.set(key, e); continue; }
+    const win = richness(e) > richness(cur) ? e : richness(e) < richness(cur) ? cur : (String(cur.createdAt || '') <= String(e.createdAt || '') ? cur : e);
+    const lose = win === e ? cur : e;
+    fillEmpty(win, lose); remove.add(lose.id); seen.set(key, win);
+  }
+  if (remove.size) db.events = db.events.filter(e => !remove.has(e.id));
+  return remove.size;
+}
+
+// POST /api/calendar/dedupe { companyId } — ניקוי ידני של כפילויות אירועי יומן (אותו gcalId)
+add('POST', /^\/api\/calendar\/dedupe$/, (req, res, _p, q, body) => {
+  const db = load();
+  const cid = (body && body.companyId) || q.companyId || null;
+  const removed = dedupeCalendarEventsByGcal(db, cid);
+  if (removed) save(db);
+  json(res, { ok: true, removed });
+});
+
 // POST /api/calendar/auto-adopt { companyId } — הוספה אוטומטית של אירועי יומן גוגל לרשימת "אירועים לאישור".
 // מוסיף אירועים עד היום (כולל) — כך שבבוקר כבר נקלטים אירועי אותו יום. לא קולט אירועים עתידיים (מעבר להיום).
 // רץ פעם ביום לכל חברה (שעון ישראל). מוסיף רק אירועי יומן שאין להם התאמה לאירוע קיים (מונע כפילויות מול קליטת ווטסאפ).
 add('POST', /^\/api\/calendar\/auto-adopt$/, async (req, res, _p, q, body) => {
   const db = load();
   const cid = (body && body.companyId) || q.companyId || (db.companies.find(c => c.active) || db.companies[0])?.id;
+  // ניקוי כפילויות אירועי יומן (אותו gcalId) בכל ריצה — מתקן גם כפילויות ישנות שנוצרו ממרוץ אימוץ.
+  const dedupRemoved = dedupeCalendarEventsByGcal(db, cid);
+  if (dedupRemoved) save(db);
   const todayIL = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date()); // YYYY-MM-DD בשעון ישראל
   db.calendarAutoAdopt = db.calendarAutoAdopt || {};
   const force = q.force === '1' || (body && body.force); // רענון ידני יזום — מדלג על מנגנון "פעם ביום"
-  if (!force && db.calendarAutoAdopt[cid] === todayIL) return json(res, { ok: true, adopted: 0, skipped: true, today: todayIL });
+  if (!force && db.calendarAutoAdopt[cid] === todayIL) return json(res, { ok: true, adopted: 0, skipped: true, today: todayIL, dedupRemoved });
   if (!hasCalendar(cid)) { db.calendarAutoAdopt[cid] = todayIL; save(db); return json(res, { ok: true, adopted: 0, noCalendar: true }); }
   try {
     const ourEvents = (db.events || []).filter(e => e.companyId === cid && (e.date || '') >= MATCH_START);

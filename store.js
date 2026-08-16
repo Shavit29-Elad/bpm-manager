@@ -154,6 +154,12 @@ export function id(prefix = 'id') {
 
 // עוזרים ממוקדים לישויות נפוצות
 export function upsertEvent(db, ev) {
+  // דדופ לפי מזהה אירוע יומן (gcalId) בתוך אותה חברה — מונע כפילויות מאימוץ אוטומטי כפול/מקבילי.
+  // אם כבר קיים אירוע לאותו gcalId, לא יוצרים חדש ולא דורסים את הקיים (כדי לא לאבד נתונים שנערכו).
+  if (ev.gcalId && ev.id) {
+    const existing = db.events.find(e => e.gcalId === ev.gcalId && (e.companyId || null) === (ev.companyId || null) && e.id !== ev.id);
+    if (existing) return existing;
+  }
   const idx = db.events.findIndex(e => e.id === ev.id);
   if (idx >= 0) db.events[idx] = { ...db.events[idx], ...ev };
   else db.events.push(ev);
