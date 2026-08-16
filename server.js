@@ -3243,6 +3243,7 @@ async function mailScanBatchFor(cid, since, limit) {
     st.errCounts = st.errCounts || {};           // מונה כשלונות פר-הודעה — כדי להפסיק לנסות מסמכים שנכשלים שוב ושוב
     const uploadedSet = new Set((st.uploadedHashes || []).map(String)); // קבצים שכבר הועלו (טביעת אצבע של התוכן)
     db.mailRecords = db.mailRecords || {}; db.mailRecords[cid] = db.mailRecords[cid] || [];
+    db.mailPending = db.mailPending || {}; db.mailPending[cid] = db.mailPending[cid] || []; // חשבוניות בלינק שלא נקלטו — רשת ביטחון
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     for (const it of scan.items) {
       if (it.viaLink) links++;
@@ -3295,12 +3296,23 @@ async function mailScanBatchFor(cid, since, limit) {
     const seenUidSet = new Set(st.seenUids.map(String));
     // מסמנים כ"נסרקו" רק הודעות שלא נכשלו — כדי שכשלים ינוסו שוב בהרצה הבאה (ולא ייעלמו)
     (scan.processedUids || []).forEach(u => { const s = String(u); if (!seenUidSet.has(s) && !erroredUids.has(s)) st.seenUids.push(u); });
+    // רשת ביטחון: חשבוניות שהגיעו כלינק ולא נפתחו — נרשמות לרשימת "לטיפול ידני" כדי שלא ייעלמו
+    const pend = db.mailPending[cid];
+    const pendUids = new Set(pend.map(p => String(p.uid)));
+    for (const u of (scan.unresolved || [])) {
+      if (takenUids.has(u.uid)) continue; // אם בסוף כן נקלט — לא מוסיפים
+      if (pendUids.has(String(u.uid))) continue;
+      pend.push({ uid: u.uid, from: u.from || '', subject: u.subject || '', receivedDate: u.receivedDate || '', link: u.link || null, seenAt: new Date().toISOString() });
+    }
+    // הודעות שנקלטו עכשיו — יורדות מרשימת ה"לטיפול ידני"
+    if (takenUids.size) db.mailPending[cid] = pend.filter(p => !takenUids.has(p.uid));
+    if (db.mailPending[cid].length > 300) db.mailPending[cid] = db.mailPending[cid].slice(-300);
     st.since = since; st.lastScanAt = new Date().toISOString();
     save(db);
     // סימון כ"נקרא" ב-Gmail — רק להודעות שמהן נלקח מסמך לקליטה בפועל (הועלה/נרשם). best-effort, לא חוסם.
     let markedSeen = 0;
     if (takenUids.size) { try { const mr = await mailReader.markMessagesSeen({ user: creds.user, pass: creds.pass }, [...takenUids]); markedSeen = (mr && mr.count) || 0; } catch { } }
-    return { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, unreadable, links, aiCalls, markedSeen, remaining: scan.remaining, done: scan.remaining === 0 };
+    return { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, unreadable, links, aiCalls, markedSeen, pending: (db.mailPending[cid] || []).length, remaining: scan.remaining, done: scan.remaining === 0 };
   });
 }
 
@@ -3462,6 +3474,25 @@ add('POST', /^\/api\/mail-scan\/nightly-now$/, async (req, res, _p, q, body) => 
 add('GET', /^\/api\/mail-scan\/nightly-status$/, (req, res) => {
   const a = load().mailAutoScan || {};
   json(res, { ok: true, running: _nightlyMailRunning, since: a.since || '2026-01-01', lastRun: a.lastRun || null });
+});
+// GET /api/mail-scan/pending?companyId= — חשבוניות שהגיעו כלינק ולא נקלטו אוטומטית (לטיפול ידני)
+add('GET', /^\/api\/mail-scan\/pending$/, (req, res, _p, q) => {
+  const db = load();
+  const cid = q.companyId || giCompanyId();
+  const list = ((db.mailPending || {})[cid] || []).slice()
+    .sort((a, b) => String(b.receivedDate || b.seenAt || '').localeCompare(String(a.receivedDate || a.seenAt || '')));
+  json(res, { ok: true, pending: list, count: list.length });
+});
+// POST /api/mail-scan/pending/dismiss { uid | all } — הסרת פריט/הכל מרשימת הטיפול הידני
+add('POST', /^\/api\/mail-scan\/pending\/dismiss$/, (req, res, _p, q, body) => {
+  const db = load();
+  const cid = (body && body.companyId) || q.companyId || giCompanyId();
+  db.mailPending = db.mailPending || {};
+  const before = (db.mailPending[cid] || []).length;
+  if (body && body.all) db.mailPending[cid] = [];
+  else db.mailPending[cid] = (db.mailPending[cid] || []).filter(p => String(p.uid) !== String(body && body.uid));
+  save(db);
+  json(res, { ok: true, removed: before - (db.mailPending[cid] || []).length });
 });
 // POST /api/business-profile/file?companyId=&slot= { filename, mime, data(base64), expiry?, label? }
 add('POST', /^\/api\/business-profile\/file$/, async (req, res, _p, q, body) => {

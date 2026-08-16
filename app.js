@@ -4185,14 +4185,16 @@ async function renderContractors(c) {
     const sync = await fetch('/api/contractors/auto-sync-names', { method: 'POST' }).then(x => x.json()).catch(() => ({ changed: 0 }));
     _ctrSyncNote = (sync && sync.changed) ? `עודכנו ${sync.changed} שמות קבלנים לפי חשבונית ירוקה` : '';
   }
-  const [pay, sup, dr, ms, spRes, notes] = await Promise.all([
+  const [pay, sup, dr, ms, spRes, notes, mp] = await Promise.all([
     api(`/api/contractors/payables?companyId=${state.company}`),
     api('/api/suppliers').catch(() => []),
     api('/api/expense-drafts').catch(() => ({ drafts: [] })),
     api('/api/mail/status').catch(() => null),
     api('/api/supplier-payables?companyId=' + state.company).catch(() => ({ payables: [] })),
     api('/api/expenses/notes').catch(() => ({})),
+    api('/api/mail-scan/pending?companyId=' + state.company).catch(() => ({ pending: [] })),
   ]);
+  _mailPending = Array.isArray(mp?.pending) ? mp.pending : [];
   _expenseNotes = (notes && typeof notes === 'object' && !notes.error) ? notes : {};
   _mailStatus = ms || _mailStatus;
   const supPayables = Array.isArray(spRes?.payables) ? spRes.payables : [];
@@ -4462,6 +4464,7 @@ window.openSupExpFromSearch = (supplierId, nameEnc) => {
 };
 let _supDocs = [], _supName = '', _supYear = 'all', _supId = '';
 let _drafts = [];
+let _mailPending = []; // חשבוניות שהגיעו כלינק ולא נקלטו אוטומטית — לטיפול ידני
 let _mailStatus = null; // סטטוס שליחת מייל לרו"ח
 const _aiByDraft = {};      // מטמון תוצאות ה-AI לכל טיוטה (id -> fields)
 const _aiInFlight = {};     // מונע קריאות כפולות במקביל
@@ -4504,6 +4507,7 @@ function draftsSection() {
       <span id="mailScanProg" class="muted" style="font-size:12.5px"></span>
       <span class="muted" style="font-size:11.5px;flex-basis:100%">הסורק מזהה חשבוניות/קבלות בתיבת המייל של החברה (AI) ומעלה אותן לכאן כטיוטות הוצאה — בדיוק כמו קובץ שגררת. מסמך שכבר נקלט (כולל בהתאמת בנק) מדולג.</span>
     </div>
+    ${mailPendingPanel()}
     <div id="expDropZone" ondragover="expDragOver(event)" ondragleave="expDragLeave(event)" ondrop="expDrop(event)" onclick="pickExpenseFile()" style="border:2px dashed var(--line);border-radius:12px;padding:16px;text-align:center;margin-top:12px;cursor:pointer;transition:border-color .15s,background .15s">
       <div style="font-size:22px">📎⬇️</div>
       <div style="font-size:13.5px;font-weight:600;margin-top:4px">גרור לכאן קבצי הוצאה (PDF / תמונה) — אפשר כמה יחד — או לחץ לבחירה</div>
@@ -4511,6 +4515,34 @@ function draftsSection() {
     </div>
     ${list.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${list.map(draftCard).join('')}</div>` : `<div class="empty">אין טיוטות ממתינות לאישור.</div>`}`;
 }
+// פאנל "חשבוניות במייל שלא נקלטו אוטומטית" — רשת ביטחון לחשבוניות שהגיעו כלינק (מורנינג/פנגו/Booking וכו')
+function mailPendingPanel() {
+  const list = _mailPending || [];
+  if (!list.length) return '';
+  const rows = list.slice(0, 50).map(p => {
+    const dt = p.receivedDate ? escapeHtml(p.receivedDate) : '';
+    const open = p.link ? `<a href="${escAttr(p.link)}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:11.5px;text-decoration:none">פתח חשבונית ↗</a>` : '<span class="muted" style="font-size:11px">חפש במייל</span>';
+    return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 4px;border-top:1px solid #fed7aa;font-size:12.5px">
+      <span style="flex:1;min-width:160px"><b>${escapeHtml(p.subject || '(ללא נושא)')}</b><span class="muted"> · ${escapeHtml(p.from || '')}${dt ? ' · ' + dt : ''}</span></span>
+      ${open}
+      <button class="btn ghost" style="padding:2px 8px;font-size:11.5px;color:var(--danger)" onclick="dismissMailPending('${p.uid}')" title="הסר מהרשימה (טופל/לא רלוונטי)">✕</button>
+    </div>`;
+  }).join('');
+  return `<div style="margin-top:10px;padding:9px 11px;background:#fff7ed;border:1px solid #fed7aa;border-radius:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <span style="font-size:13px;font-weight:700;color:#9a3412">📩 ${list.length} חשבוניות מהמייל שהגיעו כלינק ולא נקלטו אוטומטית — לטיפול ידני</span>
+      <button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="dismissMailPending('__all__')">נקה הכל</button>
+    </div>
+    <div class="muted" style="font-size:11px;margin:2px 0 4px">פתח כל אחת, הורד את ה-PDF, וגרור לאזור הקליטה למעלה. אחרי שנקלטה — הסר אותה מהרשימה.</div>
+    ${rows}
+  </div>`;
+}
+window.dismissMailPending = async (uid) => {
+  const body = uid === '__all__' ? { all: true, companyId: state.company } : { uid, companyId: state.company };
+  await fetch('/api/mail-scan/pending/dismiss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+  _mailPending = uid === '__all__' ? [] : _mailPending.filter(p => String(p.uid) !== String(uid));
+  renderContractors($('#content'));
+};
 // ===== הוצאות ספקים לתשלום (מסמכי מס שלא שולמו + חשבונות עסקה פנימיים) =====
 const PAYABLE_TYPE_NAMES = { 20: 'חשבון עסקה', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'מס-קבלה', 400: 'קבלה', 330: 'זיכוי' };
 // חיווי מוכנות לתשלום לספק — לפי אם הלקוח כבר שילם על האירועים שההוצאה מכסה

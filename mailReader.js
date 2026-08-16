@@ -9,18 +9,26 @@ function conf(creds) {
 }
 
 // ===== PDF מאחורי קישור בגוף המייל =====
-// מזהה קישורים שנראים כמו חשבונית/PDF בגוף ההודעה, מוריד אותם בשרק, ומצרף אותם כאילו היו צרופה.
+// הרבה ספקים (מורנינג/mrng.to, פנגו, תפנית, Booking, iCount וכו') שולחים *הודעה עם לינק* להורדת החשבונית,
+// במקום צרופה. כאן מזהים קישורים כאלה, עוקבים אחרי הפניות, ואם הלינק מוביל לעמוד HTML — קופצים פעם אחת
+// לתוך העמוד כדי לאתר את קובץ ה-PDF/תמונה האמיתי, ומצרפים אותו כאילו היה צרופה.
+const INVOICE_LINK_HOSTS = /(mrng\.to|morning\.co|greeninvoice|ezcount|icount|sumit|rivhit|tafnit|pango|cellopark|booking\.com|expedia|hotel|invoice|fatoora|myinvoice|docs?\.|drive\.google|dropbox|wetransfer)/i;
+const LINK_NOISE = /(unsubscribe|preferences|privacy|policy|terms|facebook|instagram|twitter|linkedin|youtube|wa\.me|whatsapp|mailto:|tel:|\.css|\.js\b|track|pixel|beacon|utm_|\/click\?)/i;
 function extractPdfLinks(text) {
   if (!text) return [];
   const out = new Set();
-  const re = /https?:\/\/[^\s"'<>()\]]+/gi;
+  const re = /https?:\/\/[^\s"'<>()\[\]]+/gi;
   let m;
-  while ((m = re.exec(text)) && out.size < 8) {
+  while ((m = re.exec(text)) && out.size < 24) {
     let u = m[0].replace(/[.,;]+$/, '').replace(/&amp;/g, '&');
     if (!/^https?:\/\//i.test(u)) continue;
-    if (/\.pdf(\?|#|$)/i.test(u) || (/(invoice|receipt|download|getfile|attachment|document|בחשבונית|חשבונית|קבלה)/i.test(u) && /(pdf|download|file|invoice|receipt|doc)/i.test(u))) out.add(u);
+    const isPdf = /\.pdf(\?|#|$)/i.test(u);
+    if (!isPdf && LINK_NOISE.test(u)) continue; // סינון רעש (הסרה מרשימה, רשתות חברתיות, טרקינג) — אלא אם זה PDF ישיר
+    const looksDoc = /(invoice|receipt|download|getfile|attachment|document|בחשבונית|חשבונית|קבלה|\/doc|\/file|export)/i.test(u);
+    if (isPdf || INVOICE_LINK_HOSTS.test(u) || looksDoc) out.add(u);
   }
-  return [...out];
+  const pdfFirst = (u) => /\.pdf(\?|#|$)/i.test(u) ? 2 : INVOICE_LINK_HOSTS.test(u) ? 1 : 0;
+  return [...out].sort((a, b) => pdfFirst(b) - pdfFirst(a));
 }
 function linkHostBlocked(url) {
   try {
@@ -28,26 +36,62 @@ function linkHostBlocked(url) {
     return /^(localhost$|127\.|10\.|192\.168\.|169\.254\.|::1)/.test(h) || /\.(local|internal|lan)$/.test(h);
   } catch { return true; }
 }
-async function fetchPdfLink(url) {
+// מוצא בתוך HTML של עמוד נחיתה קישורים שנראים כמו קובץ מסמך (pdf/הורדה) — לקפיצה שנייה אל הקובץ עצמו.
+function extractDocLinksFromHtml(html, baseUrl) {
+  if (!html) return [];
+  const out = new Set();
+  const attrRe = /(?:href|src|data-href|data-url|data-download|content)\s*=\s*["']([^"']+)["']/gi;
+  let m;
+  while ((m = attrRe.exec(html)) && out.size < 60) {
+    let raw = m[1].replace(/&amp;/g, '&').trim();
+    if (!raw || raw.startsWith('#') || /^(mailto:|tel:|javascript:)/i.test(raw)) continue;
+    let abs; try { abs = new URL(raw, baseUrl).href; } catch { continue; }
+    if (!/^https?:\/\//i.test(abs)) continue;
+    const isPdf = /\.pdf(\?|#|$)/i.test(abs);
+    if (!isPdf && LINK_NOISE.test(abs)) continue;
+    if (isPdf || /(download|getfile|attachment|\/pdf|\/file\/|\/files\/|document|invoice|receipt|export|\.pdf)/i.test(abs)) out.add(abs);
+  }
+  const pdfFirst = (u) => /\.pdf(\?|#|$)/i.test(u) ? 1 : 0;
+  return [...out].sort((a, b) => pdfFirst(b) - pdfFirst(a));
+}
+async function fetchPdfLink(url, depth = 0) {
   if (linkHostBlocked(url)) return null;
   const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), 12000);
+  const to = setTimeout(() => ctrl.abort(), 15000);
   try {
-    const r = await fetch(url, { redirect: 'follow', signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0 bpm-mailscan' } });
+    const r = await fetch(url, { redirect: 'follow', signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; bpm-mailscan/1.0)', 'Accept': 'application/pdf,image/*,text/html;q=0.9,*/*;q=0.8' } });
     clearTimeout(to);
     if (!r || !r.ok) return null;
     const ct = String(r.headers.get('content-type') || '').toLowerCase().split(';')[0].trim();
-    if (!(ct.includes('pdf') || ct.startsWith('image/'))) return null;
-    const buf = Buffer.from(await r.arrayBuffer());
-    if (!buf.length || buf.length > 8 * 1024 * 1024) return null;
-    let filename = 'link.pdf';
-    const cd = r.headers.get('content-disposition') || '';
-    const mm = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-    if (mm) { try { filename = decodeURIComponent(mm[1]); } catch { filename = mm[1]; } }
-    else { try { const p = new URL(url).pathname.split('/').pop(); if (p) filename = decodeURIComponent(p); } catch { } }
-    if (ct.includes('pdf') && !/\.pdf$/i.test(filename)) filename += '.pdf';
-    return { base64: buf.toString('base64'), mime: ct, size: buf.length, filename };
+    const finalUrl = r.url || url;
+    if (ct.includes('pdf') || ct.startsWith('image/')) {
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (!buf.length || buf.length > 12 * 1024 * 1024) return null;
+      let filename = 'link.pdf';
+      const cd = r.headers.get('content-disposition') || '';
+      const mm = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+      if (mm) { try { filename = decodeURIComponent(mm[1]); } catch { filename = mm[1]; } }
+      else { try { const p = new URL(finalUrl).pathname.split('/').pop(); if (p) filename = decodeURIComponent(p); } catch { } }
+      if (ct.includes('pdf') && !/\.pdf$/i.test(filename)) filename += '.pdf';
+      return { base64: buf.toString('base64'), mime: ct, size: buf.length, filename };
+    }
+    // עמוד HTML של ספק → קפיצה אחת אל קובץ המסמך שבתוכו
+    if (depth < 1 && (ct.includes('html') || ct === 'text/plain' || ct === '')) {
+      const html = await r.text().catch(() => '');
+      if (!html || html.length > 5 * 1024 * 1024) return null;
+      for (const c of extractDocLinksFromHtml(html, finalUrl).slice(0, 6)) {
+        if (c === url || c === finalUrl) continue;
+        const got = await fetchPdfLink(c, depth + 1).catch(() => null);
+        if (got && got.base64) return got;
+      }
+    }
+    return null;
   } catch { clearTimeout(to); return null; }
+}
+// האם ההודעה "נראית" כמו חשבונית — לפי נושא/שולח/קישורי-ספק — כדי לא לאבד חשבוניות שהלינק שלהן לא נפתח
+function looksLikeInvoiceMail(subject, from, hasHostLink) {
+  const s = `${subject || ''} ${from || ''}`;
+  return hasHostLink || /(חשבונית|קבלה|חשבון עסקה|דרישת תשלום|invoice|receipt|תשלום|מס[- ]?קבלה)/i.test(s);
 }
 
 // בדיקת חיבונ: פותח INBOX, מחזיר ספירת הודעות כוללת + מאז תאריך, ומוודא שאפשר למשפים ולפרסר הודעה (imapflow+mailparser מקצה לקצה).
@@ -88,6 +132,7 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
   const client = new ImapFlow(conf(creds));
   const items = [];
   const processedUids = [];
+  const unresolved = []; // הודעות שנראות כמו חשבונית אך לא הצלחנו לחלץ מהן מסמך (לינק שלא נפתח) — לרשת ביטחון
   try {
     await client.connect();
     const lock = await client.getMailboxLock('INBOX');
@@ -125,12 +170,14 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
             });
           });
           if (!atts.length) {
+            let gotAny = false, urls = [];
             try {
-              const urls = extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`);
+              urls = extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`);
               let li = 0;
-              for (const u of urls.slice(0, 4)) {
+              for (const u of urls.slice(0, 6)) {
                 const got = await fetchPdfLink(u).catch(() => null);
                 if (got && got.base64) {
+                  gotAny = true;
                   items.push({
                     messageId, uid: msg.uid, attIndex: 'L' + (li++), from, subject, receivedDate,
                     filename: got.filename || `link-${li}.pdf`, mime: got.mime, size: got.size,
@@ -139,13 +186,18 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
                 }
               }
             } catch { }
+            // רשת ביטחון: אם לא הצלחנו לחלץ מסמך אך ההודעה נראית כמו חשבונית — לא מאבדים אותה
+            const hostLink = urls.find(u => INVOICE_LINK_HOSTS.test(u)) || urls[0] || null;
+            if (!gotAny && looksLikeInvoiceMail(subject, from, !!hostLink)) {
+              unresolved.push({ uid: msg.uid, messageId, from, subject, receivedDate, link: hostLink });
+            }
           }
         }
       }
       remaining = Math.max(0, remaining - use.length);
     } finally { lock.release(); }
     await client.logout();
-    return { ok: true, items, processedUids, remaining };
+    return { ok: true, items, processedUids, remaining, unresolved };
   } catch (e) {
     try { await client.logout(); } catch {}
     try { await client.close(); } catch {}
