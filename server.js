@@ -1339,6 +1339,19 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
       if (inv && inv.id != null && !bankPaid.has('id:' + inv.id)) bankPaid.set('id:' + inv.id, t.date || null);
     }
   }
+  // הוצאות ספק ששולמו בפועל דרך הבנק (תנועת חובה מותאמת ומאושרת) → "שולמו" ויורדות מ"ספקים לתשלום"
+  const _nrmExp = (s) => String(s == null ? '' : s).replace(/\s+/g, '').replace(/^0+/, '');
+  const bankPaidExp = new Set();
+  for (const t of (db.bankTx || [])) {
+    if (want && t.companyId !== want) continue;
+    if (t.direction !== 'debit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
+    for (const inv of (t.matchedInvoices || [])) {
+      if (!inv || inv.kind === 'income') continue;
+      if (inv.id != null) bankPaidExp.add('id:' + String(inv.id));
+      if (inv.number != null) bankPaidExp.add('num:' + _nrmExp(inv.number));
+    }
+  }
+  const isBankPaidExp = (p) => (p.giExpenseId && bankPaidExp.has('id:' + String(p.giExpenseId))) || (p.number && bankPaidExp.has('num:' + _nrmExp(p.number)));
   let openNums = null;
   try { if (greenInvoice.haveCredentials()) { const open = await greenInvoice.openDocuments(); openNums = new Set((open || []).map(d => String(d.number))); } } catch { openNums = null; }
   // פירוט: האירועים שההוצאה מכסה — שורות קבלן באירועים ששויכו להוצאה זו (לפי מזהה רישום / מזהה מסמך ירוק / מספר חשבונית)
@@ -1362,7 +1375,7 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
     const paid = events.filter(e => e.clientPaid && e.clientPaid.status === 'paid').length;
     return paid === events.length ? 'ready' : paid === 0 ? 'waiting' : 'partial';
   };
-  const out = (q.all ? list.filter(p => !p.superseded) : list.filter(p => !p.paid && !p.superseded)).slice()
+  const out = (q.all ? list.filter(p => !p.superseded) : list.filter(p => !p.paid && !p.superseded && !isBankPaidExp(p))).slice()
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
     .map(p => { const cov = coveredFor(p); return { ...p, hasFile: !!(p.giExpenseId || p.draftId || p.localFileId), coveredEvents: cov, readiness: readinessOf(cov) }; });
   json(res, { ok: true, payables: out });

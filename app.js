@@ -7564,7 +7564,7 @@ async function linkNumberSearch(term) {
   const expItems = (exp.items || []).map(d => ({ id: d.id, number: d.number, type: d.type, clientName: d.supplierName || '—', amount: d.amountIncVat ?? d.amount, date: d.date, url: d.url, kind: 'expense' }));
   _linkNumResults = [...incItems, ...expItems];
   const { ids, used } = linkedDocIds();
-  const avail = _linkNumResults.filter(d => !ids.has(d.id) && _docFromMay26(d));
+  const avail = _linkNumResults.filter(d => !ids.has(d.id) && _docFromMay26(d) && [305, 320, 400, 330].includes(Number(d.type)));
   if (!avail.length) { nb.innerHTML = ''; return; }
   const rows = avail.map(d => {
     const j = jenc(d);
@@ -7643,10 +7643,11 @@ window.renderLinkDocs = () => {
   const qMatch = (d) => !q || String(d.number || '').includes(q) || (d.category || d.description || '').includes(q);
   const amountOf = (d) => isExp ? (d.amountIncVat ?? d.amount) : (d.amountIncVat ?? d.amount); // מסמכי הכנסה שהועלו ידנית מחזירים amount (לא amountIncVat) — חובה fallback כדי שהכיסוי לא יהיה 0
   let avail = _linkClientDocs.filter(d => !ids.has(d.id) && qMatch(d) && _docFromMay26(d));
+  // לתנועת בנק משייכים רק מסמכים שמייצגים תנועת כסף אמיתית — חשבונית מס / מס-קבלה / קבלה (וזיכוי עם הסימון). לא חשבון עסקה / הצעת מחיר.
+  const allowed = _linkIncludeCredits ? [305, 320, 400, 330] : [305, 320, 400];
+  avail = avail.filter(d => allowed.includes(Number(d.type)));
   if (!isExp) {
-    // ברירת מחדל: חשבונית מס / מס-קבלה / קבלה (חיוביות בלבד). עם הסימון — גם זיכוי (330) וקבלות שליליות.
-    const allowed = _linkIncludeCredits ? [305, 320, 400, 330] : [305, 320, 400];
-    avail = avail.filter(d => allowed.includes(Number(d.type)) && !(Number(d.type) === 400 && recs.has(String(d.number))));
+    avail = avail.filter(d => !(Number(d.type) === 400 && recs.has(String(d.number))));
     if (!_linkIncludeCredits) avail = avail.filter(d => (Number(d.amountIncVat ?? d.amount) || 0) >= 0);
   }
   const rows = avail.map(d => {
