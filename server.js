@@ -1351,7 +1351,7 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
         const byId = p.id && c.paidPayableId && String(c.paidPayableId) === String(p.id);
         const byExp = p.giExpenseId && c.paidExpenseId && String(c.paidExpenseId) === String(p.giExpenseId);
         const byNum = p.number && c.paidInvoice && String(c.paidInvoice) === String(p.number) && (c.name || '').trim() === (p.supplierName || '').trim();
-        if (byId || byExp || byNum) out.push({ date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0, clientPaid: eventClientPaid(ev, bankPaid, openNums) });
+        if (byId || byExp || byNum) out.push({ eventId: ev.id, index: (ev.contractorDetails || []).indexOf(c), date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0, supplierPaid: !!c.paid, clientPaid: eventClientPaid(ev, bankPaid, openNums) });
       }
     }
     return out.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
