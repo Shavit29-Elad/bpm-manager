@@ -1322,6 +1322,71 @@ add('GET', /^\/api\/contractors\/open-events$/, (req, res, _p, q) => {
   json(res, { ok: true, events: items });
 });
 
+// ── תשלום לספק לפי צבירת התאמות בנק ──────────────────────────────────────────
+// כלל: "שולם לספק" אוטומטי מגיע *רק* מהתאמות בנק (תנועות חובה) שמשויכות לחשבונית הספק,
+// באופן מצטבר על פני כל השורות. כל עוד הסכום המצטבר קטן מסכום החשבונית → "שולם חלקית".
+// רק כשהסכום המצטבר מכסה את מלוא החשבונית → "שולם לספק" סופי, וכל האירועים של אותה חשבונית מסומנים.
+// בנוסף: מנרמל את שורות הקבלן באירועים — מאפס סימוני "שולם" ישנים שנוצרו מקישור בלבד (לא מבנק ולא ידני),
+// ומסמן כשולם את אלה שמכוסים במלואם בבנק. סימון ידני (paidSource='manual') או "סמן כשולם" על ההוצאה (p.paid) נשמרים.
+const _nrmExpKey = (s) => String(s == null ? '' : s).replace(/\s+/g, '').replace(/^0+/, '');
+function supplierBankDebitByKey(db, want) {
+  const byKey = {}; // 'id:'+expenseId / 'num:'+number → סכום מצטבר ששולם בבנק (חובה)
+  for (const t of (db.bankTx || [])) {
+    if (want && t.companyId !== want) continue;
+    if (t.direction !== 'debit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
+    const rowAmt = Number(t.absAmount != null ? t.absAmount : Math.abs(Number(t.amount) || 0)) || 0;
+    const exps = (t.matchedInvoices || []).filter(inv => inv && inv.kind !== 'income');
+    for (const inv of exps) {
+      // תרומת השורה: הקצאה מפורשת אם קיימת, אחרת סכום השורה (כשההוצאה היחידה בשורה), אחרת סכום ההוצאה
+      const contrib = Number(inv.allocated != null ? inv.allocated : (exps.length === 1 ? rowAmt : (inv.amount != null ? inv.amount : 0))) || 0;
+      if (inv.id != null) { const k = 'id:' + String(inv.id); byKey[k] = (byKey[k] || 0) + contrib; }
+      if (inv.number != null) { const k = 'num:' + _nrmExpKey(inv.number); byKey[k] = (byKey[k] || 0) + contrib; }
+    }
+  }
+  return byKey;
+}
+// מחשב סטטוס תשלום לכל הוצאת ספק ומנרמל את שורות הקבלן. מחזיר Map: payable → {paid,total,status}
+function applyBankSupplierPayments(db, want) {
+  const debitByKey = supplierBankDebitByKey(db, want);
+  const payables = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === want);
+  const statusByKey = {}; // 'pid:'/'eid:'/'num:' → {kind,source}
+  const payMeta = new Map();
+  for (const p of payables) {
+    const total = Number(p.amount) || 0;
+    let paid = 0;
+    if (p.giExpenseId != null) paid = Math.max(paid, debitByKey['id:' + String(p.giExpenseId)] || 0);
+    if (p.number != null) paid = Math.max(paid, debitByKey['num:' + _nrmExpKey(p.number)] || 0);
+    let status = null, source = null, kind = null;
+    if (p.paid) { status = 'paid'; kind = 'full'; source = 'manual'; }
+    else if (total > 0 && paid >= total - 1) { status = 'paid'; kind = 'full'; source = 'bank'; }
+    else if (paid > 0) { status = 'partial'; kind = 'partial'; }
+    payMeta.set(p, { paid, total, status });
+    const v = { kind, source };
+    if (p.id != null) statusByKey['pid:' + String(p.id)] = v;
+    if (p.giExpenseId != null) statusByKey['eid:' + String(p.giExpenseId)] = v;
+    if (p.number != null) statusByKey['num:' + _nrmExpKey(p.number)] = v;
+  }
+  let dirty = false;
+  for (const ev of (db.events || [])) {
+    if (want && (ev.companyId || giCompanyId()) !== want) continue;
+    for (const c of (ev.contractorDetails || [])) {
+      if (!c) continue;
+      const v = (c.paidPayableId != null && statusByKey['pid:' + String(c.paidPayableId)])
+        || (c.paidExpenseId != null && statusByKey['eid:' + String(c.paidExpenseId)])
+        || (c.paidInvoice != null && statusByKey['num:' + _nrmExpKey(c.paidInvoice)]) || null;
+      const hasLink = !!(c.paidInvoice || c.paidPayableId || c.paidExpenseId);
+      if (v && v.kind === 'full') {
+        if (!c.paid || c.paidSource !== v.source) { c.paid = true; c.paidSource = v.source; dirty = true; }
+      } else if (c.paid && c.paidSource !== 'manual' && hasLink) {
+        // סימון ישן שנוצר מקישור בלבד (לא ידני, לא מכוסה במלואו בבנק) → מאופס
+        c.paid = false; c.paidSource = null; dirty = true;
+      }
+    }
+  }
+  if (dirty) save(db);
+  return payMeta;
+}
+
 // GET /api/supplier-payables?all= — הוצאות ספקים לתשלום (ברירת מחדל: רק שלא שולמו)
 add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
   const db = load();
@@ -1339,19 +1404,8 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
       if (inv && inv.id != null && !bankPaid.has('id:' + inv.id)) bankPaid.set('id:' + inv.id, t.date || null);
     }
   }
-  // הוצאות ספק ששולמו בפועל דרך הבנק (תנועת חובה מותאמת ומאושרת) → "שולמו" ויורדות מ"ספקים לתשלום"
-  const _nrmExp = (s) => String(s == null ? '' : s).replace(/\s+/g, '').replace(/^0+/, '');
-  const bankPaidExp = new Set();
-  for (const t of (db.bankTx || [])) {
-    if (want && t.companyId !== want) continue;
-    if (t.direction !== 'debit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
-    for (const inv of (t.matchedInvoices || [])) {
-      if (!inv || inv.kind === 'income') continue;
-      if (inv.id != null) bankPaidExp.add('id:' + String(inv.id));
-      if (inv.number != null) bankPaidExp.add('num:' + _nrmExp(inv.number));
-    }
-  }
-  const isBankPaidExp = (p) => (p.giExpenseId && bankPaidExp.has('id:' + String(p.giExpenseId))) || (p.number && bankPaidExp.has('num:' + _nrmExp(p.number)));
+  // תשלום לספק לפי צבירת התאמות בנק + נרמול שורות הקבלן (מאפס סימוני "שולם" ישנים שמקורם בקישור בלבד)
+  const payMeta = applyBankSupplierPayments(db, want);
   let openNums = null;
   try { if (greenInvoice.haveCredentials()) { const open = await greenInvoice.openDocuments(); openNums = new Set((open || []).map(d => String(d.number))); } } catch { openNums = null; }
   // פירוט: האירועים שההוצאה מכסה — שורות קבלן באירועים ששויכו להוצאה זו (לפי מזהה רישום / מזהה מסמך ירוק / מספר חשבונית)
@@ -1375,9 +1429,15 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
     const paid = events.filter(e => e.clientPaid && e.clientPaid.status === 'paid').length;
     return paid === events.length ? 'ready' : paid === 0 ? 'waiting' : 'partial';
   };
-  const out = (q.all ? list.filter(p => !p.superseded) : list.filter(p => !p.paid && !p.superseded && !isBankPaidExp(p))).slice()
+  const meta = (p) => payMeta.get(p) || { paid: 0, total: Number(p.amount) || 0, status: null };
+  // ברירת מחדל: מסתירים ששולמו במלואם (ידני p.paid או כיסוי בנק מלא) ומוחלפים; "שולם חלקית" *נשאר* ברשימה עם היתרה
+  const out = (q.all ? list.filter(p => !p.superseded) : list.filter(p => !p.superseded && meta(p).status !== 'paid')).slice()
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
-    .map(p => { const cov = coveredFor(p); return { ...p, hasFile: !!(p.giExpenseId || p.draftId || p.localFileId), coveredEvents: cov, readiness: readinessOf(cov) }; });
+    .map(p => {
+      const cov = coveredFor(p); const m = meta(p);
+      return { ...p, hasFile: !!(p.giExpenseId || p.draftId || p.localFileId), coveredEvents: cov, readiness: readinessOf(cov),
+        bankPaidAmount: m.paid, remaining: Math.max(0, (m.total || 0) - (m.paid || 0)), supplierPayStatus: m.status };
+    });
   json(res, { ok: true, payables: out });
 });
 
@@ -1411,6 +1471,9 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/linked-events$/, async (req, res
   if (!p) return json(res, { error: 'לא נמצא' }, 404);
   const _cid = (_q && _q.companyId) || giCompanyId();
   if ((p.companyId || giCompanyId()) !== _cid) return json(res, { error: 'ההוצאה שייכת לחברה אחרת' }, 403);
+  // נרמול תשלום-לספק לפי צבירת בנק (מאפס סימוני "שולם" ישנים שמקורם בקישור בלבד)
+  const payMetaLE = applyBankSupplierPayments(db, _cid);
+  const meP = payMetaLE.get(p) || { paid: 0, total: Number(p.amount) || 0, status: null };
   // סטטוס תשלום מהלקוח לכל אירוע — לפי בנק (זיכוי מאושר) או חשבונית ירוקה
   const bankPaid = new Map();
   for (const t of (db.bankTx || [])) {
@@ -1435,7 +1498,7 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/linked-events$/, async (req, res
     }
   }
   out.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
-  json(res, { ok: true, events: out });
+  json(res, { ok: true, events: out, supplierPayStatus: meP.status, bankPaidAmount: meP.paid, remaining: Math.max(0, (meP.total || 0) - (meP.paid || 0)) });
 });
 
 // POST /api/supplier-payables/:id/unlink-events { items:[{eventId,index}] } — ביטול שיוך אירועים מהוצאה (מחזיר אותם לרשימת הפתוחים)
@@ -2077,6 +2140,76 @@ add('GET', /^\/api\/documents\/([^/]+)\/url$/, async (req, res, params) => {
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// GET /api/documents/:id/related — כל המסמכים המקושרים לאותו מסמך (שרשרת: הצעת מחיר→עסקה→מס→קבלה + זיכויים)
+// לוגיקה: BFS על linkedDocumentIds של חשבונית ירוקה (לאב־קדמונים ולצאצאים אם דו־כיווני) + "אחאים" מאותו אירוע/חשבונית-ישנה (linkedDocs).
+add('GET', /^\/api\/documents\/([^/]+)\/related$/, async (req, res, params) => {
+  const startId = String(params[0]);
+  const db = load();
+  const meta = new Map();     // id -> { id, type, number, date, amount, status, url, uploaded, linkedIds }
+  const giCache = new Map();
+  const getGi = async (id) => {
+    if (giCache.has(id)) return giCache.get(id);
+    let d = null;
+    if (greenInvoice.haveCredentials()) { try { d = await greenInvoice.getDocument(id); } catch { d = null; } }
+    giCache.set(id, d);
+    return d;
+  };
+  // מטא־דאטה למסמך שהועלה ידנית (אינו בחשבונית ירוקה) מתוך linkedDocs באירוע/חשבונית ישנה
+  const uploadedMeta = (id) => {
+    for (const ev of (db.events || [])) {
+      const d = (ev.linkedDocs || []).find(x => String(x.id) === String(id) && x.uploaded);
+      if (d) return { id: String(id), type: d.type != null ? Number(d.type) : null, number: d.number || null, date: d.date || ev.date || ev.dateRaw || null, amount: d.amount != null ? Number(d.amount) : null, status: null, url: d.url || ('/api/files/' + id), uploaded: true };
+    }
+    for (const rec of (db.oldInvoices || [])) {
+      const d = (rec.linkedDocs || []).find(x => String(x.id) === String(id) && x.uploaded);
+      if (d) return { id: String(id), type: d.type != null ? Number(d.type) : null, number: d.number || null, date: d.date || rec.createdAt || null, amount: d.amount != null ? Number(d.amount) : null, status: null, url: d.url || ('/api/files/' + id), uploaded: true };
+    }
+    return null;
+  };
+  const addMeta = async (id) => {
+    id = String(id);
+    if (meta.has(id)) return meta.get(id);
+    let f = null; try { f = await getFile(id); } catch { }
+    if (f) { const um = uploadedMeta(id) || { id, type: null, number: null, date: null, amount: null, status: null, url: '/api/files/' + id, uploaded: true }; meta.set(id, um); return um; }
+    const d = await getGi(id);
+    if (!d) { const um = uploadedMeta(id); if (um) { meta.set(id, um); return um; } const m = { id, missing: true, linkedIds: [] }; meta.set(id, m); return m; }
+    const url = (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null);
+    const amt = d.amount != null ? Number(d.amount) : (d.total != null ? Number(d.total) : (d.sum != null ? Number(d.sum) : null));
+    const m = { id, type: Number(d.type), number: d.number, date: d.documentDate || null, amount: amt, status: Number(d.status), url, uploaded: false, linkedIds: (Array.isArray(d.linkedDocumentIds) ? d.linkedDocumentIds.map(String) : []) };
+    meta.set(id, m); return m;
+  };
+  const visited = new Set();
+  const runBfs = async () => {
+    let guard = 0;
+    while (queue.length && guard < 60) {
+      guard++;
+      const cur = String(queue.shift());
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      const m = await addMeta(cur);
+      for (const l of ((m && m.linkedIds) || [])) if (!visited.has(String(l))) queue.push(String(l));
+    }
+  };
+  const queue = [startId];
+  await runBfs();
+  // "אחאים" — כל אירוע/חשבונית־ישנה שמכיל מסמך מהשרשרת: כל שאר המסמכים שלו שייכים לאותה שרשרת
+  const collectSiblings = (arr) => {
+    for (const rec of (arr || [])) {
+      const lds = Array.isArray(rec.linkedDocs) ? rec.linkedDocs : [];
+      if (lds.some(x => x && x.id && visited.has(String(x.id)))) {
+        for (const x of lds) if (x && x.id && !visited.has(String(x.id))) queue.push(String(x.id));
+      }
+    }
+  };
+  collectSiblings(db.events);
+  collectSiblings(db.oldInvoices);
+  await runBfs();
+  const rank = { 10: 1, 100: 2, 200: 3, 300: 4, 305: 5, 320: 6, 400: 7, 330: 8, 405: 9 };
+  const docs = [...meta.values()].filter(m => !m.missing).map(m => ({ id: m.id, type: m.type, number: m.number, date: m.date, amount: m.amount, status: m.status, url: m.url, uploaded: !!m.uploaded, self: String(m.id) === startId }));
+  docs.sort((a, b) => (rank[a.type] || 99) - (rank[b.type] || 99) || String(a.date || '').localeCompare(String(b.date || '')));
+  json(res, { ok: true, id: startId, docs });
+});
+
 // POST /api/documents/:id/send { email? } — שליחת מסמך קיים במייל דרך חשבונית ירוקה
 add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, body) => {
   // תמיכה במספר כתובות (email/email2/emails[]) — נשלח מייל אחד לכולן
@@ -2586,7 +2719,8 @@ add('POST', /^\/api\/contractors\/toggle-paid$/, (req, res, _p, _q, body) => {
   if (!ev || !ev.contractorDetails || !ev.contractorDetails[body.index]) return json(res, { error: 'לא נמצא' }, 404);
   const cd = ev.contractorDetails[body.index];
   cd.paid = Boolean(body.paid);
-  if (!body.paid) { cd.paidInvoice = null; cd.paidExpenseUrl = null; cd.paidExpenseId = null; cd.paidPayableId = null; } // ביטול תשלום — מנקה את כל סימוני התשלום ומחזיר לרשימת הפתוחים
+  if (body.paid) { cd.paidSource = 'manual'; } // סימון ידני מפורש — נשמר גם בנרמול הבנק
+  else { cd.paidSource = null; cd.paidInvoice = null; cd.paidExpenseUrl = null; cd.paidExpenseId = null; cd.paidPayableId = null; } // ביטול תשלום — מנקה את כל סימוני התשלום ומחזיר לרשימת הפתוחים
   save(db); json(res, { ok: true });
 });
 
@@ -2595,15 +2729,19 @@ add('POST', /^\/api\/contractors\/mark-paid-bulk$/, (req, res, _p, _q, body) => 
   const db = load();
   const items = Array.isArray(body.items) ? body.items : [];
   const paid = body.paid !== false;
+  const linkOnly = body.link === true && !paid; // קישור בלבד — שומר את השיוך לחשבונית בלי לסמן "שולם"
   let n = 0;
   for (const it of items) {
     const ev = db.events.find(e => e.id === it.eventId);
     if (ev && ev.contractorDetails && ev.contractorDetails[it.index]) {
       const cd = ev.contractorDetails[it.index];
       cd.paid = paid;
-      cd.paidInvoice = paid ? (body.invoiceNumber || null) : null;
-      cd.paidExpenseId = paid ? (body.expenseId || null) : null;
-      cd.paidExpenseUrl = paid ? (body.expenseUrl || null) : null;
+      if (paid) cd.paidSource = 'manual'; else if (!linkOnly) cd.paidSource = null;
+      if (paid || linkOnly) {
+        cd.paidInvoice = body.invoiceNumber || null;
+        cd.paidExpenseId = body.expenseId || null;
+        cd.paidExpenseUrl = body.expenseUrl || null;
+      } else { cd.paidInvoice = null; cd.paidExpenseId = null; cd.paidExpenseUrl = null; }
       n++;
     }
   }
@@ -4271,6 +4409,8 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
   // השלמת קישור צפייה/הורדה לחשבוניות שהותאמו עכשיו (למשל שהועלו ידנית) שאין להן url
   if (greenInvoice.haveCredentials()) { for (const inv of (t.matchedInvoices || [])) await enrichMatchedUrl(inv); }
   save(db);
+  // התאמת תנועת חובה (כסף שיצא) → עדכון "שולם לספק" לפי צבירה: אירועים של חשבונית שכוסתה במלואה בבנק מסומנים
+  if (t.direction === 'debit') { try { applyBankSupplierPayments(db, t.companyId || giCompanyId()); } catch { } }
   json(res, { ok: true, tx: t });
 });
 

@@ -436,10 +436,14 @@ window.previewDoc = async (url, opts = {}) => {
   // כשמציגים טיוטת חשבונית לקליטה (URL של expense-drafts) — מוסיפים כפתור מחק ליד ההורדה.
   const _draftId = opts.deleteDraftId || (String(url).match(/\/api\/expense-drafts\/([^/]+)\/file/) || [])[1] || null;
   const delBtn = _draftId ? `<button class="btn ghost" style="padding:6px 13px;color:var(--danger)" onclick="closePreview();deleteDraft('${_draftId}')">🗑 מחק</button>` : '';
+  // מזהה המסמך (אם ידוע) — מאפשר כפתור "מסמכים מקושרים" שמציג את כל שרשרת המסמכים (הצעת מחיר→עסקה→מס→קבלה + זיכויים)
+  const _docId = opts.docId || (String(url).match(/\/api\/documents\/([^/]+)\/(?:url|file)/) || [])[1] || null;
+  const linkBtn = _docId ? `<button class="btn ghost" style="padding:6px 13px" onclick="openDocLinks('${escAttr(String(_docId))}')">🔗 מסמכים מקושרים</button>` : '';
   const shell = (inner) => `<div class="modal-card" style="width:min(920px,95vw);height:90vh;padding:0;display:flex;flex-direction:column;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">
       <b>תצוגה מקדימה של המסמך</b>
       <div style="display:flex;gap:8px;align-items:center">
+        ${linkBtn}
         ${extra}
         <a href="${url}" target="_blank" class="btn ghost" style="padding:6px 13px;text-decoration:none">הורדה ↓</a>
         ${delBtn}
@@ -470,10 +474,55 @@ window.closePreview = () => {
   const m = document.getElementById('docPreview'); if (m) m.classList.add('hidden');
   if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
 };
+// תצוגה מקדימה של מסמך חשבונית-ירוקה לפי מזהה — כמו previewDoc אך מוסיף כפתור "מסמכים מקושרים"
+window.previewDocId = (id, url, extra) => previewDoc(url, { docId: id, extraActions: extra || '' });
+// חלונית "מסמכים מקושרים" — כל שרשרת המסמכים הקשורים למסמך שנצפה (הצעת מחיר→עסקה→מס→קבלה + זיכויים)
+window.openDocLinks = async (docId) => {
+  if (!docId) return;
+  let m = document.getElementById('docLinks');
+  if (!m) { m = document.createElement('div'); m.id = 'docLinks'; m.className = 'modal'; document.body.appendChild(m); }
+  m.style.zIndex = '210'; // מעל חלונית התצוגה המקדימה (200)
+  m.classList.remove('hidden');
+  const shell = (inner) => `<div class="modal-card" style="width:min(560px,94vw);max-height:82vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <b>🔗 מסמכים מקושרים</b>
+      <button class="btn ghost" style="padding:4px 12px" onclick="closeDocLinks()">סגור ✕</button>
+    </div>${inner}</div>`;
+  m.innerHTML = shell(`<div class="empty" style="padding:24px;text-align:center">טוען…</div>`);
+  m.onclick = (e) => { if (e.target === m) closeDocLinks(); };
+  const r = await api(`/api/documents/${docId}/related`).catch(e => ({ error: String(e) }));
+  const cur = document.getElementById('docLinks');
+  if (!cur || cur.classList.contains('hidden')) return;
+  const docs = (r && r.docs) || [];
+  const others = docs.filter(d => !d.self);
+  if (!others.length) {
+    cur.innerHTML = shell(`<div class="empty" style="padding:22px;text-align:center">${r && r.error ? 'שגיאה בטעינת המסמכים המקושרים.' : 'לא נמצאו מסמכים מקושרים למסמך זה.'}</div>`);
+    return;
+  }
+  const stName = { 0: 'פתוח', 1: 'סגור', 2: 'סגור' };
+  const rows = docs.map(d => {
+    const nm = DOC_TYPE_NAMES[d.type] || (d.type ? `סוג ${d.type}` : 'מסמך');
+    const dt = d.date ? String(d.date).slice(0, 10).split('-').reverse().join('.') : '';
+    const amt = d.amount != null ? '₪' + Number(d.amount).toLocaleString('he-IL') : '';
+    const badge = d.self ? ` <span class="tag" style="background:var(--accent);color:#fff">המסמך הנוכחי</span>` : '';
+    const open = d.self ? '' : `<button class="btn ghost" style="padding:3px 11px;font-size:12px;white-space:nowrap" onclick="openDocLinksView('${escAttr(String(d.id))}')">👁 פתח</button>`;
+    const sub = [dt, amt, d.uploaded ? 'הועלה ידנית' : (d.status != null ? (stName[d.status] || '') : '')].filter(Boolean).join(' · ');
+    return `<div style="display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line)${d.self ? ';opacity:.65' : ''}">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600">${escapeHtml(nm)}${d.number ? ' #' + escapeHtml(String(d.number)) : ''}${badge}</div>
+        ${sub ? `<div class="muted" style="font-size:12px">${escapeHtml(sub)}</div>` : ''}
+      </div>
+      ${open}
+    </div>`;
+  }).join('');
+  cur.innerHTML = shell(`<div style="overflow:auto">${rows}</div>`);
+};
+window.openDocLinksView = (id) => { closeDocLinks(); previewLinkedDoc(id); };
+window.closeDocLinks = () => { const m = document.getElementById('docLinks'); if (m) m.classList.add('hidden'); };
 // תצוגה מקדימה של מסמך + כפתור "שלח במייל" בראש החלונית (ליד ההורדה) — המייל השמור ללקוח, ניתן לעריכה לפני שליחה
 window.previewDocSend = (url, id, number, typeName, clientNameEnc) => {
   const btn = `<button class="btn success" style="padding:6px 13px" onclick="openSendDoc('${id}','${String(number == null ? '' : number).replace(/'/g, '%27')}','${String(typeName || 'מסמך').replace(/'/g, '%27')}','${clientNameEnc || ''}')">✉️ שלח במייל</button>`;
-  previewDoc(url, { extraActions: btn });
+  previewDoc(url, { extraActions: btn, docId: id });
 };
 // פתיחת מסמך משוייך לפי מזהה בחלונית תצוגה מקדימה (צפייה + הורדה + מסמך המשך אם רלוונטי) — לא הורדה אוטומטית
 window.previewLinkedDoc = async (docId, el, eventId) => {
@@ -489,7 +538,7 @@ window.previewLinkedDoc = async (docId, el, eventId) => {
   if (Number(r.status) === 0 && tp !== 10 && FOLLOWUP_FOR[tp] && FOLLOWUP_FOR[tp].length) {
     extra = `<button class="btn success" style="padding:6px 12px" onclick="previewDeriveFromDoc('${docId}','${escAttr(String(r.number || ''))}',${tp},'${eventId || ''}')">↪ מסמך המשך</button>`;
   }
-  previewDoc(r.url, { extraActions: extra });
+  previewDoc(r.url, { extraActions: extra, docId });
 };
 // הפקת מסמך המשך מתוך חלונית התצוגה המקדימה — מסמך ההמשך יקושר לאירוע (אם ידוע)
 window.previewDeriveFromDoc = (docId, number, type, eventId) => {
@@ -560,7 +609,7 @@ function docsTable(docs, opts = {}) {
       <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</td>
       <td>${money(d.amountExVat)}</td>
       <td>${money(d.amountIncVat)}</td>
-      <td><div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap">${d.url ? `<button class="btn ghost" style="padding:5px 11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button><a href="${d.url}" target="_blank" class="muted" style="white-space:nowrap">הורדה ↓</a>` : ''}${actBtns(d)}</div></td>
+      <td><div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap">${d.url ? `<button class="btn ghost" style="padding:5px 11px" onclick="previewDocId('${escAttr(String(d.id || ''))}','${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button><a href="${d.url}" target="_blank" class="muted" style="white-space:nowrap">הורדה ↓</a>` : ''}${actBtns(d)}</div></td>
     </tr>`).join('')}
     <tr style="background:var(--panel2)"><td colspan="${cc ? 5 : 4}"><b>סה"כ</b></td><td><b>${money(totalEx)}</b></td><td><b>${money(totalInc)}</b></td><td></td></tr>
     </tbody></table>`;
@@ -4289,27 +4338,26 @@ function renderCtLink() {
   }).join('');
   m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:88vh;overflow:auto">
     <h3>קישור לחשבונית ספק — ${escapeHtml(_ctLink.name)}</h3>
-    <p class="muted" style="font-size:12.5px;margin:2px 0 8px">${_ctLink.items.length} אירועים נבחרו. בחר את חשבונית ההוצאה של הספק שאליה הם שייכים, או הזן מספר ידנית.</p>
+    <p class="muted" style="font-size:12.5px;margin:2px 0 8px">${_ctLink.items.length} אירועים נבחרו. בחר את חשבונית ההוצאה של הספק שאליה הם שייכים, או הזן מספר ידנית. הקישור <b>לא</b> מסמן כשולם — "שולם לספק" ייקבע לפי התאמת ההוצאה בבנק (או סימון ידני).</p>
     ${_ctLink.supplierId ? (docs.length ? `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="muted" style="font-size:12.5px">לא נמצאו מסמכי הוצאה לספק זה בחשבונית ירוקה. הזן מספר ידנית למטה.</div>') : '<div class="muted" style="font-size:12.5px">הספק לא מזוהה בחשבונית ירוקה. הזן מספר חשבונית ידנית.</div>'}
     <label style="display:block;font-size:13px;margin-top:10px">או מספר חשבונית ידני <input id="ctManualNum" dir="ltr" placeholder="מספר חשבונית" style="width:100%;padding:6px 8px;margin-top:3px" value="${_ctLink.selected ? escAttr(String(_ctLink.selected.number || '')) : ''}"></label>
     <div id="ctLinkStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('ctLinkModal').classList.add('hidden')">ביטול</button>
-      <button class="btn success" onclick="ctLinkConfirm(this)">✓ קשר וסמן כשולם</button>
+      <button class="btn success" onclick="ctLinkConfirm(this)">✓ קשר לחשבונית</button>
     </div>
   </div>`;
 }
 window.ctLinkPick = (jj) => { _ctLink.selected = JSON.parse(decodeURIComponent(jj)); renderCtLink(); };
 window.ctLinkConfirm = async (btn) => {
-  const notPaid = (_ctLink.items || []).filter(it => it.cp && it.cp !== 'paid').length;
-  if (notPaid) { if (!confirm(`ל-${notPaid} מהאירועים שנבחרו הלקוח עדיין לא שילם — לשלם לספק בכל זאת?`)) return; }
   const manual = (document.getElementById('ctManualNum')?.value || '').trim();
   const sel = _ctLink.selected;
   const invoiceNumber = manual || (sel ? String(sel.number) : '') || null;
   if (!invoiceNumber && !sel) { const st = document.getElementById('ctLinkStatus'); if (st) st.innerHTML = '<span style="color:var(--danger)">בחר חשבונית או הזן מספר.</span>'; return; }
   if (btn) btn.disabled = true;
+  // קישור בלבד — שומר את השיוך לחשבונית מבלי לסמן "שולם". "שולם לספק" ייקבע לפי התאמת בנק / סימון ידני.
   await fetch('/api/contractors/mark-paid-bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items: _ctLink.items, invoiceNumber, expenseId: sel ? sel.id : null, expenseUrl: sel ? sel.url : null, paid: true }) }).catch(() => {});
+    body: JSON.stringify({ items: _ctLink.items, invoiceNumber, expenseId: sel ? sel.id : null, expenseUrl: sel ? sel.url : null, paid: false, link: true }) }).catch(() => {});
   document.getElementById('ctLinkModal').classList.add('hidden');
   renderContractors($('#content'));
 };
@@ -4490,6 +4538,7 @@ function supplierPayablesSection(list) {
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:7px">
       <span style="font-size:12.5px">ללא מע"מ: <b>${money(p.amountExcludeVat)}</b></span>
       <span style="font-size:12.5px">כולל מע"מ: <b style="color:var(--danger)">${money(p.amount)}</b></span>
+      ${p.supplierPayStatus === 'partial' ? `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap" title="הוצאה זו שולמה חלקית לספק דרך התאמות בנק — נותרה יתרה עד לתשלום מלא">🟡 שולם חלקית לספק · ${money(p.bankPaidAmount)} מתוך ${money(p.amount)} (נותרו ${money(p.remaining)})</span>` : ''}
       <span style="flex:1;min-width:8px"></span>
       ${p.hasFile ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="previewDoc('/api/supplier-payables/${p.id}/file')">תצוגה 👁</button>
       <a class="btn ghost" style="padding:3px 10px;font-size:12px;text-decoration:none" href="/api/supplier-payables/${p.id}/file" download target="_blank" rel="noopener">הורדה ↓</a>` : ''}
@@ -4608,8 +4657,11 @@ async function renderLinkedNow() {
     if (s === 'uninvoiced') return '<span class="tag" style="background:#fee2e2;color:#991b1b;white-space:nowrap">🔴 טרם חויב</span>';
     return '<span class="tag" style="background:#f1f5f9;color:#475569;white-space:nowrap">⚪ —</span>';
   };
+  const partialBanner = r.supplierPayStatus === 'partial'
+    ? `<div style="padding:6px 10px;font-size:12px;background:#fff4e5;color:#a15c00;border-top:1px solid var(--line)">🟡 שולם חלקית לספק דרך הבנק · ${money(r.bankPaidAmount)} מתוך ${money((r.bankPaidAmount || 0) + (r.remaining || 0))} (נותרו ${money(r.remaining)}). האירועים יסומנו "שולם" כשהחשבונית תכוסה במלואה בבנק.</div>`
+    : '';
   box.innerHTML = `<div style="border:1px solid var(--accent2);border-radius:10px;overflow:hidden;margin-bottom:10px;background:#f0fdf4">
-    <div style="padding:6px 10px;font-weight:700;font-size:12.5px;background:#dcfce7">🔗 משויכים כעת (${evs.length}) — סטטוס לקוח + תשלום לספק לכל אירוע</div>
+    <div style="padding:6px 10px;font-weight:700;font-size:12.5px;background:#dcfce7">🔗 משויכים כעת (${evs.length}) — סטטוס לקוח + תשלום לספק לכל אירוע</div>${partialBanner}
     ${evs.map(ev => `<div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12.5px;padding:6px 10px;border-top:1px solid var(--line)">
       <span style="white-space:nowrap">${ddmy(ev.date)}</span>
       <span style="flex:1;min-width:110px">${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''}</span>
@@ -7373,7 +7425,7 @@ function bankTr(t) {
 function invChip(inv) {
   const esc = (u) => String(u).replace(/'/g, '%27');
   const typeLabel = inv.kind === 'expense' ? 'חשבונית ספק' : (DOC_TYPE_NAMES[inv.type] || 'מסמך');
-  const pv = inv.url ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="previewDoc('${esc(inv.url)}')">תצוגה 👁</button>` : '';
+  const pv = inv.url ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="${inv.id && inv.kind !== 'expense' ? `previewDocId('${esc(String(inv.id))}','${esc(inv.url)}')` : `previewDoc('${esc(inv.url)}')`}">תצוגה 👁</button>` : '';
   const dl = inv.url ? `<a href="${inv.url}" target="_blank" class="muted" style="font-size:11px;white-space:nowrap">הורדה ↓</a>` : '';
   let receipt = '';
   if (inv.receipt) {
