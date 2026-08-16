@@ -3278,8 +3278,9 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
     const kwNear = (nm, kw) => {
       if (!nm) return false;
       const n = esc(nm);
-      return new RegExp(n + '\\s*[-:]?\\s*(?:' + kw + ')').test(note)
-          || new RegExp('(?:' + kw + ')\\s*(?:ל)?\\s*[-:]?\\s*' + n).test(note);
+      // מרשה גם חיבור "ו" בין השם למילת-המפתח: "מתן ובונוס", "מתן-בונוס", "מתן בונוס"
+      return new RegExp(n + '\\s*[-:]?\\s*(?:ו)?(?:' + kw + ')').test(note)
+          || new RegExp('(?:ו)?(?:' + kw + ')\\s*(?:ל)?\\s*[-:]?\\s*' + n).test(note);
     };
     const nameDouble = (nm) => kwNear(nm, 'כפולה');
     const nameHalf = (nm) => kwNear(nm, 'יומית\\s*וחצי');
