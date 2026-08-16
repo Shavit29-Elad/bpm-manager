@@ -185,10 +185,27 @@ function applyPermissions() {
   // פרטי משתמש + התנתקות + ניהול משתמשים (למנהל) בכותרת
   let box = document.getElementById('userBox');
   if (!box) { box = document.createElement('div'); box.id = 'userBox'; box.style.cssText = 'display:flex;gap:8px;align-items:center;margin-inline-start:auto'; document.querySelector('.topbar').appendChild(box); }
-  box.innerHTML = `<span class="muted" style="font-size:12.5px">👤 ${escapeHtml(u.username || '')}${isAdmin ? ' · הנהלה' : ' · צפייה'}</span>
+  box.innerHTML = `<span id="mailAlert" style="display:none"></span><span class="muted" style="font-size:12.5px">👤 ${escapeHtml(u.username || '')}${isAdmin ? ' · הנהלה' : ' · צפייה'}</span>
     ${isAdmin ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openUsersModal()">👥 משתמשים</button>` : ''}
     <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="logout()">התנתק</button>`;
+  refreshMailAlert();
+  if (!window._mailAlertTimer) window._mailAlertTimer = setInterval(() => { try { refreshMailAlert(); } catch { } }, 3 * 60 * 1000);
 }
+// תג התראה בולט בראש המסך: כמה חשבוניות מהמייל ממתינות לטיפול ידני (לינק שלא נשלף אוטומטית)
+window.refreshMailAlert = async () => {
+  const el = document.getElementById('mailAlert'); if (!el) return;
+  let n = 0;
+  try { const r = await fetch('/api/mail-scan/pending?companyId=' + state.company).then(x => x.json()); n = (r && r.count) || (r && r.pending ? r.pending.length : 0); } catch { }
+  if (!n) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  el.innerHTML = `<button onclick="gotoMailPending()" title="חשבוניות מהמייל שהגיעו כלינק וממתינות לטיפול ידני" style="cursor:pointer;border:none;background:#dc2626;color:#fff;font-weight:700;font-size:12.5px;padding:4px 11px;border-radius:999px;white-space:nowrap;animation:pulseAlert 1.8s ease-in-out infinite">📩 ${n} חשבוניות לטיפול</button>`;
+  if (!document.getElementById('pulseAlertStyle')) { const s = document.createElement('style'); s.id = 'pulseAlertStyle'; s.textContent = '@keyframes pulseAlert{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.5)}50%{box-shadow:0 0 0 5px rgba(220,38,38,0)}}'; document.head.appendChild(s); }
+};
+window.gotoMailPending = () => {
+  const tab = document.querySelector('.tab[data-tab="contractors"]');
+  if (tab) tab.click();
+  setTimeout(() => { const p = document.getElementById('draftsPanel'); if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 400);
+};
 
 // ---- לשוניות לפי חברה ----
 // "הצוות" (איריס) — BPM בלבד. משה: אין עובדים/אירועים-ויומן, ולשונית החיבורים מוסתרת.
@@ -4541,6 +4558,7 @@ window.dismissMailPending = async (uid) => {
   const body = uid === '__all__' ? { all: true, companyId: state.company } : { uid, companyId: state.company };
   await fetch('/api/mail-scan/pending/dismiss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
   _mailPending = uid === '__all__' ? [] : _mailPending.filter(p => String(p.uid) !== String(uid));
+  try { refreshMailAlert(); } catch { }
   renderContractors($('#content'));
 };
 // ===== הוצאות ספקים לתשלום (מסמכי מס שלא שולמו + חשבונות עסקה פנימיים) =====
