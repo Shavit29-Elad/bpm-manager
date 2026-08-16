@@ -1074,7 +1074,7 @@ function applyLinkedEvents(db, linkedEvents, invoiceNumber, payableId) {
     const ev = (db.events || []).find(e => String(e.id) === String(le.eventId));
     if (!ev || !Array.isArray(ev.contractorDetails) || !ev.contractorDetails[le.index]) continue;
     const cd = ev.contractorDetails[le.index];
-    cd.paid = true;
+    // שיוך = קישור לחשבונית בלבד (לא "שולם לספק"). התשלום בפועל מסומן בנפרד.
     cd.paidInvoice = invoiceNumber || cd.paidInvoice || null;
     cd.paidPayableId = payableId || null;
     if (le.amount != null && le.amount !== '' && !isNaN(Number(le.amount))) cd.amount = Number(le.amount);  // תיקון סכום הספק פר-אירוע ישירות ממסך אישור הטיוטה
@@ -1381,7 +1381,7 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/link-events$/, (req, res, param
     const ev = (db.events || []).find(e => String(e.id) === String(it.eventId));
     if (ev && Array.isArray(ev.contractorDetails) && ev.contractorDetails[it.index]) {
       const cd = ev.contractorDetails[it.index];
-      cd.paid = true;
+      // שיוך = קישור לחשבונית בלבד (לא "שולם לספק"). התשלום בפועל מסומן בנפרד.
       cd.paidPayableId = p.id;
       cd.paidInvoice = p.number || cd.paidInvoice || null;
       cd.paidExpenseId = p.giExpenseId || cd.paidExpenseId || null;
@@ -1392,12 +1392,24 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/link-events$/, (req, res, param
 });
 
 // GET /api/supplier-payables/:id/linked-events — האירועים המשויכים כרגע להוצאה זו (לתצוגה + ביטול שיוך)
-add('GET', /^\/api\/supplier-payables\/([^/]+)\/linked-events$/, (req, res, params, _q) => {
+add('GET', /^\/api\/supplier-payables\/([^/]+)\/linked-events$/, async (req, res, params, _q) => {
   const db = load();
   const p = (db.supplierPayables || []).find(x => x.id === params[0]);
   if (!p) return json(res, { error: 'לא נמצא' }, 404);
   const _cid = (_q && _q.companyId) || giCompanyId();
   if ((p.companyId || giCompanyId()) !== _cid) return json(res, { error: 'ההוצאה שייכת לחברה אחרת' }, 403);
+  // סטטוס תשלום מהלקוח לכל אירוע — לפי בנק (זיכוי מאושר) או חשבונית ירוקה
+  const bankPaid = new Map();
+  for (const t of (db.bankTx || [])) {
+    if (_cid && t.companyId !== _cid) continue;
+    if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
+    for (const inv of (t.matchedInvoices || [])) {
+      if (inv && inv.number != null && !bankPaid.has('num:' + inv.number)) bankPaid.set('num:' + inv.number, t.date || null);
+      if (inv && inv.id != null && !bankPaid.has('id:' + inv.id)) bankPaid.set('id:' + inv.id, t.date || null);
+    }
+  }
+  let openNums = null;
+  try { if (greenInvoice.haveCredentials()) { const open = await greenInvoice.openDocuments(); openNums = new Set((open || []).map(d => String(d.number))); } } catch { openNums = null; }
   const out = [];
   for (const ev of (db.events || [])) {
     const details = ev.contractorDetails || [];
@@ -1406,7 +1418,7 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/linked-events$/, (req, res, para
       const byId = c.paidPayableId && String(c.paidPayableId) === String(p.id);
       const byExp = p.giExpenseId && c.paidExpenseId && String(c.paidExpenseId) === String(p.giExpenseId);
       const byNum = p.number && c.paidInvoice && String(c.paidInvoice) === String(p.number) && (c.name || '').trim() === (p.supplierName || '').trim();
-      if (byId || byExp || byNum) out.push({ eventId: ev.id, index: i, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0, contractor: (c.name || '').trim() });
+      if (byId || byExp || byNum) out.push({ eventId: ev.id, index: i, date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0, contractor: (c.name || '').trim(), supplierPaid: !!c.paid, clientPaid: eventClientPaid(ev, bankPaid, openNums) });
     }
   }
   out.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
@@ -1451,7 +1463,7 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/supersede$/, (req, res, params,
   const matchesOld = (cd) => (cd.paidPayableId && String(cd.paidPayableId) === String(oldP.id))
     || (oldP.giExpenseId && cd.paidExpenseId && String(cd.paidExpenseId) === String(oldP.giExpenseId))
     || (oldP.number && cd.paidInvoice && String(cd.paidInvoice) === String(oldP.number) && (cd.name || '').trim() === (oldP.supplierName || '').trim());
-  const linkTo = (cd) => { cd.paid = true; cd.paidPayableId = newP.id; cd.paidInvoice = newP.number || cd.paidInvoice || null; cd.paidExpenseId = newP.giExpenseId || cd.paidExpenseId || null; };
+  const linkTo = (cd) => { cd.paidPayableId = newP.id; cd.paidInvoice = newP.number || cd.paidInvoice || null; cd.paidExpenseId = newP.giExpenseId || cd.paidExpenseId || null; }; // שיוך בלבד — לא מסמן שולם
   const moved = [];
   // 1) העברת אירועי חשבון העסקה לחשבונית המס
   for (const ev of (db.events || [])) {
@@ -1600,8 +1612,19 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/delete$/, (req, res, params, q,
   const p = (db.supplierPayables || []).find(x => x.id === params[0]);
   if (!p) return json(res, { error: 'לא נמצא' }, 404);
   if ((p.companyId || giCompanyId()) !== _cid) return json(res, { error: 'ההוצאה שייכת לחברה אחרת' }, 403); // בידוד
+  // שחרור אירועים משויכים — מחיקת ההוצאה מחזירה את שורות הקבלן שלה למצב פתוח (מונע שיוך "יתום")
+  let released = 0;
+  for (const ev of (db.events || [])) {
+    for (const cd of (ev.contractorDetails || [])) {
+      if (!cd || !cd.paid) continue;
+      const here = (cd.paidPayableId && String(cd.paidPayableId) === String(p.id))
+        || (p.giExpenseId && cd.paidExpenseId && String(cd.paidExpenseId) === String(p.giExpenseId))
+        || (p.number && cd.paidInvoice && String(cd.paidInvoice) === String(p.number) && (cd.name || '').trim() === (p.supplierName || '').trim());
+      if (here) { cd.paid = false; cd.paidPayableId = null; cd.paidInvoice = null; cd.paidExpenseId = null; cd.paidExpenseUrl = null; released++; }
+    }
+  }
   db.supplierPayables = (db.supplierPayables || []).filter(x => x.id !== params[0]);
-  save(db); json(res, { ok: true, removed: 1 });
+  save(db); json(res, { ok: true, removed: 1, released });
 });
 
 // GET /api/mail/status — האם שליחת מייל מוגדרת ולאן מועברות הוצאות
@@ -3892,6 +3915,14 @@ add('DELETE', /^\/api\/expenses\/([^/]+)$/, async (req, res, params) => {
   catch (e) { return json(res, { error: e.message }, 500); }
   const db = load();
   if (db.expenseNotes) delete db.expenseNotes[id];
+  // שחרור אירועים משויכים — מחיקת ההוצאה מחזירה את שורות הקבלן שלה למצב פתוח (מונע שיוך "יתום")
+  const _delPays = (db.supplierPayables || []).filter(p => String(p.giExpenseId) === String(id));
+  for (const ev of (db.events || [])) for (const cd of (ev.contractorDetails || [])) {
+    if (!cd || !cd.paid) continue;
+    const here = (cd.paidExpenseId && String(cd.paidExpenseId) === String(id))
+      || _delPays.some(p => (cd.paidPayableId && String(cd.paidPayableId) === String(p.id)) || (p.number && cd.paidInvoice && String(cd.paidInvoice) === String(p.number) && (cd.name || '').trim() === (p.supplierName || '').trim()));
+    if (here) { cd.paid = false; cd.paidPayableId = null; cd.paidInvoice = null; cd.paidExpenseId = null; cd.paidExpenseUrl = null; }
+  }
   db.supplierPayables = (db.supplierPayables || []).filter(p => p.giExpenseId !== id);
   for (const t of (db.bankTx || [])) {
     if (Array.isArray(t.matchedInvoices) && t.matchedInvoices.some(inv => inv.id === id)) {

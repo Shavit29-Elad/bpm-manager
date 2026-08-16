@@ -4549,6 +4549,7 @@ function renderLinkEvRows() {
   const low = s => (s || '').toString().toLowerCase();
   const tokens = low(_linkPay.q).trim().split(/\s+/).filter(Boolean);
   let evs = (_linkPay.events || []).filter(ev => {
+    if (String(ev.linkedPayableId || '') === String(_linkPay.pid)) return false; // כבר משויך להוצאה זו — מוצג ב"משויכים כעת"
     const iso = String(ev.date || ''); const y = iso.slice(0, 4), mo = iso.slice(5, 7);
     if (_linkPay.year !== 'all' && y !== _linkPay.year) return false;
     if (_linkPay.month !== 'all' && mo !== _linkPay.month) return false;
@@ -4579,8 +4580,6 @@ window.toggleLinkEv = (key, on) => { if (!_linkPay) return; if (on) _linkPay.sel
 window.confirmLinkEv = async (btn) => {
   const items = [..._linkPay.sel].map(k => { const [eventId, index] = k.split('|'); return { eventId, index: +index }; });
   if (!items.length) { alert('לא נבחרו אירועים'); return; }
-  const notPaid = items.filter(it => { const ev = _linkPay.events.find(e => e.eventId === it.eventId && e.index === it.index); return !(ev && ev.clientPaid && ev.clientPaid.status === 'paid'); }).length;
-  if (notPaid) { if (!confirm(`ל-${notPaid} מהאירועים הלקוח עדיין לא שילם — לשייך (ולסמן שולם לספק) בכל זאת?`)) return; }
   if (btn) btn.disabled = true;
   await fetch(`/api/supplier-payables/${_linkPay.pid}/link-events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) }).catch(() => {});
   document.getElementById('linkEvModal').classList.add('hidden');
@@ -4592,16 +4591,34 @@ async function renderLinkedNow() {
   const r = await fetch(`/api/supplier-payables/${_linkPay.pid}/linked-events?companyId=${state.company}`).then(x => x.json()).catch(() => ({ events: [] }));
   const evs = r.events || [];
   if (!evs.length) { box.innerHTML = ''; return; }
+  const cpBadge = (cp) => {
+    const s = (cp || {}).status;
+    if (s === 'paid') return '<span class="tag" style="background:#dcfce7;color:#166534;white-space:nowrap">🟢 שולם מהלקוח</span>';
+    if (s === 'charged') return '<span class="tag" style="background:#fef9c3;color:#854d0e;white-space:nowrap">🟡 חויב · ממתין</span>';
+    if (s === 'uninvoiced') return '<span class="tag" style="background:#fee2e2;color:#991b1b;white-space:nowrap">🔴 טרם חויב</span>';
+    return '<span class="tag" style="background:#f1f5f9;color:#475569;white-space:nowrap">⚪ —</span>';
+  };
   box.innerHTML = `<div style="border:1px solid var(--accent2);border-radius:10px;overflow:hidden;margin-bottom:10px;background:#f0fdf4">
-    <div style="padding:6px 10px;font-weight:700;font-size:12.5px;background:#dcfce7">🔗 משויכים כעת (${evs.length}) — ✕ לביטול שיוך</div>
-    ${evs.map(ev => `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:6px 10px;border-top:1px solid var(--line)">
+    <div style="padding:6px 10px;font-weight:700;font-size:12.5px;background:#dcfce7">🔗 משויכים כעת (${evs.length}) — סטטוס לקוח + תשלום לספק לכל אירוע</div>
+    ${evs.map(ev => `<div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12.5px;padding:6px 10px;border-top:1px solid var(--line)">
       <span style="white-space:nowrap">${ddmy(ev.date)}</span>
-      <span style="flex:1;min-width:0">${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''} <span class="muted">· ${escapeHtml(ev.contractor || '')}</span></span>
+      <span style="flex:1;min-width:110px">${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''}</span>
+      ${cpBadge(ev.clientPaid)}
+      ${ev.supplierPaid ? '<span class="tag" style="background:#dcfce7;color:#166534;white-space:nowrap">✅ שולם לספק</span>' : '<span class="tag" style="background:#fef3c7;color:#92400e;white-space:nowrap">⏳ טרם שולם לספק</span>'}
       <span style="white-space:nowrap;font-weight:600">${money(ev.amount)}</span>
+      ${ev.supplierPaid ? '' : `<button class="btn ghost" style="padding:2px 8px;font-size:11.5px;color:var(--accent2);white-space:nowrap" onclick="markSupplierPaidEvent('${ev.eventId}',${ev.index},this)" title="סמן ששילמת לספק בפועל">✓ סמן שולם</button>`}
       <button class="btn ghost" style="padding:2px 8px;font-size:12px;color:var(--danger)" onclick="unlinkOneEvent('${ev.eventId}',${ev.index},this)" title="בטל שיוך אירוע זה">✕</button>
     </div>`).join('')}
   </div>`;
 }
+// סימון תשלום בפועל לספק על אירוע משויך (נפרד מהשיוך)
+window.markSupplierPaidEvent = async (eventId, index, btn) => {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  await fetch('/api/contractors/toggle-paid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId, index, paid: true }) }).catch(() => {});
+  try { clearApiCache(); } catch {}
+  renderLinkedNow();
+  try { renderContractors($('#content')); } catch {}
+};
 window.unlinkOneEvent = async (eventId, index, btn) => {
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   await fetch(`/api/supplier-payables/${_linkPay.pid}/unlink-events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [{ eventId, index }], companyId: state.company }) }).catch(() => {});
@@ -5198,7 +5215,7 @@ window.approveDraft = async (id, btn) => {
         ev.contractorDetails = Array.isArray(ev.contractorDetails) ? ev.contractorDetails : [];
         let cd = ev.contractorDetails.find(c => (c.name || '').trim() === supplierName.trim());
         if (!cd) { cd = { name: supplierName, amount: amt }; ev.contractorDetails.push(cd); } else { cd.amount = amt; }
-        cd.paid = true; cd.paidInvoice = number || cd.paidInvoice || null; if (payId) cd.paidPayableId = payId; if (giId) cd.paidExpenseId = giId;
+        cd.paidInvoice = number || cd.paidInvoice || null; if (payId) cd.paidPayableId = payId; if (giId) cd.paidExpenseId = giId; // שיוך בלבד — לא מסמן שולם
         ev.contractors = Array.isArray(ev.contractors) ? ev.contractors : []; if (!ev.contractors.includes(supplierName)) ev.contractors.push(supplierName);
         await fetch(`/api/events/${ev.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contractorDetails: ev.contractorDetails, contractors: ev.contractors }) }).catch(() => { });
         addedLinked++;
