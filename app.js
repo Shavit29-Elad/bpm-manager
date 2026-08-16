@@ -4473,7 +4473,8 @@ function supplierPayablesSection(list) {
   const total = items.reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const rows = items.map(p => {
     const missingAlloc = [305, 320].includes(Number(p.documentType)) && Math.max(Number(p.amount) || 0, Number(p.amountExcludeVat) || 0) > 5000 && !p.allocationNumber;
-    return `<div class="sp-row" data-readiness="${p.readiness || 'nolink'}" style="padding:10px 12px;border-top:1px solid var(--line);font-size:13px">
+    const _spSearchText = [p.supplierName, p.number, p.description, PAYABLE_TYPE_NAMES[p.documentType], ...((p.coveredEvents || []).map(e => `${e.artist || ''} ${e.location || ''}`))].filter(Boolean).join(' ').toLowerCase();
+    return `<div class="sp-row" data-readiness="${p.readiness || 'nolink'}" data-search="${escAttr(_spSearchText)}" style="padding:10px 12px;border-top:1px solid var(--line);font-size:13px">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <span class="tag" style="${p.isBusinessDoc ? 'background:#fff4e5;color:#8a5a00' : 'background:#eef;color:var(--accent)'}">${PAYABLE_TYPE_NAMES[p.documentType] || ('סוג ' + p.documentType)}${p.isBusinessDoc ? ' · פנימי' : ''}</span>
       <span style="font-weight:600;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.supplierName || 'ספק')}</span>
@@ -4502,14 +4503,23 @@ function supplierPayablesSection(list) {
   }).join('');
   return `<div class="row-between"><div><h2>🧾 רשימת ספקים לתשלום</h2>
       <span class="muted">${items.length ? `${items.length} הוצאות שטרם שולמו · סה"כ ${money(total)} (כולל מע"מ). "חשבון עסקה · פנימי" = רישום שלא נשלח לחשבונית ירוקה/רו״ח.` : 'אין הוצאות ספקים פתוחות. הוצאה שתסמן "לא שולם" (או חשבון עסקה) תופיע כאן.'}</span></div>
-      ${items.length ? `<label style="font-size:12.5px;display:flex;gap:6px;align-items:center;white-space:nowrap" title="מציג רק הוצאות שהלקוח כבר שילם על האירועים שהן מכסות"><input type="checkbox" onchange="filterReadyPayables(this.checked)"/> 🟢 רק מוכן לתשלום</label>` : ''}</div>
+      ${items.length ? `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><input type="text" oninput="filterPayablesText(this.value)" placeholder="🔍 חיפוש: ספק / מספר / תיאור / אמן…" style="padding:6px 10px;font-size:12.5px;min-width:230px"/><label style="font-size:12.5px;display:flex;gap:6px;align-items:center;white-space:nowrap" title="מציג רק הוצאות שהלקוח כבר שילם על האירועים שהן מכסות"><input type="checkbox" onchange="filterReadyPayables(this.checked)"/> 🟢 רק מוכן לתשלום</label></div>` : ''}</div>
     ${items.length ? `<div style="margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="empty">אין הוצאות פתוחות לתשלום.</div>'}`;
 }
 let _supPayables = [];
-// סינון "רק מוכן לתשלום" ברשימת הספקים לתשלום
-window.filterReadyPayables = (on) => {
-  document.querySelectorAll('.sp-row').forEach(r => { r.style.display = (!on || r.dataset.readiness === 'ready') ? '' : 'none'; });
-};
+// סינון רשימת הספקים לתשלום — "רק מוכן" + חיפוש טקסט חופשי (משולבים)
+let _spReadyOnly = false, _spSearch = '';
+function applyPayableFilters() {
+  const toks = _spSearch.split(/\s+/).filter(Boolean);
+  document.querySelectorAll('.sp-row').forEach(r => {
+    const okReady = !_spReadyOnly || r.dataset.readiness === 'ready';
+    const hay = r.dataset.search || '';
+    const okText = !toks.length || toks.every(t => hay.includes(t));
+    r.style.display = (okReady && okText) ? '' : 'none';
+  });
+}
+window.filterReadyPayables = (on) => { _spReadyOnly = !!on; applyPayableFilters(); };
+window.filterPayablesText = (v) => { _spSearch = String(v || '').toLowerCase().trim(); applyPayableFilters(); };
 // שיוך אירועים להוצאת ספק קיימת — פותח בחירת אירועים פתוחים ומקשר אותם להוצאה (מסמן "שולם לספק")
 let _linkPay = null;
 window.openLinkEventsToPayable = async (pid) => {
