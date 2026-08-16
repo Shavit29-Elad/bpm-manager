@@ -1021,7 +1021,7 @@ function renderOpenInvoices() {
   wrap.innerHTML = `
     <div class="row-between"><div><h2>חשבוניות פתוחות</h2>
       <span class="muted">${docs.length} מסמכים · ${money(totalAll)} · מקובץ לפי לקוח</span></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${state.company === 'co_ofek' ? `<button class="btn primary" style="padding:4px 12px;font-size:13px" onclick="openOldInvoice('create','',300)" title="העלאת חשבונית עסקה/מס ישנה (לפני יולי) שאינה במערכת">➕ העלה חשבונית ישנה</button><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="openBulkOldInvoices()" title="העלאת כמה מסמכי הכנסה (PDF מפייפרלס) בבת אחת — מילוי אוטומטי לכל קובץ">📎 העלאה מרובה</button>` : ''}${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="exportExpectedIncomePdf(this)" title="דוח PDF של כל ההכנסות הצפויות מהחשבוניות הפתוחות שטרם שולמו">📄 דוח הכנסות צפויות</button>${state.company === 'co_ofek' ? `<button class="btn primary" style="padding:4px 12px;font-size:13px" onclick="openOldInvoice('create','',300)" title="העלאת חשבונית עסקה/מס ישנה (לפני יולי) שאינה במערכת">➕ העלה חשבונית ישנה</button><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="openBulkOldInvoices()" title="העלאת כמה מסמכי הכנסה (PDF מפייפרלס) בבת אחת — מילוי אוטומטי לכל קובץ">📎 העלאה מרובה</button>` : ''}${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
     </div>
     ${_openInvErr ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(_openInvErr)}</div>` : ''}
     ${clients.length ? (() => {
@@ -5904,6 +5904,56 @@ async function _htmlToPdfBlob(innerHtml) {
   return pdf.output('blob');
 }
 function _blobToBase64(blob) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onloadend = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(blob); }); }
+// ===== דוח הכנסות צפויות (PDF) — כל החשבוניות הפתוחות שטרם שולמו, מקובץ לפי לקוח =====
+window.exportExpectedIncomePdf = async (btn) => {
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'מכין PDF…'; }
+  try {
+    // רק הכנסה צפויה אמיתית — פתוח שטרם שולם (מוציאים "התקבל תשלום · חסרה קבלה", שכבר שולם)
+    const docs = (_openInv || []).filter(d => !d.paidNoReceipt);
+    if (!docs.length) { alert('אין חשבוניות פתוחות שטרם שולמו.'); if (btn) { btn.disabled = false; btn.textContent = orig; } return; }
+    const openAmt = (d) => (d.amountDue != null ? Number(d.amountDue) : Number(d.amount) || 0);
+    const groups = {};
+    for (const d of docs) { const k = d.clientName || '—'; (groups[k] = groups[k] || []).push(d); }
+    const clients = Object.entries(groups)
+      .map(([name, ds]) => ({ name, ds: ds.slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || ''))), total: ds.reduce((s, x) => s + openAmt(x), 0) }))
+      .sort((a, b) => b.total - a.total);
+    const grand = clients.reduce((s, c) => s + c.total, 0);
+    const proformaSum = docs.filter(d => Number(d.type) === 300).reduce((s, d) => s + openAmt(d), 0);
+    const invoiceSum = docs.filter(d => Number(d.type) === 305).reduce((s, d) => s + openAmt(d), 0);
+    const bizName = ((state.companies || []).find(x => x.id === state.company) || {}).name || 'החברה';
+    const today = new Date().toLocaleDateString('he-IL');
+    const th = (t, w) => `<th style="border:1px solid #d8dced;padding:6px 8px;text-align:right;background:#eef0fb;font-size:12px;font-weight:700${w ? `;width:${w}` : ''}">${t}</th>`;
+    const cell = (inner, opt = '') => `<td style="border:1px solid #d8dced;padding:5px 8px;text-align:right;font-size:12.5px;${opt}">${inner}</td>`;
+    const clientBlocks = clients.map(cl => `
+      <div style="margin-top:13px">
+        <div style="display:flex;justify-content:space-between;align-items:center;background:#f5f6fd;border:1px solid #d8dced;border-bottom:none;padding:7px 10px">
+          <b style="font-size:14px">${escapeHtml(cl.name)}</b>
+          <span style="font-weight:700;color:#4338ca">${money(cl.total)} · ${cl.ds.length} מסמכים</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;background:#fff;table-layout:fixed">
+          <thead><tr>${th('סוג', '92px')}${th('מספר', '82px')}${th('תאריך', '84px')}${th('תיאור')}${th('סכום', '96px')}</tr></thead>
+          <tbody>
+            ${cl.ds.map((d, i) => `<tr style="${i % 2 ? 'background:#fafbff' : ''}">${cell(DOC_TYPE_NAMES[d.type] || 'מסמך')}${cell(d.number ? '#' + escapeHtml(String(d.number)) : '—', 'white-space:nowrap')}${cell(fmtDate(d.date), 'white-space:nowrap')}${cell(d.description ? escapeHtml(d.description) : '—')}${cell('<b>' + money(openAmt(d)) + '</b>')}</tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`).join('');
+    const html = `
+      <div style="font-size:20px;font-weight:800">${escapeHtml(bizName)}</div>
+      <div style="font-size:16px;font-weight:700;color:#4338ca;margin-top:2px">דוח הכנסות צפויות</div>
+      <div style="color:#6b7488;font-size:12.5px;margin-top:3px;padding-bottom:8px;border-bottom:2px solid #c7cce0">הופק ${today} · ${docs.length} חשבוניות פתוחות · ${clients.length} לקוחות</div>
+      ${clientBlocks}
+      <div style="margin-top:18px;border-top:2px solid #c7cce0;padding-top:10px;display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:12.5px;color:#6b7488">חשבון עסקה: ${money(proformaSum)} · חשבונית מס: ${money(invoiceSum)}</div>
+        <div style="font-size:17px;font-weight:800">סה"כ הכנסה צפויה: <span style="color:#4338ca">${money(grand)}</span></div>
+      </div>`;
+    const blob = await _htmlToPdfBlob(html);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `דוח הכנסות צפויות - ${bizName} - ${today}.pdf`; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 900);
+  } catch (e) { alert('שגיאה בהכנת הדוח: ' + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = orig || '📄 דוח הכנסות צפויות'; }
+};
 // בונה PDF אחד לכל עובד שיש לו עבודות בחודש הנבחר
 async function _buildEmployeePdfs(month, prog) {
   const emps = window._payEmps || [];
