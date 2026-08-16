@@ -3199,6 +3199,17 @@ add('POST', /^\/api\/mail-scan\/test$/, async (req, res, _p, q, body) => {
   json(res, r.ok ? { ok: true, user: creds.user, total: r.total, sinceCount: r.sinceCount, parserOk: r.parserOk, lastSubject: r.lastSubject } : { ok: false, error: r.error });
 });
 
+// GET /api/mail-scan/inspect?companyId=&q=&since= — אבחון מבנה הודעות (צרופות/לינקים/טקסט) — כדי ללמוד לחלץ מספק מסוים
+add('GET', /^\/api\/mail-scan\/inspect$/, async (req, res, _p, q) => {
+  const db = load();
+  const cid = (q && q.companyId) || giCompanyId();
+  const creds = companyMailCreds(db, cid);
+  if (!creds.user || !creds.pass) return json(res, { ok: false, error: 'לחברה זו אין חשבון מייל' });
+  const since = (q && q.since) || '2026-08-01';
+  const r = await mailReader.inspectMailbox({ user: creds.user, pass: creds.pass }, since, { query: (q && q.q) || '', limit: Math.min(12, Number(q && q.limit) || 6) });
+  json(res, r);
+});
+
 // ===== סורק מייל → טיוטות הוצאה/רישום לאישור =====
 function mailScanState(db, cid) {
   db.mailScan = db.mailScan || {};
@@ -3238,6 +3249,7 @@ async function mailScanBatchFor(cid, since, limit) {
     let uploaded = 0, recorded = 0, duplicates = 0, skipped = 0, errors = 0, links = 0, unreadable = 0, aiCalls = 0;
     const erroredUids = new Set();               // הודעות שנכשלו זמנית — לא נסמן כ"נסרקו" כדי שינוסו שוב בהרצה הבאה
     const takenUids = new Set();                 // הודעות שמהן נלקח מסמך לקליטה (הועלה/נרשם) — נסמן אותן כ"נקראו" ב-Gmail
+    const handledUids = new Set();               // הודעות שטופלו (נקלטו/כפילות/כבר קיים) — לא ייכנסו לרשימת "לטיפול ידני"
     const db = load();
     const st = mailScanState(db, cid);
     st.errCounts = st.errCounts || {};           // מונה כשלונות פר-הודעה — כדי להפסיק לנסות מסמכים שנכשלים שוב ושוב
@@ -3249,7 +3261,7 @@ async function mailScanBatchFor(cid, since, limit) {
       if (it.viaLink) links++;
       // סינון ראשון — לפני ה-AI: אם את הקובץ הזה בדיוק כבר העלינו פעם, מדלגים לגמרי (חוסך גם קריאת AI, מונע כפילות)
       const h = _fileHash(it.contentBase64);
-      if (h && uploadedSet.has(h)) { duplicates++; continue; }
+      if (h && uploadedSet.has(h)) { duplicates++; if (it.uid != null) handledUids.add(String(it.uid)); continue; }
       let ai;
       aiCalls++; // מונה קריאות AI בפועל — משמש לבלם הביטחון (תקרה לכל ריצה)
       try { ai = await classifyExpenseAttachment(it.contentBase64, it.mime, suppliers); }
@@ -3277,35 +3289,36 @@ async function mailScanBatchFor(cid, since, limit) {
       await sleep(250); // קצב — למנוע חריגה ממגבלת ה-AI
       // לא חשבונית (לוגו/חתימה/מסמך שאינו פיננסי) — מדלגים, ושומרים טביעת אצבע כדי לא לנתח את אותו קובץ שוב לעולם (חוסך קרדיט בכל ריצה עתידית).
       if (!ai || ai.route === 'skip' || !ai.isFinancialDoc) { skipped++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; }
-      if (isExisting(ai)) { duplicates++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; } // כבר קיים במערכת — לא מעלים, וגם מסמנים את הקובץ כדי לא לנתח אותו שוב
+      if (isExisting(ai)) { duplicates++; if (it.uid != null) handledUids.add(String(it.uid)); if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; } // כבר קיים במערכת — לא מעלים, וגם מסמנים את הקובץ כדי לא לנתח אותו שוב
       // כלל: לא מעלים לאישור מסמך שתאריכו לפני 2026 (חשבוניות ישנות שנשלחו/הועברו במייל, או טעויות קריאה כמו 1976/2016).
       // נשמר כטביעת אצבע כדי לא לנתח את אותו קובץ שוב.
       const _docYear = (() => { const m = String(ai.date || '').match(/(20\d{2}|\d{4})/); return m ? +m[1] : null; })();
       if (_docYear && _docYear < 2026) { skipped++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; }
       if (ai.route === 'expense') {
-        try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; if (it.uid != null) takenUids.add(it.uid); existing.push({ num: nrm(ai.invoiceNumber), amt: Number(ai.amountInclVat) || 0, sup: nrm(ai.supplierName) }); if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } }
+        try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; if (it.uid != null) { takenUids.add(it.uid); handledUids.add(String(it.uid)); } existing.push({ num: nrm(ai.invoiceNumber), amt: Number(ai.amountInclVat) || 0, sup: nrm(ai.supplierName) }); if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } }
         catch (e) { errors++; erroredUids.add(String(it.uid)); console.error(`[mail-scan] ${cid} העלאה נכשלה (uid ${it.uid}):`, String(e.message || e).slice(0, 160)); }
       } else if (ai.route === 'record') {
         const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-record', filename: it.filename, mime: it.mime, data: it.contentBase64 });
         db.mailRecords[cid].push({ id: 'mr_' + Math.random().toString(16).slice(2, 10), fileId: saved.id, filename: it.filename, mime: it.mime, from: it.from, subject: it.subject, receivedDate: it.receivedDate, documentType: ai.documentType, supplierName: ai.supplierName, number: ai.invoiceNumber, date: ai.date, amountInclVat: ai.amountInclVat, description: ai.description, recordedAt: new Date().toISOString() });
         if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } // נשמר — לא לנתח שוב את אותו קובץ
-        if (it.uid != null) takenUids.add(it.uid);
+        if (it.uid != null) { takenUids.add(it.uid); handledUids.add(String(it.uid)); }
         recorded++;
       } else { skipped++; }
     }
     const seenUidSet = new Set(st.seenUids.map(String));
     // מסמנים כ"נסרקו" רק הודעות שלא נכשלו — כדי שכשלים ינוסו שוב בהרצה הבאה (ולא ייעלמו)
     (scan.processedUids || []).forEach(u => { const s = String(u); if (!seenUidSet.has(s) && !erroredUids.has(s)) st.seenUids.push(u); });
-    // רשת ביטחון: חשבוניות שהגיעו כלינק ולא נפתחו — נרשמות לרשימת "לטיפול ידני" כדי שלא ייעלמו
+    // רשת ביטחון: כל מייל שנראה כמו חשבונית אך *לא* טופל (לא נקלט, לא כפילות) — נרשם לרשימת "לטיפול ידני" כדי שלא ייעלם
     const pend = db.mailPending[cid];
     const pendUids = new Set(pend.map(p => String(p.uid)));
-    for (const u of (scan.unresolved || [])) {
-      if (takenUids.has(u.uid)) continue; // אם בסוף כן נקלט — לא מוסיפים
+    for (const u of (scan.candidates || [])) {
+      if (handledUids.has(String(u.uid))) continue; // נקלט/כפילות — לא מוסיפים
       if (pendUids.has(String(u.uid))) continue;
       pend.push({ uid: u.uid, from: u.from || '', subject: u.subject || '', receivedDate: u.receivedDate || '', link: u.link || null, seenAt: new Date().toISOString() });
+      pendUids.add(String(u.uid));
     }
-    // הודעות שנקלטו עכשיו — יורדות מרשימת ה"לטיפול ידני"
-    if (takenUids.size) db.mailPending[cid] = pend.filter(p => !takenUids.has(p.uid));
+    // הודעות שטופלו עכשיו — יורדות מרשימת ה"לטיפול ידני"
+    if (handledUids.size) db.mailPending[cid] = db.mailPending[cid].filter(p => !handledUids.has(String(p.uid)));
     if (db.mailPending[cid].length > 300) db.mailPending[cid] = db.mailPending[cid].slice(-300);
     st.since = since; st.lastScanAt = new Date().toISOString();
     save(db);

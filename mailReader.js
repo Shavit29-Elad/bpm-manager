@@ -12,7 +12,7 @@ function conf(creds) {
 // הרבה ספקים (מורנינג/mrng.to, פנגו, תפנית, Booking, iCount וכו') שולחים *הודעה עם לינק* להורדת החשבונית,
 // במקום צרופה. כאן מזהים קישורים כאלה, עוקבים אחרי הפניות, ואם הלינק מוביל לעמוד HTML — קופצים פעם אחת
 // לתוך העמוד כדי לאתר את קובץ ה-PDF/תמונה האמיתי, ומצרפים אותו כאילו היה צרופה.
-const INVOICE_LINK_HOSTS = /(mrng\.to|morning\.co|greeninvoice|ezcount|icount|sumit|rivhit|tafnit|pango|cellopark|booking\.com|expedia|hotel|invoice|fatoora|myinvoice|docs?\.|drive\.google|dropbox|wetransfer)/i;
+const INVOICE_LINK_HOSTS = /(paperless|mrng\.to|morning\.co|greeninvoice|ezcount|icount|sumit|rivhit|tafnit|pango|cellopark|booking\.com|expedia|hotel|invoice|fatoora|myinvoice|docs?\.|drive\.google|dropbox|wetransfer)/i;
 const LINK_NOISE = /(unsubscribe|preferences|privacy|policy|terms|facebook|instagram|twitter|linkedin|youtube|wa\.me|whatsapp|mailto:|tel:|\.css|\.js\b|track|pixel|beacon|utm_|\/click\?)/i;
 function extractPdfLinks(text) {
   if (!text) return [];
@@ -132,7 +132,7 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
   const client = new ImapFlow(conf(creds));
   const items = [];
   const processedUids = [];
-  const unresolved = []; // הודעות שנראות כמו חשבונית אך לא הצלחנו לחלץ מהן מסמך (לינק שלא נפתח) — לרשת ביטחון
+  const candidates = []; // כל הודעה שנראית כמו חשבונית — השרת יחליט אם נקלטה או צריכה טיפול ידני
   try {
     await client.connect();
     const lock = await client.getMailboxLock('INBOX');
@@ -169,38 +169,76 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
               size: a.content.length, contentBase64: a.content.toString('base64'),
             });
           });
-          if (!atts.length) {
-            let gotAny = false, urls = [];
-            try {
-              urls = extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`);
-              let li = 0;
-              for (const u of urls.slice(0, 6)) {
-                const got = await fetchPdfLink(u).catch(() => null);
-                if (got && got.base64) {
-                  gotAny = true;
-                  items.push({
-                    messageId, uid: msg.uid, attIndex: 'L' + (li++), from, subject, receivedDate,
-                    filename: got.filename || `link-${li}.pdf`, mime: got.mime, size: got.size,
-                    contentBase64: got.base64, viaLink: true, sourceUrl: u,
-                  });
-                }
+          const urls = extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`);
+          const hostLink = urls.find(u => INVOICE_LINK_HOSTS.test(u)) || urls[0] || null;
+          const invoiceLike = looksLikeInvoiceMail(subject, from, !!hostLink);
+          // צרופות שהן רק תמונות (כנראה לוגו/חתימה) — אז המסמך האמיתי כנראה מאחורי לינק
+          const onlyImgAtts = atts.length > 0 && atts.every(a => String(a.contentType || '').toLowerCase().startsWith('image/'));
+          // מנסים לשלוף מלינקים כשאין צרופת-מסמך אמיתית, או כשזה בבירור מייל חשבונית
+          if (urls.length && (!atts.length || onlyImgAtts || invoiceLike)) {
+            let li = 0;
+            for (const u of urls.slice(0, 6)) {
+              const got = await fetchPdfLink(u).catch(() => null);
+              if (got && got.base64) {
+                items.push({
+                  messageId, uid: msg.uid, attIndex: 'L' + (li++), from, subject, receivedDate,
+                  filename: got.filename || `link-${li}.pdf`, mime: got.mime, size: got.size,
+                  contentBase64: got.base64, viaLink: true, sourceUrl: u,
+                });
               }
-            } catch { }
-            // רשת ביטחון: אם לא הצלחנו לחלץ מסמך אך ההודעה נראית כמו חשבונית — לא מאבדים אותה
-            const hostLink = urls.find(u => INVOICE_LINK_HOSTS.test(u)) || urls[0] || null;
-            if (!gotAny && looksLikeInvoiceMail(subject, from, !!hostLink)) {
-              unresolved.push({ uid: msg.uid, messageId, from, subject, receivedDate, link: hostLink });
             }
           }
+          // כל מייל שנראה כמו חשבונית נרשם כ"מועמד" — השרת יחליט אם בסוף נקלט או שצריך טיפול ידני (כך שום דבר לא נופל בין הכיסאות)
+          if (invoiceLike) candidates.push({ uid: msg.uid, messageId, from, subject, receivedDate, link: hostLink });
         }
       }
       remaining = Math.max(0, remaining - use.length);
     } finally { lock.release(); }
     await client.logout();
-    return { ok: true, items, processedUids, remaining, unresolved };
+    return { ok: true, items, processedUids, remaining, candidates };
   } catch (e) {
     try { await client.logout(); } catch {}
     try { await client.close(); } catch {}
+    return { ok: false, error: e.message };
+  }
+}
+
+// אבחון: מחזיר את המבנה הגולמי של הודעות שמתאימות לחיפוש (צרופות/לינקים/תקציר HTML) — כדי ללמוד איך לחלץ מספק מסוים.
+export async function inspectMailbox(creds, since, { query = '', limit = 8 } = {}) {
+  if (!creds || !creds.user || !creds.pass) return { ok: false, error: 'חסרים פרטי מייל' };
+  const ImapFlow = await imapflow();
+  const simpleParser = await mailparser();
+  const client = new ImapFlow(conf(creds));
+  const q = String(query || '').toLowerCase();
+  const out = [];
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock('INBOX');
+    try {
+      const uids = (await client.search({ since: new Date(since) }, { uid: true })) || [];
+      const use = uids.reverse();
+      let scanned = 0;
+      for await (const msg of client.fetch(use, { source: true }, { uid: true })) {
+        if (out.length >= limit || scanned > 400) break;
+        scanned++;
+        let parsed; try { parsed = await simpleParser(msg.source); } catch { continue; }
+        const from = (parsed.from && parsed.from.text) || '';
+        const subject = parsed.subject || '';
+        if (q && !(`${subject} ${from}`.toLowerCase().includes(q))) continue;
+        const atts = (parsed.attachments || []).map(a => ({
+          filename: a.filename || '', contentType: String(a.contentType || ''),
+          size: a.size || (a.content ? a.content.length : 0),
+          inline: String(a.contentDisposition || '').toLowerCase() === 'inline' || a.related === true || !!a.cid,
+        }));
+        const links = extractPdfLinks(`${parsed.html || ''}\n${parsed.text || ''}`);
+        const text = String(parsed.text || (parsed.html || '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim().slice(0, 600);
+        out.push({ uid: msg.uid, from, subject, receivedDate: parsed.date ? new Date(parsed.date).toISOString().slice(0, 10) : '', attachments: atts, links, textSnippet: text });
+      }
+    } finally { lock.release(); }
+    await client.logout();
+    return { ok: true, matches: out };
+  } catch (e) {
+    try { await client.logout(); } catch { } try { await client.close(); } catch { }
     return { ok: false, error: e.message };
   }
 }
@@ -225,4 +263,4 @@ export async function markMessagesSeen(creds, uids) {
   }
 }
 
-export default { imapTest, scanMailbox, markMessagesSeen };
+export default { imapTest, scanMailbox, inspectMailbox, markMessagesSeen };
