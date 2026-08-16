@@ -4823,6 +4823,7 @@ window.openApproveDraft = (id, fromBankTxId) => {
           ${fld('סטטוס תשלום *', `<select id="apPaid"><option value="unpaid" selected>עדיין לא שולם (יופיע ב"הוצאות ספקים לתשלום")</option><option value="paid">שולם</option></select>`)}
         </div>
         <div id="apLinkEvents" style="margin:2px 0 8px"></div>
+        <div id="apSupersedeWrap" style="margin:2px 0 8px"></div>
         <div id="apStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
         <div class="modal-actions" style="margin-top:auto">
           <button class="btn ghost" onclick="document.getElementById('apprModal').classList.add('hidden')">ביטול</button>
@@ -4834,7 +4835,7 @@ window.openApproveDraft = (id, fromBankTxId) => {
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   _openApproveId = d.id;
-  setTimeout(() => { recalcApprVat(); loadApprClassifications(d); onApprTypeChange(); aiFillDraft(d.id); if (d.url) loadApprFilePreview(d.id); loadApprLinkEvents(); }, 30);
+  setTimeout(() => { recalcApprVat(); loadApprClassifications(d); onApprTypeChange(); aiFillDraft(d.id); if (d.url) loadApprFilePreview(d.id); loadApprLinkEvents(); loadApSupersede(); }, 30);
 };
 // טוען את קובץ הטיוטה ומתאים את התצוגה: תמונה → img שמתאים לרוחב (לא ענק) · PDF → iframe
 async function loadApprFilePreview(id) {
@@ -4890,6 +4891,7 @@ window.onApprSupplierChange = () => {
   fillApprSupplierDetails();
   syncApprClassForSupplier();
   loadApprLinkEvents();
+  loadApSupersede();
 };
 // שינוי סוג המסמך — מציג אזהרת "חשבון עסקה" (רישום פנימי)
 window.onApprTypeChange = () => {
@@ -4897,7 +4899,30 @@ window.onApprTypeChange = () => {
   const isBiz = +((document.getElementById('apType') || {}).value) === 20;
   const w = document.getElementById('apBusinessWarn'); if (w) w.style.display = isBiz ? 'block' : 'none';
   const cl = document.getElementById('apClass'); if (cl) cl.style.opacity = isBiz ? '0.5' : '1';
+  loadApSupersede();
 };
+// בורר "מסמך המשך לחשבון עסקה" — מוצג בקליטת חשבונית מס/מס-קבלה כשיש לספק חשבון עסקה פתוח
+async function loadApSupersede() {
+  const wrap = document.getElementById('apSupersedeWrap'); if (!wrap) return;
+  const supId = document.getElementById('apSup')?.value;
+  const docType = +(document.getElementById('apType')?.value || 0);
+  if (!supId || ![305, 320].includes(docType)) { wrap.innerHTML = ''; return; }
+  const r = await api(`/api/supplier-payables?companyId=${state.company}`).catch(() => ({ payables: [] }));
+  const cands = (r.payables || []).filter(p => String(p.supplierId) === String(supId) && Number(p.documentType) === 300 && !p.superseded);
+  if (!cands.length) { wrap.innerHTML = ''; return; }
+  const opts = ['<option value="">— לא, זו חשבונית עצמאית —</option>']
+    .concat(cands.map(p => `<option value="${p.id}">חשבון עסקה${p.number ? ' #' + escapeHtml(String(p.number)) : ''} · ${money(p.amount || 0)} · ${fmtDate(p.date)}</option>`)).join('');
+  wrap.innerHTML = `<div style="border:1px solid var(--accent);border-radius:10px;padding:9px 11px;background:#eef2ff">
+    <div style="font-weight:700;font-size:12.5px;margin-bottom:4px">↗ מסמך המשך לחשבון עסקה?</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:6px">אם חשבונית המס הזו מחליפה חשבון עסקה שכבר נקלט מהספק — בחר אותו. אירועי העסקה יעברו לחשבונית המס, והעסקה תוסתר (נשמרת לתיעוד).</div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <select id="apSupersede" style="flex:1" onchange="onApSupersedeChange()">${opts}</select>
+      <button type="button" id="apSupersedeCompare" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap;display:none" onclick="compareSupersede()" title="הצג את חשבון העסקה להשוואה מול חשבונית המס">🔍 השווה</button>
+    </div>
+  </div>`;
+}
+window.onApSupersedeChange = () => { const b = document.getElementById('apSupersedeCompare'); if (b) b.style.display = document.getElementById('apSupersede').value ? '' : 'none'; };
+window.compareSupersede = () => { const id = document.getElementById('apSupersede')?.value; if (id) previewDoc(`/api/supplier-payables/${id}/file`); };
 // טוען אירועים פתוחים של הקבלן ומציע קישור (מסומן מראש) + בורר לשיוך כל אירוע לפי חודש/שנה + סכום (גם אם אין אירועים מוצעים)
 let _apLinkEventsData = [];
 let _apLinkFilter = { month: 'all', year: 'all' };
@@ -5180,7 +5205,14 @@ window.approveDraft = async (id, btn) => {
       }
       _apAdded = [];
     } catch { }
-    const linkNote = (r.linkedCount || addedLinked) ? ` · 🔗 קושרו ${(r.linkedCount || 0) + addedLinked} אירועים בקבלנים לתשלום` : '';
+    // מסמך המשך: אם חשבונית זו מחליפה חשבון עסקה — מעבירים אליה את אירועי העסקה ומסתירים את העסקה (תיעוד)
+    let supersedeNote = '';
+    const _supersedeId = g('apSupersede') && g('apSupersede').value;
+    if (_supersedeId && r.payableId) {
+      const sr = await fetch(`/api/supplier-payables/${_supersedeId}/supersede`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ newPayableId: r.payableId, companyId: state.company }) }).then(x => x.json()).catch(() => ({}));
+      if (sr && sr.ok) { try { clearApiCache(); } catch {} supersedeNote = ` · ↗ החליפה חשבון עסקה (${sr.moved} אירועים הועברו; חשבון העסקה הוסתר)`; }
+    }
+    const linkNote = ((r.linkedCount || addedLinked) ? ` · 🔗 קושרו ${(r.linkedCount || 0) + addedLinked} אירועים בקבלנים לתשלום` : '') + supersedeNote;
     let msg;
     if (r.duplicate) { alert('⚠ המסמך כבר קיים במערכת\n\nחשבונית זו כבר נקלטה קודם לכן. כדי למנוע כפילות, הקובץ הכפול נמחק ולא נוצרה הוצאה נוספת.'); msg = '✓ המסמך כבר קיים במערכת — לא נוצרה כפילות.'; }
     else if (r.localOnly && !r.businessDoc) {

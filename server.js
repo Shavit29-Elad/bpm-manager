@@ -1362,7 +1362,7 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
     const paid = events.filter(e => e.clientPaid && e.clientPaid.status === 'paid').length;
     return paid === events.length ? 'ready' : paid === 0 ? 'waiting' : 'partial';
   };
-  const out = (q.all ? list : list.filter(p => !p.paid)).slice()
+  const out = (q.all ? list.filter(p => !p.superseded) : list.filter(p => !p.paid && !p.superseded)).slice()
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
     .map(p => { const cov = coveredFor(p); return { ...p, hasFile: !!(p.giExpenseId || p.draftId || p.localFileId), coveredEvents: cov, readiness: readinessOf(cov) }; });
   json(res, { ok: true, payables: out });
@@ -1434,6 +1434,46 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/unlink-events$/, (req, res, par
   }
   if (Array.isArray(p.linkedEvents)) p.linkedEvents = p.linkedEvents.filter(le => !items.some(it => String(it.eventId) === String(le.eventId) && Number(it.index) === Number(le.index)));
   save(db); json(res, { ok: true, unlinked: n });
+});
+
+// POST /api/supplier-payables/:id/supersede { newPayableId, addEvents?:[{eventId,index}] }
+// חשבונית מס (newPayableId) מחליפה את חשבון העסקה (:id): מעביר את אירועי העסקה למס, מוסיף אירועים נבחרים,
+// ומסמן את העסקה כ"מוחלפת" — מוסתרת מהרשימה ומקושרת למס לתיעוד (audit). לא מוחקת נתונים.
+add('POST', /^\/api\/supplier-payables\/([^/]+)\/supersede$/, (req, res, params, _q, body) => {
+  const db = load();
+  const oldP = (db.supplierPayables || []).find(x => x.id === params[0]);
+  if (!oldP) return json(res, { error: 'חשבון העסקה לא נמצא' }, 404);
+  const newP = (db.supplierPayables || []).find(x => x.id === (body && body.newPayableId));
+  if (!newP) return json(res, { error: 'חשבונית המס לא נמצאה' }, 404);
+  const _cid = (_q && _q.companyId) || (body && body.companyId) || giCompanyId();
+  if ((oldP.companyId || giCompanyId()) !== _cid || (newP.companyId || giCompanyId()) !== _cid) return json(res, { error: 'שייך לחברה אחרת' }, 403); // בידוד
+  if (String(oldP.id) === String(newP.id)) return json(res, { error: 'לא ניתן להחליף מסמך בעצמו' }, 400);
+  const matchesOld = (cd) => (cd.paidPayableId && String(cd.paidPayableId) === String(oldP.id))
+    || (oldP.giExpenseId && cd.paidExpenseId && String(cd.paidExpenseId) === String(oldP.giExpenseId))
+    || (oldP.number && cd.paidInvoice && String(cd.paidInvoice) === String(oldP.number) && (cd.name || '').trim() === (oldP.supplierName || '').trim());
+  const linkTo = (cd) => { cd.paid = true; cd.paidPayableId = newP.id; cd.paidInvoice = newP.number || cd.paidInvoice || null; cd.paidExpenseId = newP.giExpenseId || cd.paidExpenseId || null; };
+  const moved = [];
+  // 1) העברת אירועי חשבון העסקה לחשבונית המס
+  for (const ev of (db.events || [])) {
+    const dts = ev.contractorDetails || [];
+    for (let i = 0; i < dts.length; i++) { const cd = dts[i]; if (cd && matchesOld(cd)) { linkTo(cd); moved.push({ eventId: ev.id, index: i }); } }
+  }
+  // 2) הוספת אירועים נבחרים נוספים לחשבונית המס
+  let added = 0;
+  for (const it of (Array.isArray(body?.addEvents) ? body.addEvents : [])) {
+    const ev = (db.events || []).find(e => String(e.id) === String(it.eventId));
+    if (ev && Array.isArray(ev.contractorDetails) && ev.contractorDetails[it.index]) { linkTo(ev.contractorDetails[it.index]); added++; }
+  }
+  // 3) איחוד linkedEvents של חשבונית המס
+  const allItems = [...moved, ...(Array.isArray(body?.addEvents) ? body.addEvents : [])];
+  const key = (x) => String(x.eventId) + '|' + Number(x.index);
+  newP.linkedEvents = [...(newP.linkedEvents || [])];
+  const seen = new Set(newP.linkedEvents.map(key));
+  for (const it of allItems) if (!seen.has(key(it))) { newP.linkedEvents.push({ eventId: it.eventId, index: Number(it.index) }); seen.add(key(it)); }
+  // 4) סימון חשבון העסקה כמוחלף — מוסתר מהרשימה + מקושר למס לתיעוד
+  oldP.superseded = true; oldP.supersededByPayableId = newP.id; oldP.supersededByNumber = newP.number || null; oldP.supersededAt = new Date().toISOString();
+  newP.supersedesPayableId = oldP.id; newP.supersedesNumber = oldP.number || null;
+  save(db); json(res, { ok: true, moved: moved.length, added });
 });
 
 // GET /api/supplier-payables/:id/detail — פירוט ההוצאה מחשבונית ירוקה (מה כתוב על החשבונית: תיאור + שורות פריטים)
