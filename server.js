@@ -2383,9 +2383,12 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
     for (const t of (db.bankTx || [])) {
       if (cid && t.companyId !== cid) continue;
       if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
-      for (const inv of (t.matchedInvoices || [])) {
-        if (inv.kind === 'expense') continue;
-        if (inv.receipt) { // צורפה קבלה בהתאמת הבנק → החשבונית שולמה ונסגרה
+      const invs = (t.matchedInvoices || []).filter(inv => inv.kind !== 'expense');
+      const hasReceiptDoc = invs.some(inv => [320, 400].includes(Number(inv.type))); // קבלה/מס-קבלה מותאמת באותה שורת בנק
+      for (const inv of invs) {
+        // נסגרה אם: צורפה קבלה ישירות (inv.receipt), או שיש מסמך קבלה (320/400) מותאם באותה שורת בנק
+        const settled = !!inv.receipt || (hasReceiptDoc && [300, 305].includes(Number(inv.type)));
+        if (settled) {
           if (inv.number != null) bankSettled.add('num:' + _nrm(inv.number));
           if (inv.id != null) bankSettled.add('id:' + String(inv.id));
         } else if (Number(inv.type) === 305) {
