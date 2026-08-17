@@ -128,6 +128,14 @@ window.logout = async () => {
   location.reload();
 };
 
+// שם הלשונית בדפדפן משתנה לפי החברה הפעילה — כדי לזהות את העסק בלי להיכנס לדף.
+// שם ברירת המחדל נשמר מה-HTML, ומשמש כשעוד לא נבחרה חברה (מסך התחברות).
+const DEFAULT_TITLE = document.title;
+function applyCompanyTitle() {
+  const name = currentCompanyName();
+  document.title = name ? `${name} · ${DEFAULT_TITLE}` : DEFAULT_TITLE;
+}
+
 async function startApp() {
   state.companies = await api('/api/companies');
   const sel = $('#companySelect');
@@ -137,7 +145,8 @@ async function startApp() {
   try { savedCompany = localStorage.getItem('bpm_company'); } catch { }
   state.company = (savedCompany && state.companies.some(c => c.id === savedCompany)) ? savedCompany : state.companies[0]?.id;
   sel.value = state.company || '';
-  sel.onchange = () => { state.company = sel.value; state.whRate = undefined; try { localStorage.setItem('bpm_company', state.company); } catch { } clearApiCache(); loadWhRate(); applyCompanyTabs(); renderStatus(); render(); };
+  applyCompanyTitle();
+  sel.onchange = () => { state.company = sel.value; state.whRate = undefined; try { localStorage.setItem('bpm_company', state.company); } catch { } clearApiCache(); loadWhRate(); applyCompanyTabs(); applyCompanyTitle(); renderStatus(); render(); };
   applyPermissions();
   applyCompanyTabs();
   // כפתור ה-+ הצף (מסמך חדש מכל מקום) — מציגים אחרי התחברות, וסוגרים את התפריט בלחיצה בחוץ
