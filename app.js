@@ -6927,9 +6927,13 @@ function bankMatchedIds(exceptTxId) {
   const s = new Set();
   for (const t of (_bankList || [])) {
     if (t.id === exceptTxId) continue;
-    // חייב לכלול גם 'approved' — תנועה שאושרה היא משויכת לכל דבר, והחשבוניות שלה תפוסות.
-    // בלעדיו חשבונית ששויכה לתנועה מאושרת המשיכה להופיע כהצעה בשורות אחרות.
-    if (['manual', 'auto', 'approved'].includes(t.matchStatus)) for (const inv of (t.matchedInvoices || [])) s.add(String(inv.id));
+    // כל שורה שיש עליה מסמך משויך — בלי תלות בסטטוס. זהה להיגיון של linkedDocIds בחלונית
+    // "שייך", כדי ששני המסלולים יסתירו בדיוק את אותן חשבוניות. קודם נבדקו רק manual/auto,
+    // ולכן חשבונית ששויכה לתנועה מאושרת (approved) או מוסתרת (ignored) המשיכה להיות מוצעת.
+    for (const inv of (t.matchedInvoices || [])) if (inv && inv.id != null) s.add(String(inv.id));
+    // גם לפי מספר המסמך — שיוך שנעשה דרך קליטת הוצאה שומר מזהה שונה (payableId/exp_<מספר>),
+    // ואז השוואת מזהים לבדה מפספסת ואותה חשבונית הוצעה שוב.
+    for (const inv of (t.matchedInvoices || [])) if (inv && inv.number != null) s.add('num:' + String(inv.number).trim());
   }
   return s;
 }
@@ -7215,7 +7219,9 @@ function bankTr(t) {
     biz = `<span class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>`;
     // סינון חי: לא מציגים כהצעה חשבונית שכבר משויכת לתנועה אחרת (מתעדכן מיד בכל השורות אחרי שיוך/ביטול)
     const _usedIds = bankMatchedIds(t.id);
-    const sugg = (t.suggestions || []).filter(s => !_usedIds.has(String(s.id))).map(s => { const j = jenc(s); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
+    // מסתירים הצעה שהמסמך שלה כבר משויך לתנועה אחרת — לפי מזהה *או* לפי מספר מסמך
+    const _taken = (s) => _usedIds.has(String(s.id)) || (s.number != null && _usedIds.has('num:' + String(s.number).trim()));
+    const sugg = (t.suggestions || []).filter(s => !_taken(s)).map(s => { const j = jenc(s); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
     invNo = `<span class="tag miss" style="font-size:10px">לא מותאם</span>${sugg ? `<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;max-width:280px">${sugg}</div>` : ''}`;
     // אשר (מסמן מאושר ללא מסמך) + בטל (מסיר מהרשימה) — בשתי החברות
     action = `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="approveBank('${t.id}')">אשר</button> <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',true)">בטל</button>`;
