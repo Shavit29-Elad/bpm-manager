@@ -4445,19 +4445,25 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   //      חשוב: טווח ולא רשימת תאריכים. דף חשבון הוא הצהרה מלאה על תקופה, ויום בלי תנועות
   //      פשוט לא מופיע בו. מקרה אמיתי: תנועה נרשמה זמנית ב-15/08, הבנק העביר אותה ל-16/08,
   //      ובקובץ הבא (11/08–16/08) אין ל-15/08 אף שורה — כלומר הבנק מחק אותה משם.
-  //   3) רק שורות שהמשתמש עוד לא נגע בהן. שורה עם שיוך/אישור/קבוצה/הערה נשמרת תמיד,
-  //      גם אם היא נראית פנטום — עדיף לדרוש בדיקה ידנית מאשר למחוק עבודה בשקט.
+  //   3) רק שורות ללא עבודה אמיתית עליהן. "עבודה אמיתית" = שיוך למסמך או אישור ידני —
+  //      אלה הדברים שאי אפשר לשחזר. סימון "ללא התאמה" (ignored) ושיוך לקבוצה *אינם* חוסמים:
+  //      התעלמות היא הצהרה שהשורה לא מעניינת, וקבוצה היא סיווג שנקבע מחדש בקלות.
   const toKey = (d) => { const m = String(d || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m ? `${m[3]}${m[2]}${m[1]}` : null; };
   const fileKeysDates = parsed.map(t => toKey(t.date)).filter(Boolean).sort();
   const fileMin = fileKeysDates[0], fileMax = fileKeysDates[fileKeysDates.length - 1];
   const inFileRange = (d) => { const k = toKey(d); return Boolean(k && fileMin && k >= fileMin && k <= fileMax); };
   const fileKeys = new Set(parsed.map(t => `${t.date}|${t.absAmount}|${t.direction}`));
-  const untouched = (t) => (!t.matchStatus || t.matchStatus === 'unmatched')
-    && !(t.matchedInvoices || []).length && !t.group && !String(t.notes || '').trim();
-  const staleIds = new Set(companyRows
-    .filter(t => !t.reference && inFileRange(t.date)
-      && !fileKeys.has(`${t.date}|${t.absAmount}|${t.direction}`) && untouched(t))
-    .map(t => t.id));
+  const hasWork = (t) => (t.matchedInvoices || []).length > 0
+    || t.matchStatus === 'manual' || t.matchStatus === 'approved' || Boolean(String(t.notes || '').trim());
+  // מועמדים: שורה ללא אסמכתא, בתוך טווח הקובץ, שאין לה מקבילה בו
+  const candidates = companyRows.filter(t => !t.reference && inFileRange(t.date)
+    && !fileKeys.has(`${t.date}|${t.absAmount}|${t.direction}`));
+  const staleIds = new Set(candidates.filter(t => !hasWork(t)).map(t => t.id));
+  // אבחון: שורות שנראו פנטום אך נשמרו בגלל עבודה שנעשתה עליהן — כדי שנדע למה ולא ננחש
+  const keptRows = candidates.filter(t => hasWork(t)).map(t => ({
+    date: t.date, amount: t.absAmount, direction: t.direction,
+    why: (t.matchedInvoices || []).length ? 'משויך למסמך' : (t.matchStatus === 'approved' ? 'אושר ידנית' : (t.matchStatus === 'manual' ? 'שויך ידנית' : 'יש הערה')),
+  }));
   let removed = 0;
   if (staleIds.size) {
     db.bankTx = (db.bankTx || []).filter(t => !staleIds.has(t.id));
@@ -4470,7 +4476,7 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   // התאמה מול חשבונית ירוקה (הכנסות/קבלות/הוצאות) רצה ברקע — לא חוסמת את התגובה
   const matchBg = giEnabled(companyId);
   if (matchBg) runBankMatchBg(companyId).catch(() => { });
-  json(res, { ok: true, added, backfilled, restated, removed, total: parsed.length, matching: matchBg ? 'background' : 'none', accountBalance: acctBal || null });
+  json(res, { ok: true, added, backfilled, restated, removed, kept: keptRows, total: parsed.length, matching: matchBg ? 'background' : 'none', accountBalance: acctBal || null });
 });
 
 // POST /api/bank/rematch { companyId } — הרצת התאמה אוטומטית מחדש של תנועות זכות+חובה על התנועות הקיימות (בלי העלאה חוזרת).

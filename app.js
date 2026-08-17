@@ -971,8 +971,11 @@ function openInvClientHtml(cl) {
   const rid = 'oig_' + Math.random().toString(36).slice(2, 8);
   // מסמך מרוכז: זמין כשיש ≥2 חשבוניות עסקה (300) של אותו לקוח — כולל כאלה שהועלו ידנית (אופק)
   const canConsol = cl.ds.filter(d => Number(d.type) === 300).length >= 2;
+  // תיבת סימון אחת שמשרתת גם מסמך מרוכז וגם בדיקת סטטוס תשלום. חשבונית שכבר שולמה
+  // (התקבל תשלום וחסרה רק קבלה) לא ניתנת לבחירה — אין טעם לברר עליה מועד תשלום.
+  const selectable = (d) => !d.paidNoReceipt;
   const rows = cl.ds.map(d => `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
-    ${canConsol ? (Number(d.type) === 300 ? `<input type="checkbox" class="cx-${rid}" data-id="${escAttr(String(d.id))}" data-num="${escAttr(String(d.number || ''))}" data-uploaded="${d.uploaded ? '1' : '0'}" data-event="${escAttr(String(d.eventId || ''))}" data-old="${escAttr(String(d.oldInvoiceId || ''))}" data-amount="${d.amount != null ? Number(d.amount) : (d.amountDue != null ? Number(d.amountDue) : '')}" data-desc="${escAttr(String(d.description || ''))}" onclick="event.stopPropagation()" title="בחר למסמך מרוכז" style="width:15px;height:15px;flex:0 0 auto;cursor:pointer">` : '<span style="width:15px;flex:0 0 auto"></span>') : ''}
+    ${selectable(d) ? `<input type="checkbox" class="cx-${rid}" data-id="${escAttr(String(d.id))}" data-num="${escAttr(String(d.number || ''))}" data-type="${Number(d.type) || ''}" data-uploaded="${d.uploaded ? '1' : '0'}" data-event="${escAttr(String(d.eventId || ''))}" data-old="${escAttr(String(d.oldInvoiceId || ''))}" data-amount="${d.amount != null ? Number(d.amount) : (d.amountDue != null ? Number(d.amountDue) : '')}" data-desc="${escAttr(String(d.description || ''))}" onclick="event.stopPropagation()" title="סמן לבדיקת סטטוס תשלום או למסמך מרוכז" style="width:15px;height:15px;flex:0 0 auto;cursor:pointer">` : '<span style="width:15px;flex:0 0 auto" title="כבר התקבל תשלום"></span>'}
     <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.uploaded ? ' · ישן' : ''}</span>
     <span style="white-space:nowrap">${d.number ? '#' + d.number : ''}</span><span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</span>
@@ -7728,12 +7731,18 @@ window.doBankImport = async (btn) => {
     const restMsg = r.restated ? ` · ${r.restated} תנועות עודכנו לנתונים הסופיים של הבנק (במקום להיווצר ככפילות)` : '';
     // שורות זמניות שהבנק ביטל/פיצל — הוסרו אוטומטית כדי שלא ינפחו את הסיכומים
     const remMsg = r.removed ? ` · ${r.removed} תנועות זמניות שהבנק כבר לא מכיר בהן הוסרו` : '';
+    // שורות שנראו פנטום אך נשמרו בגלל עבודה שנעשתה עליהן — מוצג כדי שתדע מה לטפל בו ידנית
+    const keptMsg = (r.kept && r.kept.length)
+      ? `<div style="margin-top:6px;font-size:12.5px;color:var(--warn)">⚠ ${r.kept.length} שורות נראות כתנועות שהבנק כבר לא מכיר בהן, אך נשמרו כי נעשתה עליהן עבודה:<br>`
+        + r.kept.map(k => `&nbsp;&nbsp;• ${k.date} · ${k.direction === 'credit' ? 'זכות' : 'חובה'} ${money(k.amount)} — ${escapeHtml(k.why)}`).join('<br>')
+        + '<br><span class="muted">הסר את השיוך/האישור והעלה שוב כדי שיימחקו.</span></div>'
+      : '';
     if (r.matching === 'background') {
-      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${restMsg}${remMsg}${balMsg}. מתאים מול חשבונית ירוקה ברקע…</span>`;
+      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${restMsg}${remMsg}${balMsg}. מתאים מול חשבונית ירוקה ברקע…</span>${keptMsg}`;
       await renderBank($('#content'));
       pollBankMatch(status);   // מרענן כשההתאמה ברקע מסתיימת
     } else {
-      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${restMsg}${remMsg}${balMsg}.</span>`;
+      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${restMsg}${remMsg}${balMsg}.</span>${keptMsg}`;
       await renderBank($('#content'));
       setTimeout(() => { const mm = document.getElementById('bankModal'); if (mm) mm.classList.add('hidden'); }, 1400);
     }
