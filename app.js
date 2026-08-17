@@ -2221,6 +2221,10 @@ async function renderCombined(c) {
           <div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">🔍</span><input id="evTextSearch" value="${escAttr(_evText)}" oninput="setEvText(this.value)" placeholder="חיפוש חופשי: זמר / מיקום / לקוח / קבלן…" style="padding:5px 10px;font-size:13px;min-width:230px"/>${_evText ? `<button class="btn ghost" style="padding:4px 9px;font-size:12px" onclick="setEvText('')">✕</button>` : ''}</div>
           ${approvedClients.length ? `<div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">לקוח:</span>${evClientSel}</div>` : ''}
           ${approvedContractors.length ? `<div style="display:flex;gap:6px;align-items:center"><span class="muted" style="font-size:13px">קבלן:</span>${evContractorSel}</div>` : ''}
+          <div style="display:flex;gap:6px;align-items:center;margin-inline-start:auto">
+            <button class="btn ghost" style="padding:4px 10px;font-size:12px;white-space:nowrap" onclick="setAllEvMonths('approved',true)" title="השאר רק כותרות חודשים עם שורת הסיכום">⊟ מזער הכל</button>
+            <button class="btn ghost" style="padding:4px 10px;font-size:12px;white-space:nowrap" onclick="setAllEvMonths('approved',false)">⊞ פתח הכל</button>
+          </div>
         </div>
         ${approvedShown.length ? eventsByMonthHtml(approvedShown, 'approved') : `<div class="empty">${anyApprovedFilter ? 'אין אירועים מאושרים שתואמים לחיפוש/סינון' : 'עדיין אין אירועים מאושרים'}</div>`}`
       : `<div class="empty">אין עדיין אירועים. לחץ "הדבק הודעת ווטסאפ" כדי לקלוט את הראשון.</div>`}
@@ -2487,6 +2491,35 @@ window.duplicateEventRow = async (id) => {
 const VAT_RATE = 0.18; // מע"מ בישראל
 // סכום ברוטו של אירוע (ללא מע"מ) — הגברה+תאורה+סאונד+בקליין+מסך לד(מ'×מחיר)+תוספות
 const evGross = (e) => (Number(e.price) || 0) + (Number(e.priceLighting) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceBackline) || 0) + ((Number(e.ledPricePerMeter) || 0) * (Number(e.ledMeters) || 0)) + (Number(e.priceExtras) || 0);
+// ---- מזעור חודשים ברשימת האירועים ----
+// המצב נשמר בדפדפן כדי שיישאר אחרי רינדור מחדש (עריכת אירוע, סינון) וגם אחרי רענון.
+let _evCollapsed = new Set();
+try { _evCollapsed = new Set(JSON.parse(localStorage.getItem('bpm_ev_collapsed') || '[]')); } catch { }
+const _evmKey = (mode, k) => `${mode}|${k}`;
+const _evmId = (mode, k) => 'evm_' + String(_evmKey(mode, k)).replace(/[^0-9A-Za-z]/g, '_');
+window.toggleEvMonth = (mode, k) => {
+  const key = _evmKey(mode, k);
+  if (_evCollapsed.has(key)) _evCollapsed.delete(key); else _evCollapsed.add(key);
+  try { localStorage.setItem('bpm_ev_collapsed', JSON.stringify([..._evCollapsed])); } catch { }
+  const id = _evmId(mode, k);
+  const body = document.getElementById(id);
+  const car = document.getElementById(id + '_c');
+  if (body) body.classList.toggle('hidden', _evCollapsed.has(key));
+  if (car) car.textContent = _evCollapsed.has(key) ? '▸' : '▾';
+};
+// מזעור/פתיחה של כל החודשים בבת אחת — שימושי כשמצטברים הרבה חודשים
+window.setAllEvMonths = (mode, collapse) => {
+  document.querySelectorAll(`[data-evm-mode="${mode}"]`).forEach(h => {
+    const k = h.dataset.evmKey;
+    const key = _evmKey(mode, k);
+    if (collapse) _evCollapsed.add(key); else _evCollapsed.delete(key);
+    const id = _evmId(mode, k);
+    const body = document.getElementById(id); if (body) body.classList.toggle('hidden', collapse);
+    const car = document.getElementById(id + '_c'); if (car) car.textContent = collapse ? '▸' : '▾';
+  });
+  try { localStorage.setItem('bpm_ev_collapsed', JSON.stringify([..._evCollapsed])); } catch { }
+};
+
 function eventsByMonthHtml(events, mode = 'approved') {
   const groups = {};
   for (const e of events) { const k = (e.date || e.dateRaw || '').slice(0, 7) || 'ללא תאריך'; (groups[k] = groups[k] || []).push(e); }
@@ -2503,12 +2536,18 @@ function eventsByMonthHtml(events, mode = 'approved') {
     const summary = mode === 'pending'
       ? `סה"כ הכנסה צפויה (ללא מע"מ): <b style="color:var(--accent2)">${money(total)}</b> · כולל מע"מ: <b style="color:var(--text)">${money(withVat)}</b>`
       : `סה"כ הכנסה (ללא מע"מ): <b style="color:var(--accent2)">${money(total)}</b> · כולל מע"מ: <b style="color:var(--text)">${money(withVat)}</b> · תשלומי קבלנים: <b style="color:var(--danger)">${money(ctrCost)}</b> · סה"כ לאחר קבלנים: <b style="color:var(--text)">${money(net)}</b>`;
+    // לחיצה על כותרת החודש מקפלת/פותחת את הטבלה. שורת הסיכום (הכנסות, קבלנים, נטו)
+    // נשארת גלויה גם כשהחודש ממוזער — היא כל הטעם במזעור.
+    const id = _evmId(mode, k);
+    const collapsed = _evCollapsed.has(_evmKey(mode, k));
     return `<div style="margin-top:18px">
-      <div class="row-between" style="margin-bottom:6px">
-        <h3 style="margin:0;font-size:15px">${monthLabel(k)} <span class="muted" style="font-weight:400;font-size:13px">· ${list.length} אירועים</span></h3>
+      <div class="row-between" data-evm-mode="${mode}" data-evm-key="${escAttr(String(k))}" style="margin-bottom:6px;gap:10px;flex-wrap:wrap">
+        <h3 style="margin:0;font-size:15px;display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none" onclick="toggleEvMonth('${mode}','${escAttr(String(k))}')" title="לחץ כדי למזער/לפתוח את החודש">
+          <span id="${id}_c" style="font-size:12px;color:var(--muted);width:11px;display:inline-block">${collapsed ? '▸' : '▾'}</span>
+          ${monthLabel(k)} <span class="muted" style="font-weight:400;font-size:13px">· ${list.length} אירועים</span></h3>
         <span class="muted" style="font-size:13px">${summary}</span>
       </div>
-      <div style="overflow-x:auto"><table style="min-width:960px">${EVENTS_THEAD}
+      <div id="${id}" class="${collapsed ? 'hidden' : ''}" style="overflow-x:auto"><table style="min-width:960px">${EVENTS_THEAD}
         <tbody>${list.map(rowEvent).join('')}</tbody></table></div>
     </div>`;
   }).join('');
