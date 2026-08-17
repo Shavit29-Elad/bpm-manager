@@ -995,12 +995,108 @@ function openInvClientHtml(cl) {
       <div><b>${escapeHtml(cl.name)}</b> <span class="muted">· ${cl.ds.length} מסמכים</span></div>
       <div style="font-weight:700">${money(cl.total)}</div>
     </div>
-    <div id="${rid}" class="${cl.ds.length > 1 ? 'hidden' : ''}">${rows}${canConsol ? `<div style="padding:9px 12px;border-top:1px solid var(--line);background:var(--panel2);display:flex;gap:9px;align-items:center;flex-wrap:wrap">
-      <button class="btn primary" style="padding:4px 12px;font-size:12.5px" onclick="openConsolidate('${encodeURIComponent(cl.name || '')}','${rid}')" title="מיזוג כמה חשבוניות עסקה למסמך מס/מס-קבלה מסכם אחד">🧾 הפק מסמך מרוכז</button>
-      <span class="muted" style="font-size:11.5px">סמן כמה חשבוניות עסקה → מסמך מס/מס-קבלה מסכם אחד שסוגר את כולן.</span>
-    </div>` : ''}</div>
+    <div id="${rid}" class="${cl.ds.length > 1 ? 'hidden' : ''}">${rows}<div style="padding:9px 12px;border-top:1px solid var(--line);background:var(--panel2);display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+      <button class="btn primary" style="padding:4px 12px;font-size:12.5px" onclick="openPayStatus('${encodeURIComponent(cl.name || '')}','${rid}')" title="שליחת בירור מועד תשלום ללקוח, עם החשבוניות המסומנות מצורפות">📨 בדיקת סטטוס תשלום מול הלקוח</button>
+      ${canConsol ? `<button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="openConsolidate('${encodeURIComponent(cl.name || '')}','${rid}')" title="מיזוג כמה חשבוניות עסקה למסמך מס/מס-קבלה מסכם אחד">🧾 הפק מסמך מרוכז</button>` : ''}
+      <span class="muted" style="font-size:11.5px">סמן חשבוניות ← בירור מועד תשלום${canConsol ? ' · או מיזוג עסקאות למסמך מסכם' : ''}.</span>
+    </div></div>
   </div>`;
 }
+// ===== בדיקת סטטוס תשלום מול הלקוח =====
+// שולח ללקוח בירור מועד תשלום עם החשבוניות הפתוחות מצורפות, או מכין הודעת ווטסאפ להעתקה.
+// הניסוחים נקבעו ע"י ההנהלה — אין לשנות מבנה או סגנון.
+let _psCtx = null;
+window.openPayStatus = async (clientEnc, rid) => {
+  const clientName = decodeURIComponent(clientEnc);
+  const docs = [...document.querySelectorAll('.cx-' + rid + ':checked')].map(c => ({
+    id: c.dataset.id, number: c.dataset.num, type: Number(c.dataset.type) || null,
+    uploaded: c.dataset.uploaded === '1', amount: c.dataset.amount !== '' ? Number(c.dataset.amount) : null,
+  }));
+  if (!docs.length) { alert('לא סומנו חשבוניות.\nסמן את החשבוניות שלגביהן תרצה לברר מועד תשלום.'); return; }
+  const bp = await api('/api/business-profile').catch(() => ({}));
+  _psCtx = { clientName, docs, companyName: (bp && (bp.mailFromName || bp.name)) || currentCompanyName(), emails: [], mode: 'email' };
+  renderPayStatus();
+  // מייל הלקוח — נמשך מחשבונית ירוקה לפי המסמך הראשון שאינו הועלה ידנית
+  const gi = docs.find(d => !d.uploaded);
+  if (gi) api(`/api/documents/${gi.id}/client-email`).then(r => {
+    const em = (r && Array.isArray(r.emails) ? r.emails.filter(Boolean) : []);
+    if (em.length && _psCtx) { _psCtx.emails = em; const i = document.getElementById('psEmail'); if (i && !i.value) i.value = em[0]; }
+  }).catch(() => {});
+};
+// נוסח המייל — זהה לזה שבשרת, לתצוגה מקדימה בלבד
+function psMailText(companyName, n) {
+  const one = n === 1;
+  return ['היי, מה נשמע?', '',
+    one ? 'מצורפת למייל זה החשבונית הפתוחה מולכם.' : 'מצורפות למייל זה החשבוניות הפתוחות מולכם.', '',
+    one ? 'נשמח לעדכון לגבי מועד התשלום הצפוי עבור החשבונית המצורפת.' : 'נשמח לעדכון לגבי מועד התשלום הצפוי עבור החשבוניות המצורפות.', '',
+    'במידה ונדרש מאיתנו מסמך, אישור או פרט נוסף לצורך ביצוע התשלום, נשמח להעביר בהקדם.', '',
+    'תודה רבה,', companyName].join('\n');
+}
+// נוסח הווטסאפ — כולל סוג ומספר מסמך. הדגשה בכוכבית בודדת (התחביר של ווטסאפ).
+function psWhatsappText(docs) {
+  const one = docs.length === 1;
+  const list = docs.map(d => `*סוג מסמך:* ${DOC_TYPE_NAMES[d.type] || 'מסמך'}\n*מספר מסמך:* ${d.number || '—'}`).join('\n\n');
+  return ['היי, מה נשמע? 😊', '',
+    one ? 'רציתי לבדוק לגבי המסמך הפתוח מולכם:' : 'רציתי לבדוק לגבי המסמכים הפתוחים מולכם:', '',
+    list, '',
+    one ? 'אשמח לעדכון לגבי מועד התשלום הצפוי עבור המסמך.' : 'אשמח לעדכון לגבי מועד התשלום הצפוי עבור המסמכים.', '',
+    'במידה ונדרש ממני משהו נוסף לצורך ביצוע התשלום, אשמח להעביר.', '',
+    'תודה רבה 🙏'].join('\n');
+}
+window.psSetMode = (m) => { _psCtx.mode = m; renderPayStatus(); };
+window.psSetCompany = (v) => { _psCtx.companyName = v; const p = document.getElementById('psPreview'); if (p) p.textContent = psMailText(v, _psCtx.docs.length); };
+function renderPayStatus() {
+  const e = _psCtx; if (!e) return;
+  const m = document.getElementById('psModal') || (() => { const x = document.createElement('div'); x.id = 'psModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  m.classList.remove('hidden');
+  const isMail = e.mode === 'email';
+  const seg = (v, l) => `<button class="btn ${e.mode === v ? 'primary' : 'ghost'}" style="padding:5px 15px;font-size:13px" onclick="psSetMode('${v}')">${l}</button>`;
+  const list = e.docs.map(d => `<span class="tag" style="font-size:11px">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + escapeHtml(String(d.number)) : ''}</span>`).join(' ');
+  const body = isMail
+    ? `<label style="font-size:13px;display:block;margin-bottom:4px">כתובת מייל של הלקוח</label>
+       <input id="psEmail" dir="ltr" value="${escAttr(e.emails[0] || '')}" placeholder="name@example.com" style="width:100%;padding:7px 9px">
+       <label style="font-size:13px;display:block;margin:10px 0 4px">שם החברה (מופיע בנושא ובחתימה)</label>
+       <input value="${escAttr(e.companyName)}" oninput="psSetCompany(this.value)" style="width:100%;padding:7px 9px">
+       <div class="muted" style="font-size:12px;margin:12px 0 4px">נושא: <b>חשבוניות פתוחות – בירור מועד תשלום | ${escapeHtml(e.companyName)}</b></div>
+       <div id="psPreview" dir="rtl" style="white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;line-height:1.7;text-align:right">${escapeHtml(psMailText(e.companyName, e.docs.length))}</div>
+       <div class="muted" style="font-size:11.5px;margin-top:6px">${e.docs.length} חשבוניות יצורפו כ-PDF. המייל יישלח מתיבת החברה הפעילה.</div>`
+    : `<div class="muted" style="font-size:12.5px;margin-bottom:6px">העתק את ההודעה ושלח ללקוח בווטסאפ. (ווטסאפ אינו תומך בצירוף קבצים דרך קישור — לכן ההודעה כוללת את סוג ומספר המסמך.)</div>
+       <div id="psPreview" dir="rtl" style="white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;line-height:1.7;text-align:right">${escapeHtml(psWhatsappText(e.docs))}</div>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw);max-height:92vh;overflow:auto">
+    <div class="row-between" style="margin:0"><h3 style="margin:0">📨 בדיקת סטטוס תשלום</h3>
+      <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('psModal').classList.add('hidden')">✕</button></div>
+    <div class="muted" style="font-size:12.5px;margin:6px 0 10px">${escapeHtml(e.clientName)} · ${list}</div>
+    <div style="display:flex;gap:5px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px;width:fit-content;margin-bottom:12px">${seg('email', '✉️ מייל')}${seg('whatsapp', '📱 ווטסאפ')}</div>
+    ${body}
+    <div id="psStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('psModal').classList.add('hidden')">סגור</button>
+      ${isMail ? `<button class="btn success" id="psSendBtn" onclick="psSend(this)">✉️ שלח מייל</button>`
+               : `<button class="btn success" onclick="psCopy(this)">📋 העתק הודעת ווטסאפ</button>`}
+    </div>
+  </div>`;
+  m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
+}
+window.psCopy = async (btn) => {
+  const txt = psWhatsappText(_psCtx.docs);
+  try { await navigator.clipboard.writeText(txt); btn.textContent = '✓ הועתק'; setTimeout(() => { btn.textContent = '📋 העתק הודעת ווטסאפ'; }, 1800); }
+  catch { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); btn.textContent = '✓ הועתק'; }
+};
+window.psSend = async (btn) => {
+  const e = _psCtx; const st = document.getElementById('psStatus');
+  const em = (document.getElementById('psEmail')?.value || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { st.innerHTML = '<span style="color:var(--danger)">כתובת מייל לא תקינה.</span>'; return; }
+  if (!confirm(`לשלוח בירור מועד תשלום ל-${em}?\n${e.docs.length} חשבוניות יצורפו למייל.`)) return;
+  btn.disabled = true; st.innerHTML = '<span class="muted">מצרף חשבוניות ושולח…</span>';
+  const r = await fetch('/api/payment-status/send', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ companyId: state.company, docs: e.docs, emails: [em], companyName: e.companyName }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false;
+  if (r.ok) {
+    st.innerHTML = `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml(em)} · ${r.attached} חשבוניות צורפו${(r.failed || []).length ? ` · ${r.failed.length} לא ניתן היה לצרף` : ''}</span>`;
+    setTimeout(() => { const mm = document.getElementById('psModal'); if (mm) mm.classList.add('hidden'); }, 2200);
+  } else st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
+};
+
 // ===== מסמך מרוכז: כמה חשבוניות עסקה (300) של אותו לקוח → מסמך מס (305) או מס-קבלה (320) מסכם אחד =====
 let _consolSel = null;
 window.openConsolidate = (clientEnc, rid) => {
