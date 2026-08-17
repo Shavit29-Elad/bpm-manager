@@ -1024,7 +1024,8 @@ window.openPayStatus = async (clientEnc, rid) => {
   }));
   if (!docs.length) { alert('לא סומנו חשבוניות.\nסמן את החשבוניות שלגביהן תרצה לברר מועד תשלום.'); return; }
   const bp = await api('/api/business-profile').catch(() => ({}));
-  _psCtx = { clientName, docs, companyName: (bp && (bp.mailFromName || bp.name)) || currentCompanyName(), emails: [], mode: 'email' };
+  _psCtx = { clientName, docs, companyName: (bp && (bp.mailFromName || bp.name)) || currentCompanyName(), emails: [], mode: 'email',
+    hasSig: Boolean(bp && String(bp.emailSignature || '').trim()) };
   renderPayStatus();
   // מייל הלקוח — נמשך מחשבונית ירוקה לפי המסמך הראשון שאינו הועלה ידנית
   const gi = docs.find(d => !d.uploaded);
@@ -1069,7 +1070,7 @@ function renderPayStatus() {
        <input value="${escAttr(e.companyName)}" oninput="psSetCompany(this.value)" style="width:100%;padding:7px 9px">
        <div class="muted" style="font-size:12px;margin:12px 0 4px">נושא: <b>חשבוניות פתוחות – בירור מועד תשלום | ${escapeHtml(e.companyName)}</b></div>
        <div id="psPreview" dir="rtl" style="white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;line-height:1.7;text-align:right">${escapeHtml(psMailText(e.companyName, e.docs.length))}</div>
-       <div class="muted" style="font-size:11.5px;margin-top:6px">${e.docs.length} חשבוניות יצורפו כ-PDF. המייל יישלח מתיבת החברה הפעילה.</div>`
+       <div class="muted" style="font-size:11.5px;margin-top:6px">${e.docs.length === 1 ? 'חשבונית אחת תצורף' : `${e.docs.length} חשבוניות יצורפו`} כ-PDF. המייל יישלח מתיבת החברה הפעילה${e.hasSig ? ', עם חתימת החברה בתחתית' : ' (לא הוגדרה חתימה בפרטי העסק)'}.</div>`
     : `<div class="muted" style="font-size:12.5px;margin-bottom:6px">העתק את ההודעה ושלח ללקוח בווטסאפ. ווטסאפ אינו תומך בצירוף קבצים דרך קישור — לכן הורד את ${e.docs.length === 1 ? 'המסמך' : 'המסמכים'} וצרף ידנית לשיחה.</div>
        <div id="psPreview" dir="rtl" style="white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;line-height:1.7;text-align:right">${escapeHtml(psWhatsappText(e.docs))}</div>`;
   m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw);max-height:92vh;overflow:auto">

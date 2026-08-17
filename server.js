@@ -2409,8 +2409,8 @@ add('POST', /^\/api\/payment-status\/send$/, async (req, res, _p, q, body) => {
   }
   if (!attachments.length) return json(res, { error: 'לא ניתן היה לצרף אף חשבונית' + (failed.length ? ` (${failed.join(', ')})` : '') }, 502);
   const { subject, text } = paymentStatusMail(companyName, attachments.length);
-  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const html = `<div dir="rtl" style="text-align:right;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#1c2333">${esc(text).replace(/\n/g, '<br>')}</div>`;
+  // אותו עוטף HTML כמו בכל שאר המיילים היוצאים — RTL + חתימת החברה מפרטי העסק
+  const html = htmlBodyWithSig(db, cid, text);
   try {
     await mailer.sendMailFrom(creds, { to: emails, subject, text, html, attachments });
     json(res, { ok: true, sentTo: emails, attached: attachments.length, failed });
