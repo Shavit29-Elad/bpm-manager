@@ -4316,14 +4316,47 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
     if (t.reference) { const r = same.find(e => String(e.reference) === String(t.reference)); if (r) return r; }
     return same.find(e => !e.reference || !t.reference) || null; // אם לאחד הצדדים אין אסמכתא — אותה תנועה
   };
-  let added = 0, backfilled = 0;
+  // ---- מסגור-מחדש של הבנק ("עוד לא התעדכן סופית") ----
+  // הבנק רושם תנועה זמנית (בלי אסמכתא), ולמחרת סוגר אותה סופית — ואז *התאריך, התיאור והאסמכתא
+  // משתנים כולם*. דוגמה אמיתית: שיק דחוי לגבייה שנרשם 15/08 "פירעון שיק דחוי" בלי אסמכתא,
+  // ולמחרת הופיע כ-16/08 "פרעון שיק דחוי לגביה" עם אסמכתא 26985. crossDup לא תפס כי התאריך זז.
+  //
+  // הזיהוי: אותו סכום + אותו כיוון + חלון ימים קצר + *השורה הקיימת חסרת אסמכתא* (כלומר נראית זמנית)
+  // + לחדשה יש אסמכתא (כלומר נסגרה). התניית חוסר-האסמכתא היא הבלם: שתי תנועות אמיתיות שלשתיהן
+  // אסמכתאות לעולם לא ימוזגו. מוטב לפספס מיזוג (כפילות גלויה שאפשר לתקן) מאשר למזג בטעות
+  // שתי תנועות כסף אמיתיות — טעות שקטה שקשה לגלות.
+  const RESTATE_DAYS = 4;   // 4 ימים כדי לכסות גם סוף שבוע
+  const dayGap = (a, b) => {
+    const p = (s) => { const m = String(s || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m ? Date.UTC(+m[3], +m[2] - 1, +m[1]) : null; };
+    const x = p(a), y = p(b);
+    return (x == null || y == null) ? 999 : Math.abs(x - y) / 86400000;
+  };
+  const restatedDup = (t) => (!t.reference) ? null : (companyRows.find(e =>
+    e.absAmount === t.absAmount && e.direction === t.direction && !e.reference
+    && e.date !== t.date && dayGap(e.date, t.date) <= RESTATE_DAYS) || null);
+  let added = 0, backfilled = 0, restated = 0;
   for (const t of parsed) {
     const sig = bankSig(t);
-    const ex = bySig.get(sig) || crossDup(t);
+    let ex = bySig.get(sig) || crossDup(t);
+    let isRestate = false;
+    if (!ex) { ex = restatedDup(t); isRestate = Boolean(ex); }
     if (ex) {
       // תנועה קיימת — נשלים יתרה רצה (balance) ואסמכתא אם חסרות, כדי שעו"ש יתעדכן ולמניעת כפילויות בעתיד
       if (t.balance != null && ex.balance !== t.balance) { ex.balance = t.balance; backfilled++; }
       if (!ex.reference && t.reference) ex.reference = t.reference;
+      if (isRestate) {
+        // הבנק סגר את התנועה סופית — מעדכנים את השורה הקיימת *במקומה* לערכים הסופיים
+        // (תאריך/תיאור/אסמכתא). עדכון-במקום ולא מחיקה+הוספה, כדי שהשיוך לחשבונית, האישור,
+        // הקבוצה וההערות שכבר נעשו על השורה הזמנית יישמרו במלואם.
+        ex.date = t.date;
+        if (t.description) ex.description = t.description;
+        if (t.nameHint) ex.nameHint = t.nameHint;
+        if (t.memo) ex.memo = t.memo;
+        if (t.invoiceNumber && !ex.invoiceNumber) ex.invoiceNumber = t.invoiceNumber;
+        ex.sig = bankSig(ex);
+        ex.restatedAt = new Date().toISOString();
+        restated++;
+      }
       continue;
     }
     const rec = {
@@ -4341,7 +4374,7 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   // התאמה מול חשבונית ירוקה (הכנסות/קבלות/הוצאות) רצה ברקע — לא חוסמת את התגובה
   const matchBg = giEnabled(companyId);
   if (matchBg) runBankMatchBg(companyId).catch(() => { });
-  json(res, { ok: true, added, backfilled, total: parsed.length, matching: matchBg ? 'background' : 'none', accountBalance: acctBal || null });
+  json(res, { ok: true, added, backfilled, restated, total: parsed.length, matching: matchBg ? 'background' : 'none', accountBalance: acctBal || null });
 });
 
 // POST /api/bank/rematch { companyId } — הרצת התאמה אוטומטית מחדש של תנועות זכות+חובה על התנועות הקיימות (בלי העלאה חוזרת).

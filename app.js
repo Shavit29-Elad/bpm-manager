@@ -7724,12 +7724,14 @@ window.doBankImport = async (btn) => {
     btn.disabled = false; btn.textContent = 'ייבא והתאם';
     if (r.error) { if (status) status.innerHTML = `<span style="color:var(--danger)">${r.error}</span>`; return; }
     const balMsg = r.accountBalance ? ` · יתרת עו"ש עודכנה ל-${money(r.accountBalance.balance)}${r.accountBalance.date ? ' (' + r.accountBalance.date + ')' : ''}` : '';
+    // תנועות שהבנק סגר סופית (תאריך/אסמכתא השתנו) — עודכנו במקומן במקום להיווצר ככפילות
+    const restMsg = r.restated ? ` · ${r.restated} תנועות עודכנו לנתונים הסופיים של הבנק (במקום להיווצר ככפילות)` : '';
     if (r.matching === 'background') {
-      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${balMsg}. מתאים מול חשבונית ירוקה ברקע…</span>`;
+      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${restMsg}${balMsg}. מתאים מול חשבונית ירוקה ברקע…</span>`;
       await renderBank($('#content'));
       pollBankMatch(status);   // מרענן כשההתאמה ברקע מסתיימת
     } else {
-      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${balMsg}.</span>`;
+      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${restMsg}${balMsg}.</span>`;
       await renderBank($('#content'));
       setTimeout(() => { const mm = document.getElementById('bankModal'); if (mm) mm.classList.add('hidden'); }, 1400);
     }
