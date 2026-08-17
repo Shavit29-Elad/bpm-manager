@@ -2168,6 +2168,41 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
 });
 
 // GET /api/documents/:id/url — קישור לקובץ המסמך (PDF) בחשבונית ירוקה, לפתיחה/הורדה
+// GET /api/documents/:id/download — הורדה אמיתית של המסמך כקובץ (Content-Disposition: attachment).
+// קיים בנפרד מ-/url כי הקישור של חשבונית ירוקה הוא חיצוני: הדפדפן רק *פותח* אותו בטאב במקום להוריד,
+// ואי אפשר למשוך אותו מהצד של הדפדפן בגלל CORS. כאן השרת מושך ומגיש כהורדה מאותו דומיין.
+add('GET', /^\/api\/documents\/([^/]+)\/download$/, async (req, res, params, q) => {
+  const id = params[0];
+  const asName = (base, ext) => encodeURIComponent(String(base || 'מסמך').replace(/[\\/:*?"<>|]/g, '-').slice(0, 80) + '.' + ext);
+  const label = String((q && q.name) || DOC_NAMES_HE[Number(q && q.type)] || 'מסמך') + ((q && q.number) ? '-' + String(q.number) : '');
+  // מסמך שהועלה ידנית — מהאחסון המקומי, בכפוף לאותה בדיקת הרשאה של /api/files/:id
+  try {
+    const f = await getFile(id);
+    if (f) {
+      if (!mayReadFile(req, f, id)) return json(res, { error: 'אין הרשאה לקובץ זה' }, 403);
+      const buf = Buffer.from(f.data, 'base64');
+      const ext = /pdf/i.test(f.mime || '') ? 'pdf' : (/png/i.test(f.mime || '') ? 'png' : (/jpe?g/i.test(f.mime || '') ? 'jpg' : 'pdf'));
+      res.writeHead(200, {
+        'Content-Type': f.mime || 'application/pdf',
+        'Content-Length': buf.length,
+        'Content-Disposition': `attachment; filename*=UTF-8''${asName(f.filename ? f.filename.replace(/\.[^.]+$/, '') : label, ext)}`,
+      });
+      return res.end(buf);
+    }
+  } catch { /* לא קובץ מקומי — ננסה חשבונית ירוקה */ }
+  if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
+  try {
+    const pdf = await greenInvoice.getDocumentPdf(id);
+    const buf = Buffer.from(pdf.base64, 'base64');
+    res.writeHead(200, {
+      'Content-Type': 'application/pdf',
+      'Content-Length': buf.length,
+      'Content-Disposition': `attachment; filename*=UTF-8''${asName(label, 'pdf')}`,
+    });
+    res.end(buf);
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 add('GET', /^\/api\/documents\/([^/]+)\/url$/, async (req, res, params) => {
   // מסמך שהועלה ידנית (חשבונית ישנה) — מוגש מהאחסון המקומי, ולא מחשבונית ירוקה
   try { const f = await getFile(params[0]); if (f) return json(res, { ok: true, url: '/api/files/' + params[0], status: 1, type: null, uploaded: true }); } catch {}

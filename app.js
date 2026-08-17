@@ -982,7 +982,7 @@ function openInvClientHtml(cl) {
     <span style="font-weight:600;white-space:nowrap">${d.amountDue != null || d.amount != null ? money(d.amountDue != null ? d.amountDue : d.amount) : '<span class="muted">—</span>'}</span>
     ${d.paidNoReceipt ? `<span class="tag" style="background:#fef3c7;color:#92400e;white-space:nowrap" title="התקבל תשלום בבנק${d.paidDate ? ' בתאריך ' + fmtDate(d.paidDate) : ''} אך עדיין לא הופקה קבלה">💰 התקבל תשלום${d.paidDate ? ' · ' + fmtDate(d.paidDate) : ''} · חסרה קבלה</span><button class="btn primary" style="padding:2px 10px;font-size:12px;white-space:nowrap" onclick="event.stopPropagation();issuePaidReceipt('${d.id}','${escAttr(String(d.paidDate || ''))}','${escAttr(String(d.paidTxId || ''))}',${d.paidAmount != null ? Number(d.paidAmount) : 0})" title="הפקת קבלה בתאריך שבו התקבל הכסף בבנק">🧾 הפק קבלה</button>` : ''}
     ${d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
-    <a href="${d.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap">הורדה ↓</a>` : ''}
+    <a href="${docDlUrl(d)}" download class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap" title="שמירת המסמך כקובץ PDF במחשב">הורדה ↓</a>` : ''}
     ${d.uploaded
       ? `${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number || ''))}',${Number(d.type)},'followup')" title="הפקת מסמך המשך בחשבונית ירוקה">מסמך המשך ↪</button>` : ''}
     <button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent)" onclick="openSendDoc('${d.id}','${escAttr(String(d.number || ''))}','${escAttr(DOC_TYPE_NAMES[d.type] || 'מסמך')}','${encodeURIComponent(cl.name || '')}')" title="שליחת המסמך במייל ללקוח">✉️ שלח</button>${d.oldInvoiceId ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap;color:var(--accent2)" onclick="openOldInvoice('receipt','${d.oldInvoiceId}',320)" title="צרף קבלה/מס-קבלה שהופקה — יסגור את המסמך ויוריד מ״חשבוניות פתוחות״">✓ צרף קבלה</button><button class="btn ghost" style="padding:2px 8px;font-size:12px;white-space:nowrap;color:var(--danger)" onclick="delOldInvoice('${d.oldInvoiceId}')" title="מחק חשבונית ישנה">✕</button>` : ''}`
@@ -1002,6 +1002,16 @@ function openInvClientHtml(cl) {
     </div></div>
   </div>`;
 }
+// קישור להורדה אמיתית של מסמך (שמירה כקובץ, לא פתיחה בטאב). דרך השרת — הקישור של
+// חשבונית ירוקה חיצוני, והדפדפן רק פותח אותו. השרת מושך ומגיש כ-attachment מאותו דומיין.
+function docDlUrl(d) {
+  const p = new URLSearchParams();
+  if (d.type != null && d.type !== '') p.set('type', String(Number(d.type) || ''));
+  if (d.number) p.set('number', String(d.number));
+  if (state.company) p.set('companyId', state.company);
+  return `/api/documents/${encodeURIComponent(String(d.id))}/download?${p.toString()}`;
+}
+
 // ===== בדיקת סטטוס תשלום מול הלקוח =====
 // שולח ללקוח בירור מועד תשלום עם החשבוניות הפתוחות מצורפות, או מכין הודעת ווטסאפ להעתקה.
 // הניסוחים נקבעו ע"י ההנהלה — אין לשנות מבנה או סגנון.
@@ -1060,7 +1070,7 @@ function renderPayStatus() {
        <div class="muted" style="font-size:12px;margin:12px 0 4px">נושא: <b>חשבוניות פתוחות – בירור מועד תשלום | ${escapeHtml(e.companyName)}</b></div>
        <div id="psPreview" dir="rtl" style="white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;line-height:1.7;text-align:right">${escapeHtml(psMailText(e.companyName, e.docs.length))}</div>
        <div class="muted" style="font-size:11.5px;margin-top:6px">${e.docs.length} חשבוניות יצורפו כ-PDF. המייל יישלח מתיבת החברה הפעילה.</div>`
-    : `<div class="muted" style="font-size:12.5px;margin-bottom:6px">העתק את ההודעה ושלח ללקוח בווטסאפ. (ווטסאפ אינו תומך בצירוף קבצים דרך קישור — לכן ההודעה כוללת את סוג ומספר המסמך.)</div>
+    : `<div class="muted" style="font-size:12.5px;margin-bottom:6px">העתק את ההודעה ושלח ללקוח בווטסאפ. ווטסאפ אינו תומך בצירוף קבצים דרך קישור — לכן הורד את ${e.docs.length === 1 ? 'המסמך' : 'המסמכים'} וצרף ידנית לשיחה.</div>
        <div id="psPreview" dir="rtl" style="white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;line-height:1.7;text-align:right">${escapeHtml(psWhatsappText(e.docs))}</div>`;
   m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw);max-height:92vh;overflow:auto">
     <div class="row-between" style="margin:0"><h3 style="margin:0">📨 בדיקת סטטוס תשלום</h3>
@@ -1072,11 +1082,26 @@ function renderPayStatus() {
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('psModal').classList.add('hidden')">סגור</button>
       ${isMail ? `<button class="btn success" id="psSendBtn" onclick="psSend(this)">✉️ שלח מייל</button>`
-               : `<button class="btn success" onclick="psCopy(this)">📋 העתק הודעת ווטסאפ</button>`}
+               : `<button class="btn ghost" onclick="psDownload(this)" title="שמירת המסמכים במחשב כדי לצרף אותם לשיחת הווטסאפ">⬇️ הורד ${e.docs.length === 1 ? 'מסמך' : `${e.docs.length} מסמכים`}</button>
+                  <button class="btn success" onclick="psCopy(this)">📋 העתק הודעת ווטסאפ</button>`}
     </div>
   </div>`;
   m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
 }
+// הורדת כל המסמכים שסומנו. בהפרש קטן בין הקבצים — דפדפנים חוסמים כמה הורדות בו-זמנית.
+window.psDownload = async (btn) => {
+  const docs = _psCtx.docs; const orig = btn.textContent;
+  btn.disabled = true;
+  for (let i = 0; i < docs.length; i++) {
+    btn.textContent = docs.length > 1 ? `מוריד ${i + 1}/${docs.length}…` : 'מוריד…';
+    const a = document.createElement('a');
+    a.href = docDlUrl(docs[i]); a.download = ''; a.style.display = 'none';
+    document.body.appendChild(a); a.click(); a.remove();
+    if (i < docs.length - 1) await new Promise(r => setTimeout(r, 900));
+  }
+  btn.textContent = '✓ הורד'; btn.disabled = false;
+  setTimeout(() => { btn.textContent = orig; }, 2200);
+};
 window.psCopy = async (btn) => {
   const txt = psWhatsappText(_psCtx.docs);
   try { await navigator.clipboard.writeText(txt); btn.textContent = '✓ הועתק'; setTimeout(() => { btn.textContent = '📋 העתק הודעת ווטסאפ'; }, 1800); }
