@@ -246,11 +246,6 @@ export async function previewDocument(opts) {
   return { url, pdfBase64: file, raw: data };
 }
 
-// תאימות לאחור — הפקת חשבונית מס (או סוג אחר עם type)
-export async function createInvoice({ client, items, type = DOC_TYPES.INVOICE, remarks, description, dueDate, payment }) {
-  return createDocument({ client, items, type, remarks, description, dueDate, payment });
-}
-
 // חיפוש מהיר של מסמכים לפי מספר או טקסט מהתיאור (לשורת החיפוש בלקוחות)
 export async function quickSearchDocuments(term) {
   const q = String(term || '').trim();
@@ -302,25 +297,8 @@ export async function quickSearchExpenses(term) {
   return matched.slice(0, 20).map(mapExpense);
 }
 
-// חיפוש מסמכים בטווח תאריכים (למעקב תשלומים/התאמות)
-export async function searchDocuments({ fromDate, toDate, page = 1, pageSize = 100 } = {}) {
-  return api('/documents/search', {
-    method: 'POST',
-    body: { fromDate, toDate, page, pageSize, sort: 'documentDate' },
-  });
-}
-
-// הפקת קבלה כנגד חשבונית ששולמה
-export async function createReceipt({ client, items, remarks }) {
-  return createInvoice({ client, items, type: DOC_TYPES.RECEIPT, remarks });
-}
-
 // ===== נתונים לדף הבית =====
 const num = (v) => (Number(v) || 0);
-function lastDay(month) {
-  const [y, m] = month.split('-').map(Number);
-  return `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
-}
 
 // שיעור מע"מ מרוכז (ברירת מחדל 18%). ניתן לעדכן דרך משתנה הסביבה VAT_RATE.
 const VAT_RATE = Number(process.env.VAT_RATE) || 0.18;
@@ -381,11 +359,6 @@ export async function incomeForRange(fromDate, toDate, types = [305, 320]) {
   });
 }
 
-// תאימות לאחור — חודש בודד
-export async function monthlyIncome(month) {
-  return incomeForRange(`${month}-01`, lastDay(month));
-}
-
 // קבלות (סוג 400) בטווח — לצורך קישור קבלה לחשבונית מס בהתאמות בנק
 export async function receiptsForRange(fromDate, toDate) {
   return cached(`receipts:${fromDate}:${toDate}`, async () => {
@@ -412,15 +385,6 @@ export async function clientDocuments(clientId) {
     // סינון הגנתי למקרה שה-API לא סינן לפי לקוח
     const filtered = all.filter(d => !d.client || !d.client.id || d.client.id === clientId);
     return (filtered.length ? filtered : all).map(mapDoc);
-  });
-}
-
-// כמות חשבוניות מס פתוחות (לא שולמו במלואן)
-export async function openInvoicesCount() {
-  return cached('openInvoices', async () => {
-    // סך כל החיובים הפתוחים = חשבון עסקה (300) + חשבונית מס (305) עם status 0 — כמו "חיובים קרובים" בחשבונית ירוקה
-    const docs = await openDocuments();
-    return docs.length;
   });
 }
 
@@ -565,7 +529,6 @@ export async function uploadExpenseFile(fileBase64, fileName, mime, existingId) 
 }
 export async function getExpense(id) { return api(`/expenses/${encodeURIComponent(id)}`); }
 export async function getSupplier(id) { return api(`/suppliers/${encodeURIComponent(id)}`); }
-export async function expenseStatuses() { return api('/expenses/statuses'); }
 // רשימת סיווגים חשבונאיים (סיווגי הוצאה) — מנסה כמה נתיבים אפשריים ומחזיר את הראשון שמצליח
 export async function listAccountingClassifications() {
   return cached('acctClassifications', async () => {
@@ -582,21 +545,6 @@ export async function listAccountingClassifications() {
     }
     return [];
   });
-}
-// אבחון: מנסה כמה נתיבים ומחזיר דגימה גולמית כדי לזהות את הנתיב הנכון לשמות סיווגים
-export async function debugClassifications() {
-  const out = [];
-  const gets = ['/accounting/classifications', '/expenses/classifications', '/accounting/classification', '/incomes/classifications', '/accounting/categories'];
-  for (const p of gets) {
-    try { const r = await api(p); const arr = Array.isArray(r) ? r : (r?.items || r?.data || []); out.push({ path: p, method: 'GET', ok: true, count: arr.length, sample: arr.slice(0, 2) }); }
-    catch (e) { out.push({ path: p, method: 'GET', ok: false, error: String(e.message).slice(0, 120) }); }
-  }
-  const posts = ['/accounting/classifications/search', '/expenses/classifications/search'];
-  for (const p of posts) {
-    try { const r = await api(p, { method: 'POST', body: { page: 1, pageSize: 10 } }); const arr = Array.isArray(r) ? r : (r?.items || r?.data || []); out.push({ path: p, method: 'POST', ok: true, count: arr.length, sample: arr.slice(0, 2) }); }
-    catch (e) { out.push({ path: p, method: 'POST', ok: false, error: String(e.message).slice(0, 120) }); }
-  }
-  return out;
 }
 // עדכון ספק קיים (למשל הגדרת סיווג חשבונאי ברירת מחדל)
 export async function updateSupplier(id, data) {
@@ -733,27 +681,6 @@ export async function supplierExpenses(supplierId) {
   });
 }
 
-// זמני — לומד את שדות הסטטוס האמיתיים מהמסמכים כדי לקבוע פתוח/סגור
-export async function debugDocStatus() {
-  const to = new Date();
-  const from = new Date(); from.setMonth(from.getMonth() - 18);
-  const fromDate = from.toISOString().slice(0, 10);
-  const toDate = to.toISOString().slice(0, 10);
-  const out = {};
-  for (const type of [300, 305]) {
-    const items = await documentsInRange(fromDate, toDate, [type]);
-    const statusHist = {};
-    for (const d of items) { const k = JSON.stringify(d.status); statusHist[k] = (statusHist[k] || 0) + 1; }
-    out[type] = {
-      total: items.length,
-      statusHist,
-      sampleKeys: items[0] ? Object.keys(items[0]) : [],
-      samples: items.slice(0, 4).map(d => ({ number: d.number, status: d.status, paid: d.paid, paymentStatus: d.paymentStatus, amount: d.amount, amountDue: d.amountDue, cancelled: d.cancelled, open: d.open })),
-    };
-  }
-  return out;
-}
-
 // שליפת כל העמודים מ-endpoint חיפוש (לקוחות/ספקים) — עד שמגיעים לסוף
 async function searchAllPages(pathName, extraBody = {}) {
   const all = [];
@@ -828,5 +755,5 @@ export async function updateSupplierDetails(id, data) {
   return r;
 }
 
-export const greenInvoice = { haveCredentials, resetToken, verify, withCompany, activeCompany, setCompanyRemark, giCompanies, setDbCreds, createInvoice, createDocument, previewDocument, createReceipt, createClient, createSupplier, searchDocuments, monthlyIncome, incomeForRange, receiptsForRange, openInvoicesCount, openDocuments, openQuotes, getDocument, documentDownloadLinks, getDocumentPdf, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, expenseStatuses, listAccountingClassifications, debugClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
+export const greenInvoice = { haveCredentials, resetToken, verify, withCompany, activeCompany, setCompanyRemark, giCompanies, setDbCreds, createDocument, previewDocument, createClient, createSupplier, incomeForRange, receiptsForRange, openDocuments, openQuotes, getDocument, documentDownloadLinks, getDocumentPdf, sendDocument, closeDocument, openDocument, latestDocumentDate, quickSearchDocuments, quickSearchExpenses, listClients, listSuppliers, clientDocuments, supplierExpenses, expensesInRange, getExpenseFileUploadUrl, uploadExpenseFile, getExpense, getSupplier, getClient, updateClientDetails, updateSupplierDetails, listAccountingClassifications, updateSupplier, createExpense, deleteExpense, updateExpenseDescription, updateExpense, expenseDrafts, getExpenseDraft, deleteExpenseDraft, clearDataCache, DOC_TYPES };
 export default greenInvoice;

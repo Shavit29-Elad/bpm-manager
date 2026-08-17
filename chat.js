@@ -206,7 +206,6 @@ export async function extractEvents(text, defaultYear) {
 ${text}`;
   const raw = await complete(system, [{ role: 'user', content: prompt }], { maxTokens: 8000 });
   const arr = parseEventsJson(raw);
-  globalThis.__lastExtractRaw = raw; // לצורך דיבוג בלבד
   const n = (v) => (v == null || v === '' || isNaN(+String(v).replace(/[^\d.\-]/g, ''))) ? null : +String(v).replace(/[^\d.\-]/g, '');
   return arr.map(e => {
     const ctr = Array.isArray(e.contractors) ? e.contractors.filter(c => c && c.name).map(c => ({ name: String(c.name).trim(), amount: n(c.amount) })) : [];

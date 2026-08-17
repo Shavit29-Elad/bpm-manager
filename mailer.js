@@ -18,12 +18,6 @@ export function mailerConfigured() {
   return Boolean(process.env.SMTP_USER && process.env.SMTP_PASS);
 }
 
-// לאן להעביר הוצאות (ברירת מחדל: תיבת המסמכים של הרו"ח)
-export function forwardExpenseTo() {
-  const v = (process.env.FORWARD_EXPENSE_EMAIL || '516942349@rivh.it').trim();
-  return v || null;
-}
-
 async function transporter() {
   if (_transporter) return _transporter;
   const nodemailer = await nm();
@@ -85,4 +79,4 @@ export async function verifyMailerFor(creds) {
   catch (e) { return { ok: false, error: e.message }; }
 }
 
-export default { mailerConfigured, forwardExpenseTo, sendMail, verifyMailer, companyMailConfigured, sendMailFrom, verifyMailerFor };
+export default { mailerConfigured, sendMail, verifyMailer, companyMailConfigured, sendMailFrom, verifyMailerFor };

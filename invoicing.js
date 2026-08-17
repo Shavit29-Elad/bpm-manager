@@ -6,7 +6,6 @@
 
 const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
 
-function monthKey(iso) { return iso ? iso.slice(0, 7) : 'unknown'; } // yyyy-mm
 function ddmyDots(iso) {
   if (!iso) return '';
   const [y, m, d] = iso.slice(0, 10).split('-');
@@ -101,21 +100,6 @@ export function eventsByClient(events) {
   return Object.values(groups).sort((a, b) => b.unissuedTotal - a.unissuedTotal || a.client.localeCompare(b.client));
 }
 
-// ---- תאימות לאחור: קיבוץ לפי לקוח+חודש (המסך הישן של "חיוב") ----
-export function groupForInvoicing(events) {
-  const groups = {};
-  for (const ev of events || []) {
-    if (isBilled(ev)) continue;
-    const client = (ev.clientName || ev.client || ev.artist || 'לא ידוע').trim();
-    const key = `${client}__${monthKey(ev.date)}`;
-    if (!groups[key]) groups[key] = { client, month: monthKey(ev.date), events: [], total: 0 };
-    groups[key].events.push(ev);
-    groups[key].total += eventTotal(ev);
-  }
-  return Object.values(groups).sort((a, b) => b.month.localeCompare(a.month));
-}
-export function invoiceItemsFromGroup(group) { return invoiceItemsFromEvents(group.events); }
-
 // קבלנים: כמה משלמים לכל קבלן, ומעקב תשלום לפי אירוע (שולם / לא שולם)
 export function contractorPayables(events) {
   const byContractor = {};
@@ -141,6 +125,5 @@ export function contractorPayables(events) {
 }
 
 export default {
-  eventTotal, eventInvoiceLines, invoiceItemsFromEvents, subjectForEvents, eventsByClient,
-  groupForInvoicing, invoiceItemsFromGroup, contractorPayables,
+  eventTotal, eventInvoiceLines, invoiceItemsFromEvents, subjectForEvents, eventsByClient, contractorPayables,
 };

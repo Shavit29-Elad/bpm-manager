@@ -11,15 +11,13 @@ import { fileURLToPath } from 'url';
 import { init as initStore, load, save, id, upsertEvent, companyEvents, saveFile, getFile, deleteFile } from './store.js';
 import { parseEventMessage, parseEventMessages } from './whatsappParser.js';
 import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar, calendarCompanies, setDbIcal } from './googleCalendar.js';
-import { groupForInvoicing, invoiceItemsFromGroup, contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents, eventTotal } from './invoicing.js';
+import { contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents, eventTotal } from './invoicing.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
-import paperless from './paperless.js';
-import { extractDescription, EXTRACT_VERSION } from './pdfDesc.js';
 import { parseBank, extractAccountBalance } from './bankParser.js';
 import { matchCredits, matchDebits, attachReceipts, nameMatch } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
-import { saveSettings, statusMasked, loadEnvIntoProcess } from './settings.js';
+import { statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
 import { buildAppMap } from './appMap.js';
@@ -137,6 +135,14 @@ const json = (res, data, code = 200) => {
 // שגיאת חשבונית ירוקה "לא ניתן לסגור מסמך שאינו פתוח" (errorCode 2400) — המסמך כבר סגור/הומר, אין צורך לסגור שוב
 const isAlreadyClosedErr = (e) => /2400|שאינו פתוח/.test(String((e && e.message) || e || ''));
 
+// ---- בידוד חברות: שני עוזרים שכל ראוט שנוגע בנתוני חברה חייב לעבור דרכם ----
+// החברה של הבקשה: מה-query, מגוף הבקשה, ואם אין — חברת ברירת המחדל. לעולם לא "כל החברות".
+const reqCompany = (q, body) => (q && q.companyId) || (body && body.companyId) || giCompanyId();
+// האם רשומה שייכת לחברה. רשומה ישנה ללא companyId שייכת לחברת ברירת המחדל (מוסכמה קיימת).
+const ownedBy = (rec, cid) => Boolean(rec) && (rec.companyId || giCompanyId()) === cid;
+// תשובת 403 אחידה לניסיון גישה לרשומה של חברה אחרת
+const wrongCompany = (res, what = 'הרשומה') => json(res, { error: `${what} שייכת לחברה אחרת` }, 403);
+
 // GET /api/companies — משתמש צפייה רואה רק את העסקים שהורשה אליהם
 add('GET', /^\/api\/companies$/, (req, res) => {
   const all = load().companies || [];
@@ -227,6 +233,7 @@ add('POST', /^\/api\/events\/([^/]+)\/duplicate$/, (req, res, params, _q, body) 
   const db = load();
   const src = db.events.find(e => e.id === params[0]);
   if (!src) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  if (!ownedBy(src, reqCompany(_q, body))) return wrongCompany(res, 'האירוע');
   const copy = JSON.parse(JSON.stringify(src));
   copy.id = id('ev');
   copy.confirmed = false;              // ילך ל"אירועים לאישור"
@@ -490,30 +497,6 @@ add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
   res.end(JSON.stringify({ from: q.from, to: q.to, whatsapp: wa, calendar: cal, calendars, calendarError }));
 });
 
-// GET /api/invoicing/pending?companyId=
-add('GET', /^\/api\/invoicing\/pending$/, (req, res, _p, q) =>
-  json(res, groupForInvoicing(companyEvents(load(), q.companyId))));
-
-// POST /api/invoicing/create
-add('POST', /^\/api\/invoicing\/create$/, async (req, res, _p, _q, body) => {
-  const db = load();
-  const group = groupForInvoicing(companyEvents(db, body.companyId))
-    .find(g => g.client === body.client && g.month === body.month);
-  if (!group) return json(res, { error: 'לא נמצאה קבוצה לחיוב' }, 404);
-  if (!greenInvoice.haveCredentials()) {
-    return json(res, { error: 'חסרים מפתחות חשבונית ירוקה - הוסף אותם ב-.env כדי להפיק בפועל',
-      preview: { client: group.client, items: invoiceItemsFromGroup(group), total: group.total } }, 400);
-  }
-  try {
-    const doc = await greenInvoice.createInvoice({
-      client: { name: group.client }, items: invoiceItemsFromGroup(group),
-      remarks: `אירועים לחודש ${group.month}` });
-    try { forwardOfekIncomeDoc(doc); } catch { }   // העברה אוטומטית ברקע למייל ההוצאות (אופק בלבד)
-    group.events.forEach(ev => { const e = db.events.find(x => x.id === ev.id); if (e) e.invoiceStatus = 'invoiced'; });
-    save(db); json(res, { ok: true, doc });
-  } catch (e) { json(res, { error: e.message }, 500); }
-});
-
 // GET /api/invoicing/clients?companyId= — כל האירועים מקובצים לפי לקוח (עם סימון מחויבים)
 add('GET', /^\/api\/invoicing\/clients$/, (req, res, _p, q) =>
   json(res, eventsByClient(companyEvents(load(), q.companyId))));
@@ -521,7 +504,8 @@ add('GET', /^\/api\/invoicing\/clients$/, (req, res, _p, q) =>
 // POST /api/invoicing/preview — { eventIds } → שורות ברירת מחדל + נושא + סכומים (בלי ליצור מסמך)
 add('POST', /^\/api\/invoicing\/preview$/, async (req, res, _p, _q, body) => {
   const db = load();
-  const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(Boolean);
+  const _cid = reqCompany(_q, body);
+  const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(e => ownedBy(e, _cid));
   const items = invoiceItemsFromEvents(evs);
   const subtotal = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
   // מייל שמור של הלקוח — כדי שיופיע מראש בתיבה בהפקה (המשתמש מחליט אם לשלוח)
@@ -556,7 +540,8 @@ add('POST', /^\/api\/invoicing\/preview-pdf$/, async (req, res, _p, _q, body) =>
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   try {
     const db = load();
-    const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(Boolean);
+    const _cid = reqCompany(_q, body);
+    const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(e => ownedBy(e, _cid));
     const items = (body.items && body.items.length) ? body.items : invoiceItemsFromEvents(evs);
     if (!items.length) return json(res, { error: 'אין שורות לתצוגה' }, 400);
     const type = Number(body.type) || greenInvoice.DOC_TYPES.INVOICE;
@@ -646,7 +631,9 @@ add('POST', /^\/api\/documents\/preview-pdf$/, async (req, res, _p, _q, body) =>
 // POST /api/invoicing/generate — יוצר מסמך בחשבונית ירוקה ומסמן את האירועים כמחויבים
 add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
   const db = load();
-  const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(Boolean);
+  const _cid = reqCompany(_q, body);
+  // בידוד: מפיקים ומסמנים אך ורק אירועים של החברה הפעילה (המסמך נוצר בחשבונית ירוקה שלה)
+  const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(e => ownedBy(e, _cid));
   const items = (body.items && body.items.length) ? body.items : invoiceItemsFromEvents(evs);
   const type = Number(body.type) || greenInvoice.DOC_TYPES.INVOICE;
   const subtotal = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
@@ -808,6 +795,7 @@ add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
     ? body.docs
     : (body.docId ? [{ id: body.docId, number: body.docNumber || null, type: Number(body.docType) || null }] : []);
   if (!ids.length || !docs.length) return json(res, { error: 'חסרים נתונים לשיוך' }, 400);
+  const _cid = reqCompany(_q, body);
   docs = docs.slice(0, 4).map(d => {
     const o = { id: d.id, number: d.number || null, type: Number(d.type) || null };
     // מסמך ישן שהועלה ידנית (אינו בחשבונית ירוקה) — שומרים url/uploaded/date/amount כדי שיוצג ויורד וייחשב כחיוב פתוח
@@ -817,7 +805,7 @@ add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
   let n = 0;
   for (const id of ids) {
     const e = db.events.find(x => x.id === id);
-    if (!e) continue;
+    if (!e || !ownedBy(e, _cid)) continue;   // בידוד
     // צירוף המסמכים החדשים לקיימים (בלי כפילויות) — מאפשר לשייך עוד מסמכים בהמשך
     const merged = Array.isArray(e.linkedDocs) ? e.linkedDocs.slice() : [];
     for (const d of docs) if (!merged.some(x => String(x.id) === String(d.id))) merged.push(d);
@@ -845,6 +833,7 @@ add('POST', /^\/api\/events\/([^/]+)\/attach-doc$/, async (req, res, params, _q,
   const db = load();
   const ev = db.events.find(e => e.id === params[0]);
   if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  if (!ownedBy(ev, reqCompany(_q, body))) return wrongCompany(res, 'האירוע');
   if (!body || !body.data) return json(res, { error: 'חסר קובץ' }, 400);
   const type = Number(body.type) || null;
   const saved = await saveFile({ employeeId: 'evdoc:' + ev.id, kind: 'event-doc', filename: body.filename || 'document', mime: body.mime || 'application/octet-stream', data: body.data });
@@ -866,10 +855,11 @@ add('POST', /^\/api\/events\/([^/]+)\/attach-doc$/, async (req, res, params, _q,
 });
 
 // DELETE /api/events/:id/attach-doc/:docId — הסרת מסמך שהועלה מאירוע + עדכון סטטוס
-add('DELETE', /^\/api\/events\/([^/]+)\/attach-doc\/([^/]+)$/, async (req, res, params) => {
+add('DELETE', /^\/api\/events\/([^/]+)\/attach-doc\/([^/]+)$/, async (req, res, params, q) => {
   const db = load();
   const ev = db.events.find(e => e.id === params[0]);
   if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  if (!ownedBy(ev, reqCompany(q))) return wrongCompany(res, 'האירוע');
   ev.linkedDocs = (ev.linkedDocs || []).filter(d => String(d.id) !== String(params[1]));
   try { await deleteFile(params[1]); } catch {}
   const REAL = [300, 305, 320, 400];
@@ -891,6 +881,7 @@ add('POST', /^\/api\/events\/([^/]+)\/create-followup$/, async (req, res, params
   const db = load();
   const ev = db.events.find(e => e.id === params[0]);
   if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  if (!ownedBy(ev, reqCompany(_q, body))) return wrongCompany(res, 'האירוע');
   try {
     const type = Number(body.type);
     const items = (Array.isArray(body.items) ? body.items : [])
@@ -969,9 +960,10 @@ add('POST', /^\/api\/old-invoices\/([^/]+)\/attach-doc$/, async (req, res, param
   json(res, { ok: true });
 });
 // DELETE /api/old-invoices/:id — מחיקה + קבצים
-add('DELETE', /^\/api\/old-invoices\/([^/]+)$/, async (req, res, params) => {
+add('DELETE', /^\/api\/old-invoices\/([^/]+)$/, async (req, res, params, q) => {
   const db = load(); db.oldInvoices = db.oldInvoices || [];
   const rec = db.oldInvoices.find(r => r.id === params[0]);
+  if (rec && !ownedBy(rec, reqCompany(q))) return wrongCompany(res, 'החשבונית');
   if (rec) { for (const d of (rec.linkedDocs || [])) { try { await deleteFile(d.id); } catch {} } }
   db.oldInvoices = db.oldInvoices.filter(r => r.id !== params[0]);
   save(db);
@@ -2766,6 +2758,7 @@ add('POST', /^\/api\/contractors\/toggle-paid$/, (req, res, _p, _q, body) => {
   const db = load();
   const ev = db.events.find(e => e.id === body.eventId);
   if (!ev || !ev.contractorDetails || !ev.contractorDetails[body.index]) return json(res, { error: 'לא נמצא' }, 404);
+  if (!ownedBy(ev, reqCompany(_q, body))) return wrongCompany(res, 'האירוע');
   const cd = ev.contractorDetails[body.index];
   cd.paid = Boolean(body.paid);
   if (body.paid) { cd.paidSource = 'manual'; } // סימון ידני מפורש — נשמר גם בנרמול הבנק
@@ -2779,9 +2772,11 @@ add('POST', /^\/api\/contractors\/mark-paid-bulk$/, (req, res, _p, _q, body) => 
   const items = Array.isArray(body.items) ? body.items : [];
   const paid = body.paid !== false;
   const linkOnly = body.link === true && !paid; // קישור בלבד — שומר את השיוך לחשבונית בלי לסמן "שולם"
+  const cid = reqCompany(_q, body);
   let n = 0;
   for (const it of items) {
     const ev = db.events.find(e => e.id === it.eventId);
+    if (ev && !ownedBy(ev, cid)) continue;   // בידוד
     if (ev && ev.contractorDetails && ev.contractorDetails[it.index]) {
       const cd = ev.contractorDetails[it.index];
       cd.paid = paid;
@@ -2802,9 +2797,11 @@ add('POST', /^\/api\/contractors\/dismiss-supplier$/, (req, res, _p, _q, body) =
   const db = load();
   const name = String(body?.name || '').trim();
   if (!name) return json(res, { error: 'חסר שם ספק' }, 400);
+  const cid = reqCompany(_q, body);
   const undo = body?.undo === true;
   let n = 0;
   for (const ev of db.events) {
+    if (!ownedBy(ev, cid)) continue;   // בידוד: ספק עם אותו שם בחברה אחרת לא ייסגר בטעות
     for (const c of (ev.contractorDetails || [])) {
       if ((c.name || '').trim() !== name) continue;
       if (undo) { if (c.handled) { c.handled = false; n++; } }
@@ -2838,8 +2835,10 @@ add('POST', /^\/api\/contractors\/rename-bulk$/, (req, res, _p, _q, body) => {
     .filter(r => r && r.from && r.to && String(r.from).trim() !== String(r.to).trim())
     .map(r => [String(r.from).trim(), String(r.to).trim()]));
   if (!map.size) return json(res, { error: 'אין שינויים לביצוע' }, 400);
+  const cid = reqCompany(_q, body);
   let changed = 0; const applied = {};
   for (const ev of db.events) {
+    if (!ownedBy(ev, cid)) continue;   // בידוד: שינוי שם קבלן חל רק על אירועי החברה הפעילה
     for (const c of (ev.contractorDetails || [])) {
       const key = (c.name || '').trim();
       if (map.has(key)) { c.name = map.get(key); changed++; applied[key] = (applied[key] || 0) + 1; }
@@ -2851,15 +2850,19 @@ add('POST', /^\/api\/contractors\/rename-bulk$/, (req, res, _p, _q, body) => {
 
 // POST /api/contractors/auto-sync-names — עדכון אוטומטי של שמות קבלנים לפי חשבונית ירוקה (רק התאמות ודאיות)
 // התאמה ודאית = שם הקבלן זהה לספק, או שקיים בדיוק ספק אחד שהשם שלו מכיל את שם הקבלן (או להיפך).
-add('POST', /^\/api\/contractors\/auto-sync-names$/, async (req, res) => {
+add('POST', /^\/api\/contractors\/auto-sync-names$/, async (req, res, _p, q, body) => {
   const db = load();
+  // בידוד: רשימת הספקים נשלפת מחשבונית ירוקה של החברה הפעילה, ולכן גם השינוי חייב לחול
+  // אך ורק על אירועי אותה חברה. בלי זה פתיחת הלשונית בחברה אחת שינתה שמות קבלנים בכל השאר.
+  const cid = reqCompany(q, body);
+  const companyEvs = (db.events || []).filter(ev => ownedBy(ev, cid));
   let suppliers = [];
   try { suppliers = (await greenInvoice.listSuppliers()).map(s => (s.name || '').trim()).filter(Boolean); }
   catch (e) { return json(res, { ok: false, changed: 0, error: e.message }); }
   const supSet = new Set(suppliers);
   // שמות קבלנים ייחודיים מהאירועים
   const names = new Set();
-  for (const ev of db.events) for (const c of (ev.contractorDetails || [])) { const n = (c.name || '').trim(); if (n) names.add(n); }
+  for (const ev of companyEvs) for (const c of (ev.contractorDetails || [])) { const n = (c.name || '').trim(); if (n) names.add(n); }
   const renameMap = new Map();
   for (const name of names) {
     if (supSet.has(name)) continue; // כבר תואם במדויק
@@ -2868,7 +2871,7 @@ add('POST', /^\/api\/contractors\/auto-sync-names$/, async (req, res) => {
   }
   let changed = 0; const applied = {};
   if (renameMap.size) {
-    for (const ev of db.events) {
+    for (const ev of companyEvs) {
       for (const c of (ev.contractorDetails || [])) {
         const k = (c.name || '').trim();
         if (renameMap.has(k)) { c.name = renameMap.get(k); changed++; applied[k] = renameMap.get(k); }
@@ -3017,10 +3020,46 @@ add('POST', /^\/api\/employees\/([^/]+)\/files$/, async (req, res, params, _q, b
   save(db);
   json(res, { fileId, kind: body.kind, filename: body.filename || 'file' });
 });
+// לאיזו חברה שייך קובץ מאוחסן. הקבצים מתויגים ב-employee_id לפי המקור שיצר אותם
+// ('biz:<cid>' / 'mailscan:<cid>' / 'evdoc:<eventId>' / מזהה עובד / 'oldinv' / 'payable'),
+// ואם התיוג לא מספיק — מאתרים את הרשומה שמפנה לקובץ. מחזיר null אם לא ניתן לקבוע.
+function fileCompanyId(db, fileRec, fileId) {
+  const owner = String((fileRec && (fileRec.employee_id || fileRec.employeeId)) || '');
+  let m = owner.match(/^(?:biz|mailscan):(.+)$/);
+  if (m) return m[1];
+  m = owner.match(/^evdoc:(.+)$/);
+  if (m) { const ev = (db.events || []).find(e => e.id === m[1]); return ev ? (ev.companyId || giCompanyId()) : null; }
+  if (owner && owner !== 'oldinv' && owner !== 'payable') {
+    const emp = (db.employees || []).find(e => e.id === owner);
+    if (emp) return emp.companyId || 'co_bpm';
+  }
+  const fid = String(fileId);
+  for (const rec of (db.oldInvoices || [])) if ((rec.linkedDocs || []).some(d => String(d.id) === fid)) return rec.companyId || giCompanyId();
+  for (const p of (db.supplierPayables || [])) if (String(p.localFileId) === fid) return p.companyId || giCompanyId();
+  for (const ev of (db.events || [])) if ((ev.linkedDocs || []).some(d => String(d.id) === fid)) return ev.companyId || giCompanyId();
+  for (const [cid, list] of Object.entries(db.mailRecords || {})) if ((list || []).some(r => String(r.fileId) === fid)) return cid;
+  for (const [cid, p] of Object.entries(db.businessProfiles || {})) {
+    const metas = [p.bankConfirmation, p.taxConfirmation, ...(p.additionalDocs || []),
+      ...((p.managers || []).flatMap(mg => Object.values((mg && mg.files) || {})))].filter(Boolean);
+    if (metas.some(x => String(x.fileId || '') === fid)) return cid;
+  }
+  return null;
+}
+// האם המשתמש רשאי לקבל את הקובץ. מנהל — הכל (יש לו גישה לכל העסקים ממילא).
+// משתמש צפייה — רק קבצים של עסק שהורשה אליו; קובץ שלא ניתן לשייך נחסם.
+function mayReadFile(req, fileRec, fileId) {
+  const u = req && req.user;
+  if (!u || u.role === 'admin') return true;
+  const allowed = Array.isArray(u.companies) ? u.companies : [];
+  const owner = fileCompanyId(load(), fileRec, fileId);
+  return Boolean(owner) && allowed.includes(owner);
+}
+
 // GET /api/files/:id — הגשת הקובץ (צפייה=inline / הורדה=?download=1)
 add('GET', /^\/api\/files\/([^/]+)$/, async (req, res, params, q) => {
   const f = await getFile(params[0]);
   if (!f) return json(res, { error: 'קובץ לא נמצא' }, 404);
+  if (!mayReadFile(req, f, params[0])) return json(res, { error: 'אין הרשאה לקובץ זה' }, 403);
   const buf = Buffer.from(f.data || '', 'base64');
   const disp = (q && q.download) ? 'attachment' : 'inline';
   res.writeHead(200, { 'Content-Type': f.mime || 'application/octet-stream', 'Content-Disposition': `${disp}; filename="${encodeURIComponent(f.filename || 'file')}"`, 'Content-Length': buf.length });
@@ -3558,7 +3597,9 @@ add('GET', /^\/api\/employees\/([^/]+)\/jobs$/, (req, res, params, q) => {
   const db = load();
   const emp = (db.employees || []).find(e => e.id === params[0]);
   if (!emp) return json(res, { error: 'עובד לא נמצא' }, 404);
-  const emps = (db.employees || []).filter(e => !e.companyId || e.companyId === emp.companyId);
+  // בידוד: עובד ללא companyId שייך ל-BPM (מוסכמה). בלי זה עובדי BPM דלפו לחישוב של חברות אחרות.
+  const _ecid = emp.companyId || 'co_bpm';
+  const emps = (db.employees || []).filter(e => (e.companyId || 'co_bpm') === _ecid);
   const pay = employeePayForMonth(companyEvents(db, emp.companyId), q.month, emps).find(p => p.name === emp.name);
   json(res, { employee: emp, month: q.month, pay: pay || { shifts: [], base: 0, bonus: 0, total: 0 } });
 });
@@ -3569,11 +3610,11 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
     const note = body?.note || '';
     const result = await interpretBonuses(note, body?.employees || []);
     if (!Array.isArray(result)) return json(res, result);
-    const cid = q.companyId || body?.companyId;
+    const cid = reqCompany(q, body);
     const db = load();
     const baseMap = {}, defMap = {};
     for (const e of (db.employees || [])) {
-      if (e.companyId && e.companyId !== cid) continue;
+      if ((e.companyId || 'co_bpm') !== cid) continue;   // בידוד: עובד ללא תיוג = BPM
       const nm = String(e.name).trim();
       if (e.baseRate != null && e.baseRate !== '') baseMap[nm] = Number(e.baseRate);
       if (e.bonus != null && e.bonus !== '') defMap[nm] = Number(e.bonus);
@@ -3650,7 +3691,6 @@ add('GET', /^\/api\/suppliers$/, async (req, res, _p, q) => {
 // GET /api/accounting/classifications — סיווגים חשבונאיים (סיווגי הוצאה) מחשבונית ירוקה
 add('GET', /^\/api\/accounting\/classifications$/, async (req, res, _p, q) => {
   if (!greenInvoice.haveCredentials()) return json(res, { classifications: [], error: 'חשבונית ירוקה לא מחוברת' });
-  if (q.debug) { try { return json(res, { debug: await greenInvoice.debugClassifications() }); } catch (e) { return json(res, { error: e.message }); } }
   try { json(res, { classifications: await greenInvoice.listAccountingClassifications() }); }
   catch (e) { json(res, { classifications: [], error: e.message }); }
 });
@@ -3723,12 +3763,7 @@ add('GET', /^\/api\/whatsapp\/status$/, (req, res) => json(res, getBridgeStatus(
 // ---- מרכז חיבורים ----
 async function verifyConnection(key) {
   if (key === 'greenInvoice') return greenInvoice.verify();
-  if (key === 'paperless') return paperless.verify();
   if (key === 'googleCalendar') return calendarVerify();
-  if (key === 'whatsapp') {
-    const st = getBridgeStatus().status;
-    return { ok: st === 'connected', error: st === 'connected' ? null : `סטטוס: ${st}` };
-  }
   return { ok: false, error: 'לא נתמך' };
 }
 
@@ -3755,12 +3790,9 @@ function connCard(key, isOwner) {
   };
 }
 
-// בונה תצוגת חיבורים לפי חברה: כל חברה רואה רק את החיבורים שלה. חיבור "מחובר" מוצג רק לחברה שאליה הוא שייך
-// (BPM=חשבונית ירוקה+יומן, אופק=Paperless); לשאר החברות "לא מחובר" בתצוגה-בלבד.
+// בונה תצוגת חיבורים לפי חברה: לכל חברה חשבונית ירוקה + יומן משלה (מפתחות פר-חברה, בידוד מלא).
 function buildConnectionsView(companyId) {
   const db = load();
-  const comp = companyId ? (db.companies || []).find(c => c.id === companyId) : null;
-  const acct = comp ? (comp.accounting || 'greenInvoice') : 'greenInvoice';
   const cid = companyId || giCompanyId();
   const ccreds = ((db.connCreds || {})[cid]) || {};
   const cards = [];
@@ -3774,8 +3806,7 @@ function buildConnectionsView(companyId) {
     c.perCompany = true; c.message = null;
     return c;
   };
-  if (acct === 'paperless') cards.push(connCard('paperless', companyId === paperlessCompanyId()));
-  else cards.push(perCompCard('greenInvoice', giEnabled(cid)));
+  cards.push(perCompCard('greenInvoice', giEnabled(cid)));
   cards.push(perCompCard('googleCalendar', hasCalendar(cid)));
   // בנק — העלאת קובץ xlsx (פר-חברה, דרך לשונית הבנק)
   cards.push(connCard('bank', false));
@@ -3825,16 +3856,8 @@ add('POST', /^\/api\/connections\/connect$/, async (req, res, _p, q, body) => {
     return json(res, { ok: r.ok, error: r.ok ? null : r.error, connections: buildConnectionsView(cid) });
   }
 
-  // שאר החיבורים (ווטסאפ וכו') — התנהגות גלובלית קיימת
-  const allowed = def.toggle ? [def.toggle] : (def.fields || []).map(f => f.env);
-  const updates = {};
-  for (const k of allowed) if (values[k] !== undefined) updates[k] = values[k];
-  saveSettings(updates);
-  if (key === 'paperless') _plStatus = { at: 0, ok: false, msg: null };
-  const now = new Date().toISOString();
-  const r = await verifyConnection(key);
-  setRecord(key, r.ok ? { status: 'connected', lastCheckedAt: now, message: null } : { status: 'error', lastCheckedAt: now, message: r.error });
-  json(res, { ok: r.ok, connections: buildConnectionsView(cid) });
+  // כל החיבורים הנתמכים (חשבונית ירוקה + יומן) מטופלים למעלה, פר-חברה. שאר המפתחות מוגדרים כמשתני סביבה ב-Render.
+  return json(res, { error: 'חיבור זה מוגדר דרך משתני סביבה ואינו ניתן לעריכה כאן' }, 400);
 });
 
 // POST /api/connections/test  { key, companyId }
@@ -3861,9 +3884,6 @@ add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, q, body) => {
     if (key === 'greenInvoice') greenInvoice.setDbCreds(cid, null); else setDbIcal(cid, []);
     return json(res, { ok: true, connections: buildConnectionsView(cid) });
   }
-  const clear = def.toggle ? { [def.toggle]: '' } : {};
-  (def.fields || []).forEach(f => { clear[f.env] = ''; });
-  saveSettings(clear);
   clearRecord(key);
   json(res, { ok: true, connections: buildConnectionsView(cid) });
 });
@@ -4422,9 +4442,10 @@ async function attachSourceInvoices(matched) {
 // GET /api/bank?companyId=
 add('GET', /^\/api\/bank$/, async (req, res, _p, q) => {
   const db = load();
-  let list = (db.bankTx || []).filter(t => !q.companyId || t.companyId === q.companyId);
+  const _cid = reqCompany(q);
+  let list = (db.bankTx || []).filter(t => ownedBy(t, _cid));
   // השלמה חד-פעמית של קישורי צפייה/הורדה לחשבוניות מותאמות שאין להן url (נשמר, כך שלא נטען שוב)
-  if (giEnabled(q.companyId || giCompanyId())) {
+  if (giEnabled(_cid)) {
     let changed = false, budget = 25;
     for (const t of list) {
       if (budget <= 0) break;
@@ -4446,11 +4467,13 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
   const db = load();
   const t = (db.bankTx || []).find(x => x.id === params[0]);
   if (!t) return json(res, { error: 'לא נמצא' }, 404);
-  // כמה מחשבונית מסוימת כבר הוקצה בשורות בנק אחרות (מאושרות/מותאמות) — בסיס לתשלום בפעימות
+  if (!ownedBy(t, reqCompany(_q, body))) return wrongCompany(res, 'התנועה');
+  // כמה מחשבונית מסוימת כבר הוקצה בשורות בנק אחרות (מאושרות/מותאמות) — בסיס לתשלום בפעימות.
+  // נספרות רק שורות של אותה חברה — אחרת הקצאה בחברה אחת הייתה חוסמת שיוך בחברה אחרת.
   const allocatedElsewhere = (invId) => {
     let s = 0;
     for (const o of (db.bankTx || [])) {
-      if (o.id === t.id || !['manual', 'auto', 'approved'].includes(o.matchStatus)) continue;
+      if (o.id === t.id || !ownedBy(o, t.companyId || giCompanyId()) || !['manual', 'auto', 'approved'].includes(o.matchStatus)) continue;
       for (const mi of (o.matchedInvoices || [])) if (String(mi.id) === String(invId)) s += (Number(mi.allocated != null ? mi.allocated : mi.amount) || 0);
     }
     return s;
@@ -4510,10 +4533,10 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
 // GET /api/bank/coverage-audit?companyId= — שורות זכות מאושרות שהמסמכים המשויכים לא מכסים את הסכום שהועבר
 add('GET', /^\/api\/bank\/coverage-audit$/, (req, res, _p, q) => {
   const db = load();
-  const cid = q.companyId;
+  const cid = reqCompany(q);
   const flagged = [];
   for (const t of (db.bankTx || [])) {
-    if (cid && t.companyId !== cid) continue;
+    if (!ownedBy(t, cid)) continue;
     if (!['manual', 'approved', 'auto'].includes(t.matchStatus)) continue; // גם זכות (הכנסות) וגם חובה (הוצאות)
     const invs = t.matchedInvoices || [];
     if (!invs.length) continue; // אושר ללא מסמך — לא נכלל
@@ -4530,8 +4553,11 @@ add('GET', /^\/api\/bank\/coverage-audit$/, (req, res, _p, q) => {
 });
 
 // DELETE /api/bank/:id
-add('DELETE', /^\/api\/bank\/([^/]+)$/, (req, res, params) => {
+add('DELETE', /^\/api\/bank\/([^/]+)$/, (req, res, params, q) => {
   const db = load();
+  const t = (db.bankTx || []).find(x => x.id === params[0]);
+  if (!t) return json(res, { ok: true });
+  if (!ownedBy(t, reqCompany(q))) return wrongCompany(res, 'התנועה');
   db.bankTx = (db.bankTx || []).filter(x => x.id !== params[0]);
   save(db);
   json(res, { ok: true });
@@ -4572,16 +4598,18 @@ add('PUT', /^\/api\/tx-groups\/([^/]+)$/, (req, res, params, _q, body) => {
   const db = load();
   const g = (db.txGroups || []).find(x => x.id === params[0]);
   if (!g) return json(res, { error: 'לא נמצא' }, 404);
+  if (!ownedBy(g, reqCompany(_q, body))) return wrongCompany(res, 'הקבוצה');
   const name = String(body?.name || '').trim();
   if (name) g.name = name;
   save(db);
   json(res, { ok: true, group: g });
 });
 // DELETE /api/tx-groups/:id  — לא מוחקים את מוזיקה/דיגיטל (הבית תלוי בהן); מנקים את השיוך מהתנועות
-add('DELETE', /^\/api\/tx-groups\/([^/]+)$/, (req, res, params) => {
+add('DELETE', /^\/api\/tx-groups\/([^/]+)$/, (req, res, params, q) => {
   const db = load();
   const g = (db.txGroups || []).find(x => x.id === params[0]);
   if (!g) return json(res, { ok: true });
+  if (!ownedBy(g, reqCompany(q))) return wrongCompany(res, 'הקבוצה');
   if (g.key === 'music' || g.key === 'digital') return json(res, { error: 'לא ניתן למחוק את קבוצת מוזיקה/דיגיטל' }, 400);
   if (g.isDefaultIncome) return json(res, { error: 'לא ניתן למחוק את קבוצת "הכנסות עסק" (ברירת המחדל להכנסות)' }, 400);
   db.txGroups = (db.txGroups || []).filter(x => x.id !== params[0]);
@@ -4612,8 +4640,11 @@ add('POST', /^\/api\/tx-group-rules$/, (req, res, _p, _q, body) => {
   json(res, { ok: true, rule, applied });
 });
 // DELETE /api/tx-group-rules/:id
-add('DELETE', /^\/api\/tx-group-rules\/([^/]+)$/, (req, res, params) => {
+add('DELETE', /^\/api\/tx-group-rules\/([^/]+)$/, (req, res, params, q) => {
   const db = load();
+  const r = (db.txGroupRules || []).find(x => x.id === params[0]);
+  if (!r) return json(res, { ok: true });
+  if (!ownedBy(r, reqCompany(q))) return wrongCompany(res, 'הכלל');
   db.txGroupRules = (db.txGroupRules || []).filter(x => x.id !== params[0]);
   save(db);
   json(res, { ok: true });
@@ -4632,7 +4663,7 @@ add('POST', /^\/api\/tx-group-rules\/apply$/, (req, res, _p, _q, body) => {
 add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   const db = load();
   if (ensureGroupsSeeded(db)) save(db);
-  const cid = q.companyId || null;
+  const cid = reqCompany(q);
   const year = String(q.year || new Date().getFullYear());
   const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
   const netOf = (inv) => {
@@ -4650,10 +4681,9 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   const defIncomeId = (groups.find(g => g.isDefaultIncome) || {}).id || null;
   const ungrouped = Array(12).fill(0);       // הכנסות ללא קבוצה (חברות בלי קבוצת ברירת מחדל)
   const ungroupedExp = Array(12).fill(0);    // הוצאות ללא קבוצה — מוצגות ב"אחר" כדי שהסכומים יסתדרו עם הפירוט
-  const ungroupedDocs = []; // אין עוד "הכנסות ללא שיוך" בבסיס מזומן — הכל לפי תנועות הבנק
   let incomeError = null;
   for (const t of (db.bankTx || [])) {
-    if (cid && t.companyId !== cid) continue;
+    if (!ownedBy(t, cid)) continue;
     if (t.matchStatus !== 'manual' && t.matchStatus !== 'approved') continue;
     const m = String(t.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
     if (!m || m[3] !== year) continue;
@@ -4683,7 +4713,7 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
   const out = groups.map(g => mkGroup(g.id, g.name, g.key, gmap[g.id].income, gmap[g.id].expense, gmap[g.id].unlinkedExpense));
   if (ungrouped.some(x => x)) out.push(mkGroup('ungrouped', 'הכנסות ללא שיוך לקטגוריה', null, ungrouped, Array(12).fill(0), 0));
   if (ungroupedExp.some(x => x)) out.push(mkGroup('ungrouped_exp', 'הוצאות ללא קבוצה', null, Array(12).fill(0), ungroupedExp, 0));
-  json(res, { ok: true, year, incomeBasis: 'issued-305-320-gross', incomeError, groups: out, ungroupedDocs: ungroupedDocs.sort((a, b) => String(a.date).localeCompare(String(b.date))), groupsList: groups.map(g => ({ id: g.id, name: g.name })) });
+  json(res, { ok: true, year, incomeBasis: 'issued-305-320-gross', incomeError, groups: out, groupsList: groups.map(g => ({ id: g.id, name: g.name })) });
 });
 
 // GET /api/month-detail?companyId=&year=YYYY&month=M (1-12)
@@ -4692,14 +4722,14 @@ add('GET', /^\/api\/group-summary$/, async (req, res, _p, q) => {
 add('GET', /^\/api\/month-detail$/, (req, res, _p, q) => {
   const db = load();
   if (ensureGroupsSeeded(db)) save(db);
-  const cid = q.companyId || null;
+  const cid = reqCompany(q);
   const year = String(q.year || new Date().getFullYear());
   const month = parseInt(q.month, 10) || 0; // 1-12
   const groups = (db.txGroups || []).filter(g => g.companyId === cid);
   const gname = (gid) => { const g = groups.find(x => x.id === gid); return g ? g.name : ''; };
   const income = [], expense = [];
   for (const t of (db.bankTx || [])) {
-    if (cid && t.companyId !== cid) continue;
+    if (!ownedBy(t, cid)) continue;
     const m = String(t.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
     if (!m || m[3] !== year || (+m[2]) !== month) continue;
     if (t.matchStatus !== 'manual' && t.matchStatus !== 'approved') continue;
@@ -4737,22 +4767,10 @@ add('GET', /^\/api\/month-detail$/, (req, res, _p, q) => {
   });
 });
 
-// POST /api/doc-group { companyId, number, groupId } — שיוך ידני של מסמך הכנסה לקבוצה (למסמכים שאין להם תנועת בנק). groupId ריק = הסרה.
-add('POST', /^\/api\/doc-group$/, (req, res, _p, q, body) => {
-  const cid = (body && body.companyId) || q.companyId;
-  const num = String((body && body.number) != null ? body.number : '').trim();
-  if (!cid || !num) return json(res, { error: 'חסר מזהה חברה או מספר מסמך' }, 400);
-  const db = load();
-  db.docGroupOverrides = db.docGroupOverrides || {};
-  db.docGroupOverrides[cid] = db.docGroupOverrides[cid] || {};
-  if (body && body.groupId) db.docGroupOverrides[cid][num] = String(body.groupId);
-  else delete db.docGroupOverrides[cid][num];
-  save(db);
-  json(res, { ok: true, number: num, groupId: (body && body.groupId) || null });
-});
-
 // ================= התחברות והרשאות =================
-const VALID_TABS = ['home', 'events', 'clients', 'invoicing', 'quotes', 'contractors', 'payroll', 'bank', 'team', 'connections'];
+// הלשוניות שניתן להקצות למשתמש צפייה — חייב להתאים ל-TAB_LABELS ב-app.js, אחרת בחירה של המנהל
+// נמחקת בשקט בשמירה. 'business' (פרטי העסק) אינו כאן בכוונה — הוא להנהלה בלבד.
+const VALID_TABS = ['home', 'summary', 'events', 'quotes', 'clients', 'contractors', 'payroll', 'bank', 'team', 'connections'];
 const uid = () => id('usr');
 const cleanUsername = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
 
@@ -4868,151 +4886,10 @@ add('GET', /^\/api\/health$/, (req, res, _p, q) => {
   json(res, {
     ok: true,
     greenInvoiceConnected: giConn,
-    paperlessConnected: paperless.haveCredentials(),
     calendarConnected: calConn,
     chatConnected: chatConfigured(),
     whatsapp: getBridgeStatus().status,
   });
-});
-
-// ================= פייפרלס (אופק) =================
-// מזהה החברה המחוברת לפייפרלס (אופק)
-function paperlessCompanyId() { const c = (load().companies || []).find(x => x.accounting === 'paperless'); return c ? c.id : 'co_ofek'; }
-// בדיקת חיבור אמיתית מקאשית (5 דק') — קוראת בפועל ל-API כדי לוודא שהטוקן תקין
-let _plStatus = { at: 0, ok: false, msg: null };
-async function paperlessStatus() {
-  if (!paperless.haveCredentials()) return { ok: false, msg: 'לא הוזן טוקן' };
-  if (Date.now() - _plStatus.at < 5 * 60 * 1000) return _plStatus;
-  const r = await paperless.verify();
-  _plStatus = { at: Date.now(), ok: r.ok, msg: r.error || null };
-  return _plStatus;
-}
-// GET /api/paperless/status — סטטוס חיבור אמיתי (למחוון "מחובר" של אופק)
-add('GET', /^\/api\/paperless\/status$/, async (req, res) => {
-  const s = await paperlessStatus();
-  json(res, { connected: !!s.ok, message: s.msg || null });
-});
-// GET /api/paperless/documents?docType=&status=&from=&to= — חיפוש מסמכים של אופק (הכנסה/הוצאה)
-add('GET', /^\/api\/paperless\/documents$/, async (req, res, _p, q) => {
-  if (!paperless.haveCredentials()) return json(res, { docs: [], error: 'פייפרלס לא מחובר' });
-  try {
-    const invoiceTypes = q.invoiceTypes ? String(q.invoiceTypes).split(',').map(Number).filter(n => !isNaN(n)) : null;
-    const docs = await paperless.searchDocuments({
-      docType: q.docType != null ? Number(q.docType) : 0,
-      status: q.status != null ? Number(q.status) : 0,
-      from: q.from || null, to: q.to || null,
-      docNumber: q.docNumber || null,
-      invoiceTypes: invoiceTypes && invoiceTypes.length ? invoiceTypes : null,
-      amountMin: q.amountMin != null && q.amountMin !== '' ? Number(q.amountMin) : null,
-      amountMax: q.amountMax != null && q.amountMax !== '' ? Number(q.amountMax) : null,
-      raw: q.raw === '1',
-    });
-    json(res, { docs });
-  } catch (e) { json(res, { docs: [], error: e.message }); }
-});
-
-// מטמונים קצרים לאופק. פייפרלס מגביל-קצב בחוזקה, ו-openDeals מבצע ~13 קריאות (חלונות חודשיים),
-// לכן: הכנסות/הוצאות נשמרות במטמון קצר, ועסקאות פתוחות מחושבות ברקע (עבודה יחידה, בלי כפילויות).
-let _plIncExp = {};                    // key `${from}|${to}` → { at, income, expenses }
-const PL_INCEXP_TTL = 3 * 60 * 1000;
-let _plDeals = { at: 0, data: null, running: false, lastFail: 0 };   // עסקאות פתוחות — מטמון + דגלים
-const PL_DEALS_TTL = 4 * 60 * 1000;
-const PL_DEALS_COOLDOWN = 90 * 1000;   // אחרי כישלון — לא לנסות שוב מיד (למנוע הצפת בקשות לפייפרלס)
-
-// מפעיל חישוב עסקאות פתוחות ברקע (עבודה יחידה, עם צינון אחרי כישלון) — לא חוסם את טעינת הדף.
-function refreshOpenDealsBg(to) {
-  if (_plDeals.running) return;
-  if (_plDeals.lastFail && (Date.now() - _plDeals.lastFail) < PL_DEALS_COOLDOWN) return;
-  _plDeals.running = true;
-  paperless.openDeals(undefined, to)
-    .then(d => { _plDeals = { at: Date.now(), data: d, running: false, lastFail: 0 }; fillDescriptionsBg(d); })
-    .catch(() => { _plDeals.running = false; _plDeals.lastFail = Date.now(); });
-}
-
-// ---- פירוט (תיאור) המסמכים — חילוץ מה-PDF (S3, ללא מגבלת-קצב) ושמירה קבועה לפי מזהה מסמך ----
-// רץ פעם אחת לכל מסמך חדש; מסמך שכבר חולץ (או תמונה/לא-זמין) לא נמשך שוב.
-let _descRunning = false;
-async function fillDescriptionsBg(deals) {
-  if (_descRunning || !Array.isArray(deals) || !deals.length) return;
-  _descRunning = true;
-  try {
-    const have = (load().paperlessDesc) || {};
-    const results = {};
-    for (const d of deals) {
-      if (!d.id) continue;
-      const cur = have[d.id];
-      // כבר יש תוצאה יציבה *בגרסת החילוץ הנוכחית* — לא נחלץ שוב
-      if (cur && cur.status !== 'error' && cur.status !== 'pending' && cur.v === EXTRACT_VERSION) continue;
-      const r = await extractDescription(d.url, d.clientName);
-      results[d.id] = { desc: r.desc || null, status: r.status, raw: r.raw || null, v: EXTRACT_VERSION, at: Date.now() };
-      await new Promise(s => setTimeout(s, 400));   // עדינות מול S3
-    }
-    if (Object.keys(results).length) {
-      const db = load();
-      db.paperlessDesc = { ...(db.paperlessDesc || {}), ...results };
-      save(db);
-    }
-  } catch { /* מתעלמים — יינסה שוב בפעם הבאה */ }
-  finally { _descRunning = false; }
-}
-
-// מצרף פירוט שמור לכל עסקה. descStatus: 'ok' | 'image' | 'empty' | 'unavailable' | 'error' | 'pending'
-function attachDescriptions(deals) {
-  const map = (load().paperlessDesc) || {};
-  return deals.map(d => {
-    const e = map[d.id];
-    return { ...d, desc: (e && e.desc) || null, descStatus: (e && e.status) || 'pending', descRaw: (e && e.raw) || null };
-  });
-}
-
-// GET /api/paperless/summary?from=&to= — סיכום לדף הבית של אופק: הכנסות/הוצאות + עסקאות פתוחות (רקע)
-add('GET', /^\/api\/paperless\/summary$/, async (req, res, _p, q) => {
-  const empty = { income: 0, incomeCount: 0, expenses: 0, expenseCount: 0, openTotal: 0, openInvoices: [], recentIncome: [], recentExpenses: [] };
-  if (!paperless.haveCredentials()) return json(res, { ...empty, error: 'פייפרלס לא מחובר' });
-  const to = q.to || new Date().toISOString().slice(0, 10);
-  const from = q.from || (to.slice(0, 4) + '-01-01');
-  try {
-    // הכנסות/הוצאות — מטמון קצר; אם אין, שתי קריאות רציפות.
-    const ieKey = `${from}|${to}`;
-    let ie = _plIncExp[ieKey];
-    let partial = false;
-    if (!ie || (Date.now() - ie.at) >= PL_INCEXP_TTL || q.refresh === '1') {
-      let income = [], expenses = [];
-      try { income = await paperless.incomeForRange(from, to); } catch { partial = true; }
-      try { expenses = await paperless.expensesForRange(from, to); } catch { partial = true; }
-      ie = { at: Date.now(), income, expenses };
-      if (!partial) _plIncExp[ieKey] = ie;
-    }
-    const income = ie.income, expenses = ie.expenses;
-    const sum = (arr) => arr.reduce((s, d) => s + (Number(d.amount) || 0), 0);
-
-    // עסקאות פתוחות — ממטמון אם טרי, אחרת מפעילים רקע ומחזירים "נטען".
-    // תוצאה חלקית (חלון שנחסם בקצב) — מוצגת מיד אבל עם TTL קצר + ריצה חוזרת ברקע כדי להשלים.
-    const dealsData = _plDeals.data;
-    const dealsPartial = !!(dealsData && dealsData.partial);
-    const ttl = dealsPartial ? 45 * 1000 : PL_DEALS_TTL;
-    const dealsFresh = dealsData && (Date.now() - _plDeals.at) < ttl && q.refresh !== '1';
-    let open = [], openPending = false, openPartial = false, openDescPending = false;
-    if (dealsFresh) {
-      open = attachDescriptions(dealsData);
-      if (dealsPartial) { openPartial = true; refreshOpenDealsBg(to); }
-      // עדיין חסרים פירוטים? נפעיל השלמה ברקע ונסמן שנטען
-      openDescPending = open.some(d => d.descStatus === 'pending' || d.descStatus === 'error');
-      if (openDescPending) fillDescriptionsBg(dealsData);
-    } else { openPending = true; refreshOpenDealsBg(to); }
-    const openByKind = { 'עסקה': 0, 'מס': 0 };
-    for (const d of open) if (openByKind[d.kind] != null) openByKind[d.kind]++;
-
-    json(res, {
-      from, to,
-      income: sum(income), incomeCount: income.length,
-      expenses: sum(expenses), expenseCount: expenses.length,
-      openTotal: sum(open), openCount: open.length, openByKind, openInvoices: open, openPending, openPartial, openDescPending,
-      recentIncome: income.slice(0, 30),
-      recentExpenses: expenses.slice(0, 30),
-      error: partial ? 'חלק מהנתונים לא נטענו כרגע מפייפרלס (נסה שוב עוד רגע)' : null,
-    });
-  } catch (e) { json(res, { ...empty, from, to, error: e.message }); }
 });
 
 // ---- הגשת קבצים סטטיים ----
@@ -5049,7 +4926,9 @@ const COMPANY_SEED = [
 // מזהה חברת ה-GI הראשית (ברירת מחדל BPM) — לשם תאימות לאחור בלבד
 function giCompanyId() { const c = (load().companies || []).find(x => x.accounting === 'greenInvoice'); return c ? c.id : 'co_bpm'; }
 
-// ============ העברה אוטומטית של מסמכי הכנסה של אופק למייל ההוצאות (פייפרלס/רו"ח) ============
+// מזהה חברת אופק — ההעברה האוטומטית של מסמכי הכנסה למייל ההוצאות רלוונטית לה בלבד
+const OFEK_COMPANY_ID = 'co_ofek';
+// ============ העברה אוטומטית של מסמכי הכנסה של אופק למייל ההוצאות (רו"ח) ============
 // אך ורק אצל אופק, ואך ורק לסוגים: 305 חשבונית מס · 320 חשבונית מס-קבלה · 400 קבלה (כולל קבלה שלילית) · 330 חשבונית זיכוי.
 // רץ אוטומטית וברקע (fire-and-forget), ללא קשר לשליחת המסמך ללקוח.
 const OFEK_INCOME_FWD_TYPES = new Set([305, 320, 400, 330]);
@@ -5057,7 +4936,7 @@ const _OFEK_DOC_NAME = { 305: 'חשבונית מס', 320: 'חשבונית מס-�
 async function forwardOfekIncomeDoc(doc, type) {
   try {
     const cid = (greenInvoice.activeCompany ? greenInvoice.activeCompany() : null) || giCompanyId();
-    if (cid !== paperlessCompanyId()) return;                          // רק אופק
+    if (cid !== OFEK_COMPANY_ID) return;                                // רק אופק
     const t = Number(type != null ? type : (doc && (doc.type ?? doc.documentType)));
     if (!OFEK_INCOME_FWD_TYPES.has(t)) return;                         // רק הסוגים שהוגדרו
     if (!doc || !doc.id) return;
@@ -5190,7 +5069,7 @@ function runMigrations() {
     console.log('מיגרציה: הוסר חשבון ההתחברות iris (מיותר — איריס היא סוכנת)');
   }
   db.companies = db.companies || [];
-  // ניקוי חד-פעמי של נתוני אופק שנותרו מהניסויים הקודמים (Paperless) — כדי שהחברה תתחיל נקייה לגמרי.
+  // ניקוי חד-פעמי של נתוני אופק שנותרו מהניסויים הקודמים — כדי שהחברה תתחיל נקייה לגמרי.
   // מוגן בדגל _ofekDataCleared כך שירוץ פעם אחת בלבד ולא ימחק נתונים אמיתיים שיוזנו בעתיד.
   if (!db._ofekDataCleared) {
     db.bankTx = (db.bankTx || []).filter(t => t.companyId !== 'co_ofek');
@@ -5248,15 +5127,12 @@ function runMigrations() {
 async function autoVerifyConnections() {
   const checks = [
     ['greenInvoice', greenInvoice.haveCredentials()],
-    ['paperless', paperless.haveCredentials()],
     ['googleCalendar', hasCalendar()],
   ];
   for (const [key, hasEnv] of checks) {
     if (!hasEnv) continue;
     try {
-      const r = key === 'greenInvoice' ? await greenInvoice.verify()
-        : key === 'paperless' ? await paperless.verify()
-        : await calendarVerify();
+      const r = key === 'greenInvoice' ? await greenInvoice.verify() : await calendarVerify();
       const now = new Date().toISOString();
       setRecord(key, r.ok ? { status: 'connected', lastCheckedAt: now, message: null }
         : { status: 'error', lastCheckedAt: now, message: r.error });
@@ -5286,10 +5162,14 @@ const server = http.createServer((req, res) => {
       // משתמש צפייה — קריאה בלבד + הגבלת עסקים
       if (authUser.role !== 'admin' && !isLogout) {
         if (req.method !== 'GET') return json(res, { error: 'אין הרשאה לפעולה זו (צפייה בלבד)' }, 403);
+        const allowedCos = Array.isArray(authUser.companies) ? authUser.companies : [];
         const comp = q.companyId || null;
-        if (comp && Array.isArray(authUser.companies) && !authUser.companies.includes(comp)) {
+        if (comp && allowedCos.length && !allowedCos.includes(comp)) {
           return json(res, { error: 'אין הרשאה לעסק זה' }, 403);
         }
+        // בקשה ללא companyId — נועלים אותה לעסק המורשה הראשון. בלי זה הבקשה נופלת לחברת
+        // ברירת המחדל (או, בראוטים ישנים, ל"כל החברות") ומשתמש צפייה היה רואה נתונים של עסק אחר.
+        if (!comp && allowedCos.length) q.companyId = allowedCos[0];
       }
     }
     req.user = authUser;

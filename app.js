@@ -702,112 +702,7 @@ window.waSendForDoc = async (docId) => {
   else { if (w) w.close(); alert('לא ניתן לשלוח בוואטסאפ' + (r && r.error ? ': ' + r.error : ' — נסה מסמך שקיים בחשבונית ירוקה')); }
 };
 
-// סוג המערכת החשבונאית של החברה הנוכחית (greenInvoice / paperless / null)
-function companyAccounting() { return ((state.companies || []).find(x => x.id === state.company) || {}).accounting || null; }
-
-// תאריך מסמך פייפרלס לתצוגה (YYYY-MM-DD → DD/MM/YY). לחשבון עסקה התאריך מדויק-לחודש בלבד (ה-API לא מחזיר יום).
-function plDate(iso) {
-  if (!iso) return '—';
-  const [y, m, d] = String(iso).slice(0, 10).split('-');
-  return `${d}/${m}/${(y || '').slice(2)}`;
-}
-// כפתורי תצוגה/הורדה למסמך פייפרלס
-function plLinks(d) {
-  if (!d.url) return '';
-  const u = String(d.url).replace(/'/g, '%27');
-  return `<button class="btn ghost" style="padding:1px 7px;font-size:11px" onclick="previewDoc('${u}')">תצוגה 👁</button> <a href="${d.url}" target="_blank" class="btn ghost" style="padding:1px 7px;font-size:11px;text-decoration:none;white-space:nowrap">הורדה ↓</a>`;
-}
-
-// ---- דף הבית של אופק (נתונים חיים מ‑Paperless) ----
-let _plHomeTimer = null;
-async function renderPaperlessHome(c) {
-  const curYear = new Date().getFullYear();
-  const compName = ((state.companies || []).find(x => x.id === state.company) || {}).name || 'אופק';
-  if (_plHomeTimer) { clearTimeout(_plHomeTimer); _plHomeTimer = null; }
-  c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מ‑Paperless…</div></div>`;
-  // עוקפים את מטמון ה-GET של הצד-לקוח כדי שנוכל לרענן את "עסקאות פתוחות" בזמן שהן נטענות ברקע
-  const s = await api(`/api/paperless/summary?companyId=${state.company}&from=${curYear}-01-01&to=${curYear}-12-31&_=${Date.now()}`).catch(() => ({ error: 'שגיאת טעינה' }));
-  const kpi = (lbl, val, sub, color) => `<div class="card"><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
-  const open = s.openInvoices || [];
-  const bk = s.openByKind || {};
-  const openSub = `${bk['עסקה'] || 0} עסקה · ${bk['מס'] || 0} מס`;
-  const kindTag = (k) => k === 'מס'
-    ? '<span class="tag" style="font-size:10px;background:#e8f0ff;color:#2952cc">חשבונית מס</span>'
-    : '<span class="tag" style="font-size:10px;background:#fff2e0;color:#b26a00">חשבון עסקה</span>';
-
-  // תא פירוט — טקסט מחולץ מהמסמך, או סטטוס טעינה/חוסר-זמינות
-  const descCell = (d) => {
-    if (d.desc) return `<span title="${escapeHtml(d.desc)}">${escapeHtml(d.desc)}</span>`;
-    if (d.descStatus === 'image') return '<span class="muted" style="font-size:11px">מסמך סרוק — פתח בתצוגה</span>';
-    if (d.descStatus === 'empty' || d.descStatus === 'unavailable') return '<span class="muted">—</span>';
-    return '<span class="muted" style="font-size:11px">טוען פירוט…</span>';
-  };
-  // שורת עסקה פתוחה — תאריך · לקוח · מס' · סוג · פירוט · ללא מע"מ · כולל מע"מ · פעולות
-  const dealRow = (d) => `<tr>
-      <td style="white-space:nowrap">${plDate(d.date)}</td>
-      <td>${escapeHtml(d.clientName || '—')}</td>
-      <td style="white-space:nowrap">${escapeHtml(String(d.number || ''))}</td>
-      <td>${kindTag(d.kind)}</td>
-      <td style="max-width:240px;font-size:12px">${descCell(d)}</td>
-      <td style="text-align:left;white-space:nowrap">${money(d.amountExVat)}</td>
-      <td style="text-align:left;white-space:nowrap;font-weight:600">${money(d.amount)}</td>
-      <td style="white-space:nowrap">${plLinks(d)}
-        <button class="btn ghost" style="padding:1px 7px;font-size:11px" onclick='plIssueDoc("continue", ${JSON.stringify({ number: d.number, clientName: d.clientName, clientId: d.clientId, amount: d.amount, amountExVat: d.amountExVat, kind: d.kind }).replace(/'/g, "&#39;")})'>מסמך המשך</button>
-        <button class="btn ghost" style="padding:1px 7px;font-size:11px" onclick='plIssueDoc("similar", ${JSON.stringify({ number: d.number, clientName: d.clientName, clientId: d.clientId, amount: d.amount, amountExVat: d.amountExVat, kind: d.kind }).replace(/'/g, "&#39;")})'>מסמך דומה</button>
-      </td></tr>`;
-
-  const docRow = (d) => `<div style="display:flex;gap:10px;align-items:center;padding:6px 10px;border-top:1px solid var(--line);font-size:13px">
-      <span style="width:70px;white-space:nowrap">#${escapeHtml(String(d.number || ''))}</span>
-      <span style="width:70px;white-space:nowrap" class="muted">${plDate(d.date)}</span>
-      <span style="flex:1">${escapeHtml(d.clientName || '—')}</span>
-      <span style="white-space:nowrap;font-weight:600">${money(d.amount)}</span>
-      ${d.closed ? '<span class="tag invoiced" style="font-size:10px">שולם</span>' : '<span class="tag miss" style="font-size:10px">פתוח</span>'}
-      ${plLinks(d)}</div>`;
-
-  c.innerHTML = `
-    <div class="panel">
-      <div class="row-between"><div><h2>דף הבית — ${escapeHtml(compName)}</h2><span class="muted">נתונים חיים מ‑Paperless · שנת ${curYear}</span></div></div>
-      ${s.error ? `<div class="warn-banner">${escapeHtml(s.error)}</div>` : ''}
-      <div class="cards" style="margin-top:14px">
-        ${kpi('הכנסה השנה', money(s.income || 0), `${s.incomeCount || 0} מסמכים`, 'var(--accent2)')}
-        ${kpi('הוצאות השנה', money(s.expenses || 0), `${s.expenseCount || 0} מסמכים`, 'var(--danger)')}
-        ${kpi('עסקאות פתוחות', open.length, openSub, 'var(--warn)')}
-        ${kpi('סכום פתוח', money(s.openTotal || 0), 'כולל מע"מ', 'var(--warn)')}
-      </div>
-    </div>
-    <div class="panel">
-      <div class="row-between"><h3 style="margin:0">עסקאות פתוחות ${open.length ? `(${open.length})` : ''}</h3><span class="muted" style="font-size:12px">${s.openPartial ? 'משלים נתונים מ‑Paperless…' : 'חשבון עסקה + חשבונית מס שטרם נסגרו'}</span></div>
-      ${open.length ? `<div style="overflow-x:auto"><table class="grid" style="margin-top:10px;font-size:13px">
-        <thead><tr><th>תאריך</th><th>שם לקוח</th><th>מס׳</th><th>סוג</th><th>פירוט</th><th>ללא מע"מ</th><th>כולל מע"מ</th><th>פעולות</th></tr></thead>
-        <tbody>${open.map(dealRow).join('')}</tbody>
-        <tfoot><tr style="background:var(--panel2);font-weight:600"><td colspan="5">סה"כ ${open.length} עסקאות פתוחות</td><td style="text-align:left">${money(open.reduce((t, d) => t + (d.amountExVat || 0), 0))}</td><td style="text-align:left">${money(s.openTotal || 0)}</td><td></td></tr></tfoot>
-      </table></div>
-      <p class="muted" style="font-size:11px;margin-top:8px">התאריך של חשבון עסקה מדויק-לחודש (Paperless אינו מספק יום מדויק ב-API). הפירוט מחולץ אוטומטית מהמסמך ונשמר; מסמכים סרוקים (תמונה) מסומנים — לחץ "תצוגה" לצפייה במקור.</p>`
-        : (s.openPending ? '<div class="empty">טוען עסקאות פתוחות מ‑Paperless… (עד כדקה, בגלל מגבלת קצב) — יתעדכן אוטומטית.</div>' : '<div class="empty">אין עסקאות פתוחות.</div>')}
-    </div>
-    <div class="panel">
-      <h3>מסמכי הכנסה אחרונים</h3>
-      ${(s.recentIncome || []).length ? (s.recentIncome || []).slice(0, 15).map(docRow).join('') : '<div class="empty">אין מסמכים.</div>'}
-    </div>
-    <div class="panel">
-      <h3>מסמכי הוצאה אחרונים</h3>
-      ${(s.recentExpenses || []).length ? (s.recentExpenses || []).slice(0, 15).map(docRow).join('') : '<div class="empty">אין מסמכים.</div>'}
-    </div>`;
-
-  // עסקאות פתוחות + פירוטים נטענים/מושלמים ברקע — נרענן אוטומטית עד שיגיעו כולם
-  if ((s.openPending || s.openPartial || s.openDescPending) && companyAccounting() === 'paperless' && (location.hash || '#home').startsWith('#home')) {
-    _plHomeTimer = setTimeout(() => { if (document.body.contains(c)) renderPaperlessHome(c); }, s.openPending ? 12000 : 20000);
-  }
-}
-
-// מסמך המשך / מסמך דומה — יפותח בשלב הבא (יצירת מסמך דרך Paperless invoices/create)
-function plIssueDoc(mode, d) {
-  const label = mode === 'continue' ? 'מסמך המשך' : 'מסמך דומה';
-  alert(`${label} עבור ${d.clientName || ''} (מסמך ${d.number || ''}) — יופעל בשלב הבא. Paperless אינו מחזיר את שורות המסמך המקורי, כך שתצטרך להזין את שורות המסמך ידנית.`);
-}
-
 async function renderHome(c) {
-  if (companyAccounting() === 'paperless') return renderPaperlessHome(c);
   initPeriod();
   const curYear = new Date().getFullYear();
   c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מחשבונית ירוקה…</div></div>`;
@@ -966,36 +861,8 @@ function businessSummaryHtml(r) {
     ${kpis}
     ${monthsTable}
     ${groupsBreakdown}
-    ${(r.ungroupedDocs && r.ungroupedDocs.length) ? ungroupedDocsHtml(r) : ''}
   </div>`;
 }
-// מסמכי הכנסה שאין להם שיוך לבנק — מוצגים בסוף הסיכום עם אפשרות לשייך לקטגוריה
-function ungroupedDocsHtml(r) {
-  const docs = r.ungroupedDocs || [];
-  const glist = (r.groupsList || []).filter(g => g.id !== 'ungrouped');
-  const total = docs.reduce((s, d) => s + (Number(d.amount) || 0), 0);
-  const opts = glist.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
-  const rows = docs.map(d => `<tr>
-    <td style="white-space:nowrap">${fmtDate(d.date)}</td>
-    <td style="white-space:nowrap">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number}</td>
-    <td>${escapeHtml(d.clientName || '')}</td>
-    <td style="font-weight:600">${money(d.amount)}</td>
-    <td style="white-space:nowrap"><select id="ug_${d.number}" style="padding:3px 6px;font-size:12px"><option value="">— בחר קטגוריה —</option>${opts}</select>
-      <button class="btn primary" style="padding:2px 10px;font-size:11.5px" onclick="assignDocGroup('${String(d.number)}')">שייך</button></td></tr>`).join('');
-  return `<details open style="margin-top:18px;border-top:2px solid var(--line);padding-top:10px">
-    <summary style="cursor:pointer;font-weight:700;font-size:15px;color:var(--warn)">⚠ הכנסות ללא שיוך לבנק (${docs.length}) — ${money(total)}</summary>
-    <p class="muted" style="font-size:12px;margin:6px 0">מסמכי הכנסה שאין להם תנועת בנק תואמת עם קטגוריה. בחר קטגוריה לכל אחד כדי לשייך אותו לסיכום.</p>
-    <div style="overflow-x:auto"><table style="min-width:560px;font-size:13px"><thead><tr><th>תאריך</th><th>מסמך</th><th>לקוח</th><th>סכום</th><th>שיוך</th></tr></thead><tbody>${rows}</tbody></table></div>
-  </details>`;
-}
-window.assignDocGroup = async (number) => {
-  const sel = document.getElementById('ug_' + number); const gid = sel ? sel.value : '';
-  if (!gid) { alert('בחר קטגוריה לשיוך'); return; }
-  const r = await fetch('/api/doc-group', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company, number: String(number), groupId: gid }) }).then(x => x.json()).catch(() => null);
-  if (!r || r.error) { alert((r && r.error) || 'שגיאה בשיוך'); return; }
-  renderBusinessSummary($('#content')); // ריענון — המסמך נכנס לקטגוריה ויורד מהרשימה
-};
-
 // ---- חלונית פירוט חודשי בסיכום עסק — הכנסות מצד אחד, הוצאות מנגד (מתוך התאמות הבנק) ----
 let _monthDetail = null, _mdGroupFilter = '';
 window.openMonthDetail = async (year, month) => {
@@ -1231,23 +1098,6 @@ window.openDerive = (id, number, srcType, mode, fromClient) => {
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
 };
-window.doDerive = async (id, type, linked, btn) => {
-  const st = document.getElementById('derStatus');
-  const typeName = DOC_TYPE_SHORT[type] || 'מסמך';
-  if (!confirm(`להפיק ${typeName}?\nהמסמך ייווצר בחשבונית ירוקה${linked ? ' ויקושר למקור' : ''} ולא ניתן למחיקה (רק לזכות).`)) return;
-  [...document.querySelectorAll('#derModal button')].forEach(b => b.disabled = true);
-  st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
-  const r = await fetch(`/api/documents/${id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, linked }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (r.ok) {
-    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''} · מוריד קובץ…</span>`;
-    autoDownloadDoc(r.doc?.url);
-    setTimeout(() => { document.getElementById('derModal').classList.add('hidden'); loadOpenInvoices && loadOpenInvoices(); if (typeof _docActionRefresh === 'function') _docActionRefresh(); }, 1400);
-  } else {
-    [...document.querySelectorAll('#derModal button')].forEach(b => b.disabled = false);
-    st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
-  }
-};
-
 // ============ עורך מסמך המשך: שורות לעריכה + תאריך + תקבולים ============
 // סוגי תקבול לפי חשבונית ירוקה: ניכוי מס במקור=0, מזומן=1, צ'ק=2, אשראי=3, העברה בנקאית=4
 const DER_PAY_TYPES = [[4, 'העברה בנקאית'], [2, "צ'ק"], [0, 'ניכוי מס במקור'], [1, 'מזומן'], [3, 'כרטיס אשראי']];
@@ -2498,16 +2348,6 @@ window.duplicateEventRow = async (id) => {
   const r = await fetch(`/api/events/${id}/duplicate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: state.company }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r && r.id) { if (typeof clearApiCache === 'function') clearApiCache(); await renderCombined($('#content')); jumpTo('sec-pending'); }
   else alert('שגיאה בשכפול' + (r && r.error ? ': ' + r.error : ''));
-};
-// פתיחת/הורדת מסמך משויך מחשבונית ירוקה לפי מזהה
-window.openLinkedDoc = async (docId, el) => {
-  if (!docId) return;
-  const prevOpacity = el ? el.style.opacity : '';
-  if (el) { el.style.opacity = '0.5'; el.style.pointerEvents = 'none'; }
-  const r = await api(`/api/documents/${docId}/url`).catch(() => ({ error: 'שגיאת רשת' }));
-  if (el) { el.style.opacity = prevOpacity; el.style.pointerEvents = ''; }
-  if (r && r.ok && r.url) window.open(r.url, '_blank', 'noopener');
-  else alert('לא ניתן לפתוח את המסמך' + (r && r.error ? ': ' + r.error : ''));
 };
 // אירועים מקובצים לפי חודש — כל חודש בטבלה נפרדת עם סיכום
 const VAT_RATE = 0.18; // מע"מ בישראל
@@ -3770,24 +3610,6 @@ window.showDesignedPreview = async (btn) => {
     m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   } else if (st) st.innerHTML = `<span style="color:var(--danger)">לא ניתן להציג תצוגה מקדימה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
-// חלון "החשבונית הופקה בהצלחה" עם אפשרות הורדה מיידית
-function showInvoiceDoneDialog(typeName, number, url) {
-  // ללא הורדה אוטומטית — לא לפתוח טאב חדש בכרום. ההורדה/צפייה דרך הכפתורים בחלונית.
-  let m = document.getElementById('invDoneModal');
-  if (!m) { m = document.createElement('div'); m.id = 'invDoneModal'; m.className = 'modal'; document.body.appendChild(m); }
-  m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(420px,94vw);text-align:center">
-    <div style="font-size:42px;line-height:1">✅</div>
-    <h3 style="margin:8px 0 2px">החשבונית הופקה בהצלחה</h3>
-    <p class="muted" style="font-size:13.5px">${escapeHtml(typeName || 'מסמך')}${number ? ` #${escapeHtml(String(number))}` : ''}</p>
-    <div class="modal-actions" style="justify-content:center;gap:10px;margin-top:16px">
-      ${url ? `<a class="btn primary" href="${url}" target="_blank" rel="noopener" onclick="document.getElementById('invDoneModal').classList.add('hidden')">⬇ להורדה לחץ כאן</a>` : ''}
-      <button class="btn ghost" onclick="document.getElementById('invDoneModal').classList.add('hidden')">סגור</button>
-    </div>
-  </div>`;
-  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
-}
-
 // ---- הצעות מחיר ----
 let _quotesAll = [];
 let _quotesText = '';
@@ -4153,44 +3975,11 @@ window.quoteCloseSelected = async () => {
   if (r.ok) renderQuotes($('#content'));
   else { alert('שגיאה בסגירה: ' + (r.error || '')); if (btn) { btn.disabled = false; } }
 };
-const FOLLOWUP_TYPES = [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
 window.quoteClose = async (id, number) => {
   if (!confirm(`לסגור את הצעת מחיר #${number}?\nההצעה תסומן כסגורה ותוסר מהרשימה (אפשר לפתוח מחדש בחשבונית ירוקה).`)) return;
   const r = await fetch(`/api/quotes/${id}/close`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) renderQuotes($('#content')); else alert('שגיאה בסגירה: ' + (r.error || ''));
 };
-window.quoteFollowup = (id, clientEnc, number) => {
-  let m = document.getElementById('fuModal');
-  if (!m) { m = document.createElement('div'); m.id = 'fuModal'; m.className = 'modal'; document.body.appendChild(m); }
-  m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(440px,94vw)">
-    <h3>מסמך המשך מהצעה #${number}</h3>
-    <p class="muted" style="font-size:13px">${escapeHtml(decodeURIComponent(clientEnc))} — בחר את סוג המסמך שייווצר מההצעה (עם אותן שורות, מקושר להצעה):</p>
-    <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
-      ${FOLLOWUP_TYPES.map(([v, l]) => `<button class="btn ghost" style="justify-content:flex-start;text-align:right" onclick="doFollowup('${id}',${v},this)">${l}</button>`).join('')}
-    </div>
-    <div id="fuStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
-    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('fuModal').classList.add('hidden')">ביטול</button></div>
-  </div>`;
-  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
-};
-window.doFollowup = async (id, type, btn) => {
-  const st = document.getElementById('fuStatus');
-  const typeName = (FOLLOWUP_TYPES.find(x => x[0] === type) || [, ''])[1];
-  if (!confirm(`להפיק ${typeName} מההצעה?\nהמסמך ייווצר בחשבונית ירוקה עם שורות ההצעה ולא ניתן למחיקה (רק לזכות).`)) return;
-  [...document.querySelectorAll('#fuModal button')].forEach(b => b.disabled = true);
-  st.innerHTML = '<span class="muted">מפיק מסמך…</span>';
-  const r = await fetch(`/api/quotes/${id}/followup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (r.ok) {
-    st.innerHTML = `<span style="color:var(--accent2)">✓ הופק ${typeName} #${r.doc?.number || ''}</span>`;
-    document.getElementById('fuModal').classList.add('hidden'); renderQuotes($('#content'));
-    showDocReadyPopup(r.doc, typeName); // חלונית צפייה/הורדה/שליחה — בלי טאב חדש
-  } else {
-    [...document.querySelectorAll('#fuModal button')].forEach(b => b.disabled = false);
-    st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
-  }
-};
-
 // ---- קבלנים ----
 let _suppliers = [];
 let _ctrSyncNote = ''; // הודעה על עדכון אוטומטי של שמות קבלנים לפי חשבונית ירוקה
@@ -5987,19 +5776,6 @@ window.delManualLine = (i) => {
   if (!_report || !_report.rows[i] || !_report.rows[i].manual) return;
   _report.rows.splice(i, 1); renderJobsReport(); saveManualLines();
 };
-window.printJobsReport = () => {
-  const el = document.getElementById('jobsReport'); if (!el) return;
-  const w = window.open('', '_blank', 'width=820,height=940');
-  if (!w) { alert('כדי להדפיס — אשר חלונות קופצים בדפדפן, או פשוט צלם מסך את הדוח.'); return; }
-  // ממירים שדות קלט לטקסט להדפסה נקייה
-  const clone = el.cloneNode(true);
-  clone.querySelectorAll('input').forEach(inp => { const span = document.createElement('span'); span.textContent = inp.value; inp.replaceWith(span); });
-  w.document.write(`<!doctype html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>דוח עבודות</title>
-    <style>body{font-family:'Heebo',Arial,sans-serif;color:#1c2333;padding:26px;margin:0}</style></head>
-    <body>${clone.innerHTML}</body></html>`);
-  w.document.close();
-  setTimeout(() => { w.focus(); w.print(); }, 350);
-};
 // הורדת PDF של הדוח הנוכחי (העובד הפתוח) — קובץ קל (JPEG דחוס), משקף גם עריכות שנעשו במודל
 window.downloadCurrentReportPdf = async (btn) => {
   if (!_report) return;
@@ -6201,12 +5977,6 @@ window.sendEmployeeReports = async (btn) => {
   if (btn) { btn.disabled = false; btn.textContent = orig || '📧 שלח פירוט עבודות לרו״ח'; }
 };
 
-function empDocChip(e, kind, label) {
-  const fid = e.docs && e.docs[kind];
-  return fid
-    ? `<span style="white-space:nowrap"><a href="/api/files/${fid}" target="_blank" class="tag match" style="text-decoration:none">${label} 👁</a><a onclick="empDelDoc('${fid}')" style="cursor:pointer;color:var(--danger);margin-inline-start:3px">×</a></span>`
-    : `<button class="btn ghost" style="padding:2px 8px;font-size:11px;white-space:nowrap" onclick="empUploadDoc('${e.id}','${kind}')">${label} ↑</button>`;
-}
 function empRow(e) {
   const val = (f) => (e[f] == null ? '' : String(e[f])).replace(/"/g, '&quot;');
   return `<tr>
@@ -6459,7 +6229,7 @@ async function renderBusiness(c) {
         <button class="btn ghost" onclick="bizMailTest()">🔌 בדוק חיבור</button>
         <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:8px">צריך <b>סיסמת אפליקציה</b> של גוגל (לא סיסמת החשבון הרגילה). יש להפעיל אימות דו-שלבי ואז ליצור App Password בכתובת <span dir="ltr">myaccount.google.com/apppasswords</span>. הסיסמה נשמרת מוצפנת בשרת ולא מוצגת שוב.</div>
+      <div class="muted" style="font-size:12px;margin-top:8px">צריך <b>סיסמת אפליקציה</b> של גוגל (לא סיסמת החשבון הרגילה). יש להפעיל אימות דו-שלבי ואז ליצור App Password בכתובת <span dir="ltr">myaccount.google.com/apppasswords</span>. הסיסמה נשמרת בשרת בלבד — היא לא מוצגת שוב ולא נשלחת חזרה לדפדפן. אפשר לבטל אותה בכל רגע מהגדרות גוגל.</div>
       <label style="display:block;margin-top:14px;font-weight:600">✉️ שורת הנושא של המייל
         <input id="biz_mailSubject" style="width:100%;margin-top:4px;font-size:13px" placeholder="ריק = ברירת מחדל. לדוגמה: [שם החברה] | [סוג מסמך] | מס' [מספר מסמך]" value="${escapeHtml(p.mailSubjectTemplate || '')}">
       </label>
@@ -6967,8 +6737,6 @@ window.deleteReq = async (id) => {
 };
 
 // ---- בנק: התאמת תנועות לחשבוניות ----
-const BANK_META = { auto: { t: 'הותאם אוטומטית', cls: 'invoiced' }, manual: { t: 'אושר', cls: 'match' }, unmatched: { t: 'ממתין לאישור', cls: 'pending' }, ignored: { t: 'ללא התאמה', cls: 'miss' } };
-
 const BANK_SORT = {
   date: t => (t.date || '').split('/').reverse().join(''),
   amount: t => t.absAmount || 0,
@@ -7475,32 +7243,6 @@ function bankTr(t) {
     <td>${notesInput}</td>
     <td style="white-space:nowrap"><div style="display:flex;gap:5px;flex-wrap:wrap">${action}${incomeBtn}${linkBtn}</div></td>
   </tr>`;
-}
-// כרטיס חשבונית בודדת בתא ההתאמה — שם עסק, סוג+מספר, סכום, קבלה נפרדת, תצוגה+הורדה
-function invChip(inv) {
-  const esc = (u) => String(u).replace(/'/g, '%27');
-  const typeLabel = inv.kind === 'expense' ? 'חשבונית ספק' : (DOC_TYPE_NAMES[inv.type] || 'מסמך');
-  const pv = inv.url ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="${inv.id && inv.kind !== 'expense' ? `previewDocId('${esc(String(inv.id))}','${esc(inv.url)}')` : `previewDoc('${esc(inv.url)}')`}">תצוגה 👁</button>` : '';
-  const dl = inv.url ? `<a href="${inv.url}" target="_blank" class="muted" style="font-size:11px;white-space:nowrap">הורדה ↓</a>` : '';
-  let receipt = '';
-  if (inv.receipt) {
-    const rpv = inv.receipt.url ? `<button class="btn ghost" style="padding:2px 7px;font-size:11px" onclick="previewDoc('${esc(inv.receipt.url)}')">👁</button>` : '';
-    const rdl = inv.receipt.url ? `<a href="${inv.receipt.url}" target="_blank" class="muted" style="font-size:11px">↓</a>` : '';
-    receipt = `<div class="muted" style="font-size:11px;margin-top:1px">🧾 קבלה #${inv.receipt.number} · ${money(inv.receipt.amount)} ${rpv} ${rdl}</div>`;
-  }
-  // חשבונית המס המקורית שממנה נגזרה הקבלה (מסמך המשך) — מוצגת מקוננת תחת הקבלה
-  let src = '';
-  if (inv.sourceInvoice) {
-    const s = inv.sourceInvoice;
-    const spv = s.url ? `<button class="btn ghost" style="padding:2px 7px;font-size:11px" onclick="previewDoc('${esc(s.url)}')">👁</button>` : '';
-    const sdl = s.url ? `<a href="${s.url}" target="_blank" class="muted" style="font-size:11px">↓</a>` : '';
-    src = `<div class="muted" style="font-size:11px;margin-top:1px">📄 ${DOC_TYPE_NAMES[s.type] || 'חשבונית מס'} #${s.number} · ${money(s.amount)} ${spv} ${sdl}</div>`;
-  }
-  const allocNote = (inv.allocated != null && Math.abs((inv.allocated || 0) - (inv.amount || 0)) > 1)
-    ? `<span style="font-size:11px;color:var(--warn)">· נזקף ${money(inv.allocated)} מתוך ${money(inv.amount)}</span>` : '';
-  return `<div style="padding:4px 0;border-bottom:1px dashed var(--line)">
-    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">✓ <b>${escapeHtml(inv.clientName || '')}</b> · ${typeLabel} #${inv.number} · ${money(inv.amount)} ${allocNote} ${pv} ${dl}</div>
-    ${src}${receipt}</div>`;
 }
 // פעולות מתעדכנות במקום (בלי לרנדר מחדש את כל הטבלה ובלי לקפוץ למעלה)
 // שיוך מסמך (הצעה) — מותר גם בלי קבוצה. השורה תישאר "ממתינה לקבוצה" (לא מאושרת) עד לבחירת קבוצה.
