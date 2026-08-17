@@ -2318,6 +2318,70 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
+// ============ בדיקת סטטוס תשלום מול הלקוח ============
+// בונה את נוסח המייל לפי מספר החשבוניות. הניסוח נקבע ע"י המנהל — אין לשנות מבנה או סגנון.
+function paymentStatusMail(companyName, count) {
+  const one = count === 1;
+  return {
+    subject: `חשבוניות פתוחות – בירור מועד תשלום | ${companyName}`,
+    text: [
+      'היי, מה נשמע?',
+      '',
+      one ? 'מצורפת למייל זה החשבונית הפתוחה מולכם.' : 'מצורפות למייל זה החשבוניות הפתוחות מולכם.',
+      '',
+      one ? 'נשמח לעדכון לגבי מועד התשלום הצפוי עבור החשבונית המצורפת.'
+          : 'נשמח לעדכון לגבי מועד התשלום הצפוי עבור החשבוניות המצורפות.',
+      '',
+      'במידה ונדרש מאיתנו מסמך, אישור או פרט נוסף לצורך ביצוע התשלום, נשמח להעביר בהקדם.',
+      '',
+      'תודה רבה,',
+      companyName,
+    ].join('\n'),
+  };
+}
+// POST /api/payment-status/send — שולח בירור מועד תשלום ללקוח עם החשבוניות הפתוחות מצורפות
+// { docs:[{id, number, type, uploaded}], emails:[...], companyName }
+add('POST', /^\/api\/payment-status\/send$/, async (req, res, _p, q, body) => {
+  const b = body || {};
+  const cid = reqCompany(q, b);
+  const docs = Array.isArray(b.docs) ? b.docs.slice(0, 20) : [];
+  const _isEmail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
+  const emails = [...new Set((Array.isArray(b.emails) ? b.emails : []).map(e => String(e || '').trim()).filter(_isEmail))];
+  if (!docs.length) return json(res, { error: 'לא נבחרו חשבוניות' }, 400);
+  if (!emails.length) return json(res, { error: 'אין כתובת מייל ללקוח — יש להזין כתובת' }, 400);
+  const db = load();
+  const creds = companyMailCreds(db, cid);
+  if (!mailer.companyMailConfigured(creds) && !mailer.mailerConfigured()) {
+    return json(res, { error: 'לחברה זו אין חשבון מייל מוגדר — הגדר חשבון מייל בפרטי העסק.' }, 400);
+  }
+  const comp = (db.companies || []).find(c => c.id === cid);
+  const companyName = String(b.companyName || bizProfile(db, cid).name || (comp && comp.name) || '').trim();
+  // איסוף הקבצים: מסמך מחשבונית ירוקה → PDF דרך ה-API; מסמך שהועלה ידנית → מהאחסון המקומי
+  const attachments = [];
+  const failed = [];
+  for (const d of docs) {
+    const label = `${DOC_NAMES_HE[Number(d.type)] || 'מסמך'}-${String(d.number || d.id).replace(/[^\w.-]/g, '_')}`;
+    try {
+      if (d.uploaded) {
+        const f = await getFile(d.id);
+        if (!f || !f.data) { failed.push(d.number || d.id); continue; }
+        attachments.push({ filename: f.filename || `${label}.pdf`, content: Buffer.from(f.data, 'base64'), contentType: f.mime || 'application/pdf' });
+      } else {
+        const pdf = await greenInvoice.getDocumentPdf(d.id);
+        attachments.push({ filename: `${label}.pdf`, content: Buffer.from(pdf.base64, 'base64'), contentType: 'application/pdf' });
+      }
+    } catch (e) { failed.push(d.number || d.id); }
+  }
+  if (!attachments.length) return json(res, { error: 'לא ניתן היה לצרף אף חשבונית' + (failed.length ? ` (${failed.join(', ')})` : '') }, 502);
+  const { subject, text } = paymentStatusMail(companyName, attachments.length);
+  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const html = `<div dir="rtl" style="text-align:right;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:#1c2333">${esc(text).replace(/\n/g, '<br>')}</div>`;
+  try {
+    await mailer.sendMailFrom(creds, { to: emails, subject, text, html, attachments });
+    json(res, { ok: true, sentTo: emails, attached: attachments.length, failed });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
 // תווית חודש בעברית מ-YYYY-MM → "יולי 2026"
 const _MONTHS_HE = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
 function monthLabelHe(month) {
@@ -4377,15 +4441,21 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
   //
   // שלושה בלמים כדי שלא תימחק תנועה אמיתית:
   //   1) רק שורות ללא אסמכתא (שורה שנסגרה בבנק לעולם לא נמחקת).
-  //   2) רק תאריכים שהקובץ באמת מכסה — כך שייבוא חלקי לא ימחק ימים שאינם בו.
+  //   2) רק בתוך *טווח התאריכים* של הקובץ — כך שייבוא חלקי לא ימחק ימים שאינם בו.
+  //      חשוב: טווח ולא רשימת תאריכים. דף חשבון הוא הצהרה מלאה על תקופה, ויום בלי תנועות
+  //      פשוט לא מופיע בו. מקרה אמיתי: תנועה נרשמה זמנית ב-15/08, הבנק העביר אותה ל-16/08,
+  //      ובקובץ הבא (11/08–16/08) אין ל-15/08 אף שורה — כלומר הבנק מחק אותה משם.
   //   3) רק שורות שהמשתמש עוד לא נגע בהן. שורה עם שיוך/אישור/קבוצה/הערה נשמרת תמיד,
   //      גם אם היא נראית פנטום — עדיף לדרוש בדיקה ידנית מאשר למחוק עבודה בשקט.
-  const fileDates = new Set(parsed.map(t => t.date));
+  const toKey = (d) => { const m = String(d || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m ? `${m[3]}${m[2]}${m[1]}` : null; };
+  const fileKeysDates = parsed.map(t => toKey(t.date)).filter(Boolean).sort();
+  const fileMin = fileKeysDates[0], fileMax = fileKeysDates[fileKeysDates.length - 1];
+  const inFileRange = (d) => { const k = toKey(d); return Boolean(k && fileMin && k >= fileMin && k <= fileMax); };
   const fileKeys = new Set(parsed.map(t => `${t.date}|${t.absAmount}|${t.direction}`));
   const untouched = (t) => (!t.matchStatus || t.matchStatus === 'unmatched')
     && !(t.matchedInvoices || []).length && !t.group && !String(t.notes || '').trim();
   const staleIds = new Set(companyRows
-    .filter(t => !t.reference && fileDates.has(t.date)
+    .filter(t => !t.reference && inFileRange(t.date)
       && !fileKeys.has(`${t.date}|${t.absAmount}|${t.direction}`) && untouched(t))
     .map(t => t.id));
   let removed = 0;
