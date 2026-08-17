@@ -4495,8 +4495,19 @@ function payReadinessBadge(p) {
   return `<span class="muted" style="font-size:11px;white-space:nowrap" title="ההוצאה לא משויכת לאירוע — אין תלות בתשלום מלקוח">לא משויך לאירוע</span>`;
 }
 function supplierPayablesSection(list) {
-  const items = Array.isArray(list) ? list : [];
-  const total = items.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const raw = Array.isArray(list) ? list : [];
+  const total = raw.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  // מיון לפי תאריך האירוע המוקדם ביותר שההוצאה מכסה — החודש המוקדם למעלה, המאוחר למטה.
+  // התאריכים ב-ISO (yyyy-mm-dd) ולכן השוואת מחרוזות מספיקה. הוצאה שאינה משויכת לאף
+  // אירוע יורדת לתחתית (אין לה תאריך אירוע), וממוינת שם לפי תאריך המסמך.
+  const firstEvDate = (p) => (p.coveredEvents || []).map(e => String(e.date || '')).filter(Boolean).sort()[0] || '';
+  const items = raw.slice().sort((a, b) => {
+    const x = firstEvDate(a), y = firstEvDate(b);
+    if (x && y) return x < y ? -1 : (x > y ? 1 : 0);
+    if (x) return -1;
+    if (y) return 1;
+    return String(a.date || '').localeCompare(String(b.date || ''));
+  });
   const rows = items.map(p => {
     const missingAlloc = [305, 320].includes(Number(p.documentType)) && Math.max(Number(p.amount) || 0, Number(p.amountExcludeVat) || 0) > 5000 && !p.allocationNumber;
     const _spSearchText = [p.supplierName, p.number, p.description, PAYABLE_TYPE_NAMES[p.documentType], ...((p.coveredEvents || []).map(e => `${e.artist || ''} ${e.location || ''}`))].filter(Boolean).join(' ').toLowerCase();
@@ -4511,7 +4522,7 @@ function supplierPayablesSection(list) {
     ${p.description ? `<div style="font-size:12.5px;margin:5px 0 0;white-space:pre-wrap;word-break:break-word"><span class="muted">תיאור:</span> ${escapeHtml(p.description)}</div>` : ''}
     ${(p.coveredEvents && p.coveredEvents.length) ? `<div style="margin:7px 0 0;padding:7px 9px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;font-size:12px">
       <div class="muted" style="font-weight:600;margin-bottom:3px">📋 פירוט אירועים (${p.coveredEvents.length}):</div>
-      ${p.coveredEvents.map(e => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0;border-top:1px dashed var(--line)"><span style="flex:1;min-width:90px">${ddmy(e.date)}${e.artist ? ` · ${escapeHtml(e.artist)}` : ''}${e.location ? ` · ${escapeHtml(e.location)}` : ''}</span>${clientPaidBadge(e.clientPaid)}${e.supplierPaid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap">✅ שולם לספק</span>' : `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap">⏳ טרם שולם לספק</span>${e.eventId != null ? `<button class="btn ghost" style="padding:1px 7px;font-size:11px;color:var(--accent2);white-space:nowrap" onclick="markSupplierPaidEvent('${e.eventId}',${e.index},this)" title="סימון ידני: שילמת לספק בפועל (מחוץ למעקב הבנק)">✓ סמן ששולם ידנית</button>` : ''}`}<span style="white-space:nowrap;font-weight:600">${money(e.amount)}</span></div>`).join('')}
+      ${p.coveredEvents.slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || ''))).map(e => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0;border-top:1px dashed var(--line)"><span style="flex:1;min-width:90px">${ddmy(e.date)}${e.artist ? ` · ${escapeHtml(e.artist)}` : ''}${e.location ? ` · ${escapeHtml(e.location)}` : ''}</span>${clientPaidBadge(e.clientPaid)}${e.supplierPaid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap">✅ שולם לספק</span>' : `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap">⏳ טרם שולם לספק</span>${e.eventId != null ? `<button class="btn ghost" style="padding:1px 7px;font-size:11px;color:var(--accent2);white-space:nowrap" onclick="markSupplierPaidEvent('${e.eventId}',${e.index},this)" title="סימון ידני: שילמת לספק בפועל (מחוץ למעקב הבנק)">✓ סמן ששולם ידנית</button>` : ''}`}<span style="white-space:nowrap;font-weight:600">${money(e.amount)}</span></div>`).join('')}
     </div>` : ''}
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:7px">
       <span style="font-size:12.5px">ללא מע"מ: <b>${money(p.amountExcludeVat)}</b></span>
