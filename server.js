@@ -4369,12 +4369,38 @@ add('POST', /^\/api\/bank\/import$/, async (req, res, _p, _q, body) => {
     };
     db.bankTx.push(rec); bySig.set(sig, rec); companyRows.push(rec); added++;
   }
+  // ---- ניקוי אוטומטי של תנועות זמניות שהבנק כבר לא מכיר בהן ----
+  // קובץ בנק הוא הצהרה מלאה על הטווח שלו. שורה *זמנית* (בלי אסמכתא) שיושבת על תאריך
+  // שהקובץ מכסה, ואין לה מקבילה בקובץ — הבנק ביטל או פיצל אותה, והיא תנועת פנטום שמנפחת
+  // את הסיכומים. מקרה אמיתי (16.08.26): חיוב אשראי זמני של 15,240.88 פוצל למחרת ל-15,107.68
+  // + 133.20, והשורה המקורית נשארה תקועה.
+  //
+  // שלושה בלמים כדי שלא תימחק תנועה אמיתית:
+  //   1) רק שורות ללא אסמכתא (שורה שנסגרה בבנק לעולם לא נמחקת).
+  //   2) רק תאריכים שהקובץ באמת מכסה — כך שייבוא חלקי לא ימחק ימים שאינם בו.
+  //   3) רק שורות שהמשתמש עוד לא נגע בהן. שורה עם שיוך/אישור/קבוצה/הערה נשמרת תמיד,
+  //      גם אם היא נראית פנטום — עדיף לדרוש בדיקה ידנית מאשר למחוק עבודה בשקט.
+  const fileDates = new Set(parsed.map(t => t.date));
+  const fileKeys = new Set(parsed.map(t => `${t.date}|${t.absAmount}|${t.direction}`));
+  const untouched = (t) => (!t.matchStatus || t.matchStatus === 'unmatched')
+    && !(t.matchedInvoices || []).length && !t.group && !String(t.notes || '').trim();
+  const staleIds = new Set(companyRows
+    .filter(t => !t.reference && fileDates.has(t.date)
+      && !fileKeys.has(`${t.date}|${t.absAmount}|${t.direction}`) && untouched(t))
+    .map(t => t.id));
+  let removed = 0;
+  if (staleIds.size) {
+    db.bankTx = (db.bankTx || []).filter(t => !staleIds.has(t.id));
+    removed = staleIds.size;
+    console.log(`[bank-import] ${companyId}: הוסרו ${removed} תנועות זמניות שהבנק כבר לא מכיר בהן`);
+  }
+
   applyGroupRules(db, companyId);   // שיוך-אוטומטי לפי שם (מיידית, מתוך nameHint)
   save(db);
   // התאמה מול חשבונית ירוקה (הכנסות/קבלות/הוצאות) רצה ברקע — לא חוסמת את התגובה
   const matchBg = giEnabled(companyId);
   if (matchBg) runBankMatchBg(companyId).catch(() => { });
-  json(res, { ok: true, added, backfilled, restated, total: parsed.length, matching: matchBg ? 'background' : 'none', accountBalance: acctBal || null });
+  json(res, { ok: true, added, backfilled, restated, removed, total: parsed.length, matching: matchBg ? 'background' : 'none', accountBalance: acctBal || null });
 });
 
 // POST /api/bank/rematch { companyId } — הרצת התאמה אוטומטית מחדש של תנועות זכות+חובה על התנועות הקיימות (בלי העלאה חוזרת).

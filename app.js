@@ -7726,12 +7726,14 @@ window.doBankImport = async (btn) => {
     const balMsg = r.accountBalance ? ` · יתרת עו"ש עודכנה ל-${money(r.accountBalance.balance)}${r.accountBalance.date ? ' (' + r.accountBalance.date + ')' : ''}` : '';
     // תנועות שהבנק סגר סופית (תאריך/אסמכתא השתנו) — עודכנו במקומן במקום להיווצר ככפילות
     const restMsg = r.restated ? ` · ${r.restated} תנועות עודכנו לנתונים הסופיים של הבנק (במקום להיווצר ככפילות)` : '';
+    // שורות זמניות שהבנק ביטל/פיצל — הוסרו אוטומטית כדי שלא ינפחו את הסיכומים
+    const remMsg = r.removed ? ` · ${r.removed} תנועות זמניות שהבנק כבר לא מכיר בהן הוסרו` : '';
     if (r.matching === 'background') {
-      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${restMsg}${balMsg}. מתאים מול חשבונית ירוקה ברקע…</span>`;
+      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${restMsg}${remMsg}${balMsg}. מתאים מול חשבונית ירוקה ברקע…</span>`;
       await renderBank($('#content'));
       pollBankMatch(status);   // מרענן כשההתאמה ברקע מסתיימת
     } else {
-      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${restMsg}${balMsg}.</span>`;
+      if (status) status.innerHTML = `<span style="color:var(--accent2)">✓ נוספו ${r.added} תנועות${restMsg}${remMsg}${balMsg}.</span>`;
       await renderBank($('#content'));
       setTimeout(() => { const mm = document.getElementById('bankModal'); if (mm) mm.classList.add('hidden'); }, 1400);
     }
