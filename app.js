@@ -6910,7 +6910,8 @@ function bankSummaryHtml(rows) {
   const cr = rows.filter(t => t.direction === 'credit'), db = rows.filter(t => t.direction === 'debit');
   const sumCredit = cr.reduce((s, t) => s + (t.absAmount || 0), 0);
   const sumDebit = db.reduce((s, t) => s + (t.absAmount || 0), 0);
-  const matchedCr = cr.filter(t => (t.matchedInvoices || []).length && (t.matchStatus === 'auto' || t.matchStatus === 'manual'));
+  // כולל 'approved' — אחרת שורות מאושרות לא נספרו ב"סה"כ סכום חשבוניות" וב"סה"כ ניכוי במקור"
+  const matchedCr = cr.filter(t => (t.matchedInvoices || []).length && ['auto', 'manual', 'approved'].includes(t.matchStatus));
   const invSum = (t) => (t.matchedInvoices || []).reduce((a, i) => a + (Number(i.amount) || 0), 0);
   const sumInv = matchedCr.reduce((s, t) => s + invSum(t), 0);
   const _wr = whRate();
@@ -6926,7 +6927,9 @@ function bankMatchedIds(exceptTxId) {
   const s = new Set();
   for (const t of (_bankList || [])) {
     if (t.id === exceptTxId) continue;
-    if (t.matchStatus === 'manual' || t.matchStatus === 'auto') for (const inv of (t.matchedInvoices || [])) s.add(String(inv.id));
+    // חייב לכלול גם 'approved' — תנועה שאושרה היא משויכת לכל דבר, והחשבוניות שלה תפוסות.
+    // בלעדיו חשבונית ששויכה לתנועה מאושרת המשיכה להופיע כהצעה בשורות אחרות.
+    if (['manual', 'auto', 'approved'].includes(t.matchStatus)) for (const inv of (t.matchedInvoices || [])) s.add(String(inv.id));
   }
   return s;
 }
