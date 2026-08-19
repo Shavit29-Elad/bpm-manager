@@ -135,6 +135,20 @@ check('openEditPayable נבנית בלי שגיאת ריצה', () => {
   fn(fakeDom());
   return true;
 });
+check('החלפת חברה מאפסת את כל מטמוני הנתונים', () => {
+  // באג אמיתי: רשימות הספקים/לקוחות/עובדים נטענות פעם אחת לכל טעינת דף
+  // ("if (!_evSuppliers)"), ובלי איפוס בהחלפת חברה הן ממשיכות להציג את נתוני
+  // החברה הקודמת — ספק חדש לא נמצא, ושמות של חברה אחת דולפים לתצוגה של אחרת.
+  const m = app.match(/function resetCompanyCaches\(\) \{([\s\S]*?)\n\}/);
+  if (!m) throw new Error('resetCompanyCaches לא קיימת');
+  const reset = m[1];
+  const must = ['_evSuppliers', '_evClients', '_evEmployees', '_suppliers', '_supPayables', '_bankList', 'clientsList'];
+  const miss = must.filter(v => !reset.includes(v));
+  if (miss.length) throw new Error('לא מאופסים: ' + miss.join(', '));
+  const onchange = app.match(/sel\.onchange = \(\) => \{[^\n]*/)?.[0] || '';
+  if (!onchange.includes('resetCompanyCaches()')) throw new Error('לא נקראת בהחלפת חברה');
+  return true;
+});
 check('שמירת אירוע לא מוחקת שדות קישור של שורות קבלן', () => {
   // הבדיקה הקודמת בדקה רק את *טעינת* העורך, ולכן עברה בזמן שהבאג עדיין חי:
   // ההשמטה קרתה ב-collectEventBody, במסלול היציאה. כאן נבדק המסלול הזה.

@@ -135,6 +135,19 @@ function applyCompanyTitle() {
   document.title = name ? `${name} · ${DEFAULT_TITLE}` : DEFAULT_TITLE;
 }
 
+// ניקוי כל המטמונים שמחזיקים נתוני חברה. חייב לרוץ בכל החלפת חברה — הרשימות
+// האלה נטענות פעם אחת לכל טעינת דף ("if (!_evSuppliers)"), ולכן בלי איפוס הן
+// ממשיכות להציג את נתוני החברה הקודמת: ספק חדש באופק לא נמצא, ומה שגרוע יותר —
+// שמות הלקוחות והספקים של BPM מוצגים בזמן עבודה באופק.
+function resetCompanyCaches() {
+  _evClients = null; _evEmployees = null; _evSuppliers = null;
+  _suppliers = []; _linkClients = null; _classifications = null; _bizDefaultClass = '';
+  _openInv = null; _openInvErr = null; _openInvSearch = '';
+  _invClients = []; _openInvClients = []; _supPayables = [];
+  _drafts = []; _hiddenDrafts = []; _bankList = []; _txGroups = [];
+  state.clientsList = null;
+}
+
 async function startApp() {
   state.companies = await api('/api/companies');
   const sel = $('#companySelect');
@@ -145,7 +158,7 @@ async function startApp() {
   state.company = (savedCompany && state.companies.some(c => c.id === savedCompany)) ? savedCompany : state.companies[0]?.id;
   sel.value = state.company || '';
   applyCompanyTitle();
-  sel.onchange = () => { state.company = sel.value; state.whRate = undefined; try { localStorage.setItem('bpm_company', state.company); } catch { } clearApiCache(); loadWhRate(); applyCompanyTabs(); applyCompanyTitle(); renderStatus(); render(); };
+  sel.onchange = () => { state.company = sel.value; state.whRate = undefined; try { localStorage.setItem('bpm_company', state.company); } catch { } clearApiCache(); resetCompanyCaches(); loadWhRate(); applyCompanyTabs(); applyCompanyTitle(); renderStatus(); render(); };
   applyPermissions();
   applyCompanyTabs();
   // כפתור ה-+ הצף (מסמך חדש מכל מקום) — מציגים אחרי התחברות, וסוגרים את התפריט בלחיצה בחוץ
@@ -5537,7 +5550,8 @@ window.saveNewSupplierInline = async (btn) => {
   const newSup = { id: newId, name: sup.name || name, taxId: tax || null };
   _suppliers = Array.isArray(_suppliers) ? _suppliers : [];
   if (newId && !_suppliers.some(s => s.id === newId)) _suppliers.push(newSup);
-  _evSuppliers = null; // אילוץ ריענון רשימת הספקים בעריכת אירועים
+  _evSuppliers = null;   // אילוץ ריענון רשימת הספקים בעריכת אירועים
+  clearApiCache();       // בלי זה api('/api/suppliers') מחזיר תשובה מהמטמון (60 שניות) בלי הספק החדש
   const sel = g('apSup');
   if (sel && newId) { const o = document.createElement('option'); o.value = newId; o.textContent = newSup.name; sel.appendChild(o); sel.value = String(newId); }
   if (tax && g('apTax') && !g('apTax').value) g('apTax').value = tax;
