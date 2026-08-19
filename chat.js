@@ -13,7 +13,7 @@ async function callGemini(system, messages, { maxTokens = 1200 } = {}) {
   // רשימת מודלים לניסיון (מהחדש לישן) — עמידה בפני שינויי שמות/פרישת מודלים
   const candidates = process.env.GEMINI_MODEL
     ? [process.env.GEMINI_MODEL]
-    : ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash-latest'];
+    : ['gemini-flash-latest', 'gemini-3.5-flash', 'gemini-flash-lite-latest', 'gemini-pro-latest'];
   const contents = messages.map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }],
@@ -258,7 +258,7 @@ export async function interpretBonuses(note, names) {
 
 // ===== קליטת חשבונית ספק עם AI — קורא את ה-PDF/תמונה ומחלץ את השדות =====
 // כשמזוהה ש-Claude ללא קרדיט/הרשאה — מדלגים עליו זמנית וניגשים ישר ל-Gemini (חוסך קריאה מיותרת פר-מסמך ולוגים).
-let _claudeOutUntil = 0;
+let _claudeOutUntil = 0, _claudeOutReason = '';
 // קריאה מולטימודלית ל-Claude (מסמך/תמונה) — עם fallback למודלים
 async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = {}) {
   const key = process.env.ANTHROPIC_API_KEY;
@@ -293,7 +293,8 @@ async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = 
         // אין קרדיט / הרשאה — אין טעם לנסות מודלים נוספים או מסמכים נוספים ב-Claude; מדלגים עליו ל-15 דק' ועוברים ל-Gemini
         if ((res.status === 400 && /credit balance is too low/i.test(text)) || res.status === 401 || res.status === 403) {
           _claudeOutUntil = Date.now() + 15 * 60 * 1000;
-          throw new Error(`Claude ללא קרדיט/הרשאה (${res.status})`);
+          _claudeOutReason = /credit balance is too low/i.test(text) ? 'Claude — נגמר הקרדיט בחשבון Anthropic' : `Claude — אין הרשאה (${res.status})`;
+          throw new Error(_claudeOutReason);
         }
         throw new Error(`שגיאת AI (${res.status}): ${text.slice(0, 300)}`);
       }
@@ -316,10 +317,15 @@ async function visionExtract(system, prompt, fileBase64, mediaType, opts = {}) {
     catch (e) {
       if (!hasG) throw e;
       console.error('[vision] Claude נכשל — עובר ל-Gemini:', String(e.message || e).slice(0, 140));
-      return await callGeminiVision(system, prompt, fileBase64, mediaType, opts);
+      try { return await callGeminiVision(system, prompt, fileBase64, mediaType, opts); }
+      catch (ge) { throw new Error(`${ge.message} · ${String(e.message || e).slice(0, 120)}`); }
     }
   }
-  if (hasG) return await callGeminiVision(system, prompt, fileBase64, mediaType, opts);
+  // Claude מדולג (נגמר קרדיט/הרשאה) — מציינים זאת בשגיאה, אחרת נראה כאילו רק Gemini אשם
+  if (hasG) {
+    try { return await callGeminiVision(system, prompt, fileBase64, mediaType, opts); }
+    catch (ge) { throw new Error(_claudeOutReason ? `${ge.message} · ${_claudeOutReason}` : ge.message); }
+  }
   throw new Error('AI לא מוגדר (חסר ANTHROPIC_API_KEY או GEMINI_API_KEY)');
 }
 // פענוח JSON חסין מתשובת AI: מסיר גדרות ```‏, חותך לאובייקט, מנקה פסיקים עודפים, מבריח מרכאות לא-חוקיות בתוך מחרוזות
@@ -346,7 +352,7 @@ function parseAiJson(raw) {
 // קריאה מולטימודלית ל-Gemini (גיבוי)
 async function callGeminiVision(system, prompt, fileBase64, mime, { maxTokens = 900 } = {}) {
   const key = process.env.GEMINI_API_KEY;
-  const candidates = process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+  const candidates = process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : ['gemini-flash-latest', 'gemini-3.5-flash', 'gemini-flash-lite-latest', 'gemini-pro-latest'];
   const body = JSON.stringify({
     system_instruction: { parts: [{ text: system }] },
     contents: [{ role: 'user', parts: [{ inline_data: { mime_type: mime || 'application/pdf', data: fileBase64 } }, { text: prompt }] }],
