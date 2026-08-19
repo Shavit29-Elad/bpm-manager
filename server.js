@@ -1152,6 +1152,10 @@ add('GET', /^\/api\/expense-drafts$/, async (req, res, _p, q) => {
       const num = nrm(d.number); if (!num) return false;
       const amt = d.amount != null ? Number(d.amount) : null;
       const sup = nrm(d.supplierName);
+      // מספר מסמך לבדו אינו ראיה מספקת. טיוטה שה-AI עוד לא הספיק לקרוא מגיעה בלי
+      // סכום ובלי שם ספק, ואז שני התנאים האחרים "עברו" מאליהם — די היה במספר
+      // חשבונית מקרי שכבר קיים במערכת כדי שהטיוטה תיעלם מהרשימה מיד אחרי ההעלאה.
+      if (amt == null && !sup) return false;
       return existing.some(x => x.num === num && (amt == null || amtEq(x.amt, amt)) && (!sup || !x.sup || sup === x.sup));
     };
     const drafts = all
