@@ -3738,6 +3738,33 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
     const globalHalf = /יומית\s*וחצי/.test(note) && !anyKnownNear(nameHalf);
     // "בונוס לכולם" / "בונוס לשניהם" — מילת בונוס ללא שם עובד מוכר צמוד → כל עובד מקבל את הבונוס הקבוע שלו
     const globalBonus = /בונוס|תוספת/.test(note) && !anyKnownNear(nameBonus);
+    // סכום שנכתב במפורש ליד "בונוס"/"תוספת" ("בונוס 1000", "1000 בונוס", "תוספת של 250").
+    // כשיש סכום כזה הוא גובר על הבונוס הקבוע של העובד — הבונוס הקבוע נועד ל"בונוס לכולם" בלי מספר.
+    const AMT = '(\\d{1,7}(?:[.,]\\d{1,2})?)';
+    const amts = [
+      ...note.matchAll(new RegExp('(?:בונוס|תוספת)\\s*(?:של\\s*)?(?:₪\\s*)?' + AMT, 'g')),
+      ...note.matchAll(new RegExp(AMT + '\\s*(?:₪|ש"?ח)?\\s*(?:בונוס|תוספת)', 'g')),
+    ].map(m => Number(String(m[1]).replace(',', '.'))).filter(n => !isNaN(n));
+    const hasExplicitAmount = amts.length > 0;
+    const uniqAmts = [...new Set(amts)];
+    const explicitAmount = uniqAmts.length === 1 ? uniqAmts[0] : null;  // כמה סכומים שונים → סומכים על הפירוש פר-עובד
+    // "כולל" / "סה״כ" / "ביחד" → הסכום שנכתב הוא הסך הכולל לעובד, והבונוס הוא ההפרש מהיומית שלו
+    const isTotalNote = /כולל|סה"כ|סה״כ|סהכ|ביחד|בסך\s*הכל/.test(note);
+    // "ללא בונוס" — אסור שהבונוס הקבוע יידרס לתוכו
+    const noBonusNote = /(?:ללא|בלי|אין)\s*בונוס/.test(note);
+    // הבונוס הקבוע של העובד חל רק כשההערה לא נקבה בסכום ולא ביטלה את הבונוס
+    const useDefaultBonus = !hasExplicitAmount && !noBonusNote;
+    // מחשב את הבונוס לעובד לפי הסכום שנכתב: במצב "כולל" — הסכום פחות היומית שלו
+    const bonusFromNote = (amt, base, r) => {
+      if (amt == null) return false;
+      if (isTotalNote) {
+        if (base == null) { r.bonus = amt; r.baseMissing = true; }
+        else { r.bonus = Math.max(0, +(amt - base).toFixed(2)); r.noteTotal = amt; r.totalAsBonus = true; }
+      } else r.bonus = amt;
+      r.bonusFactor = null;
+      if (r.factor == null || r.factor === '') r.factor = '1';
+      return true;
+    };
     for (const r of result) {
       const nm = String(r.name || '').trim();
       const base = baseMap[nm];
@@ -3755,8 +3782,13 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
       }
       // "בונוס"/"תוספת" ליד שם העובד או כללי ("לכולם") → הבונוס הקבוע שהוגדר לעובד
       if (nameBonus(nm) || globalBonus) {
-        const def = defMap[nm];
-        if (def != null) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; if (r.factor == null || r.factor === '') r.factor = '1'; }
+        if (hasExplicitAmount) {
+          // סכום מפורש בהערה — הוא הקובע. אם נכתבו כמה סכומים שונים, לוקחים את זה שה-AI ייחס לעובד.
+          bonusFromNote(explicitAmount != null ? explicitAmount : (r.bonus != null ? Number(r.bonus) : null), base, r);
+        } else if (useDefaultBonus) {
+          const def = defMap[nm];
+          if (def != null) { r.bonus = def; r.bonusFactor = null; r.defaultBonus = true; if (r.factor == null || r.factor === '') r.factor = '1'; }
+        }
       }
     }
     // רשת ביטחון: עובד שמופיע בתיאור עם "כפולה"/"בונוס"/"תוספת" אך ה-AI לא זיהה — נוסיף אותו ידנית
@@ -3772,8 +3804,13 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
         result.push({ name: nm, factor: '1', bonus: base != null ? Math.round(base / 2) : null, bonusFactor: null, halfAsBonus: true });
         present.add(nm);
       } else if (nameBonus(nm)) {
-        const def = defMap[nm];
-        if (def != null) { result.push({ name: nm, factor: '1', bonus: def, bonusFactor: null, defaultBonus: true }); present.add(nm); }
+        if (hasExplicitAmount) {
+          const r = { name: nm, factor: '1', bonus: null, bonusFactor: null };
+          if (bonusFromNote(explicitAmount, baseMap[nm], r)) { result.push(r); present.add(nm); }
+        } else if (useDefaultBonus) {
+          const def = defMap[nm];
+          if (def != null) { result.push({ name: nm, factor: '1', bonus: def, bonusFactor: null, defaultBonus: true }); present.add(nm); }
+        }
       }
     }
     json(res, result);
