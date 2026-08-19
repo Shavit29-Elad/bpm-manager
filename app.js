@@ -1717,9 +1717,33 @@ window.docCloseOpen = async (id, action) => {
   if (!confirm(isClose
     ? 'לסמן את המסמך כטופל (סגור)?\nניתן לפתוח אותו מחדש בכל עת.'
     : 'לפתוח מחדש את המסמך הסגור?')) return;
+  // בסגירה — בודקים אילו אירועים עדיין מקושרים למסמך, ושואלים אם לנתק אותם.
+  // בלי זה האירועים נשארים מסומנים כמחויבים ע"י מסמך שכבר נסגר, ולא יופיעו שוב להפקה.
+  let unlinkIds = null;
+  if (isClose) {
+    const ev = await fetch(`/api/documents/${id}/events`).then(x => x.json()).catch(() => ({ events: [] }));
+    const list = (ev && ev.events) || [];
+    if (list.length) {
+      const lines = list.map(e => `• ${ddmy(e.date)}${e.artist ? ' · ' + e.artist : ''}${e.location ? ' · ' + e.location : ''}`).join('\n');
+      unlinkIds = confirm(`למסמך זה מקושרים ${list.length} אירועים:\n\n${lines}\n\nלבטל את השיוך שלהם?\n\nאישור — האירועים יחזרו ל״ממתין לחיוב״ ויופיעו שוב להפקת חשבונית.\nביטול — המסמך ייסגר והאירועים יישארו מסומנים כמחויבים.`)
+        ? list.map(e => e.id) : null;
+    }
+  }
   const r = await fetch(`/api/documents/${id}/${action}`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (r.ok) { if (typeof reloadClientDocs === 'function') reloadClientDocs(); if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices(); }
-  else alert('שגיאה: ' + (r.error || 'הפעולה נכשלה'));
+  if (!r.ok) { alert('שגיאה: ' + (r.error || 'הפעולה נכשלה')); return; }
+  let freed = 0;
+  if (unlinkIds && unlinkIds.length) {
+    const u = await fetch(`/api/documents/${id}/unlink-events`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eventIds: unlinkIds }),
+    }).then(x => x.json()).catch(() => ({}));
+    freed = ((u && u.unlinked) || []).length;
+    clearApiCache();
+    if (state.tab === 'events' || state.tab === 'invoicing') renderCombined($('#content'));
+  }
+  if (typeof reloadClientDocs === 'function') reloadClientDocs();
+  if (typeof loadOpenInvoices === 'function' && document.getElementById('openInvWrap')) loadOpenInvoices();
+  if (freed) alert(`המסמך נסגר · ${freed} אירועים חזרו ל״ממתין לחיוב״.`);
 };
 
 // ============ זיכוי (חד-שלבי מחשבונית מס / דו-שלבי מחשבונית מס-קבלה) ============
@@ -3199,6 +3223,23 @@ window.evLinkDeriveQuote = (quoteId, quoteNumber) => {
   // מודל העורך העשיר צריך להופיע מעל מודל עריכת האירוע שנשאר פתוח מאחור
   setTimeout(() => { const dm = document.getElementById('derModal'); if (dm) dm.style.zIndex = '95'; const rm = document.getElementById('docReadyModal'); if (rm) rm.style.zIndex = '100'; }, 30);
 };
+// ניתוק שיוך מסמך מאירוע. שונה מ"הסר" של מסמך שהועלה: שם הקובץ נמחק, כאן רק הקשר.
+window.evUnlinkDoc = async (evId, docId, number, type) => {
+  const nm = `${DOC_TYPE_SHORT[type] || DOC_TYPE_NAMES[type] || 'מסמך'}${number ? ' #' + number : ''}`;
+  if (!confirm(`לבטל את השיוך של ${nm} לאירוע?\n\nהמסמך עצמו לא יימחק מחשבונית ירוקה — רק הקשר לאירוע.\nאם לא יישאר חיוב פעיל, האירוע יחזור ל״ממתין לחיוב״.`)) return;
+  const r = await fetch(`/api/events/${evId}/unlink-doc/${encodeURIComponent(docId)}`, { method: 'DELETE' })
+    .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r.ok) { alert('שגיאה: ' + (r.error || 'הניתוק נכשל')); return; }
+  if (_evEditing && _evEditing.id === evId) {
+    _evEditing.linkedDocs = r.linkedDocs || [];
+    _evEditing.invoiceStatus = r.invoiceStatus;
+    const box = document.getElementById('evLinkedDocs');
+    if (box) box.innerHTML = evLinkedDocsHtml(_evEditing);
+  }
+  clearApiCache();
+  if (state.tab === 'events' || state.tab === 'invoicing') renderCombined($('#content'));
+};
+
 // תצוגת מסמכים משויכים לאירוע (בעורך) — צפייה בצד + פעולות: מסמך המשך / שכפול / זיכוי
 function evLinkedDocsHtml(ev) {
   const docs = Array.isArray(ev && ev.linkedDocs) ? ev.linkedDocs : [];
@@ -3222,6 +3263,8 @@ function evLinkedDocsHtml(ev) {
         if (FOLLOWUP_FOR[tp] && FOLLOWUP_FOR[tp].length) acts.push(`<button class="btn ghost" style="${bs}" onclick="evDocFollowup('${d.id}','${escAttr(String(d.number))}',${tp})">מסמך המשך ↪</button>`);
         acts.push(`<button class="btn ghost" style="${bs}" onclick="evDocDuplicate('${d.id}','${escAttr(String(d.number))}',${tp})">שכפול ⧉</button>`);
         if (tp === 305 || tp === 320) acts.push(`<button class="btn ghost" style="${bs};color:var(--danger)" onclick="evDocCredit('${d.id}','${escAttr(String(d.number))}',${tp})">זיכוי ⊖</button>`);
+        // ניתוק השיוך בלבד — המסמך נשאר בחשבונית ירוקה, רק הקשר לאירוע מוסר
+        acts.push(`<button class="btn ghost" style="${bs};color:var(--danger)" onclick="evUnlinkDoc('${ev.id}','${d.id}','${escAttr(String(d.number || ''))}',${tp})" title="הסרת השיוך בלבד — המסמך עצמו לא נמחק מחשבונית ירוקה">בטל שיוך ✕</button>`);
       }
       return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag invoiced" style="font-size:11px;cursor:pointer;text-decoration:underline" title="צפייה בתוך העורך" onclick="evPreviewDoc('${d.id}',this)">${DOC_TYPE_SHORT[tp] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>

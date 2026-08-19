@@ -854,6 +854,61 @@ add('POST', /^\/api\/events\/([^/]+)\/attach-doc$/, async (req, res, params, _q,
   json(res, { ok: true, doc });
 });
 
+// מחשב מחדש את סטטוס החיוב של אירוע לפי המסמכים שנותרו עליו. הלוגיקה הזו שוכפלה
+// בשלושה מקומות; מרוכזת כאן כדי שניתוק שיוך, מחיקת קובץ וזיכוי יתנהגו זהה.
+function recomputeEventInvoiceStatus(ev) {
+  const REAL = [300, 305, 320, 400];
+  const active = (ev.linkedDocs || []).filter(d => REAL.includes(Number(d.type)) && !d.converted && !d.credited && !d.credit);
+  if (active.length) {
+    ev.invoiceStatus = 'invoiced';
+    let primary = active[0];
+    for (const t of [305, 320, 300, 400]) { const d = active.find(x => Number(x.type) === t); if (d) { primary = d; break; } }
+    ev.invoiceId = primary.id; ev.invoiceNumber = primary.number; ev.invoiceType = primary.type;
+  } else {
+    ev.invoiceStatus = 'pending'; ev.invoiceId = null; ev.invoiceNumber = null; ev.invoiceType = null;
+    delete ev.clientPaid;   // אין חיוב פעיל — האירוע חוזר להיות פתוח להפקה
+  }
+}
+// ניתוק מסמך מאירוע. לא נוגע במסמך עצמו בחשבונית ירוקה — רק מסיר את הקישור ומחזיר
+// את האירוע ל"ממתין לחיוב" אם לא נשאר עליו חיוב פעיל.
+function unlinkDocFromEvent(ev, docId) {
+  const before = (ev.linkedDocs || []).length;
+  ev.linkedDocs = (ev.linkedDocs || []).filter(d => String(d.id) !== String(docId));
+  if (String(ev.invoiceId || '') === String(docId)) { ev.invoiceId = null; ev.invoiceNumber = null; ev.invoiceType = null; }
+  recomputeEventInvoiceStatus(ev);
+  return before !== ev.linkedDocs.length || true;
+}
+
+// DELETE /api/events/:id/unlink-doc/:docId — ניתוק שיוך של מסמך מאירוע (המסמך עצמו נשאר בחשבונית ירוקה)
+add('DELETE', /^\/api\/events\/([^/]+)\/unlink-doc\/([^/]+)$/, (req, res, params, q) => {
+  const db = load();
+  const ev = (db.events || []).find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'אירוע לא נמצא' }, 404);
+  if (!ownedBy(ev, reqCompany(q))) return wrongCompany(res, 'האירוע');
+  unlinkDocFromEvent(ev, params[1]);
+  save(db);
+  json(res, { ok: true, invoiceStatus: ev.invoiceStatus, linkedDocs: ev.linkedDocs || [] });
+});
+
+// POST /api/documents/:id/unlink-events { eventIds? } — ניתוק המסמך מכמה אירועים בבת אחת.
+// משמש בסגירת חשבון עסקה: המסמך נסגר, והאירועים שהיו מקושרים אליו חוזרים ל"ממתין לחיוב".
+add('POST', /^\/api\/documents\/([^/]+)\/unlink-events$/, (req, res, params, q, body) => {
+  const db = load();
+  const cid = reqCompany(q, body);
+  const only = Array.isArray(body && body.eventIds) && body.eventIds.length ? new Set(body.eventIds.map(String)) : null;
+  const out = [];
+  for (const ev of (db.events || [])) {
+    if (!ownedBy(ev, cid)) continue;
+    const refs = (ev.linkedDocs || []).some(d => String(d.id) === String(params[0])) || String(ev.invoiceId || '') === String(params[0]);
+    if (!refs) continue;
+    if (only && !only.has(String(ev.id))) continue;
+    unlinkDocFromEvent(ev, params[0]);
+    out.push({ id: ev.id, date: ev.date || null, artist: ev.artist || ev.title || '' });
+  }
+  if (out.length) save(db);
+  json(res, { ok: true, unlinked: out });
+});
+
 // DELETE /api/events/:id/attach-doc/:docId — הסרת מסמך שהועלה מאירוע + עדכון סטטוס
 add('DELETE', /^\/api\/events\/([^/]+)\/attach-doc\/([^/]+)$/, async (req, res, params, q) => {
   const db = load();
