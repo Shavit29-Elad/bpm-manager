@@ -3452,8 +3452,28 @@ async function mailScanBatchFor(cid, since, limit) {
       // סינון ראשון — לפני ה-AI: אם את הקובץ הזה בדיוק כבר העלינו פעם, מדלגים לגמרי (חוסך גם קריאת AI, מונע כפילות)
       const h = _fileHash(it.contentBase64);
       if (h && uploadedSet.has(h)) { duplicates++; if (it.uid != null) handledUids.add(String(it.uid)); continue; }
+      // תקרת גודל לפני ה-AI. חשבונית אמיתית היא כמעט תמיד מתחת ל-3MB; קובץ כבד מזה הוא
+      // בדרך כלל דוח/סריקה של עשרות עמודים, שנספר כעשרות אלפי טוקנים לקריאה אחת.
+      // ב-backfill של 15-16.08 רצו 536 קריאות כאלה ושרפו את רוב הקרדיט. הקובץ לא נזרק —
+      // הוא נכנס ל"חשבוניות לטיפול" כדי שתראה אותו ותחליט ידנית.
+      const _bytes = Math.floor((String(it.contentBase64 || '').length * 3) / 4);
+      if (_bytes > AI_FILE_MAX_BYTES) {
+        skipped++;
+        if (it.uid != null) handledUids.add(String(it.uid));
+        db.mailPending[cid].push({ uid: it.uid, from: it.from || '', subject: it.subject || '',
+          receivedDate: it.receivedDate || '', link: it.link || null, seenAt: new Date().toISOString(),
+          reason: `קובץ כבד (${Math.round(_bytes / 1048576)}MB) — לא נשלח ל-AI, טיפול ידני` });
+        console.log(`[mail-scan] ${cid}: דילוג על קובץ ${Math.round(_bytes / 1048576)}MB (מעל התקרה) — uid ${it.uid}`);
+        continue;
+      }
+      if (aiDayBudgetLeft(db) <= 0) {
+        skipped++;
+        console.log(`[mail-scan] ${cid}: נגמר התקציב היומי (${AI_DAY_MAX} קריאות AI) — עוצר, ימשיך מחר`);
+        break;
+      }
       let ai;
       aiCalls++; // מונה קריאות AI בפועל — משמש לבלם הביטחון (תקרה לכל ריצה)
+      aiDayBudgetSpend(db);
       try { ai = await classifyExpenseAttachment(it.contentBase64, it.mime, suppliers); }
       catch (e) {
         errors++;
@@ -3530,7 +3550,7 @@ add('POST', /^\/api\/mail-scan\/run$/, async (req, res, _p, q, body) => {
 
 // ===== סריקה לילית אוטומטית לכל החברות =====
 // סורק את כל טווח הזמן (מ-since) עד שאין עוד — באצוות קטנות כדי לא להעמיס. seenUids מונע כפילויות בין לילות.
-async function runMailScanFull(cid, since, maxBatches = 400, aiCap = 400) {
+async function runMailScanFull(cid, since, maxBatches = 400, aiCap = 40) {   // aiCap היה 400 — אפשר 433 קריאות ביום אחד
   const tot = { uploaded: 0, recorded: 0, duplicates: 0, skipped: 0, errors: 0, unreadable: 0, links: 0, aiCalls: 0, batches: 0, completed: false, cappedAt: null };
   let done = false, i = 0;
   while (!done && i++ < maxBatches) {
@@ -3612,6 +3632,24 @@ add('POST', /^\/api\/mail-scan\/dedupe$/, async (req, res, _p, q, body) => {
 });
 
 let _nightlyMailRunning = false;
+// תקרת גודל לקובץ שנשלח לקריאת AI — הגנה מפני שריפת קרדיט על מסמכים כבדים
+const AI_FILE_MAX_BYTES = Number(process.env.AI_FILE_MAX_MB || 3) * 1024 * 1024;
+// תקציב יומי של קריאות AI לקליטת מייל, חוצה חברות. התקרה שהייתה קיימת (400 לכל חברה
+// בכל ריצה) אפשרה 433 קריאות ביום אחד ב-backfill — רוב שריפת הקרדיט. זו תקרה אמיתית:
+// כשנגמרת, הקליטה ממשיכה מחר. מייל אמיתי הוא 6-14 קריאות ביום, אז זה לא מפריע בשגרה.
+const AI_DAY_MAX = Number(process.env.AI_DAY_MAX || 80);
+function aiDayBudgetLeft(db) {
+  const today = new Date().toISOString().slice(0, 10);
+  const a = db.mailAutoScan && db.mailAutoScan.aiDay;
+  if (!a || a.date !== today) return AI_DAY_MAX;
+  return Math.max(0, AI_DAY_MAX - (Number(a.count) || 0));
+}
+function aiDayBudgetSpend(db, n = 1) {
+  const today = new Date().toISOString().slice(0, 10);
+  db.mailAutoScan = db.mailAutoScan || {};
+  const a = db.mailAutoScan.aiDay;
+  db.mailAutoScan.aiDay = (a && a.date === today) ? { date: today, count: (Number(a.count) || 0) + n } : { date: today, count: n };
+}
 async function runNightlyMailScan(sinceOverride, resetSeen, opts = {}) {
   if (_nightlyMailRunning) return { skipped: 'כבר רץ' };
   _nightlyMailRunning = true;
