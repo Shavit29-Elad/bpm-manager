@@ -47,7 +47,7 @@ export function buildReport(data, now = new Date()) {
       count: invs.length,
       sum: invs.reduce((t, d) => t + (Number(d.amount) || 0), 0),
       note: late ? `${late} מעל ${overdueDays} יום` : null,
-      cols: ['לקוח', 'מסמך', 'הופקה', 'גיל', 'סכום'],
+      cols: ['לקוח', 'מסמך', 'הופקה', 'ממתינה', 'סכום'],
       limit: null,   // חובות פתוחים — אף פעם לא מקצרים
       rows: invs.map(d => ({
         flag: (d.days || 0) >= overdueDays,
@@ -93,7 +93,24 @@ export function buildReport(data, now = new Date()) {
     sections.push({ icon: '💸', title: 'כסף שאתה חייב', tone: 'red', total: outGroups.reduce((t, g) => t + g.sum, 0), groups: outGroups });
   }
 
-  // ===== 3) דורש יד =====
+  // ===== 3) תנועה בבנק החודש =====
+  // תמונת מצב, לא משימה — ולכן היא לבדה אינה מצדיקה משלוח מייל (ראו hasAction בסוף).
+  const b = data.bank;
+  if (b && (b.credit || b.debit)) {
+    sections.push({
+      icon: '🏦', title: `תנועה בבנק · ${b.label || 'החודש'}`, tone: 'blue', total: null, info: true,
+      groups: [{
+        label: null, cols: ['', ''],
+        rows: [
+          { cells: ['נכנס', money(b.credit)] },
+          { cells: ['יצא', money(b.debit)] },
+          { cells: ['נטו', money((b.credit || 0) - (b.debit || 0))], strong: true },
+        ],
+      }],
+    });
+  }
+
+  // ===== 4) דורש יד =====
   const fix = [];
   if (data.mailPending) fix.push(['חשבוניות נתקעו בקליטה מהמייל', data.mailPending]);
   if (data.bankUnmatched) fix.push(['תנועות זכות בבנק שלא הותאמו', data.bankUnmatched]);
@@ -105,7 +122,8 @@ export function buildReport(data, now = new Date()) {
     });
   }
 
-  if (!sections.length) return null;
+  // מייל נשלח רק אם יש משהו לעשות. מקטע מידע (תנועת הבנק) אינו נחשב.
+  if (!sections.some(s => !s.info)) return null;
 
   const d = now;
   const dateLabel = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getFullYear()).slice(2)}`;
@@ -141,6 +159,7 @@ const TONES = {
   green: { bar: '#059669', soft: '#ecfdf5' },
   red: { bar: '#dc2626', soft: '#fef2f2' },
   amber: { bar: '#d97706', soft: '#fffbeb' },
+  blue: { bar: '#4f46e5', soft: '#eef2ff' },
 };
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const F = 'font-family:Arial,Helvetica,sans-serif';
@@ -160,11 +179,11 @@ export function reportHtml(r) {
         : '';
       const lim = g.limit === null ? null : (g.limit || MAX_ROWS);
       const rows = (lim == null ? g.rows : g.rows.slice(0, lim)).map((row, idx) => {
-        const bg = row.flag ? tone.soft : (idx % 2 ? '#fafbfc' : '#ffffff');
+        const bg = (row.flag || row.strong) ? tone.soft : (idx % 2 ? '#fafbfc' : '#ffffff');
         const tds = row.cells.map((c, i) => {
           const last = i === row.cells.length - 1;
           const edge = (i === 0 && row.flag) ? `;border-right:3px solid ${tone.bar}` : '';
-          return `<td align="${last ? 'left' : 'right'}" style="padding:8px 14px;${F};font-size:13px;color:#1f2937;border-bottom:1px solid #f3f4f6${last ? ';font-weight:700;white-space:nowrap' : ''}${edge}">${esc(c)}</td>`;
+          return `<td align="${last ? 'left' : 'right'}" style="padding:8px 14px;${F};font-size:13px;color:#1f2937;border-bottom:1px solid #f3f4f6${(last || row.strong) ? ';font-weight:700' : ''}${last ? ';white-space:nowrap' : ''}${edge}">${esc(c)}</td>`;
         }).join('');
         const sub = row.sub
           ? `<tr style="background:${bg}"><td colspan="${row.cells.length}" style="padding:0 14px 8px;${F};font-size:11.5px;color:#6b7280;border-bottom:1px solid #f3f4f6">${esc(row.sub)}</td></tr>`

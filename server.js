@@ -4168,6 +4168,20 @@ async function gatherReportData(cid) {
     else if (p.readiness === 'waiting' || p.readiness === 'partial') out.payablesWaiting.push(row);
   }
 
+  // תנועת הבנק בחודש הנוכחי. תאריכי התנועות הם dd/mm/yyyy.
+  const nowD = new Date();
+  const mm = String(nowD.getMonth() + 1).padStart(2, '0'), yy = String(nowD.getFullYear());
+  const MONTHS_HE = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+  let bCredit = 0, bDebit = 0;
+  for (const t of (db.bankTx || [])) {
+    if (!ownedBy(t, cid)) continue;
+    const m = String(t.date || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m || m[2] !== mm || m[3] !== yy) continue;
+    const v = Math.abs(Number(t.absAmount != null ? t.absAmount : t.amount) || 0);
+    if (t.direction === 'credit') bCredit += v; else if (t.direction === 'debit') bDebit += v;
+  }
+  out.bank = { credit: +bCredit.toFixed(2), debit: +bDebit.toFixed(2), label: `${MONTHS_HE[nowD.getMonth()]} ${yy}` };
+
   out.mailPending = ((db.mailPending || {})[cid] || []).length;
   // תנועות זכות שלא הותאמו — כסף שנכנס ולא ידוע מול איזו חשבונית. זו אותה הגדרה
   // בדיוק שבמסך הבנק (matchStatus === 'unmatched', ברירת המחדל שם היא זכות בלבד).
