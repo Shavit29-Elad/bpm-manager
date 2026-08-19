@@ -145,7 +145,6 @@ export function reportText(r) {
       out.push('');
     }
   }
-  if (r.appUrl) out.push('', `פתח את המערכת: ${r.appUrl}`);
   out.push('', '— נשלח אוטומטית ממערכת הניהול הפיננסי');
   return out.join('\n');
 }
@@ -202,10 +201,6 @@ export function reportHtml(r) {
     </table>`;
   }).join('');
 
-  const btn = r.appUrl
-    ? `<div style="text-align:center;margin:4px 0"><a href="${esc(r.appUrl)}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:12px 34px;border-radius:9px;font-weight:700;font-size:14px;${F}">פתח את המערכת</a></div>`
-    : '';
-
   return `<div dir="rtl" style="background:#f6f7fb;padding:22px 12px;${F}">
     <div style="max-width:680px;margin:0 auto">
       <div style="margin-bottom:16px">
@@ -213,7 +208,6 @@ export function reportHtml(r) {
         <div style="${F};font-size:13.5px;color:#6b7280;margin-top:3px">זה מה שדורש טיפול היום ב${esc(r.companyName)} · ${esc(r.dateLabel)}</div>
       </div>
       ${sections}
-      ${btn}
       <div style="${F};font-size:11.5px;color:#9ca3af;text-align:center;margin-top:16px">נשלח אוטומטית ממערכת הניהול הפיננסי</div>
     </div>
   </div>`;
