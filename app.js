@@ -4325,6 +4325,7 @@ async function renderContractors(c) {
   _suppliers = Array.isArray(sup) ? sup : [];
   _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
   _hiddenDrafts = Array.isArray(dr?.hidden) ? dr.hidden : [];
+  purgeDuplicateDrafts();   // כפילויות נמחקות מעצמן — ההוצאה כבר קיימת, הטיוטה מיותרת
   const totalUnpaid = payables.reduce((s, x) => s + (x.unpaidTotal || 0), 0);
   const totalPaid = payables.reduce((s, x) => s + (x.paidTotal || 0), 0);
   c.innerHTML = `<div class="panel" id="draftsPanel">${draftsSection()}</div>
@@ -4614,6 +4615,27 @@ window.kickDraftsAi = async () => {
 };
 // ===== טיוטות הוצאה (OCR) — צפייה ואישור מתוך האתר =====
 const DRAFT_TYPE_NAMES = { 20: 'חשבון/אישור', 305: 'חשבונית מס', 320: 'מס-קבלה', 330: 'זיכוי', 400: 'קבלה', 405: 'קבלה תרומה' };
+// מחיקת טיוטות שכבר נקלטו כהוצאה. רץ אוטומטית אחרי כל טעינה של רשימת הטיוטות.
+// נמחקות רק כאלה שהשרת סימן duplicate — "נדחתה ידנית" ו"כבר אושרה" נשארות מוסתרות
+// וניתנות לשחזור, כי שם ההחלטה הייתה של המשתמש ולא של זיהוי אוטומטי.
+let _purging = false;
+async function purgeDuplicateDrafts() {
+  if (_purging) return;
+  const ids = (_hiddenDrafts || []).filter(h => h.duplicate).map(h => h.id);
+  if (!ids.length) return;
+  _purging = true;
+  try {
+    const r = await fetch('/api/expense-drafts/purge-duplicates', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }),
+    }).then(x => x.json()).catch(() => null);
+    if (r && r.deleted) {
+      _hiddenDrafts = (_hiddenDrafts || []).filter(h => !h.duplicate);
+      const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
+      const t = _expToast(); t.textContent = `${r.deleted} טיוטות כפולות נמחקו — ההוצאות עצמן נשמרו`;
+      setTimeout(() => { t.style.display = 'none'; }, 4500);
+    }
+  } finally { _purging = false; }
+}
 window.restoreDraft = async (id, btn) => {
   if (btn) btn.disabled = true;
   const r = await fetch(`/api/expense-drafts/${encodeURIComponent(id)}/restore`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
@@ -5070,6 +5092,7 @@ window.reloadDrafts = async (btn) => {
   const dr = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
   _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
   _hiddenDrafts = Array.isArray(dr?.hidden) ? dr.hidden : [];
+  purgeDuplicateDrafts();   // כפילויות נמחקות מעצמן — ההוצאה כבר קיימת, הטיוטה מיותרת
   const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
   if (btn) { btn.disabled = false; btn.textContent = '↻ רענן'; }
   kickDraftsAi(); // AI קורא את כל הטיוטות ברקע כדי שהכרטיסים והמסך יהיו מוכנים מראש
@@ -6548,6 +6571,7 @@ window.scanMailNow = async () => {
         const dr = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
         _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
   _hiddenDrafts = Array.isArray(dr?.hidden) ? dr.hidden : [];
+  purgeDuplicateDrafts();   // כפילויות נמחקות מעצמן — ההוצאה כבר קיימת, הטיוטה מיותרת
         const panel = document.getElementById('draftsPanel');
         if (panel) { panel.innerHTML = draftsSection(); kickDraftsAi(); }
       } catch { }
@@ -6565,6 +6589,7 @@ window.scanMailNow = async () => {
       const dr = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
       _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
   _hiddenDrafts = Array.isArray(dr?.hidden) ? dr.hidden : [];
+  purgeDuplicateDrafts();   // כפילויות נמחקות מעצמן — ההוצאה כבר קיימת, הטיוטה מיותרת
       const panel = document.getElementById('draftsPanel');
       if (panel) { panel.innerHTML = draftsSection(); kickDraftsAi(); }
     } catch { }

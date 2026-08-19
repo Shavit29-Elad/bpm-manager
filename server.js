@@ -1163,16 +1163,18 @@ add('GET', /^\/api\/expense-drafts$/, async (req, res, _p, q) => {
     const hiddenReason = (d) => {
       if (approved[d.id]) return 'כבר אושרה ונקלטה כהוצאה';
       if (dismissed.includes(d.id)) return 'נדחתה ידנית';
-      if (alreadyExpense(d)) return `כבר קיימת כהוצאה (מספר ${d.number})`;
+      if (alreadyExpense(d)) return { text: `כבר קיימת כהוצאה (מספר ${d.number})`, dup: true };
       return null;
     };
     const drafts = [], hidden = [];
     for (const d of all) {
       const why = hiddenReason(d);
-      if (why) hidden.push({ id: d.id, number: d.number || null, supplierName: d.supplierName || null, amount: d.amount != null ? d.amount : null, date: d.date || null, reason: why });
-      else drafts.push({ ...d, raw: undefined });
+      if (why) {
+        const w = typeof why === 'string' ? { text: why, dup: false } : why;
+        hidden.push({ id: d.id, number: d.number || null, supplierName: d.supplierName || null, amount: d.amount != null ? d.amount : null, date: d.date || null, reason: w.text, duplicate: w.dup });
+      } else drafts.push({ ...d, raw: undefined });
     }
-    json(res, { drafts, hidden, hiddenCount: hidden.length });
+    json(res, { drafts, hidden, hiddenCount: hidden.length, duplicateCount: hidden.filter(h => h.duplicate).length });
   } catch (e) { json(res, { drafts: [], error: e.message }, 500); }
 });
 
@@ -1192,6 +1194,21 @@ function applyLinkedEvents(db, linkedEvents, invoiceNumber, payableId) {
   }
   return n;
 }
+
+// POST /api/expense-drafts/purge-duplicates — מחיקת טיוטות שכבר נקלטו כהוצאה.
+// { ids: [...] } — רק מזהים שהשרת עצמו סימן ככפילות ברשימה, כדי שלא תימחק טיוטה
+// שרק נדחתה או שסומנה כמאושרת בטעות. הטיוטה היא הקובץ שהועלה; ההוצאה עצמה נשארת.
+add('POST', /^\/api\/expense-drafts\/purge-duplicates$/, async (req, res, _p, q, body) => {
+  const ids = [...new Set((Array.isArray(body && body.ids) ? body.ids : []).map(String).filter(Boolean))].slice(0, 100);
+  if (!ids.length) return json(res, { ok: true, deleted: 0, failed: [] });
+  let deleted = 0; const failed = [];
+  for (const id of ids) {
+    try { await greenInvoice.deleteExpenseDraft(id); deleted++; }
+    catch (e) { failed.push({ id, error: e.message }); }
+  }
+  if (deleted) { greenInvoice.clearDataCache(); console.log(`[drafts] נמחקו ${deleted} טיוטות כפולות`); }
+  json(res, { ok: true, deleted, failed });
+});
 
 // POST /api/expense-drafts/:id/restore — החזרת טיוטה שהוסתרה (נדחתה ידנית או סומנה כמאושרת)
 add('POST', /^\/api\/expense-drafts\/([^/]+)\/restore$/, (req, res, params) => {
