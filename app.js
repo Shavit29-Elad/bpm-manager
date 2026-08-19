@@ -2985,6 +2985,29 @@ async function renderCalendar(c) {
 const escAttr = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 const INV_TYPES = [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']];
 let _invClients = [];
+let _invSearch = '';   // חיפוש חופשי בהפקת חשבוניות — מסנן את מה שכבר בזיכרון, בלי קריאת שרת
+window.setInvSearch = (v) => {
+  _invSearch = String(v || '').trim().toLowerCase();
+  renderInvoicingBody();
+  const i = document.getElementById('invSearch');
+  if (i) { i.focus({ preventScroll: true }); i.setSelectionRange(i.value.length, i.value.length); }
+};
+const _invToks = () => _invSearch.split(/\s+/).filter(Boolean);
+// התאמה של אירוע בודד: אמן, מיקום, תאריך או סכום
+function invEvMatches(ev, toks) {
+  if (!toks.length) return true;
+  const hay = [ev.artist, ev.location, ddmy(ev.date), ev.date, ev.total].map(x => String(x == null ? '' : x)).join(' ').toLowerCase();
+  return toks.every(t => hay.includes(t));
+}
+// לקוח נכנס לתצוגה אם שמו תואם (ואז מוצגים כל אירועיו) או אם יש לו אירוע תואם (ואז רק הוא)
+function invFilterClient(g, toks) {
+  const openEvents = (g.events || []).filter(ev => !ev.issued);
+  if (!toks.length) return { g, events: openEvents, partial: false };
+  const nameHit = toks.every(t => String(g.client || '').toLowerCase().includes(t));
+  if (nameHit) return { g, events: openEvents, partial: false };
+  const hits = openEvents.filter(ev => invEvMatches(ev, toks));
+  return hits.length ? { g, events: hits, partial: hits.length < openEvents.length, hidden: openEvents.length - hits.length } : null;
+}
 async function renderInvoicing(c) {
   c.innerHTML = `<div class="panel"><div class="empty">טוען אירועים…</div></div>`;
   _invClients = await api(`/api/invoicing/clients?companyId=${state.company}`) || [];
@@ -2993,15 +3016,35 @@ async function renderInvoicing(c) {
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>הפקת חשבוניות ללקוחות</h2>
       <span class="muted">בחר אירועים שטרם הופקה להם חשבונית והפק חשבון עסקה / מס / מס-קבלה / קבלה, או שייך למסמך קיים. ברגע שהופקה חשבונית (עסקה/מס/מס-קבלה/קבלה) האירוע יורד מכאן, והמעקב אחר התשלום נמשך ב"חשבוניות פתוחות" בדף הבית. הצעת מחיר בלבד אינה נחשבת הפקה.</span></div></div>
-    ${shown.length ? shown.map(invClientCard).join('') : `<div class="empty">אין יתרות פתוחות — כל האירועים חויבו ושולמו. 👌</div>`}
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      <span style="font-size:14px">🔎</span>
+      <input id="invSearch" type="text" value="${escAttr(_invSearch)}" oninput="setInvSearch(this.value)"
+        onkeydown="if(event.key==='Escape'){setInvSearch('')}" autocomplete="off"
+        placeholder="חיפוש: לקוח · אמן · מיקום · תאריך · סכום…"
+        style="flex:1;min-width:220px;padding:8px 11px;font-size:13.5px"/>
+      ${_invSearch ? `<button class="btn ghost" style="padding:5px 11px;font-size:12.5px" onclick="setInvSearch('')">נקה ✕</button>` : ''}
+    </div>
+    <div id="invBody"></div>
   </div>`;
+  renderInvoicingBody();
 }
-function invClientCard(g) {
+// גוף הרשימה בלבד — כדי שהקלדה בחיפוש לא תבנה מחדש את כל המסך (ותאבד את המיקוד)
+function renderInvoicingBody() {
+  const box = document.getElementById('invBody'); if (!box) return;
+  const toks = _invToks();
+  const shown = (_invClients || []).filter(g => (g.unissuedCount || 0) > 0)
+    .map(g => invFilterClient(g, toks)).filter(Boolean);
+  box.innerHTML = shown.length
+    ? shown.map(x => invClientCard(x.g, x.events, x.hidden || 0)).join('')
+    : `<div class="empty">${toks.length ? 'אין תוצאות לחיפוש.' : 'אין יתרות פתוחות — כל האירועים חויבו ושולמו. 👌'}</div>`;
+}
+function invClientCard(g, eventsOverride, hiddenCount) {
   const safe = 'c' + (g.clientId || g.client).replace(/[^a-zA-Z0-9֐-׿]/g, '_');
   const bodyId = 'invbody_' + safe;
   const cEnc = encodeURIComponent(g.client);
   // מציגים אירועים שטרם הופקה להם חשבונית. אירוע שהופקה לו עסקה/מס/מס-קבלה/קבלה מוסר לגמרי (עובר ל"חשבוניות פתוחות").
-  const openEvents = g.events.filter(ev => !ev.issued);
+  // בחיפוש מגיעה רשימה מסוננת — ואז ההפקה תחול רק על מה שמוצג, ולכן מוצגת אזהרה מפורשת.
+  const openEvents = Array.isArray(eventsOverride) ? eventsOverride : g.events.filter(ev => !ev.issued);
   const rows = openEvents.map(ev => {
     const tags = (ev.linkedDocs || []).map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה / הורדה" onclick="previewLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ');
     return `<tr>
@@ -3020,7 +3063,8 @@ function invClientCard(g) {
       <div><b>${escapeHtml(g.client)}</b> <span class="muted">· ${g.unissuedCount} להפקה · סכום ${money(g.unissuedTotal)}</span></div>
       <div style="font-weight:700">${money(g.unissuedTotal)}</div>
     </div>
-    <div id="${bodyId}" class="${collapsed ? 'hidden' : ''}">
+    <div id="${bodyId}" class="${(collapsed && !_invSearch) ? 'hidden' : ''}">
+      ${hiddenCount ? `<div style="padding:7px 14px;font-size:12px;color:var(--warn);background:var(--panel2);border-bottom:1px solid var(--line)">⚠ ${hiddenCount} אירועים נוספים של לקוח זה מוסתרים ע"י החיפוש — ההפקה תחול רק על המוצגים.</div>` : ''}
       <table style="margin:0"><thead><tr><th style="width:56px">בחר</th><th>תאריך</th><th>אמן</th><th>מיקום</th><th>סכום</th><th>מסמכים</th></tr></thead>
         <tbody>${rows}</tbody></table>
       <div style="padding:10px 14px;display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
