@@ -4324,6 +4324,7 @@ async function renderContractors(c) {
   const payables = Array.isArray(pay) ? pay : [];
   _suppliers = Array.isArray(sup) ? sup : [];
   _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
+  _hiddenDrafts = Array.isArray(dr?.hidden) ? dr.hidden : [];
   const totalUnpaid = payables.reduce((s, x) => s + (x.unpaidTotal || 0), 0);
   const totalPaid = payables.reduce((s, x) => s + (x.paidTotal || 0), 0);
   c.innerHTML = `<div class="panel" id="draftsPanel">${draftsSection()}</div>
@@ -4585,7 +4586,7 @@ window.openSupExpFromSearch = (supplierId, nameEnc) => {
   selectSupplier(supplierId, nameEnc);
 };
 let _supDocs = [], _supName = '', _supYear = 'all', _supId = '';
-let _drafts = [];
+let _drafts = [], _hiddenDrafts = [], _showHiddenDrafts = false;
 let _mailPending = []; // חשבוניות שהגיעו כלינק ולא נקלטו אוטומטית — לטיפול ידני
 let _mailStatus = null; // סטטוס שליחת מייל לרו"ח
 const _aiByDraft = {};      // מטמון תוצאות ה-AI לכל טיוטה (id -> fields)
@@ -4613,12 +4614,38 @@ window.kickDraftsAi = async () => {
 };
 // ===== טיוטות הוצאה (OCR) — צפייה ואישור מתוך האתר =====
 const DRAFT_TYPE_NAMES = { 20: 'חשבון/אישור', 305: 'חשבונית מס', 320: 'מס-קבלה', 330: 'זיכוי', 400: 'קבלה', 405: 'קבלה תרומה' };
+window.restoreDraft = async (id, btn) => {
+  if (btn) btn.disabled = true;
+  const r = await fetch(`/api/expense-drafts/${encodeURIComponent(id)}/restore`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r.ok) { alert('שגיאה: ' + (r.error || '')); if (btn) btn.disabled = false; return; }
+  clearApiCache();
+  renderContractors($('#content'));
+};
 function draftsSection() {
   const list = _drafts || [];
   const ms = _mailStatus || {};
   const mailNote = ms.configured
     ? `<div style="font-size:12px;color:var(--accent2);margin-top:2px">📧 כל הוצאה שנקלטת נשלחת אוטומטית לרו"ח: ${escapeHtml(String(ms.forwardTo || ''))}</div>`
     : `<div style="font-size:12px;color:var(--warn);margin-top:2px">📧 שליחת הוצאות לרו"ח (${escapeHtml(String(ms.forwardTo || '516942349@rivh.it'))}) עדיין לא מחוברת — צריך להגדיר חשבון מייל שולח.</div>`;
+  // טיוטות שהוסתרו — שלוש סיבות שונות שנראות זהות למשתמש. מוצגות לפי דרישה,
+  // עם הסיבה ועם אפשרות להחזיר, כדי שקובץ שנעלם לא ייראה כאילו נמחק.
+  const hid = _hiddenDrafts || [];
+  const hidHtml = hid.length ? `
+    <div style="margin-top:10px">
+      <button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="_showHiddenDrafts=!_showHiddenDrafts;document.getElementById('draftsPanel').innerHTML=draftsSection()">
+        ${_showHiddenDrafts ? '▾' : '▸'} ${hid.length} טיוטות מוסתרות
+      </button>
+      ${_showHiddenDrafts ? `<div style="margin-top:7px;border:1px solid var(--line);border-radius:9px;overflow:hidden">
+        ${hid.map(h => `<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding:7px 11px;border-top:1px solid var(--line);font-size:12.5px;background:var(--panel2)">
+          <span style="white-space:nowrap">${h.number ? '#' + escapeHtml(String(h.number)) : '—'}</span>
+          <span style="flex:1;min-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(h.supplierName || '—')}</span>
+          <span class="muted" style="white-space:nowrap">${h.amount != null ? money(h.amount) : ''}</span>
+          <span class="muted" style="font-size:11.5px">${escapeHtml(h.reason || '')}</span>
+          <button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="restoreDraft('${escAttr(String(h.id))}',this)">↩ החזר</button>
+        </div>`).join('')}
+      </div>` : ''}
+    </div>` : '';
+
   return `<div class="row-between"><div><h2>🧾 טיוטות הוצאה לאישור</h2>
       <span class="muted">${list.length ? `${list.length} טיוטות שהעלית וממתינות לאישור. בדוק את מה שהזיהוי האוטומטי קלט, תקן אם צריך, ואשר — תיווצר הוצאה אמיתית שמשויכת לספק.` : 'אין טיוטות ממתינות. העלה קובץ הוצאה כדי שיופיע כאן אחרי זיהוי אוטומטי (OCR).'}</span>${mailNote}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn success" onclick="pickExpenseFile()">📎 העלה קובץ הוצאה</button><button class="btn ghost" onclick="reloadDrafts(this)">↻ רענן</button></div></div>
@@ -4635,7 +4662,7 @@ function draftsSection() {
       <div style="font-size:13.5px;font-weight:600;margin-top:4px">גרור לכאן קבצי הוצאה (PDF / תמונה) — אפשר כמה יחד — או לחץ לבחירה</div>
       <div class="muted" style="font-size:11.5px;margin-top:2px">כל קובץ יעלה כהוצאה נפרדת לחשבונית ירוקה ויעבור זיהוי אוטומטי (OCR)</div>
     </div>
-    ${list.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${list.map(draftCard).join('')}</div>` : `<div class="empty">אין טיוטות ממתינות לאישור.</div>`}`;
+    ${list.length ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${list.map(draftCard).join('')}</div>` : `<div class="empty">אין טיוטות ממתינות לאישור.</div>`}${hidHtml}`;
 }
 // פאנל "חשבוניות במייל שלא נקלטו אוטומטית" — רשת ביטחון לחשבוניות שהגיעו כלינק (מורנינג/פנגו/Booking וכו')
 function mailPendingPanel() {
@@ -5042,6 +5069,7 @@ window.reloadDrafts = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'מרענן…'; }
   const dr = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
   _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
+  _hiddenDrafts = Array.isArray(dr?.hidden) ? dr.hidden : [];
   const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
   if (btn) { btn.disabled = false; btn.textContent = '↻ רענן'; }
   kickDraftsAi(); // AI קורא את כל הטיוטות ברקע כדי שהכרטיסים והמסך יהיו מוכנים מראש
@@ -6519,6 +6547,7 @@ window.scanMailNow = async () => {
       try {
         const dr = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
         _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
+  _hiddenDrafts = Array.isArray(dr?.hidden) ? dr.hidden : [];
         const panel = document.getElementById('draftsPanel');
         if (panel) { panel.innerHTML = draftsSection(); kickDraftsAi(); }
       } catch { }
@@ -6535,6 +6564,7 @@ window.scanMailNow = async () => {
     try {
       const dr = await api('/api/expense-drafts?fresh=1').catch(() => ({ drafts: [] }));
       _drafts = Array.isArray(dr?.drafts) ? dr.drafts : [];
+  _hiddenDrafts = Array.isArray(dr?.hidden) ? dr.hidden : [];
       const panel = document.getElementById('draftsPanel');
       if (panel) { panel.innerHTML = draftsSection(); kickDraftsAi(); }
     } catch { }

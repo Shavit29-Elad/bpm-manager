@@ -1158,10 +1158,21 @@ add('GET', /^\/api\/expense-drafts$/, async (req, res, _p, q) => {
       if (amt == null && !sup) return false;
       return existing.some(x => x.num === num && (amt == null || amtEq(x.amt, amt)) && (!sup || !x.sup || sup === x.sup));
     };
-    const drafts = all
-      .filter(d => !approved[d.id] && !dismissed.includes(d.id) && !alreadyExpense(d))
-      .map(d => ({ ...d, raw: undefined }));
-    json(res, { drafts });
+    // סיבת ההסתרה נשמרת ומוחזרת — טיוטה שנעלמת בלי הסבר היא באג שקשה לאתר,
+    // וכאן יש שלוש סיבות שונות שנראות למשתמש זהות לחלוטין.
+    const hiddenReason = (d) => {
+      if (approved[d.id]) return 'כבר אושרה ונקלטה כהוצאה';
+      if (dismissed.includes(d.id)) return 'נדחתה ידנית';
+      if (alreadyExpense(d)) return `כבר קיימת כהוצאה (מספר ${d.number})`;
+      return null;
+    };
+    const drafts = [], hidden = [];
+    for (const d of all) {
+      const why = hiddenReason(d);
+      if (why) hidden.push({ id: d.id, number: d.number || null, supplierName: d.supplierName || null, amount: d.amount != null ? d.amount : null, date: d.date || null, reason: why });
+      else drafts.push({ ...d, raw: undefined });
+    }
+    json(res, { drafts, hidden, hiddenCount: hidden.length });
   } catch (e) { json(res, { drafts: [], error: e.message }, 500); }
 });
 
@@ -1181,6 +1192,17 @@ function applyLinkedEvents(db, linkedEvents, invoiceNumber, payableId) {
   }
   return n;
 }
+
+// POST /api/expense-drafts/:id/restore — החזרת טיוטה שהוסתרה (נדחתה ידנית או סומנה כמאושרת)
+add('POST', /^\/api\/expense-drafts\/([^/]+)\/restore$/, (req, res, params) => {
+  const db = load();
+  const id = params[0];
+  let did = [];
+  if (db.dismissedDrafts && db.dismissedDrafts.includes(id)) { db.dismissedDrafts = db.dismissedDrafts.filter(x => x !== id); did.push('בוטלה הדחייה'); }
+  if (db.approvedDrafts && db.approvedDrafts[id]) { delete db.approvedDrafts[id]; did.push('בוטל סימון האישור'); }
+  if (did.length) save(db);
+  json(res, { ok: true, done: did });
+});
 
 // POST /api/expense-drafts/:id/approve — אישור טיוטה → יצירת הוצאה אמיתית מנתוני ה-OCR (עם תיקונים)
 // body: { supplierId, number, date, documentType, amount, vatIncluded, description, accountingClassificationId? }
