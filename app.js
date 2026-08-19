@@ -928,6 +928,20 @@ function renderMonthDetail() {
 
 // ---- חשבוניות פתוחות בדף הבית (כמו "חיובים קרובים" בחשבונית ירוקה) ----
 let _openInv = null, _openInvErr = null, _openInvFilter = 'all', _openInvExpanded = false;
+let _openInvSearch = '';   // חיפוש חופשי בתוך החשבוניות הפתוחות (מסנן את הרשימה שכבר בזיכרון — מיידי, בלי קריאת שרת)
+window.setOpenInvSearch = (v) => {
+  _openInvSearch = String(v || '').trim().toLowerCase();
+  renderOpenInvoices();
+  const i = document.getElementById('openInvSearch');
+  if (i) { i.focus({ preventScroll: true }); i.setSelectionRange(i.value.length, i.value.length); }
+};
+// התאמה לכל מילה בנפרד — "בקסטייג 70246" ימצא גם כשהסדר הפוך
+function openInvMatches(d, toks) {
+  if (!toks.length) return true;
+  const hay = [d.clientName, d.number, d.description, DOC_TYPE_SHORT[d.type], DOC_TYPE_NAMES[d.type],
+    fmtDate(d.date), d.amount, d.amountDue].map(x => String(x == null ? '' : x)).join(' ').toLowerCase();
+  return toks.every(t => hay.includes(t));
+}
 const OPEN_INV_PREVIEW = 4; // כמה לקוחות מציגים לפני "הצג עוד"
 window.toggleOpenInvExpand = () => { _openInvExpanded = !_openInvExpanded; renderOpenInvoices(); };
 async function loadOpenInvoices() {
@@ -951,8 +965,10 @@ function renderOpenInvoices() {
   const wrap = document.getElementById('openInvWrap'); if (!wrap) return;
   _openInvClients = [...new Set((_openInv || []).map(d => d.clientName).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he'));
   const openAmt = (d) => (d.amountDue != null ? Number(d.amountDue) : Number(d.amount) || 0);
-  const docs = (_openInv || []).filter(d => _openInvFilter === 'all' ? true
+  const _toks = _openInvSearch.split(/\s+/).filter(Boolean);
+  const byType = (_openInv || []).filter(d => _openInvFilter === 'all' ? true
     : _openInvFilter === 'proforma' ? Number(d.type) === 300 : Number(d.type) === 305);
+  const docs = byType.filter(d => openInvMatches(d, _toks));
   const groups = {};
   for (const d of docs) { const k = d.clientName || '—'; (groups[k] = groups[k] || []).push(d); }
   const clients = Object.entries(groups)
@@ -962,19 +978,27 @@ function renderOpenInvoices() {
   const chip = (v, lbl) => `<button class="btn ${_openInvFilter === v ? 'primary' : 'ghost'}" style="padding:4px 12px;font-size:13px" onclick="setOpenInvFilter('${v}')">${lbl}</button>`;
   wrap.innerHTML = `
     <div class="row-between"><div><h2>חשבוניות פתוחות</h2>
-      <span class="muted">${docs.length} מסמכים · ${money(totalAll)} · מקובץ לפי לקוח</span></div>
+      <span class="muted">${docs.length} מסמכים · ${money(totalAll)} · מקובץ לפי לקוח${_toks.length ? ` · מתוך ${byType.length}` : ''}</span></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="exportExpectedIncomePdf(this)" title="דוח PDF של כל ההכנסות הצפויות מהחשבוניות הפתוחות שטרם שולמו">📄 דוח הכנסות צפויות</button>${state.company === 'co_ofek' ? `<button class="btn primary" style="padding:4px 12px;font-size:13px" onclick="openOldInvoice('create','',300)" title="העלאת חשבונית עסקה/מס ישנה (לפני יולי) שאינה במערכת">➕ העלה חשבונית ישנה</button><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="openBulkOldInvoices()" title="העלאת כמה מסמכי הכנסה (PDF מפייפרלס) בבת אחת — מילוי אוטומטי לכל קובץ">📎 העלאה מרובה</button>` : ''}${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      <span style="font-size:14px">🔎</span>
+      <input id="openInvSearch" type="text" value="${escAttr(_openInvSearch)}" oninput="setOpenInvSearch(this.value)"
+        onkeydown="if(event.key==='Escape'){setOpenInvSearch('')}" autocomplete="off"
+        placeholder="חיפוש בחשבוניות הפתוחות: לקוח · מספר מסמך · תיאור · סכום…"
+        style="flex:1;min-width:220px;padding:8px 11px;font-size:13.5px"/>
+      ${_openInvSearch ? `<button class="btn ghost" style="padding:5px 11px;font-size:12.5px" onclick="setOpenInvSearch('')">נקה ✕</button>` : ''}
     </div>
     ${_openInvErr ? `<div class="warn-banner" style="margin-top:10px">${escapeHtml(_openInvErr)}</div>` : ''}
     ${clients.length ? (() => {
-      const shown = _openInvExpanded ? clients : clients.slice(0, OPEN_INV_PREVIEW);
+      const shown = (_openInvExpanded || _toks.length) ? clients : clients.slice(0, OPEN_INV_PREVIEW);   // בחיפוש מציגים את כל ההתאמות
       const hidden = clients.length - shown.length;
       const moreBtn = (hidden > 0 || _openInvExpanded)
         ? `<button class="btn ghost" style="align-self:center;margin-top:4px;padding:7px 18px" onclick="toggleOpenInvExpand()">${_openInvExpanded ? 'הצג פחות ▲' : `הצג עוד ${hidden} לקוחות ▼`}</button>`
         : '';
       return `<div style="margin-top:12px;display:flex;flex-direction:column;gap:8px">${shown.map(openInvClientHtml).join('')}${moreBtn}</div>`;
     })()
-      : `<div class="empty">אין חשבוניות פתוחות 👌</div>`}`;
+      : `<div class="empty">${_toks.length ? 'אין חשבוניות פתוחות שתואמות לחיפוש.' : 'אין חשבוניות פתוחות 👌'}</div>`}`;
 }
 function openInvClientHtml(cl) {
   const rid = 'oig_' + Math.random().toString(36).slice(2, 8);
@@ -1004,7 +1028,7 @@ function openInvClientHtml(cl) {
       <div><b>${escapeHtml(cl.name)}</b> <span class="muted">· ${cl.ds.length} מסמכים</span></div>
       <div style="font-weight:700">${money(cl.total)}</div>
     </div>
-    <div id="${rid}" class="${cl.ds.length > 1 ? 'hidden' : ''}">${rows}<div style="padding:9px 12px;border-top:1px solid var(--line);background:var(--panel2);display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+    <div id="${rid}" class="${(cl.ds.length > 1 && !_openInvSearch) ? 'hidden' : ''}">${rows}<div style="padding:9px 12px;border-top:1px solid var(--line);background:var(--panel2);display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="btn primary" style="padding:4px 12px;font-size:12.5px" onclick="openPayStatus('${encodeURIComponent(cl.name || '')}','${rid}')" title="שליחת בירור מועד תשלום ללקוח, עם החשבוניות המסומנות מצורפות">📨 בדיקת סטטוס תשלום מול הלקוח</button>
       ${canConsol ? `<button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="openConsolidate('${encodeURIComponent(cl.name || '')}','${rid}')" title="מיזוג כמה חשבוניות עסקה למסמך מס/מס-קבלה מסכם אחד">🧾 הפק מסמך מרוכז</button>` : ''}
       <span class="muted" style="font-size:11.5px">סמן חשבוניות ← בירור מועד תשלום${canConsol ? ' · או מיזוג עסקאות למסמך מסכם' : ''}.</span>
