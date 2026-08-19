@@ -4298,6 +4298,36 @@ add('POST', /^\/api\/daily-report\/run$/, async (req, res, q, body) => {
   json(res, { ok: true, result: per[cid] || null });
 });
 
+// POST /api/supplier-payables/:id/event-amounts — עדכון הסכום של שורות הקבלן באירועים
+// שההוצאה מכסה. הסכום נשמר על האירוע עצמו (contractorDetails[index].amount), ולכן
+// משתקף מיד גם במסך האירועים, ברווחיות ובחישוב "מוכן לתשלום".
+// { items: [{ eventId, index, amount }] }
+add('POST', /^\/api\/supplier-payables\/([^/]+)\/event-amounts$/, (req, res, params, q, body) => {
+  const db = load();
+  const cid = reqCompany(q, body);
+  const pay = (db.supplierPayables || []).find(x => x.id === params[0]);
+  if (!pay) return json(res, { error: 'רישום ההוצאה לא נמצא' }, 404);
+  if (!ownedBy(pay, cid)) return wrongCompany(res, 'ההוצאה');
+  const items = Array.isArray(body && body.items) ? body.items : [];
+  const updated = [], errors = [];
+  for (const it of items) {
+    const ev = (db.events || []).find(e => e.id === String(it.eventId));
+    if (!ev) { errors.push(`אירוע ${it.eventId} לא נמצא`); continue; }
+    if (!ownedBy(ev, cid)) { errors.push('אירוע שייך לחברה אחרת'); continue; }
+    const idx = Number(it.index);
+    const row = (ev.contractorDetails || [])[idx];
+    if (!row) { errors.push(`שורת קבלן ${idx} לא נמצאה באירוע ${it.eventId}`); continue; }
+    const amt = Number(it.amount);
+    if (!isFinite(amt) || amt < 0) { errors.push('סכום לא תקין'); continue; }
+    const before = Number(row.amount) || 0;
+    if (Math.abs(before - amt) < 0.005) continue;   // לא השתנה
+    row.amount = +amt.toFixed(2);
+    updated.push({ eventId: ev.id, index: idx, name: row.name || '', before, after: row.amount });
+  }
+  if (updated.length) save(db);
+  json(res, { ok: true, updated, errors, sum: (db.events || []).length ? undefined : undefined });
+});
+
 // ---- גיבוי ----
 // כל הנתונים הפיננסיים של שלוש החברות יושבים במסמך אחד. בלי גיבוי, באג או תקלה
 // אצל ספק האחסון = אובדן מוחלט. הגיבוי יוצא מהמערכת החוצה, לתיבה נפרדת.

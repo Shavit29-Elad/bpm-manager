@@ -4920,9 +4920,9 @@ window.openEditPayable = (pid) => {
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="epBiz" ${p.isBusinessDoc ? 'checked' : ''}/> חשבון עסקה · פנימי (לא לרו"ח)</label>
     </div>
     <div id="epStatus" style="font-size:13px;min-height:18px;margin:6px 0"></div>
+    ${covHtml}
     <div class="modal-actions" style="justify-content:space-between;align-items:center">
       <div style="display:flex;gap:8px">
-        ${p.hasFile ? `<button class="btn ghost" style="font-size:12px" onclick="previewDoc('/api/supplier-payables/${pid}/file')">👁 חשבונית</button>` : ''}
         <button class="btn ghost" style="font-size:12px" onclick="openLinkEventsToPayable('${pid}')">🔗 שייך אירועים</button>
       </div>
       <div style="display:flex;gap:8px">
@@ -4930,8 +4930,36 @@ window.openEditPayable = (pid) => {
         <button class="btn success" onclick="savePayableEdit('${pid}',this)">💾 שמור</button>
       </div>
     </div>
+    </div>
+   </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  if (fileUrl) epLoadFile(fileUrl);
+  epRecalcCov();
+};
+// טעינת המסמך לפאנל הצדדי (PDF ב-iframe, תמונה כתמונה)
+async function epLoadFile(url) {
+  const pane = document.getElementById('epFilePane'); if (!pane) return;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('שגיאה');
+    const blob = await r.blob();
+    const u = URL.createObjectURL(blob);
+    pane.innerHTML = /image\//.test(blob.type)
+      ? `<div style="height:100%;overflow:auto;text-align:center;background:#fff"><img src="${u}" style="max-width:100%"/></div>`
+      : `<iframe src="${u}" style="width:100%;height:100%;border:0"></iframe>`;
+  } catch { pane.innerHTML = '<div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">לא ניתן להציג את המסמך</div>'; }
+}
+// סיכום חי של הסכומים פר-אירוע מול סכום ההוצאה — פער אמיתי צריך להיראות
+window.epRecalcCov = () => {
+  const box = document.getElementById('epCovSum'); if (!box) return;
+  const rows = [...document.querySelectorAll('.epEvAmt')];
+  if (!rows.length) return;
+  const sum = rows.reduce((t, i) => t + (Number(i.value) || 0), 0);
+  const total = Number(document.getElementById('epAmount')?.value) || 0;
+  const diff = +(total - sum).toFixed(2);
+  box.innerHTML = `סכום האירועים: <b>${money(sum)}</b> · סכום ההוצאה: <b>${money(total)}</b>`
+    + (Math.abs(diff) > 0.5 ? ` · <span style="color:var(--warn)">פער ${money(Math.abs(diff))}</span>` : ' · <span style="color:var(--accent2)">תואם ✓</span>');
 };
 window.savePayableEdit = async (pid, btn) => {
   const g = (id) => document.getElementById(id);
@@ -4943,9 +4971,27 @@ window.savePayableEdit = async (pid, btn) => {
     paid: g('epPaid').checked, isBusinessDoc: g('epBiz').checked,
   };
   const st = g('epStatus'); if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">שומר…</span>';
+  // סכומים פר-אירוע שהשתנו — נשמרים על האירועים עצמם, לפני עדכון ההוצאה
+  const evItems = [...document.querySelectorAll('.epEvAmt')]
+    .filter(i => i.dataset.ev && Math.abs((Number(i.value) || 0) - (Number(i.dataset.orig) || 0)) > 0.005)
+    .map(i => ({ eventId: i.dataset.ev, index: Number(i.dataset.idx), amount: Number(i.value) || 0 }));
+  let evMsg = '';
+  if (evItems.length) {
+    const ev = await fetch(`/api/supplier-payables/${pid}/event-amounts`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: evItems }),
+    }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (!ev.ok) { if (btn) btn.disabled = false; if (st) st.innerHTML = `<span style="color:var(--danger)">עדכון סכומי האירועים נכשל: ${escapeHtml(String(ev.error || ''))}</span>`; return; }
+    evMsg = ` · ${(ev.updated || []).length} סכומי אירועים עודכנו`;
+    if ((ev.errors || []).length) evMsg += ` · ${ev.errors.length} נכשלו`;
+  }
   const r = await fetch(`/api/supplier-payables/${pid}/update`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
-  if (r.ok) { document.getElementById('editPayModal').classList.add('hidden'); renderContractors($('#content')); }
+  if (r.ok) {
+    document.getElementById('editPayModal').classList.add('hidden');
+    clearApiCache();   // הסכומים השתנו גם על האירועים — לא להגיש נתונים ישנים
+    renderContractors($('#content'));
+    if (evMsg) { const t = _expToast(); t.textContent = 'נשמר' + evMsg; setTimeout(() => { t.style.display = 'none'; }, 4000); }
+  }
   else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
 window.markPayablePaid = async (pid) => {
