@@ -6556,6 +6556,15 @@ async function renderBusiness(c) {
         <button class="btn ghost" onclick="bizMailTest()">🔌 בדוק חיבור</button>
         <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
       </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <b style="font-size:13.5px">💾 גיבוי נתונים</b>
+        <div class="muted" style="font-size:12px;margin:3px 0 8px">כל הנתונים של שלוש החברות נשלחים אוטומטית ב-02:00 לכתובת גיבוי נפרדת. אפשר גם להוריד עותק עכשיו לפני שינוי גדול.</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <a class="btn ghost" href="/api/backup/download" download style="text-decoration:none">⬇️ הורד גיבוי עכשיו</a>
+          <button class="btn ghost" onclick="backupRunNow(this)">✉️ שלח גיבוי במייל עכשיו</button>
+          <span id="bizBackupMsg" class="muted" style="font-size:12.5px"></span>
+        </div>
+      </div>
       <div class="muted" style="font-size:12px;margin-top:8px">צריך <b>סיסמת אפליקציה</b> של גוגל (לא סיסמת החשבון הרגילה). יש להפעיל אימות דו-שלבי ואז ליצור App Password בכתובת <span dir="ltr">myaccount.google.com/apppasswords</span>. הסיסמה נשמרת בשרת בלבד — היא לא מוצגת שוב ולא נשלחת חזרה לדפדפן. אפשר לבטל אותה בכל רגע מהגדרות גוגל.</div>
       <label style="display:block;margin-top:14px;font-weight:600">✉️ שורת הנושא של המייל
         <input id="biz_mailSubject" style="width:100%;margin-top:4px;font-size:13px" placeholder="ריק = ברירת מחדל. לדוגמה: [שם החברה] | [סוג מסמך] | מס' [מספר מסמך]" value="${escapeHtml(p.mailSubjectTemplate || '')}">
@@ -6758,6 +6767,16 @@ window.bizSave = async () => {
   });
   state.whRate = Math.min(0.3, Math.max(0, (Number(g('biz_wh')) || 0) / 100));   // רענון שיעור הניכוי בזיכרון מיד
   if (msg) { msg.textContent = 'נשמר ✓'; setTimeout(() => { if (msg) msg.textContent = ''; }, 2500); }
+};
+// גיבוי ידני — לבדיקה שהמסלול עובד, ולפני שינויים גדולים
+window.backupRunNow = async (btn) => {
+  const msg = document.getElementById('bizBackupMsg');
+  btn.disabled = true; if (msg) msg.textContent = 'בונה ושולח…';
+  const r = await fetch('/api/backup/run', { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false;
+  if (msg) msg.innerHTML = r.ok
+    ? `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml(String(r.to || ''))} · ${(r.gzBytes / 1048576).toFixed(2)}MB · ${r.counts.events} אירועים, ${r.counts.bankTx} תנועות בנק</span>`
+    : `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || r.skipped || 'נכשל'))}</span>`;
 };
 window.bizMailTest = async () => {
   const g = (id) => (document.getElementById(id)?.value || '').trim();
