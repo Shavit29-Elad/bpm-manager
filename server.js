@@ -1794,6 +1794,25 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/update$/, (req, res, params, _q
   const _cid = (_q && _q.companyId) || (body && body.companyId) || giCompanyId();
   if ((p.companyId || giCompanyId()) !== _cid) return json(res, { error: 'ההוצאה שייכת לחברה אחרת' }, 403); // בידוד
   const b = body || {};
+  // לפני שמשנים מספר או שם ספק — מקבעים את הקישור של שורות הקבלן למזהה ההוצאה.
+  // שורות שמקושרות רק בהתאמת "מספר + שם" היו מתנתקות בשקט מכל עריכה של השדות האלה,
+  // והאירוע היה נעלם מפירוט ההוצאה בלי שום חיווי.
+  const willRename = (b.number != null && String(b.number).trim() !== String(p.number || ''))
+    || (b.supplierName != null && String(b.supplierName).trim() !== String(p.supplierName || ''));
+  if (willRename) {
+    let pinned = 0;
+    for (const ev of (db.events || [])) {
+      if (!ownedBy(ev, _cid)) continue;
+      for (const cd of (ev.contractorDetails || [])) {
+        if (!cd || cd.paidPayableId) continue;
+        const byNum = p.number && cd.paidInvoice && String(cd.paidInvoice) === String(p.number)
+          && (cd.name || '').trim() === (p.supplierName || '').trim();
+        const byExp = p.giExpenseId && cd.paidExpenseId && String(cd.paidExpenseId) === String(p.giExpenseId);
+        if (byNum || byExp) { cd.paidPayableId = p.id; pinned++; }
+      }
+    }
+    if (pinned) console.log(`[payable] ${p.id}: קובעו ${pinned} קישורי שורות קבלן לפני שינוי מספר/שם`);
+  }
   if (b.number != null) p.number = String(b.number).trim();
   if (b.date) p.date = String(b.date).slice(0, 10);
   if (b.description != null) {
@@ -4353,6 +4372,7 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/event-amounts$/, (req, res, par
   if (!ownedBy(pay, cid)) return wrongCompany(res, 'ההוצאה');
   const items = Array.isArray(body && body.items) ? body.items : [];
   const updated = [], errors = [];
+  let linked = 0;   // שורות שהקישור שלהן קובע למזהה
   for (const it of items) {
     const ev = (db.events || []).find(e => e.id === String(it.eventId));
     if (!ev) { errors.push(`אירוע ${it.eventId} לא נמצא`); continue; }
@@ -4362,13 +4382,17 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/event-amounts$/, (req, res, par
     if (!row) { errors.push(`שורת קבלן ${idx} לא נמצאה באירוע ${it.eventId}`); continue; }
     const amt = Number(it.amount);
     if (!isFinite(amt) || amt < 0) { errors.push('סכום לא תקין'); continue; }
+    // קיבוע הקישור למזהה ההוצאה. חלק מהשורות מקושרות רק בהתאמת "מספר חשבונית + שם
+    // ספק", וכל עריכה של אחד מהשדות האלה מנתקת אותן בשקט. אנחנו כאן בהקשר של ההוצאה
+    // הזו בוודאות, אז זו ההזדמנות להפוך את הקישור למפורש ועמיד.
+    if (!row.paidPayableId) { row.paidPayableId = pay.id; linked++; }
     const before = Number(row.amount) || 0;
     if (Math.abs(before - amt) < 0.005) continue;   // לא השתנה
     row.amount = +amt.toFixed(2);
     updated.push({ eventId: ev.id, index: idx, name: row.name || '', before, after: row.amount });
   }
-  if (updated.length) save(db);
-  json(res, { ok: true, updated, errors, sum: (db.events || []).length ? undefined : undefined });
+  if (updated.length || linked) save(db);
+  json(res, { ok: true, updated, errors, linked });
 });
 
 // ---- גיבוי ----
