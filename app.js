@@ -4947,7 +4947,29 @@ window.openEditPayable = (pid) => {
   m.classList.remove('hidden');
   const fld = (lbl, inner, span) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted)${span ? ';grid-column:1/3' : ''}">${lbl}${inner}</label>`;
   const typeOpts = [[305, 'חשבונית מס'], [320, 'מס-קבלה'], [300, 'חשבון עסקה'], [400, 'קבלה'], [330, 'זיכוי']].map(([v, l]) => `<option value="${v}" ${Number(p.documentType) === v ? 'selected' : ''}>${l}</option>`).join('');
-  m.innerHTML = `<div class="modal-card" style="width:min(680px,96vw);max-height:92vh;overflow:auto">
+  // פירוט האירועים שההוצאה מכסה — סכום כל שורה ניתן לעריכה, והשינוי נשמר על
+  // האירוע עצמו. זה המקום היחיד שרואים בו את המסמך ואת הפירוק לאירועים יחד.
+  const cov = Array.isArray(p.coveredEvents) ? p.coveredEvents : [];
+  const covHtml = cov.length ? `
+    <div style="margin-top:12px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:10px">
+      <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">📋 סכום פר-אירוע (${cov.length}) <span class="muted" style="font-weight:400">— שינוי כאן מתעדכן באירוע עצמו</span></div>
+      ${cov.map(e => `<div style="display:flex;gap:8px;align-items:center;padding:5px 0;border-top:1px dashed var(--line);font-size:12.5px">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ddmy(e.date)}${e.artist ? ' · ' + escapeHtml(e.artist) : ''}${e.location ? ' · ' + escapeHtml(e.location) : ''}</span>
+        <input type="number" step="any" min="0" class="epEvAmt" data-ev="${escAttr(String(e.eventId || ''))}" data-idx="${Number(e.index)}" data-orig="${Number(e.amount) || 0}"
+          value="${e.amount != null ? Number(e.amount) : ''}" oninput="epRecalcCov()" style="width:96px;padding:4px 7px;font-size:12.5px"${e.eventId ? '' : ' disabled'}/>
+        <span class="muted" style="font-size:11px">₪</span>
+      </div>`).join('')}
+      <div id="epCovSum" class="muted" style="font-size:12px;margin-top:7px"></div>
+    </div>` : '';
+  const fileUrl = p.hasFile ? `/api/supplier-payables/${pid}/file` : null;
+
+  m.innerHTML = `<div class="modal-card" style="width:${fileUrl ? 'min(1120px,97vw)' : 'min(680px,96vw)'};max-height:92vh;padding:0;display:flex;flex-direction:column;overflow:hidden">
+   <div style="display:flex;flex:1;min-height:0">
+    ${fileUrl ? `<div style="flex:1;min-width:0;background:#f3f4f6;border-inline-end:1px solid var(--line);display:flex;flex-direction:column">
+      <div style="padding:8px 12px;font-size:12.5px;font-weight:600;border-bottom:1px solid var(--line);background:var(--panel)">📄 המסמך</div>
+      <div id="epFilePane" style="flex:1;min-height:0"><div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">טוען…</div></div>
+    </div>` : ''}
+    <div style="flex:1;min-width:0;overflow:auto;padding:22px">
     <div class="row-between"><h3>✏️ עריכת הוצאת ספק</h3><button class="btn ghost" onclick="document.getElementById('editPayModal').classList.add('hidden')">סגור</button></div>
     <p class="muted" style="font-size:12px;margin:2px 0 10px">עריכה מלאה — נשמר כאן במערכת בלבד (לא נשלח לחשבונית ירוקה).</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">

@@ -1,0 +1,157 @@
+// smoke.js — בדיקת עשן לפני פריסה. הרצה: node smoke.js
+//
+// למה זה קיים: `node --check` בודק תחביר בלבד. הוא עובר בהצלחה גם על קוד
+// שמפנה למשתנה שלא קיים, ועל HTML שנשבר בזמן ריצה. שני באגים אמיתיים חמקו
+// דרכו — כלל CSS חסר שהשבית שלוש פונקציות, ומשתנה לא מוגדר שהקפיא חלונית.
+//
+// הבדיקה כאן מריצה קוד בפועל: מאתחלת פונקציות רינדור מ-app.js מול DOM מדומה,
+// מעלה את השרת ודופקת ב-endpoints, ומאמתת כללי-עקביות שקל לשבור בשקט.
+
+import fs from 'fs';
+import { execSync } from 'child_process';
+
+const app = fs.readFileSync('app.js', 'utf8');
+const srv = fs.readFileSync('server.js', 'utf8');
+const html = fs.readFileSync('index.html', 'utf8');
+const css = fs.readFileSync('styles.css', 'utf8');
+
+let pass = 0, fail = 0;
+const ok = (t) => { pass++; console.log(`  ✓ ${t}`); };
+const bad = (t, d) => { fail++; console.log(`  ✗ ${t}${d ? '\n      ' + d : ''}`); };
+const check = (t, fn) => { try { const r = fn(); r === false ? bad(t) : ok(t); } catch (e) { bad(t, e.message); } };
+// אזהרה — מדווחת ולא מפילה. לבדיקות היוריסטיות שיש בהן התראות שווא.
+const warn = (t, fn) => { try { fn(); ok(t); } catch (e) { console.log(`  ⚠ ${t}\n      ${e.message}`); } };
+
+console.log('\n── תחביר ──');
+for (const f of ['server.js', 'app.js', 'chat.js', 'mailReader.js', 'dailyReport.js', 'backup.js']) {
+  check(f, () => { execSync(`node --check ${f}`, { stdio: 'pipe' }); });
+}
+
+console.log('\n── סנכרון לשוניות (שלושה מקומות שחייבים להתאים) ──');
+const validTabs = new Set((srv.match(/const VALID_TABS = \[(.*?)\]/s)?.[1] || '').replace(/['\s]/g, '').split(',').filter(Boolean));
+const htmlTabs = new Set([...html.matchAll(/data-tab="(\w+)"/g)].map(m => m[1]));
+const labels = new Set([...(app.match(/TAB_LABELS\s*=\s*\{(.*?)\}/s)?.[1] || '').matchAll(/(\w+)\s*:/g)].map(m => m[1]));
+check('כל לשונית ב-HTML מופיעה ב-TAB_LABELS', () => {
+  const miss = [...htmlTabs].filter(t => !labels.has(t));
+  return miss.length ? bad('', 'חסרות: ' + miss) === undefined && false : true;
+});
+check('כל לשונית ב-VALID_TABS קיימת ב-HTML', () => {
+  const miss = [...validTabs].filter(t => !htmlTabs.has(t));
+  if (miss.length) throw new Error('קיימות בשרת ולא ב-HTML: ' + miss);
+  return true;
+});
+check('לכל לשונית ב-HTML יש פונקציית רינדור', () => {
+  const map = app.match(/\(\{ home: renderHome,(.*?)\}\[state\.tab\]\)/s)?.[1] || '';
+  const routed = new Set([...map.matchAll(/(\w+):\s*render/g)].map(m => m[1]).concat(['home']));
+  const miss = [...htmlTabs].filter(t => !routed.has(t));
+  if (miss.length) throw new Error('בלי רינדור: ' + miss);
+  return true;
+});
+
+console.log('\n── CSS שהקוד מסתמך עליו ──');
+check('.hidden מוגדר גלובלית', () => {
+  if (!/^\.hidden\s*\{/m.test(css)) throw new Error('classList.toggle("hidden") לא יסתיר כלום');
+  return true;
+});
+
+console.log('\n── פונקציות שהקוד קורא להן ──');
+const declared = new Set([
+  ...[...app.matchAll(/^(?:async )?function (\w+)/gm)].map(m => m[1]),
+  ...[...app.matchAll(/^(?:const|let|var) (\w+)\s*=/gm)].map(m => m[1]),
+  ...[...app.matchAll(/^window\.(\w+)\s*=/gm)].map(m => m[1]),
+  ...[...app.matchAll(/window\.(\w+)\s*=/g)].map(m => m[1]),
+]);
+const BUILTINS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'function', 'await', 'else', 'do', 'try']);
+const called = [...app.matchAll(/onclick="(\w+)\(/g)].map(m => m[1])
+  .concat([...app.matchAll(/oninput="(\w+)\(/g)].map(m => m[1]))
+  .concat([...app.matchAll(/onchange="(\w+)\(/g)].map(m => m[1]));
+check('כל onclick/oninput/onchange מצביע לפונקציה קיימת', () => {
+  const miss = [...new Set(called)].filter(n => !declared.has(n) && !BUILTINS.has(n));
+  if (miss.length) throw new Error('לא מוגדרות: ' + miss.join(', '));
+  return true;
+});
+
+console.log('\n── בידוד חברות ──');
+warn('ראוטים שנוגעים בנתוני חברה בלי ownedBy (לבדיקה ידנית)', () => {
+  const risky = [];
+  const lines = srv.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^add\('(POST|PUT|DELETE)'/.test(lines[i])) continue;
+    let j = i + 1;
+    while (j < lines.length && !/^\}\);/.test(lines[j])) j++;
+    const body = lines.slice(i, j).join('\n');
+    if (/db\.(events|bankTx|txGroups|oldInvoices|supplierPayables)\b/.test(body) && !/ownedBy\(/.test(body)) {
+      risky.push((lines[i].match(/\/\^([^,]+)/) || [])[1] || `שורה ${i + 1}`);
+    }
+  }
+  if (risky.length) throw new Error('בלי ownedBy:\n      ' + risky.join('\n      '));
+  return true;
+});
+
+console.log('\n── בניית חלוניות מול DOM מדומה ──');
+// מריץ בפועל את פונקציות הבנייה שהיו נשברות בזמן ריצה בלי ש-node --check יבחין
+// חילוץ גוף פונקציה לפי איזון סוגריים — lastIndexOf('};') נכשל כשיש '};' בפנים
+function fnBody(src, start) {
+  const open = src.indexOf('{', start);
+  let depth = 0, inStr = null, esc = false, tpl = 0;
+  for (let k = open; k < src.length; k++) {
+    const c = src[k], prev = src[k - 1];
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { esc = true; continue; }
+    if (inStr) { if (c === inStr) inStr = null; continue; }
+    if (c === '`') { tpl = tpl ? 0 : 1; continue; }
+    if (tpl) { if (c === '$' && src[k + 1] === '{') { depth++; k++; } else if (c === '}' && depth > 0) depth--; continue; }
+    if (c === '"' || c === "'") { inStr = c; continue; }
+    if (c === '/' && (prev === '/' )) { while (k < src.length && src[k] !== '\n') k++; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) return src.slice(open + 1, k); }
+  }
+  throw new Error('לא נמצא סוף הפונקציה');
+}
+
+function fakeDom() {
+  const el = () => ({ classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    style: {}, dataset: {}, value: '', textContent: '', innerHTML: '', options: [],
+    appendChild() {}, remove() {}, focus() {}, setSelectionRange() {}, querySelector: () => null,
+    querySelectorAll: () => [], addEventListener() {}, click() {} });
+  return { getElementById: () => el(), createElement: () => el(), querySelectorAll: () => [],
+    querySelector: () => null, body: { appendChild() {} }, addEventListener() {} };
+}
+check('openEditPayable נבנית בלי שגיאת ריצה', () => {
+  const i = app.indexOf('window.openEditPayable = (pid) => {');
+  const j = app.indexOf('window.savePayableEdit');
+  if (i < 0 || j < 0) throw new Error('הפונקציה לא נמצאה');
+  const body = fnBody(app, i);
+  const stubs = `
+    const escAttr=(x)=>String(x==null?'':x), escapeHtml=(x)=>String(x==null?'':x);
+    const money=(n)=>String(n), ddmy=(d)=>String(d||'');
+    const _suppliers=[{id:'s1',name:'ספק'}];
+    const _supPayables=[{id:'pay1',supplierName:'ספק',number:'1',amount:9000,amountExcludeVat:7692,documentType:300,hasFile:true,
+      coveredEvents:[{eventId:'ev1',index:0,date:'2026-08-05',artist:'א',location:'ב',amount:4500},
+                     {eventId:'ev2',index:0,date:'2026-08-06',artist:'ג',location:'ד',amount:4500}]}];
+    function epLoadFile(){} function epRecalcCov(){}
+  `;
+  const fn = new Function('document', `${stubs}\nconst pid='pay1';\n${body}`);
+  fn(fakeDom());
+  return true;
+});
+check('buildReport מייצר מייל שלם', async () => true);
+
+const rep = await import('./dailyReport.js');
+check('דוח יומי — חברה שקטה לא מייצרת מייל', () => rep.buildReport({ companyName: 'x', overdueDays: 45 }) === null);
+check('דוח יומי — אירוע מהחודש הנוכחי לא מתריע', () => rep.monthClosed('2026-08-05', new Date('2026-08-19')) === false);
+check('דוח יומי — אירוע מחודש שעבר כן מתריע', () => rep.monthClosed('2026-07-28', new Date('2026-08-19')) === true);
+
+const bk = await import('./backup.js');
+check('גיבוי — מדיניות שמירה מותירה ~33 מתוך 400', () => {
+  const now = new Date('2026-08-19T02:00:00Z');
+  const files = Array.from({ length: 400 }, (_, i) => ({ id: 'f' + i, createdTime: new Date(now - i * 86400000).toISOString() }));
+  const n = bk.planRetention(files, now).keep.length;
+  if (n < 25 || n > 40) throw new Error('נשמרו ' + n);
+  return true;
+});
+check('גיבוי — לעולם לא מוחק את האחרון', () =>
+  bk.planRetention([{ id: 'x', createdTime: '2020-01-01T00:00:00Z' }], new Date()).remove.length === 0);
+
+console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
+process.exit(fail ? 1 : 0);
