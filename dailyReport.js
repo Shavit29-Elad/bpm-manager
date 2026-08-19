@@ -110,15 +110,21 @@ export function buildReport(data, now = new Date()) {
     });
   }
 
-  // ===== 4) דורש יד =====
-  const fix = [];
-  if (data.mailPending) fix.push(['חשבוניות נתקעו בקליטה מהמייל', data.mailPending]);
-  if (data.bankUnmatched) fix.push(['תנועות זכות בבנק שלא הותאמו', data.bankUnmatched]);
-  if (data.eventsPending) fix.push(['אירועים מהיומן ממתינים לאישור', data.eventsPending]);
-  if (fix.length) {
+  // ===== 4) כסף שנכנס — חשבוניות ששולמו =====
+  // תנועות זכות בבנק שהותאמו לחשבונית, בחודש הנוכחי. תמונת מצב (info) ולא משימה.
+  const paid = (data.paidInvoices || []).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  if (paid.length) {
     sections.push({
-      icon: '🔧', title: 'דורש יד', tone: 'amber', total: null,
-      groups: [{ label: null, cols: ['', ''], rows: fix.map(([t, n]) => ({ cells: [t, String(n)] })) }],
+      icon: '✅', title: 'חשבוניות ששולמו והתקבלו', tone: 'teal', info: true,
+      total: paid.reduce((t, p) => t + (Number(p.amount) || 0), 0),
+      groups: [{
+        label: null, count: paid.length,
+        cols: ['תאריך', 'לקוח', 'מסמך', 'סכום'],
+        limit: null,
+        rows: paid.map(p => ({
+          cells: [p.date || '—', p.name || '—', p.docs || '—', money(p.amount)],
+        })),
+      }],
     });
   }
 
@@ -160,6 +166,7 @@ const TONES = {
   red: { bar: '#dc2626', soft: '#fef2f2' },
   amber: { bar: '#d97706', soft: '#fffbeb' },
   blue: { bar: '#4f46e5', soft: '#eef2ff' },
+  teal: { bar: '#0891b2', soft: '#ecfeff' },
 };
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const F = 'font-family:Arial,Helvetica,sans-serif';

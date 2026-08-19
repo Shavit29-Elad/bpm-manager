@@ -4182,6 +4182,23 @@ async function gatherReportData(cid) {
   }
   out.bank = { credit: +bCredit.toFixed(2), debit: +bDebit.toFixed(2), label: `${MONTHS_HE[nowD.getMonth()]} ${yy}` };
 
+  // חשבוניות ששולמו והתקבלו — תנועות זכות בבנק שהותאמו למסמך, בחודש הנוכחי.
+  // זה הכסף שנכנס בפועל, עם המסמך שכנגדו.
+  out.paidInvoices = [];
+  for (const t of (db.bankTx || [])) {
+    if (!ownedBy(t, cid) || t.direction !== 'credit') continue;
+    const m = String(t.date || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m || m[2] !== mm || m[3] !== yy) continue;
+    const invs = Array.isArray(t.matchedInvoices) ? t.matchedInvoices : [];
+    if (!invs.length) continue;
+    out.paidInvoices.push({
+      date: t.date,
+      name: (invs[0] && (invs[0].clientName || invs[0].supplierName)) || t.nameHint || t.description || '—',
+      docs: invs.map(i => `#${i.number || '—'}`).join(', '),
+      amount: Math.abs(Number(t.absAmount != null ? t.absAmount : t.amount) || 0),
+    });
+  }
+
   out.mailPending = ((db.mailPending || {})[cid] || []).length;
   // תנועות זכות שלא הותאמו — כסף שנכנס ולא ידוע מול איזו חשבונית. זו אותה הגדרה
   // בדיוק שבמסך הבנק (matchStatus === 'unmatched', ברירת המחדל שם היא זכות בלבד).
