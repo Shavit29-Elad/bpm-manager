@@ -4222,7 +4222,7 @@ window.saveNewClientForQuote = async (btn) => {
   const newName = cl.name || name;
   _evClients = Array.isArray(_evClients) ? _evClients : [];
   if (newId && !_evClients.some(c => String(c.id) === String(newId))) _evClients.push({ id: newId, name: newName, email: email || null });
-  state.clientsList = null; _linkClients = null; // רענון מטמוני לקוחות אחרים
+  state.clientsList = null; _linkClients = null; clearApiCache();   // רענון מטמוני לקוחות אחרים + מטמון ה-API, אחרת הלקוח החדש לא יופיע בדקה הראשונה
   if (typeof nqSync === 'function') nqSync();          // שמירת מצב ההצעה הנוכחי (שורות, נושא וכו')
   if (_nq && newId) { _nq.clientId = String(newId); _nq.clientName = newName; if (email) _nq.email = email; }
   st.innerHTML = '<span style="color:var(--accent2)">✓ הלקוח נוסף ונבחר</span>';

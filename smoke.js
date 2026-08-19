@@ -135,6 +135,19 @@ check('openEditPayable נבנית בלי שגיאת ריצה', () => {
   fn(fakeDom());
   return true;
 });
+check('כל יצירת לקוח/ספק מנקה את מטמון ה-API', () => {
+  // בלי זה api() מחזיר תשובה מהמטמון (60 שניות) בלי הרשומה החדשה, והמשתמש
+  // מחפש ספק שהרגע הוסיף ולא מוצא אותו.
+  const L = app.split('\n');
+  const bad = [];
+  L.forEach((l, i) => {
+    if (!l.includes("method: 'POST'")) return;
+    if (!/\/api\/(suppliers|clients)'/.test(l)) return;
+    if (!L.slice(i, i + 22).join('\n').includes('clearApiCache()')) bad.push(i + 1);
+  });
+  if (bad.length) throw new Error('מסלולים בלי clearApiCache בשורות: ' + bad.join(', '));
+  return true;
+});
 check('החלפת חברה מאפסת את כל מטמוני הנתונים', () => {
   // באג אמיתי: רשימות הספקים/לקוחות/עובדים נטענות פעם אחת לכל טעינת דף
   // ("if (!_evSuppliers)"), ובלי איפוס בהחלפת חברה הן ממשיכות להציג את נתוני
