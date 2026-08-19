@@ -1192,6 +1192,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     const supplierId = body.supplierId || draft.supplierId;
     // חשבון עסקה (20) = רישום פנימי. אופק = רשומה מקומית בלבד + מייל (ה-GI של אופק אינו מסיים הוצאות דרך ה-API — POST /expenses מחזיר 404).
     const isBusiness = Number(body.documentType) === 20;
+    const isCredit = Number(body.documentType || draft.documentType) === 330;   // חשבונית זיכוי מספק
     const _activeCid = q.companyId || giCompanyId();
     const localOnly = isBusiness || _activeCid === 'co_ofek';
     if (!localOnly && !supplierId) return json(res, { error: 'יש לבחור ספק עבור ההוצאה' }, 400);
@@ -1231,7 +1232,12 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       supplierId, supplierName: body.supplierName || draft.supplierName || '',
       taxId: (body.taxId || '').trim() || null,
       documentType: Number(body.documentType || draft.documentType) || 305,
-      number, date, amount, amountExcludeVat: net, vat,
+      // זיכוי מספק (330) מקטין את החוב אליו — נשמר בסכום שלילי כדי שכל הסכימות
+      // הקיימות ("סה\"כ לתשלום", מוכן לתשלום, הדוח היומי) יתקזזו נכון מאליהן.
+      number, date,
+      amount: isCredit ? -Math.abs(amount) : amount,
+      amountExcludeVat: isCredit ? -Math.abs(net) : net,
+      vat: isCredit ? -Math.abs(vat) : vat,
       description: baseDesc, allocationNumber: alloc || null,
       paid: paidFlag, paidAt: paidFlag ? new Date().toISOString() : null,
       linkedEvents, createdAt: new Date().toISOString(),

@@ -5007,7 +5007,7 @@ window.dismissDraft = async (id) => {
   const p = document.getElementById('draftsPanel'); if (p) p.innerHTML = draftsSection();
 };
 // סוגי מסמך להוצאה (כמו בחשבונית ירוקה): חשבון עסקה / מס / מס-קבלה / קבלה
-const APPROVE_DOC_TYPES = [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה'], [20, 'חשבון עסקה / דרישת תשלום (רישום פנימי — לא לחשבונית ירוקה ולא לרו״ח)']];
+const APPROVE_DOC_TYPES = [[305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה'], [330, 'חשבונית זיכוי (מקטינה את החוב לספק)'], [20, 'חשבון עסקה / דרישת תשלום (רישום פנימי — לא לחשבונית ירוקה ולא לרו״ח)']];
 window.recalcApprVat = () => {
   const g = (x) => document.getElementById(x);
   const amount = +(g('apAmount')?.value) || 0;
@@ -5061,6 +5061,7 @@ window.openApproveDraft = (id, fromBankTxId) => {
           <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:-4px 0 9px"><input type="checkbox" id="apClassSave" checked/> שמור כברירת מחדל לספק זה (כדי שהקליטה הבאה תהיה אוטומטית)</label>
           ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
           ${fld('סוג המסמך *', `<select id="apType" onchange="onApprTypeChange()">${typeSel}</select>`)}
+          <div id="apCreditWarn" style="display:none;font-size:12px;background:#ecfdf5;border:1px solid var(--accent2);color:#0a7d33;border-radius:8px;padding:7px 9px;margin:-4px 0 10px">↩ <b>חשבונית זיכוי</b> — הזן את הסכום כמספר חיובי. הוא יירשם כמקטין את החוב לספק, ויתקזז אוטומטית מ"סה״כ לתשלום".</div>
           <div id="apBusinessWarn" style="display:none;font-size:12px;background:#fff4e5;border:1px solid var(--warn);color:#8a5a00;border-radius:8px;padding:7px 9px;margin:-4px 0 10px">⚠ חשבון עסקה = <b>רישום פנימי בלבד</b>. לא ייווצר בחשבונית ירוקה ולא יישלח לרו״ח. יופיע ב"הוצאות ספקים לתשלום".</div>
           ${fld('מספר המסמך *', `<input id="apNum" dir="ltr" value="${escAttr(String(d.number || ''))}" placeholder="מספר"/>`)}
           ${fld('מספר הקצאה (חובה לחשבונית מס/מס-קבלה מעל 5,000 ₪)', `<input id="apAlloc" dir="ltr" value="${escAttr(String(d.allocationNumber || ''))}" placeholder="מספר הקצאה מרשות המסים" oninput="checkAllocWarn()"/>`)}
@@ -5166,6 +5167,8 @@ window.onApprSupplierChange = () => {
 // שינוי סוג המסמך — מציג אזהרת "חשבון עסקה" (רישום פנימי)
 window.onApprTypeChange = () => {
   checkAllocWarn();
+  const isCredit = +((document.getElementById('apType') || {}).value) === 330;
+  const cw = document.getElementById('apCreditWarn'); if (cw) cw.style.display = isCredit ? 'block' : 'none';
   const isBiz = +((document.getElementById('apType') || {}).value) === 20;
   const w = document.getElementById('apBusinessWarn'); if (w) w.style.display = isBiz ? 'block' : 'none';
   const cl = document.getElementById('apClass'); if (cl) cl.style.opacity = isBiz ? '0.5' : '1';
