@@ -698,17 +698,51 @@ window.doSendDoc = async (id) => {
     setTimeout(() => { const mm = document.getElementById('sendDocModal'); if (mm) mm.classList.add('hidden'); }, 1300);
   } else { if (btn) { btn.disabled = false; btn.textContent = '✉️ שלח'; } if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String((r && r.error) || ''))}</span>`; }
 };
-// שליחת מסמך בוואטסאפ (wa.me) מכל מקום שיש "שלח" — מושך את מספר הלקוח מחשבונית ירוקה, אחרת מבקש מספר
+// שליחת מסמך בוואטסאפ. ווטסאפ לא מקבלת קובץ דרך קישור — לכן שני מסלולים:
+//  • טלפון/מק: חלונית השיתוף של המכשיר עם ה-PDF מצורף בפועל (Web Share API)
+//  • כרום במחשב: הורדת ה-PDF + פתיחת ווטסאפ ווב המחובר ישירות בשיחה, לגרירת הקובץ
+const _canShareFiles = () => {
+  try { return Boolean(navigator.canShare && navigator.canShare({ files: [new File([new Blob([1])], 'a.pdf', { type: 'application/pdf' })] })); }
+  catch { return false; }
+};
 window.waSendForDoc = async (docId) => {
-  const w = window.open('about:blank', '_blank'); // נפתח מיד בלחיצה כדי לא להיחסם ע"י הדפדפן
   let r = await api(`/api/documents/${docId}/whatsapp`).catch(() => null);
   if (r && r.ok && !r.waUrl) { // אין מספר שמור ללקוח — מבקשים
     const p = prompt('הזן מספר טלפון של הלקוח (למשל 0501234567):');
-    if (!p) { if (w) w.close(); return; }
+    if (!p) return;
     r = await api(`/api/documents/${docId}/whatsapp?phone=${encodeURIComponent(p)}`).catch(() => null);
   }
-  if (r && r.waUrl) { if (w) w.location = r.waUrl; else window.open(r.waUrl, '_blank', 'noopener'); }
-  else { if (w) w.close(); alert('לא ניתן לשלוח בוואטסאפ' + (r && r.error ? ': ' + r.error : ' — נסה מסמך שקיים בחשבונית ירוקה')); }
+  if (!r || !r.ok) { alert('לא ניתן לשלוח בוואטסאפ' + (r && r.error ? ': ' + r.error : ' — נסה מסמך שקיים בחשבונית ירוקה')); return; }
+  const fname = `${DOC_TYPE_NAMES[r.docType] || 'מסמך'}${r.docNumber ? '-' + r.docNumber : ''}.pdf`;
+  const dlUrl = docDlUrl({ id: docId, type: r.docType, number: r.docNumber });
+
+  // מסלול א׳ — שיתוף מקורי עם הקובץ מצורף
+  if (_canShareFiles()) {
+    try {
+      const blob = await fetch(dlUrl).then(x => x.ok ? x.blob() : null);
+      if (blob) {
+        const file = new File([blob], fname, { type: 'application/pdf' });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], text: r.text || '' });
+          return;   // המשתמש בחר ווטסאפ בחלונית — הקובץ צורף
+        }
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;   // ביטל את השיתוף — לא ליפול למסלול השני
+    }
+  }
+
+  // מסלול ב׳ — הורדה + ווטסאפ ווב בשיחה של הלקוח
+  if (!r.waUrl) { alert('אין מספר טלפון ללקוח.'); return; }
+  const a = document.createElement('a');
+  a.href = dlUrl; a.download = fname; a.style.display = 'none';
+  document.body.appendChild(a); a.click(); a.remove();
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const target = (!isMobile && r.waWebUrl) ? r.waWebUrl : r.waUrl;   // במחשב — ישר לווטסאפ ווב המחובר
+  setTimeout(() => window.open(target, '_blank', 'noopener'), 600);  // שהיה קצרה כדי שההורדה תתחיל לפני מעבר הפוקוס
+  const _t = _expToast();
+  _t.textContent = 'המסמך ירד למחשב — גרור אותו לשיחה שנפתחה בווטסאפ.';
+  setTimeout(() => { _t.style.display = 'none'; }, 6000);
 };
 
 async function renderHome(c) {

@@ -2704,8 +2704,13 @@ add('GET', /^\/api\/documents\/([^/]+)\/whatsapp$/, async (req, res, params, q) 
     const text = `שלום${clientName ? ' ' + clientName : ''}, מצורפת ${typeName}${number ? ` מס' ${number}` : ''}${amt ? ` על סך ${amt}` : ''}.`
       + (url ? `\nלצפייה והורדה: ${url}` : '') + (bizName ? `\nתודה, ${bizName}` : '');
     const digits = ilPhoneDigits(phone);
-    const waUrl = digits ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}` : null;
-    json(res, { ok: true, phone: phone || null, waUrl, text, clientName });
+    // שני קישורים: wa.me פותח את האפליקציה (טלפון), web.whatsapp.com נכנס ישירות
+    // לווטסאפ ווב המחובר בדפדפן בלי מסך ביניים. הפרונט בוחר לפי המכשיר.
+    const enc = encodeURIComponent(text);
+    const waUrl = digits ? `https://wa.me/${digits}?text=${enc}` : null;
+    const waWebUrl = digits ? `https://web.whatsapp.com/send?phone=${digits}&text=${enc}` : null;
+    json(res, { ok: true, phone: phone || null, waUrl, waWebUrl, text, clientName,
+      docType: Number(doc.type) || null, docNumber: number || null });
   } catch (e) { json(res, { ok: false, error: e.message }, 500); }
 });
 
