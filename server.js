@@ -18,7 +18,6 @@ import { parseBank, extractAccountBalance } from './bankParser.js';
 import { matchCredits, matchDebits, attachReceipts, nameMatch } from './bankMatch.js';
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { statusMasked, loadEnvIntoProcess } from './settings.js';
-import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { chatConfigured, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields, classifyExpenseAttachment, aiUsage } from './chat.js';
 import { buildBackup, backupFileName, runBackupMail, planRetention } from './backup.js';
 import { buildReport, reportHtml, monthClosed, daysSince, DEFAULT_OVERDUE_DAYS } from './dailyReport.js';
@@ -3312,6 +3311,7 @@ function bizProfile(db, cid) {
   // חתימת מייל (HTML) — מודבקת מה-Gmail, כולל חותמת/תמונה. מצורפת בתחתית מיילים שנשלחים מהמערכת (פירוט עבודות). ריק = בלי חתימה.
   if (p.emailSignature === undefined) p.emailSignature = '';
   if (p.reportOverdueDays === undefined) p.reportOverdueDays = 0;   // 0 = ברירת המחדל מ-dailyReport.js
+  if (p.defaultClassificationId === undefined) p.defaultClassificationId = '';   // סיווג הוצאה שנבחר אוטומטית כשאין לספק סיווג משלו
   // חשבון מייל שולח פר-חברה (Gmail + App Password) — כל חברה שולחת מהתיבה שלה
   if (p.mailUser === undefined) p.mailUser = '';
   if (p.mailPass === undefined) p.mailPass = '';
@@ -3414,6 +3414,7 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   if ('payrollEmail' in b) p.payrollEmail = String(b.payrollEmail || '').trim();
   if ('emailSignature' in b) p.emailSignature = String(b.emailSignature || '');
   if ('reportOverdueDays' in b) p.reportOverdueDays = Math.max(0, Math.min(365, Number(b.reportOverdueDays) || 0));
+  if ('defaultClassificationId' in b) p.defaultClassificationId = String(b.defaultClassificationId || '').trim();
   // חשבון מייל שולח פר-חברה (Gmail). הסיסמה מתעדכנת רק אם נשלח ערך חדש לא-ריק (כדי לאפשר עדכון שאר השדות בלי לשלוח סיסמה שוב).
   if ('mailUser' in b) p.mailUser = String(b.mailUser || '').trim();
   if ('mailFromName' in b) p.mailFromName = String(b.mailFromName || '').trim();
@@ -4091,53 +4092,6 @@ async function verifyConnection(key) {
 
 // כרטיס חיבור בודד. isOwner=האם החברה הנוכחית היא בעלת חיבור זה (הסודות גלובליים ושייכים לחברה אחת).
 // חברה שאינה בעלת החיבור רואה "לא מחובר" בתצוגה-בלבד (readonly) — בלי טופס חיבור, כדי לא לדרוס בטעות חיבור של חברה אחרת.
-function connCard(key, isOwner) {
-  const masked = statusMasked();
-  const rec = isOwner ? (getRecords()[key] || {}) : {};
-  const bridge = getBridgeStatus();
-  const def = CONN_DEFS[key];
-  let status = def.soon ? 'soon' : (isOwner ? (rec.status || 'disconnected') : 'disconnected');
-  if (key === 'whatsapp' && isOwner) status = bridge.status === 'connected' ? 'connected' : (rec.status || bridge.status || 'disconnected');
-  return {
-    key, name: def.name, icon: def.icon, help: def.help, soon: Boolean(def.soon),
-    readonly: !isOwner && !def.soon, // תצוגה בלבד לחברה שאינה בעלת החיבור
-    toggle: def.toggle || null,
-    toggleOn: def.toggle ? (isOwner ? masked[def.toggle]?.set : false) : undefined,
-    fields: (def.fields || []).map(f => ({ ...f, set: isOwner ? masked[f.env]?.set : false, hint: isOwner ? masked[f.env]?.hint : undefined })),
-    status,
-    connectedAt: isOwner ? (rec.connectedAt || null) : null,
-    lastCheckedAt: isOwner ? (rec.lastCheckedAt || null) : null,
-    message: isOwner ? (rec.message || null) : null,
-    whatsappQr: key === 'whatsapp' ? (isOwner ? bridge.hasQr : false) : undefined,
-  };
-}
-
-// בונה תצוגת חיבורים לפי חברה: לכל חברה חשבונית ירוקה + יומן משלה (מפתחות פר-חברה, בידוד מלא).
-function buildConnectionsView(companyId) {
-  const db = load();
-  const cid = companyId || giCompanyId();
-  const ccreds = ((db.connCreds || {})[cid]) || {};
-  const cards = [];
-  // חשבונית ירוקה + יומן — פר-חברה: טופס חיבור זמין, אך המפתחות נשמרים בבסיס הנתונים תחת מזהה החברה בלבד.
-  // כך חיבור/עדכון של חברה אחת אינו נוגע במפתחות של חברה אחרת (בידוד מלא, אין דריסה).
-  const perCompCard = (key, connected) => {
-    const c = connCard(key, true);              // isOwner=true → טופס חיבור מוצג
-    const stored = ccreds[key] || {};
-    c.status = connected ? 'connected' : 'disconnected';
-    c.fields = (c.fields || []).map(f => ({ ...f, set: connected || Boolean(stored[f.env]), hint: '' }));
-    c.perCompany = true; c.message = null;
-    return c;
-  };
-  cards.push(perCompCard('greenInvoice', giEnabled(cid)));
-  cards.push(perCompCard('googleCalendar', hasCalendar(cid)));
-  // בנק — העלאת קובץ xlsx (פר-חברה, דרך לשונית הבנק)
-  cards.push(connCard('bank', false));
-  return cards;
-}
-
-// GET /api/connections?companyId=
-add('GET', /^\/api\/connections$/, (req, res, _p, q) => json(res, buildConnectionsView(q.companyId)));
-
 // טעינת מפתחות החיבורים פר-חברה מבסיס הנתונים לזיכרון (עליית שרת + אחרי כל חיבור)
 function hydrateConnCreds() {
   const db = load();
@@ -4151,64 +4105,6 @@ function hydrateConnCreds() {
     if (cal) setDbIcal(cid, [cal.GOOGLE_ICAL_URL, cal.GOOGLE_ICAL_URL_2, cal.GOOGLE_ICAL_URL_3].filter(Boolean));
   }
 }
-
-// POST /api/connections/connect  { key, companyId, values:{ENV:VAL,...} }
-add('POST', /^\/api\/connections\/connect$/, async (req, res, _p, q, body) => {
-  const { key, values = {} } = body || {};
-  const cid = (body && body.companyId) || q.companyId || giCompanyId();
-  const def = CONN_DEFS[key];
-  if (!def) return json(res, { error: 'חיבור לא מוכר' }, 404);
-  if (def.soon) return json(res, { error: 'החיבור עדיין בפיתוח' }, 400);
-
-  // חשבונית ירוקה / יומן — שמירה פר-חברה בבסיס הנתונים (בידוד מלא; לא נוגע בחברות אחרות)
-  if (key === 'greenInvoice' || key === 'googleCalendar') {
-    const db = load();
-    db.connCreds = db.connCreds || {};
-    db.connCreds[cid] = db.connCreds[cid] || {};
-    const stored = { ...(db.connCreds[cid][key] || {}) };
-    for (const f of (def.fields || [])) {
-      const v = values[f.env];
-      if (v !== undefined && String(v).trim() !== '') stored[f.env] = String(v).trim();  // ריק = משאירים ערך קיים
-    }
-    db.connCreds[cid][key] = stored;
-    save(db);
-    if (key === 'greenInvoice') greenInvoice.setDbCreds(cid, { id: stored.GREENINVOICE_API_KEY_ID, secret: stored.GREENINVOICE_API_SECRET });
-    else setDbIcal(cid, [stored.GOOGLE_ICAL_URL, stored.GOOGLE_ICAL_URL_2, stored.GOOGLE_ICAL_URL_3].filter(Boolean));
-    const r = key === 'greenInvoice' ? await greenInvoice.verify(cid) : await calendarVerify(cid);
-    return json(res, { ok: r.ok, error: r.ok ? null : r.error, connections: buildConnectionsView(cid) });
-  }
-
-  // כל החיבורים הנתמכים (חשבונית ירוקה + יומן) מטופלים למעלה, פר-חברה. שאר המפתחות מוגדרים כמשתני סביבה ב-Render.
-  return json(res, { error: 'חיבור זה מוגדר דרך משתני סביבה ואינו ניתן לעריכה כאן' }, 400);
-});
-
-// POST /api/connections/test  { key, companyId }
-add('POST', /^\/api\/connections\/test$/, async (req, res, _p, q, body) => {
-  const key = body?.key;
-  const cid = (body && body.companyId) || q.companyId || giCompanyId();
-  if (!CONN_DEFS[key]) return json(res, { error: 'חיבור לא מוכר' }, 404);
-  let r;
-  if (key === 'greenInvoice') r = await greenInvoice.verify(cid);
-  else if (key === 'googleCalendar') r = await calendarVerify(cid);
-  else r = await verifyConnection(key);
-  json(res, { ok: r.ok, error: r.ok ? null : r.error, connections: buildConnectionsView(cid) });
-});
-
-// POST /api/connections/disconnect  { key, companyId }
-add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, q, body) => {
-  const key = body?.key;
-  const cid = (body && body.companyId) || q.companyId || giCompanyId();
-  const def = CONN_DEFS[key];
-  if (!def) return json(res, { error: 'חיבור לא מוכר' }, 404);
-  if (key === 'greenInvoice' || key === 'googleCalendar') {
-    const db = load();
-    if (db.connCreds && db.connCreds[cid]) { delete db.connCreds[cid][key]; save(db); }
-    if (key === 'greenInvoice') greenInvoice.setDbCreds(cid, null); else setDbIcal(cid, []);
-    return json(res, { ok: true, connections: buildConnectionsView(cid) });
-  }
-  clearRecord(key);
-  json(res, { ok: true, connections: buildConnectionsView(cid) });
-});
 
 // ---- סיכום יומי פר-חברה ----
 // נשלח ב-07:00 לתיבת כל חברה, ורק אם יש בו משהו שדורש פעולה.
@@ -5254,7 +5150,7 @@ add('GET', /^\/api\/month-detail$/, (req, res, _p, q) => {
 // ================= התחברות והרשאות =================
 // הלשוניות שניתן להקצות למשתמש צפייה — חייב להתאים ל-TAB_LABELS ב-app.js, אחרת בחירה של המנהל
 // נמחקת בשקט בשמירה. 'business' (פרטי העסק) אינו כאן בכוונה — הוא להנהלה בלבד.
-const VALID_TABS = ['home', 'summary', 'events', 'quotes', 'clients', 'contractors', 'payroll', 'bank', 'connections'];
+const VALID_TABS = ['home', 'summary', 'events', 'quotes', 'clients', 'contractors', 'payroll', 'bank'];
 const uid = () => id('usr');
 const cleanUsername = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
 
@@ -5606,23 +5502,6 @@ function runMigrations() {
   if (changed) save(db);
 }
 
-// זיהוי-מחדש אוטומטי של חיבורים בכל הפעלה: אם המפתחות קיימים (למשל כמשתני סביבה
-// קבועים ב-Render) — מאמת אותם ומסמן ירוק, כך שאין צורך לחבר מחדש אחרי כל פרסום.
-async function autoVerifyConnections() {
-  const checks = [
-    ['greenInvoice', greenInvoice.haveCredentials()],
-    ['googleCalendar', hasCalendar()],
-  ];
-  for (const [key, hasEnv] of checks) {
-    if (!hasEnv) continue;
-    try {
-      const r = key === 'greenInvoice' ? await greenInvoice.verify() : await calendarVerify();
-      const now = new Date().toISOString();
-      setRecord(key, r.ok ? { status: 'connected', lastCheckedAt: now, message: null }
-        : { status: 'error', lastCheckedAt: now, message: r.error });
-    } catch (e) { /* לא חוסם עליית שרת */ }
-  }
-}
 
 // ---- שרת ----
 const server = http.createServer((req, res) => {
@@ -5688,7 +5567,6 @@ server.listen(PORT, async () => {
   seedIfEmpty();
   runMigrations();
   hydrateConnCreds();         // טוען מפתחות חיבורים פר-חברה שהוזנו באתר (בסיס הנתונים) לזיכרון
-  autoVerifyConnections();
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);
   startWhatsappBridge(async (text) => { try { const wc = process.env.WHATSAPP_COMPANY || 'co_bpm'; await greenInvoice.withCompany(wc, () => ingestText(text, wc)); } catch {} })
     .then(r => { if (r && !r.ok) console.log('ווטסאפ:', r.reason); });

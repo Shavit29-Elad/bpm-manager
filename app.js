@@ -61,14 +61,14 @@ const api = (p) => {
   };
 })();
 
-const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
+const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', business: '🏢 פרטי העסק' };
 // לשוניות רלוונטיות לחברה מסוימת (לניהול הרשאות משתמשים) — נגזר מאותם כללים כמו applyCompanyTabs. "פרטי העסק" — הנהלה בלבד.
 function companyTabsFor(cid) {
   const isBpm = cid === 'co_bpm', isMoshe = cid === 'co_moshe';
   const out = [];
   for (const k of Object.keys(TAB_LABELS)) {
     if (k === 'business') continue;
-    if (['events', 'payroll', 'connections'].includes(k)) { if (!isMoshe) out.push(k); continue; }
+    if (['events', 'payroll'].includes(k)) { if (!isMoshe) out.push(k); continue; }
     out.push(k);   // כולל 'summary' — סיכום עסק זמין לכל החברות
   }
   return out;
@@ -218,7 +218,7 @@ window.gotoMailPending = () => {
 // ---- לשוניות לפי חברה ----
 // "הצוות" (איריס) — BPM בלבד. משה: אין עובדים/אירועים-ויומן, ולשונית החיבורים מוסתרת.
 // כך שאצל משה נשארות: בית · מסמכים ולקוחות · הצעות מחיר · חשבוניות · קבלנים · בנק · פרטי העסק.
-const MOSHE_HIDDEN_TABS = ['events', 'payroll', 'connections'];
+const MOSHE_HIDDEN_TABS = ['events', 'payroll'];
 function applyCompanyTabs() {
   const isBpm = state.company === 'co_bpm';
   const isMoshe = state.company === 'co_moshe';
@@ -348,7 +348,7 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes,      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections, business: renderBusiness }[state.tab])(c);
+  ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes,      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, business: renderBusiness }[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
@@ -5057,7 +5057,7 @@ window.openApproveDraft = (id, fromBankTxId) => {
         <div id="apNewSupPanel" style="margin-bottom:2px"></div>
         <div style="padding-inline-start:2px">
           ${fld('שם הספק / קבלן *', `<div style="display:flex;flex-direction:column;gap:6px"><input id="apSupSearch" placeholder="🔍 חפש ספק לפי שם…" oninput="filterApSup(this.value)" style="font-size:12.5px;padding:6px 9px"><div style="display:flex;gap:6px;align-items:center"><select id="apSup" style="flex:1" onchange="onApprSupplierChange()"><option value="">— בחר ספק —</option>${supOpts}</select><button type="button" class="btn ghost" style="padding:5px 10px;font-size:12px;white-space:nowrap" onclick="openAddSupplier()">+ ספק חדש</button></div></div>`)}
-          ${fld('סיווג הוצאה (חשבונית ירוקה) *', `<select id="apClass"><option value="">— טוען סיווגים… —</option></select>`)}
+          ${fld('סיווג הוצאה (חשבונית ירוקה) *', `<select id="apClass" onchange="rememberClass(this.value)"><option value="">— טוען סיווגים… —</option></select><div id="apClassHint" class="muted" style="font-size:11.5px;margin-top:3px"></div>`)}
           <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:-4px 0 9px"><input type="checkbox" id="apClassSave" checked/> שמור כברירת מחדל לספק זה (כדי שהקליטה הבאה תהיה אוטומטית)</label>
           ${fld('מספר עוסק / ח.פ', `<input id="apTax" dir="ltr" value="${escAttr(String(d.supplierTaxId || ''))}" placeholder="ח.פ / ע.מ"/>`)}
           ${fld('סוג המסמך *', `<select id="apType" onchange="onApprTypeChange()">${typeSel}</select>`)}
@@ -5108,11 +5108,16 @@ async function loadApprFilePreview(id) {
 }
 // טוען את רשימת הסיווגים החשבונאיים ובוחר את ברירת המחדל של הספק (אם יש)
 let _classifications = null;
+let _bizDefaultClass = '';   // סיווג ברירת המחדל של החברה, נטען מפרטי העסק
 async function loadApprClassifications(d) {
   const sel = document.getElementById('apClass'); if (!sel) return;
   if (!_classifications) {
-    const r = await api('/api/accounting/classifications').catch(() => ({ classifications: [] }));
+    const [r, bp] = await Promise.all([
+      api('/api/accounting/classifications').catch(() => ({ classifications: [] })),
+      api('/api/business-profile').catch(() => ({})),
+    ]);
     _classifications = Array.isArray(r.classifications) ? r.classifications : [];
+    _bizDefaultClass = (bp && bp.defaultClassificationId) || '';
   }
   if (!document.getElementById('apClass')) return;
   if (!_classifications.length) {
@@ -5122,13 +5127,28 @@ async function loadApprClassifications(d) {
   sel.innerHTML = '<option value="">— בחר סיווג הוצאה —</option>' + _classifications.map(c => `<option value="${escAttr(String(c.id))}">${escapeHtml(c.name)}</option>`).join('');
   syncApprClassForSupplier(d && d.accountingClassificationId);
 }
-// בוחר בבורר הסיווג את ברירת המחדל של הספק הנבחר
+// ברירת המחדל של הסיווג, בשלוש רמות — כדי שלא תידרש בחירה ידנית בכל קליטה:
+//   1. הסיווג השמור על הספק עצמו בחשבונית ירוקה
+//   2. סיווג ברירת מחדל של החברה (נקבע ב"פרטי העסק")
+//   3. הסיווג האחרון שנבחר בפועל (נזכר אוטומטית, פר-חברה)
+const _lastClassKey = () => 'bpm_lastClass_' + (state.company || '');
+const lastUsedClass = () => { try { return localStorage.getItem(_lastClassKey()) || ''; } catch { return ''; } };
+const rememberClass = (id) => { try { if (id) localStorage.setItem(_lastClassKey(), String(id)); } catch { } };
 window.syncApprClassForSupplier = (fallbackId) => {
   const sel = document.getElementById('apClass'); if (!sel) return;
   const supId = document.getElementById('apSup')?.value;
   const sup = (_suppliers || []).find(s => String(s.id) === String(supId));
-  const cid = (sup && sup.accountingClassificationId) || fallbackId || '';
-  if (cid && [...sel.options].some(o => o.value === String(cid))) sel.value = String(cid);
+  const has = (id) => id && [...sel.options].some(o => o.value === String(id));
+  const supClass = sup && sup.accountingClassificationId;
+  const coDefault = (_bizDefaultClass || '');
+  let pick = '', why = '';
+  if (has(supClass)) { pick = supClass; why = 'לפי הספק'; }
+  else if (has(fallbackId)) { pick = fallbackId; why = 'לפי המסמך'; }
+  else if (has(coDefault)) { pick = coDefault; why = 'ברירת מחדל של העסק'; }
+  else if (has(lastUsedClass())) { pick = lastUsedClass(); why = 'הסיווג האחרון שבחרת'; }
+  if (pick) sel.value = String(pick);
+  const hint = document.getElementById('apClassHint');
+  if (hint) hint.textContent = pick ? `מולא אוטומטית — ${why}. אפשר לשנות.` : '';
 };
 // חיפוש ספק לפי טקסט במסך אישור הטיוטה — מסתיר אפשרויות שלא תואמות בבורר (הבורר עצמו נשאר מקור האמת)
 window.filterApSup = (q) => {
@@ -6557,6 +6577,11 @@ async function renderBusiness(c) {
         <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <b style="font-size:13.5px">🏷 סיווג הוצאה — ברירת מחדל</b>
+        <div class="muted" style="font-size:12px;margin:3px 0 8px">מולא אוטומטית בקליטת חשבונית ספק כשאין לספק סיווג משלו, כדי שלא תצטרך לבחור בכל פעם.</div>
+        <select id="biz_defaultClassificationId" style="max-width:340px"><option value="">— טוען… —</option></select>
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
         <b style="font-size:13.5px">📬 סיכום יומי</b>
         <div class="muted" style="font-size:12px;margin:3px 0 8px">כל בוקר ב-07:00 נשלח לתיבה של החברה הזו סיכום של מה שדורש טיפול. אם אין כלום — לא נשלח מייל.</div>
         <label style="display:block;max-width:320px">חשבונית נחשבת מתעכבת אחרי
@@ -6644,6 +6669,7 @@ async function renderBusiness(c) {
   </div>
   ${mosheBank() ? groupsMgmtPanelHtml() : ''}
   ${mosheBank() ? rulesMgmtPanelHtml() : ''}`;
+  fillBizClassSelect(p.defaultClassificationId);
 }
 // ---- ניהול קבוצות שיוך + כללי שיוך-אוטומטי (רק אצל משה) ----
 let _txGroupRules = [];
@@ -6771,7 +6797,7 @@ window.bizSave = async () => {
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
     name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), senderEmail: g('biz_sender'), payrollEmail: g('biz_payroll'), emailSignature: (document.getElementById('biz_sig')?.innerHTML || ''), docRemark: g('biz_docremark'),
-    mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'), reportOverdueDays: g('biz_reportOverdueDays'), mailBodyTemplate: (document.getElementById('biz_mailBody')?.value || ''), mailSubjectTemplate: (document.getElementById('biz_mailSubject')?.value || ''),
+    mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'), reportOverdueDays: g('biz_reportOverdueDays'), defaultClassificationId: g('biz_defaultClassificationId'), mailBodyTemplate: (document.getElementById('biz_mailBody')?.value || ''), mailSubjectTemplate: (document.getElementById('biz_mailSubject')?.value || ''),
     withholdingPct: Number(g('biz_wh')) || 0,
     managers: [
       { name: g('mgr0_name'), idNumber: g('mgr0_id'), phone: g('mgr0_phone'), email: g('mgr0_email') },
@@ -6813,6 +6839,14 @@ window.backupRunNow = async (btn) => {
     ? `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml(String(r.to || ''))} · ${(r.gzBytes / 1048576).toFixed(2)}MB · ${r.counts.events} אירועים, ${r.counts.bankTx} תנועות בנק</span>`
     : `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || r.skipped || 'נכשל'))}</span>`;
 };
+// מילוי בורר סיווג ברירת המחדל בפרטי העסק
+async function fillBizClassSelect(current) {
+  const sel = document.getElementById('biz_defaultClassificationId'); if (!sel) return;
+  const r = await api('/api/accounting/classifications').catch(() => ({ classifications: [] }));
+  const list = Array.isArray(r.classifications) ? r.classifications : [];
+  sel.innerHTML = '<option value="">— ללא ברירת מחדל —</option>'
+    + list.map(c => `<option value="${escAttr(String(c.id))}"${String(c.id) === String(current || '') ? ' selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+}
 window.bizMailTest = async () => {
   const g = (id) => (document.getElementById(id)?.value || '').trim();
   const msg = document.getElementById('bizMailTestMsg');
@@ -6887,78 +6921,6 @@ async function checkBizAlerts() {
   }).join('');
 }
 
-async function renderConnections(c) {
-  const conns = await api('/api/connections?companyId=' + state.company);
-  c.innerHTML = `<div class="panel">
-    <div class="warn-banner">המפתחות נשמרים מקומית בלבד (קובץ .env אצלך) ולא נשלחים לשום מקום חיצוני. כל חיבור עובר אימות אמיתי מול השירות.</div>
-    <h2>מרכז חיבורים</h2>
-    <p class="muted">חבר כל שירות, וראה כאן מה מחובר ומתי התחבר.</p>
-    <div style="display:grid;gap:14px;margin-top:14px">
-      ${conns.map(connCard).join('')}
-    </div>
-  </div>`;
-  conns.forEach(wireCard);
-}
-
-function connCard(x) {
-  const m = STATUS_META[x.status] || STATUS_META.disconnected;
-  const inputs = (x.soon || x.readonly) ? '' : (x.toggle
-    ? `<label style="display:flex;gap:8px;align-items:center;margin-top:10px">
-         <input type="checkbox" id="tg_${x.key}" ${x.toggleOn ? 'checked' : ''}/> הפעל גשר (דורש התקנה וסריקת QR)
-       </label>`
-    : x.fields.map(f => `
-        <div style="margin-top:10px">
-          <label class="muted" style="font-size:13px;display:block;margin-bottom:4px">${f.label} ${f.set ? `<span class="tag invoiced">מוגדר (${f.hint})</span>` : ''}</label>
-          <input type="password" id="in_${x.key}_${f.env}" placeholder="${f.set ? 'השאר ריק כדי לא לשנות' : 'הדבק כאן'}" style="width:100%"/>
-        </div>`).join(''));
-
-  const actions = x.readonly ? `<span class="muted">${x.message || 'חיבור זה מוגדר לעסק אחר — כרגע לא מחובר עבור עסק זה. הגדר חיבור משלו כשיהיה מוכן.'}</span>`
-    : x.soon ? `<span class="muted">בפיתוח — שלב הבא</span>` : `
-    <button class="btn primary" data-connect="${x.key}">${x.status === 'connected' ? 'עדכן וחבר מחדש' : 'חבר'}</button>
-    ${x.status !== 'disconnected' ? `<button class="btn ghost" data-test="${x.key}">בדוק חיבור</button>` : ''}
-    ${x.status === 'connected' || x.status === 'error' ? `<button class="btn ghost" data-disc="${x.key}">נתק</button>` : ''}
-    <span class="muted" id="msg_${x.key}" style="margin-inline-start:8px"></span>`;
-
-  return `<div class="card">
-    <div class="row-between" style="margin:0">
-      <div style="font-size:16px;font-weight:700">${x.icon} ${x.name}
-        <span class="tag ${m.cls}" style="margin-inline-start:8px">
-          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${m.dot};margin-inline-end:5px"></span>${m.txt}</span>
-      </div>
-    </div>
-    <div class="muted" style="font-size:12px;margin-top:4px">${x.help}</div>
-    ${x.status === 'connected' ? `<div style="margin-top:8px;font-size:13px">🟢 התחבר: <b>${fmtTime(x.connectedAt)}</b> · בדיקה אחרונה: ${fmtTime(x.lastCheckedAt)}</div>` : ''}
-    ${x.status === 'error' ? `<div style="margin-top:8px;font-size:13px;color:var(--danger)">שגיאה: ${x.message || ''} (נבדק ${fmtTime(x.lastCheckedAt)})</div>` : ''}
-    ${inputs}
-    <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${actions}</div>
-  </div>`;
-}
-
-function wireCard(x) {
-  if (x.soon || x.readonly) return;
-  const msg = (t) => { const el = $(`#msg_${x.key}`); if (el) el.textContent = t; };
-  const collect = () => {
-    const values = {};
-    if (x.toggle) values[x.toggle] = $(`#tg_${x.key}`).checked ? 'on' : 'off';
-    else x.fields.forEach(f => { const v = $(`#in_${x.key}_${f.env}`).value.trim(); if (v) values[f.env] = v; });
-    return values;
-  };
-  const post = async (path, extra) => {
-    msg('בודק…');
-    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: x.key, companyId: state.company, ...extra }) }).then(r => r.json());
-    await renderStatus();
-    if (r && r.error) { msg('❌ ' + r.error); return; }
-    if (r && r.ok) msg('✓ בוצע');
-    renderConnections($('#content'));
-  };
-  const b = (sel, fn) => { const el = document.querySelector(sel); if (el) el.onclick = fn; };
-  b(`[data-connect="${x.key}"]`, () => post('/api/connections/connect', { values: collect() }));
-  b(`[data-test="${x.key}"]`, () => post('/api/connections/test', {}));
-  b(`[data-disc="${x.key}"]`, () => { if (confirm('לנתק חיבור זה?')) post('/api/connections/disconnect', {}); });
-}
-
-// ---- הצוות (עובדים וירטואליים) + צ'אט ----
 const escapeHtml = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const BANK_SORT = {
   date: t => (t.date || '').split('/').reverse().join(''),
