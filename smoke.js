@@ -135,6 +135,22 @@ check('openEditPayable נבנית בלי שגיאת ריצה', () => {
   fn(fakeDom());
   return true;
 });
+check('שמירת אירוע לא מוחקת שדות קישור של שורות קבלן', () => {
+  // הבדיקה הקודמת בדקה רק את *טעינת* העורך, ולכן עברה בזמן שהבאג עדיין חי:
+  // ההשמטה קרתה ב-collectEventBody, במסלול היציאה. כאן נבדק המסלול הזה.
+  const L = app.split('\n');
+  const i = L.findIndex(l => l.includes('const ctr = _evCtr.filter'));
+  if (i < 0) throw new Error('לא נמצאה בניית ctr');
+  const fn = new Function('_evCtr', 'num', L[i] + '\nreturn ctr;');
+  const row = fn([{ name: 'ספק ', amount: '4000', paid: false, paidSource: 'manual',
+    paidPayableId: 'pay_x', paidExpenseId: 'exp_9', paidInvoice: '500924', paidExpenseUrl: 'u', handled: true }],
+    (x) => (x === '' || x == null || isNaN(+x) ? null : +x))[0];
+  const lost = ['paidPayableId', 'paidExpenseId', 'paidSource', 'paidInvoice', 'paidExpenseUrl', 'handled']
+    .filter(k => row[k] === undefined);
+  if (lost.length) throw new Error('שדות שנמחקים בשמירה: ' + lost.join(', '));
+  if (row.amount !== 4000) throw new Error('הסכום לא נשמר: ' + row.amount);
+  return true;
+});
 check('עורך האירוע לא מוחק שדות קישור של שורות קבלן', () => {
   // באג אמיתי: הרשימה נבנתה מחדש עם שדות נבחרים בלבד, ולכן פתיחת אירוע ושמירתו
   // מחקה את paidPayableId — והשיוך להוצאת הספק נעלם בלי שנגעו בכלום.

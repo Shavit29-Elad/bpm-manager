@@ -2927,13 +2927,12 @@ function collectEventBody() {
   const clientName = (g('evClient')?.value || '').trim() || null;
   const clientId = (_evClients || []).find(c => c.name === clientName)?.id || _evEditing.clientId || null;
   // שמירה תוך שימור סטטוס התשלום (paid/paidInvoice/handled) — אחרת עריכת אירוע הייתה מוחקת סימון "שולם" של קבלן
-  const ctr = _evCtr.filter(c => (c.name || '').trim()).map(c => {
-    const o = { name: c.name.trim(), amount: num(c.amount) };
-    if (c.paid) { o.paid = true; if (c.paidInvoice) o.paidInvoice = c.paidInvoice; if (c.paidExpenseUrl) o.paidExpenseUrl = c.paidExpenseUrl; }
-    if (c.handled) o.handled = true;
-    return o;
-  });
-  const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus), bonusFactor: (w.bonusFactor == null || w.bonusFactor === '') ? null : +w.bonusFactor, food: num(w.food), travel: num(w.travel), note: (w.note || '').trim() || null }));
+  // פריסה מלאה של השורה. קודם נבנה כאן אובייקט חדש עם name/amount/paid/paidInvoice/
+  // paidExpenseUrl/handled בלבד — ולכן כל שמירת אירוע מחקה את paidPayableId ואת
+  // paidExpenseId, שהם הקישור להוצאת הספק. paidInvoice אף נשמר רק כש-paid=true,
+  // כך ששורה מקושרת שטרם שולמה איבדה גם אותו. זה מה שניתק את השיוך בכל כניסה לאירוע.
+  const ctr = _evCtr.filter(c => (c.name || '').trim()).map(c => ({ ...c, name: c.name.trim(), amount: num(c.amount) }));
+  const emp = _evEmp.filter(w => (w.name || '').trim()).map(w => ({ ...w, name: w.name.trim(), factor: (w.factor == null || w.factor === '') ? 1 : +w.factor, bonus: num(w.bonus), bonusFactor: (w.bonusFactor == null || w.bonusFactor === '') ? null : +w.bonusFactor, food: num(w.food), travel: num(w.travel), note: (w.note || '').trim() || null }));   // פריסה מלאה מאותה סיבה
   return {
     date: g('evDate').value || null, dateRaw: g('evDate').value || _evEditing.dateRaw || null,
     artist: g('evArtist').value.trim() || null,
