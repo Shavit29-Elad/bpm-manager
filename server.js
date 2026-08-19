@@ -4232,13 +4232,15 @@ async function gatherReportData(cid) {
     try {
       const docs = await greenInvoice.openDocuments() || [];
       for (const d of docs) {
+        // כל המסמכים הפתוחים נכנסים — הסף רק מסמן מי מתעכבת, לא מסנן
         const days = daysSince(d.date || d.documentDate);
-        if (days == null || days < overdueDays) continue;
         out.overdueInvoices.push({
           clientName: d.clientName || (d.client && d.client.name) || '',
           typeName: DOC_NAMES_HE[Number(d.type)] || 'מסמך',
           number: d.number || null,
           amount: d.amountDue != null ? Number(d.amountDue) : Number(d.amount) || 0,
+          date: d.date || d.documentDate || null,
+          description: String(d.description || '').trim().slice(0, 90) || null,
           days,
         });
       }

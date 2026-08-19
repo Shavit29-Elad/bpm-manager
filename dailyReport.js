@@ -27,9 +27,12 @@ export function monthClosed(evDate, now = new Date()) {
   return (Number(m[1]) * 12 + Number(m[2])) < (now.getFullYear() * 12 + (now.getMonth() + 1));
 }
 
-const listBlock = (rows, extraLine) => {
-  const shown = rows.slice(0, MAX_ROWS).map(r => `  • ${r}`);
-  if (rows.length > MAX_ROWS) shown.push(`  ועוד ${rows.length - MAX_ROWS}${extraLine ? ' — ' + extraLine : ''}`);
+// limit=null → בלי קיצור. חשבוניות פתוחות מוצגות תמיד במלואן: זה הכסף שממתין לך,
+// ו"ועוד 4" שם אומר שארבעה חובות נעלמים מהעין.
+const listBlock = (rows, extraLine, limit = MAX_ROWS) => {
+  if (limit == null || rows.length <= limit) return rows.map(r => `  • ${r}`).join('\n');
+  const shown = rows.slice(0, limit).map(r => `  • ${r}`);
+  shown.push(`  ועוד ${rows.length - limit}${extraLine ? ' — ' + extraLine : ''}`);
   return shown.join('\n');
 };
 
@@ -44,10 +47,20 @@ export function buildReport(data, now = new Date()) {
   const totalIn = (data.overdueInvoices || []).reduce((s, d) => s + (Number(d.amount) || 0), 0)
     + (data.uninvoicedEvents || []).reduce((s, e) => s + (Number(e.amount) || 0), 0);
   if ((data.overdueInvoices || []).length) {
-    const rows = data.overdueInvoices
-      .slice().sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0))
-      .map(d => `${d.clientName || '—'} · ${d.typeName || 'מסמך'}${d.number ? ' #' + d.number : ''} · ${money(d.amount)} · ${d.days} יום`);
-    inRows.push(`חשבוניות פתוחות מעל ${data.overdueDays} יום (${rows.length}):\n${listBlock(rows)}`);
+    // כל החשבוניות הפתוחות, בלי קיצור. הסף אינו מסנן — הוא רק מסמן ב-⚠ מי מתעכבת,
+    // וכאלה עולות לראש הרשימה. אחריהן מיון לפי סכום יורד.
+    const all = data.overdueInvoices.slice().sort((a, b) => {
+      const la = (a.days || 0) >= data.overdueDays ? 0 : 1, lb = (b.days || 0) >= data.overdueDays ? 0 : 1;
+      return la !== lb ? la - lb : (Number(b.amount) || 0) - (Number(a.amount) || 0);
+    });
+    const late = all.filter(d => (d.days || 0) >= data.overdueDays);
+    const rows = all.map(d => `${(d.days || 0) >= data.overdueDays ? '⚠ ' : ''}${d.clientName || '—'} · ${d.typeName || 'מסמך'}${d.number ? ' #' + d.number : ''} · ${money(d.amount)}`
+      + `${d.date ? ' · הופקה ' + ddmy(d.date) : ''}${d.days != null ? ' · ' + d.days + ' יום' : ''}`
+      + `${d.description ? '\n     ' + d.description : ''}`);
+    const sumAll = all.reduce((t, d) => t + (Number(d.amount) || 0), 0);
+    const head = `חשבוניות פתוחות (${rows.length} · ${money(sumAll)})`
+      + (late.length ? ` — מתוכן ${late.length} מעל ${data.overdueDays} יום, מסומנות ב-⚠` : '');
+    inRows.push(`${head}:\n${listBlock(rows, null, null)}`);
   }
   if ((data.uninvoicedEvents || []).length) {
     const evs = data.uninvoicedEvents.slice().sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0));
