@@ -1841,7 +1841,13 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/update$/, (req, res, params, _q
     p.amountExcludeVat = Number(b.amountExcludeVat) || 0;
   }
   p.updatedAt = new Date().toISOString();
-  save(db); json(res, { ok: true, payable: p });
+  const stillLinked = (db.events || []).filter(e => ownedBy(e, _cid))
+    .flatMap(e => (e.contractorDetails || []).map((c, i) => ({ ev: e.id, i, c })))
+    .filter(x => x.c && (String(x.c.paidPayableId || '') === String(p.id)
+      || (p.number && x.c.paidInvoice && String(x.c.paidInvoice) === String(p.number) && (x.c.name || '').trim() === (p.supplierName || '').trim())))
+    .map(x => `${x.ev}#${x.i}`);
+  console.log(`[payable-update] ${p.id} (${p.supplierName || ''} #${p.number || ''}) · שורות קבלן מקושרות אחרי העדכון: ${stillLinked.length ? stillLinked.join(', ') : 'אין ⚠'}`);
+  save(db); json(res, { ok: true, payable: p, linkedRows: stillLinked });
 });
 
 // POST /api/supplier-payables/:id/delete — הסרת רשומת הוצאת ספק פנימית
@@ -4391,8 +4397,14 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/event-amounts$/, (req, res, par
     row.amount = +amt.toFixed(2);
     updated.push({ eventId: ev.id, index: idx, name: row.name || '', before, after: row.amount });
   }
+  // תיעוד מלא — כדי שאם שיוך נשבר שוב, יהיה מה לקרוא בלוגים במקום לנחש
+  const after = (db.events || []).filter(e => ownedBy(e, cid))
+    .flatMap(e => (e.contractorDetails || []).map((c, i) => ({ ev: e.id, i, c })))
+    .filter(x => x.c && String(x.c.paidPayableId || '') === String(pay.id))
+    .map(x => `${x.ev}#${x.i}`);
+  console.log(`[event-amounts] ${pay.id} (${pay.supplierName || ''} #${pay.number || ''}) · עודכנו ${updated.length} · קובעו ${linked} · שורות מקושרות אחרי: ${after.length ? after.join(', ') : 'אין'}${errors.length ? ' · שגיאות: ' + errors.join('; ') : ''}`);
   if (updated.length || linked) save(db);
-  json(res, { ok: true, updated, errors, linked });
+  json(res, { ok: true, updated, errors, linked, linkedRows: after });
 });
 
 // ---- גיבוי ----
