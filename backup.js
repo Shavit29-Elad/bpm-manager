@@ -165,7 +165,44 @@ export function planRetention(files, now = new Date(), policy = RETENTION) {
   return { keep: dated.filter(f => keep.has(f.id)), remove: dated.filter(f => !keep.has(f.id)) };
 }
 
+// ---- שליחה במייל ----
+// היעד נקבע ב-BACKUP_EMAIL. נשלח מתיבת החברה הראשית, שכבר מוגדרת ל-SMTP.
+export function backupMailText(info) {
+  return [
+    'גיבוי יומי של מערכת הניהול הפיננסי.',
+    '',
+    `נוצר: ${new Date(info.at).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })}`,
+    `גודל: ${(info.gzBytes / 1048576).toFixed(2)}MB דחוס (${(info.rawBytes / 1048576).toFixed(1)}MB לפני דחיסה)`,
+    '',
+    'תוכן:',
+    `  אירועים: ${info.counts.events}`,
+    `  תנועות בנק: ${info.counts.bankTx}`,
+    `  עובדים: ${info.counts.employees}`,
+    `  חשבוניות ישנות: ${info.counts.oldInvoices}`,
+    `  הוצאות ספקים: ${info.counts.supplierPayables}`,
+    '',
+    'הקובץ מכיל את כל הנתונים של שלוש החברות. אין למחוק אותו — הוא הדרך היחידה',
+    'לשחזר את המערכת אם משהו ישתבש. אינו כולל את הקבצים המצורפים (PDF של חשבוניות).',
+    '',
+    'לשחזור — יש לפנות למפתח עם הקובץ הזה.',
+  ].join('\n');
+}
+
 // ---- ריצה מלאה ----
+// גיבוי במייל — המסלול הפעיל. אין תלות בשום שירות חיצוני מעבר לתיבה שכבר מוגדרת.
+export async function runBackupMail(sendMailFrom, creds, to) {
+  if (!to) return { skipped: 'לא מוגדר BACKUP_EMAIL' };
+  const info = await buildBackup();
+  const name = backupFileName(new Date(info.at));
+  await sendMailFrom(creds, {
+    to: [to],
+    subject: `גיבוי מערכת · ${new Date(info.at).toISOString().slice(0, 10)}`,
+    text: backupMailText(info),
+    attachments: [{ filename: name, content: info.buf, contentType: 'application/gzip' }],
+  });
+  return { ok: true, to, name, gzBytes: info.buf.length, rawBytes: info.rawBytes, counts: info.counts, at: info.at };
+}
+
 export async function runBackup() {
   const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
   if (!backupConfigured()) return { skipped: 'לא מוגדר — חסר GOOGLE_SERVICE_ACCOUNT_JSON או GOOGLE_DRIVE_FOLDER_ID' };

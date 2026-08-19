@@ -95,89 +95,7 @@ async function complete(system, messages, opts = {}) {
   return process.env.ANTHROPIC_API_KEY ? callAnthropic(system, messages, opts) : callGemini(system, messages, opts);
 }
 
-// שילוב מפת האפליקציה (מעודכנת) + הזיכרון המתמשך לתוך פרומפט המערכת של הדמות
-const CHAT_HISTORY_LIMIT = 20;   // כמה הודעות אחרונות נשלחות למודל
-function withContext(member, memory, appMap) {
-  let sys = member.system;
-  if (appMap) sys += `\n\n${appMap}`;
-  if (memory) sys += `\n\n## הזיכרון המתמשך שלך (מה שלמדת על העסק, המערכת וההעדפות של המנהל — השתמש/י בזה):\n${memory}`;
-  return sys;
-}
 
-// צ'אט אישי (עם מפת אפליקציה + זיכרון)
-export async function chatWithMember(member, history, memory = '', appMap = '') {
-  // חיתוך היסטוריה: כל הודעה שלחה מחדש את *כל* השיחה מתחילתה, בלי גבול.
-  // 20 ההודעות האחרונות מספיקות להקשר ועוצרות צמיחה אינסופית של העלות.
-  const recent = history.slice(-CHAT_HISTORY_LIMIT);
-  return complete(withContext(member, memory, appMap), recent.map(m => ({ role: m.role, content: m.content })), { label: 'chat' });
-}
-
-// צ'אט קבוצתי — כל חבר עונה בתורו על סמך תמלול השיחה (עם מפת אפליקציה + זיכרון)
-export async function chatGroupReply(member, transcript, memory = '', appMap = '') {
-  const content = `זו שיחה קבוצתית של צוות החברה (כמה עובדים וירטואליים + המנהל). התמלול עד כה:\n\n${transcript}\n\nהשב/י עכשיו כ${member.name} (${member.role}) בלבד — בקצרה, באופי שלך, ורק בתחום שלך. אם אין לך מה להוסיף, כתב/י משפט קצר. אל תדבר/י בשם אחרים.`;
-  return complete(withContext(member, memory, appMap), [{ role: 'user', content }], { label: 'chat-group' });
-}
-
-// צ'אט אישי עם צילום מסך — המנהל מראה למעצבת מסך מהמערכת, והיא מנתחת אותו (ראייה ממוחשבת)
-export async function chatWithMemberVision(member, history, memory = '', appMap = '', image = {}, userText = '') {
-  const system = withContext(member, memory, appMap);
-  const recent = (history || []).slice(-8, -1).map(m => `${m.role === 'user' ? 'מנהל' : member.name}: ${m.content}`).join('\n');
-  const prompt = `${recent ? 'הקשר השיחה עד כה:\n' + recent + '\n\n' : ''}המנהל שלח צילום מסך מהמערכת (asfinance.co.il). ${userText ? 'הודעתו: ' + userText : 'נתחי אותו כמעצבת מוצר — מה את רואה, מה עובד טוב, ומה היית משפרת. תני המלצות קונקרטיות (צבעים, מרווחים, היררכיה) ובר-יישום.'}`;
-  const media = image.mime || 'image/png';
-  const data = image.data || '';
-  if (process.env.ANTHROPIC_API_KEY) {
-    const isPdf = media === 'application/pdf';
-    const block = isPdf
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
-      : { type: 'image', source: { type: 'base64', media_type: media, data } };
-    return callAnthropicVision(system, [block, { type: 'text', text: prompt }], { maxTokens: 1300 });
-  }
-  return callGeminiVision(system, prompt, data, media, { maxTokens: 1300 });
-}
-
-// סיכום שיחה כבקשת פיתוח מובנית (JSON)
-export async function summarizeAsRequest(member, transcript) {
-  const system = `אתה עוזר שממיר שיחה עם ${member.name} (${member.role}) לבקשת פיתוח מסודרת עבור מערכת הניהול. ענה אך ורק ב-JSON תקין, בלי טקסט נוסף.`;
-  const prompt = `מתוך השיחה הבאה, נסח בקשת פיתוח אחת שמסכמת מה המנהל רוצה שיפותח או ישונה במערכת. החזר JSON בלבד במבנה המדויק:
-{"title":"כותרת קצרה","summary":"משפט או שניים שמסבירים את הבקשה","details":["פרט או קריטריון קבלה 1","פרט 2"],"priority":"low|medium|high"}
-אם אין בקשה ברורה בשיחה, קבע title ל"לא זוהתה בקשה ברורה".
-
-השיחה:
-${transcript}`;
-  const raw = await complete(system, [{ role: 'user', content: prompt }], { label: 'summarize' });
-  try {
-    const jsonStr = (raw.match(/\{[\s\S]*\}/) || [raw])[0];
-    const out = JSON.parse(jsonStr);
-    return {
-      title: out.title || 'בקשת פיתוח',
-      summary: out.summary || '',
-      details: Array.isArray(out.details) ? out.details.filter(Boolean) : [],
-      priority: ['low', 'medium', 'high'].includes(out.priority) ? out.priority : 'medium',
-    };
-  } catch {
-    return { title: 'בקשת פיתוח', summary: raw.slice(0, 300), details: [], priority: 'medium' };
-  }
-}
-
-// פענוח JSON עמיד: מסיר גדרות קוד, ואם המערך נחתך — משחזר את האובייקטים השלמים
-function parseEventsJson(raw) {
-  if (!raw) return [];
-  let s = String(raw).replace(/```json/gi, '').replace(/```/g, '').trim();
-  const arrMatch = s.match(/\[[\s\S]*\]/);
-  if (arrMatch) { try { const a = JSON.parse(arrMatch[0]); if (Array.isArray(a)) return a; } catch { } }
-  // שחזור: מפרקים כל אובייקט ברמה העליונה בנפרד (עמיד לחיתוך באמצע)
-  const objs = []; let depth = 0, start = -1, inStr = false, esc = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
-    if (c === '"') { inStr = true; continue; }
-    if (c === '{') { if (depth === 0) start = i; depth++; }
-    else if (c === '}') { depth--; if (depth === 0 && start >= 0) { try { objs.push(JSON.parse(s.slice(start, i + 1))); } catch { } start = -1; } }
-  }
-  return objs;
-}
-
-// חילוץ אירועים מהודעה (מובנית או חופשית) לרשימת אירועים מובנית — עם AI
 export async function extractEvents(text, defaultYear) {
   const yr = defaultYear || new Date().getFullYear();
   const system = `אתה מנתח הודעות אירועים של חברת הגברה ותאורה (BPM). תפקידך להמיר טקסט למערך JSON של אירועים. ענה אך ורק ב-JSON תקין, בלי טקסט לפני או אחרי.`;
@@ -584,13 +502,3 @@ ${supList || '(אין)'}`;
   };
 }
 
-// למידה: מפיק "עובדות לזכור" מתוך חילופי ההודעות האחרונים (לזיכרון המתמשך)
-export async function learnFromExchange(member, exchangeText) {
-  const system = `אתה עוזר שמתחזק זיכרון ארוך-טווח עבור ${member.name} (${member.role}). מטרתך לזקק עובדות/העדפות/החלטות יציבות ששווה לזכור לטווח ארוך.`;
-  const prompt = `מתוך חילופי ההודעות הבאים, כתוב 0–2 נקודות תמציתיות (שורה כל אחת) של מידע חדש ויציב ששווה לזכור על העסק/המערכת/העדפות המנהל. אל תכלול דברים חד-פעמיים או טריוויאליים. אם אין מה לזכור, כתוב בדיוק: אין\n\n${exchangeText}`;
-  try {
-    const out = (await complete(system, [{ role: 'user', content: prompt }], { label: 'learn' })).trim();
-    if (!out || out === 'אין' || out.length > 500) return '';
-    return out;
-  } catch { return ''; }
-}

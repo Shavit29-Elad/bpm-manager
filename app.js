@@ -61,14 +61,13 @@ const api = (p) => {
   };
 })();
 
-const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', team: '👥 הצוות', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
+const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', connections: '🔌 חיבורים', business: '🏢 פרטי העסק' };
 // לשוניות רלוונטיות לחברה מסוימת (לניהול הרשאות משתמשים) — נגזר מאותם כללים כמו applyCompanyTabs. "פרטי העסק" — הנהלה בלבד.
 function companyTabsFor(cid) {
   const isBpm = cid === 'co_bpm', isMoshe = cid === 'co_moshe';
   const out = [];
   for (const k of Object.keys(TAB_LABELS)) {
     if (k === 'business') continue;
-    if (k === 'team') { if (isBpm) out.push(k); continue; }
     if (['events', 'payroll', 'connections'].includes(k)) { if (!isMoshe) out.push(k); continue; }
     out.push(k);   // כולל 'summary' — סיכום עסק זמין לכל החברות
   }
@@ -229,8 +228,6 @@ function applyCompanyTabs() {
   const userAllows = (t) => !allowedSet || allowedSet.has(t);
   const goHome = () => { const home = document.querySelector('.tab[data-tab="home"]'); if (home) home.click(); };
   // הצוות — BPM בלבד
-  document.querySelectorAll('.tab[data-tab="team"]').forEach(t => { t.style.display = (isBpm && userAllows('team')) ? '' : 'none'; });
-  if (!isBpm && state.tab === 'team') goHome();
   // פרטי העסק — פר-חברה, אך להנהלה בלבד (מכיל ת״ז/רישיונות/מסמכים רגישים)
   document.querySelectorAll('.tab[data-tab="business"]').forEach(t => { t.style.display = isAdmin ? '' : 'none'; });
   if (!isAdmin && state.tab === 'business') goHome();
@@ -351,8 +348,7 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes, team: renderTeam,
-     bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections, business: renderBusiness }[state.tab])(c);
+  ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes,      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, connections: renderConnections, business: renderBusiness }[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
@@ -6910,164 +6906,6 @@ function wireCard(x) {
 
 // ---- הצוות (עובדים וירטואליים) + צ'אט ----
 const escapeHtml = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-window.openChat = (id) => { state.activeChat = id; renderTeam($('#content')); };
-
-async function renderTeam(c) {
-  const data = await api('/api/team');
-  if (!state.activeChat) state.activeChat = 'group';
-  const members = data.members || [];
-  state.members = members;
-  const item = (id, emoji, name, sub, active) => `
-    <div class="chat-item ${active ? 'active' : ''}" onclick="openChat('${id}')">
-      <span style="font-size:20px">${emoji}</span>
-      <div style="min-width:0"><div style="font-weight:600">${name}</div><div class="muted" style="font-size:12px">${sub}</div></div>
-    </div>`;
-  const sidebar = `<div class="panel" style="width:250px;flex:none">
-      <h2 style="margin-bottom:14px">הצוות</h2>
-      ${item('group', '👥', 'כל הצוות', `${members.length} עובדים`, state.activeChat === 'group')}
-      <div style="height:1px;background:var(--line);margin:8px 0"></div>
-      ${members.map(m => item(m.id, m.emoji, m.name, m.role, state.activeChat === m.id)).join('')}
-      <div style="height:1px;background:var(--line);margin:8px 0"></div>
-      ${item('requests', '📋', 'בקשות פיתוח', 'המשימות שאספנו', state.activeChat === 'requests')}
-    </div>`;
-  let main;
-  if (state.activeChat === 'requests') {
-    main = `<div class="panel" style="flex:1;min-width:320px" id="requestsBody"><div class="empty">טוען…</div></div>`;
-  } else {
-    const activeName = state.activeChat === 'group' ? 'כל הצוות' : (members.find(m => m.id === state.activeChat)?.name || '');
-    const notice = data.configured ? '' : `<div class="warn-banner">כדי שהצוות יענה צריך מפתח AI. הכי קל וחינמי: מפתח Google Gemini — הוסף <b>GEMINI_API_KEY</b> כמשתנה סביבה ב-Render (משיגים חינם ב-aistudio.google.com/apikey).</div>`;
-    main = `<div class="panel" style="flex:1;min-width:320px;display:flex;flex-direction:column;height:600px">
-      <div class="row-between" style="margin-bottom:12px"><h2>${activeName}</h2>
-        ${data.configured ? `<button class="btn ghost" style="padding:6px 12px" onclick="summarizeRequest(this)">📋 סכם כבקשת פיתוח</button>` : ''}
-      </div>
-      ${notice}
-      <div id="chatMsgs" style="flex:1;overflow:auto;display:flex;flex-direction:column;gap:10px;padding:4px"></div>
-      <div id="chatAttach" class="muted" style="display:none;align-items:center;gap:8px;margin-top:8px;font-size:12px"></div>
-      <div style="display:flex;gap:8px;margin-top:12px;align-items:flex-end">
-        <input type="file" id="chatImgInput" accept="image/*" style="display:none" onchange="onChatImage(this)">
-        <button class="btn ghost" title="צרף צילום מסך" style="padding:9px 12px" onclick="document.getElementById('chatImgInput').click()" ${data.configured ? '' : 'disabled'}>📷</button>
-        <textarea id="chatInput" rows="1" placeholder="כתוב הודעה… (Enter לשליחה · Shift+Enter לשורה חדשה · אפשר להדביק צילום מסך)" style="flex:1;resize:none;min-height:42px;max-height:150px;font-family:inherit;line-height:1.5" ${data.configured ? '' : 'disabled'} onkeydown="chatKeydown(event)" oninput="chatAutoGrow(this)" onpaste="onChatPaste(event)"></textarea>
-        <button class="btn primary" style="align-self:flex-end" onclick="sendChat()" ${data.configured ? '' : 'disabled'}>שלח</button>
-      </div>
-    </div>`;
-  }
-  c.innerHTML = `<div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">${sidebar}${main}</div>`;
-  if (state.activeChat === 'requests') renderRequestsBody($('#requestsBody'));
-  else loadChat();
-}
-
-async function loadChat() {
-  const msgs = await api(`/api/team/${state.activeChat}/messages`);
-  renderMsgs(msgs);
-}
-
-function bubble(m) {
-  const mine = m.role === 'user';
-  // בצ'אט אישי אין name בהודעה — נשלים משם החבר הפעיל (תקף גם לעובדים עתידיים)
-  const mem = (state.members || []).find(x => x.id === state.activeChat);
-  const who = mine ? 'אתה' : `${m.emoji || mem?.emoji || '🤖'} ${m.name || mem?.name || 'עוזר'}`;
-  return `<div style="align-self:${mine ? 'flex-start' : 'flex-end'};max-width:80%;background:${mine ? 'var(--panel2)' : 'var(--grad-soft)'};border:1px solid var(--line);border-radius:14px;padding:10px 14px">
-    <div class="muted" style="font-size:11px;margin-bottom:4px">${who}</div>
-    <div style="white-space:pre-wrap;line-height:1.55">${escapeHtml(m.content)}</div></div>`;
-}
-function renderMsgs(msgs, typing) {
-  const box = $('#chatMsgs'); if (!box) return;
-  const list = (msgs || []).map(bubble).join('');
-  const typingBubble = typing ? `<div style="align-self:flex-end;background:var(--grad-soft);border:1px solid var(--line);border-radius:14px;padding:10px 14px" class="muted">כותב…</div>` : '';
-  box.innerHTML = (list || (typing ? '' : `<div class="empty">התחל שיחה 👋</div>`)) + typingBubble;
-  box.scrollTop = box.scrollHeight;
-}
-
-// ---- צירוף צילום מסך לצ'אט (המנהל מראה לאיריס מסך מהמערכת) ----
-let _chatImage = null; // { data(base64), mime, name }
-function _readImageFile(f) {
-  const rd = new FileReader();
-  rd.onload = () => { _chatImage = { data: String(rd.result).split(',')[1] || '', mime: f.type || 'image/png', name: f.name || 'screenshot.png' }; showChatAttach(); };
-  rd.readAsDataURL(f);
-}
-window.onChatImage = (inp) => { const f = inp.files && inp.files[0]; if (f) _readImageFile(f); };
-window.onChatPaste = (e) => {
-  const items = (e.clipboardData && e.clipboardData.items) || [];
-  for (const it of items) { if (it.type && it.type.indexOf('image/') === 0) { const f = it.getAsFile(); if (f) { _readImageFile(f); e.preventDefault(); return; } } }
-};
-window.clearChatImage = () => { _chatImage = null; const i = document.getElementById('chatImgInput'); if (i) i.value = ''; showChatAttach(); };
-function showChatAttach() {
-  const el = document.getElementById('chatAttach'); if (!el) return;
-  if (_chatImage) { el.style.display = 'flex'; el.innerHTML = `📷 ${escapeHtml(_chatImage.name)} מצורף <button class="btn ghost" style="padding:1px 8px;font-size:11px" onclick="clearChatImage()">הסר ✕</button>`; }
-  else { el.style.display = 'none'; el.innerHTML = ''; }
-}
-
-// Enter שולח, Shift+Enter יורד שורה; הטקסטאריה גדלה לפי התוכן
-window.chatKeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } };
-window.chatAutoGrow = (el) => { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 150) + 'px'; };
-
-window.sendChat = async () => {
-  const inp = $('#chatInput'); if (!inp) return;
-  const text = inp.value.trim();
-  const img = _chatImage;
-  if (!text && !img) return;
-  inp.value = ''; inp.style.height = 'auto'; inp.disabled = true;
-  const existing = await api(`/api/team/${state.activeChat}/messages`);
-  renderMsgs([...existing, { role: 'user', content: (img ? '📷 צילום מסך' + (text ? ' — ' + text : '') : text) }], true);
-  const r = await fetch(`/api/team/${state.activeChat}/message`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(img ? { text, image: { data: img.data, mime: img.mime } } : { text }),
-  }).then(r => r.json());
-  _chatImage = null; showChatAttach();
-  inp.disabled = false;
-  renderMsgs(r.messages || existing);
-  if (r.error) { const b = $('#chatMsgs'); if (b) b.innerHTML += `<div class="warn-banner">${r.error}</div>`; }
-  inp.focus();
-};
-
-// ---- בקשות פיתוח (בתוך אזור הצוות) ----
-window.summarizeRequest = async (btn) => {
-  if (btn) { btn.disabled = true; btn.textContent = 'מסכם…'; }
-  const r = await fetch(`/api/team/${state.activeChat}/summarize-request`, { method: 'POST' }).then(x => x.json());
-  if (r.error) { if (btn) { btn.disabled = false; btn.textContent = '📋 סכם כבקשת פיתוח'; } alert(r.error); return; }
-  state.activeChat = 'requests';
-  renderTeam($('#content'));
-};
-
-const REQ_STATUS = { open: { t: 'חדש', cls: 'pending' }, 'in-progress': { t: 'מטופל', cls: 'invoiced' }, done: { t: 'טופל', cls: 'match' } };
-const REQ_PRIORITY = { low: 'נמוכה', medium: 'בינונית', high: 'גבוהה' };
-
-async function renderRequestsBody(box) {
-  if (!box) return;
-  const list = await api('/api/requests');
-  const open = list.filter(r => r.status !== 'done').length;
-  box.innerHTML = `<div class="row-between"><div><h2>📋 בקשות פיתוח</h2><span class="muted">${list.length} בקשות · ${open} פתוחות</span></div></div>
-    <p class="muted" style="font-size:13px;margin-top:4px">בצ'אט עם הצוות, אחרי שסיכמתם מה צריך — לחץ "📋 סכם כבקשת פיתוח" והבקשה תופיע כאן.</p>
-    <div style="margin-top:14px">${list.length ? list.map(reqCard).join('') : `<div class="empty">אין בקשות עדיין.</div>`}</div>`;
-}
-function reqCard(r) {
-  const s = REQ_STATUS[r.status] || REQ_STATUS.open;
-  const sbtn = (st, label) => `<button class="btn ${r.status === st ? 'primary' : 'ghost'}" style="padding:5px 11px;font-size:13px" onclick="setReqStatus('${r.id}','${st}')">${label}</button>`;
-  return `<div class="card" style="margin-bottom:12px">
-    <div class="row-between" style="margin:0">
-      <div style="font-weight:700;font-size:15px">${escapeHtml(r.title)}</div>
-      <span class="tag ${s.cls}">${s.t}</span>
-    </div>
-    <div class="muted" style="font-size:12px;margin-top:3px">${escapeHtml(r.memberName || '')} · ${fmtTime(r.createdAt)} · עדיפות ${REQ_PRIORITY[r.priority] || ''}</div>
-    ${r.summary ? `<div style="margin-top:8px;line-height:1.5">${escapeHtml(r.summary)}</div>` : ''}
-    ${(r.details && r.details.length) ? `<ul style="margin:8px 0 0;padding-inline-start:18px;line-height:1.6">${r.details.map(d => `<li>${escapeHtml(d)}</li>`).join('')}</ul>` : ''}
-    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      ${sbtn('open', 'חדש')}${sbtn('in-progress', 'מטופל')}${sbtn('done', 'טופל')}
-      <button class="btn ghost" style="padding:5px 11px;font-size:13px;margin-inline-start:auto;color:var(--danger)" onclick="deleteReq('${r.id}')">מחק</button>
-    </div>
-  </div>`;
-}
-window.setReqStatus = async (id, status) => {
-  await fetch(`/api/requests/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
-  renderRequestsBody($('#requestsBody'));
-};
-window.deleteReq = async (id) => {
-  if (!confirm('למחוק את הבקשה?')) return;
-  await fetch(`/api/requests/${id}`, { method: 'DELETE' });
-  renderRequestsBody($('#requestsBody'));
-};
-
-// ---- בנק: התאמת תנועות לחשבוניות ----
 const BANK_SORT = {
   date: t => (t.date || '').split('/').reverse().join(''),
   amount: t => t.absAmount || 0,

@@ -19,9 +19,8 @@ import { matchCredits, matchDebits, attachReceipts, nameMatch } from './bankMatc
 import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
-import { listTeam, findMember, TEAM } from './team.js';
-import { buildAppMap } from './appMap.js';
-import { chatWithMember, chatWithMemberVision, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields, classifyExpenseAttachment , aiUsage } from './chat.js';
+import { chatConfigured, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields, classifyExpenseAttachment, aiUsage } from './chat.js';
+import { buildBackup, backupFileName, runBackupMail, backupMailText } from './backup.js';
 import mailer from './mailer.js';
 import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
@@ -4208,123 +4207,70 @@ add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, q, body) => {
   json(res, { ok: true, connections: buildConnectionsView(cid) });
 });
 
-// ---- צוות (עובדים וירטואליים) + צ'אט ----
-// GET /api/team  -> רשימת חברי הצוות
-add('GET', /^\/api\/team$/, (req, res) => json(res, { members: listTeam(), configured: chatConfigured() }));
+// ---- גיבוי ----
+// כל הנתונים הפיננסיים של שלוש החברות יושבים במסמך אחד. בלי גיבוי, באג או תקלה
+// אצל ספק האחסון = אובדן מוחלט. הגיבוי יוצא מהמערכת החוצה, לתיבה נפרדת.
+const BACKUP_HOUR_UTC = 23, BACKUP_MIN_UTC = 0;   // 02:00 שעון ישראל
+let _lastBackup = null;
 
-// GET /api/team/:id/messages  (id = 'group' או מזהה חבר)
-add('GET', /^\/api\/team\/([^/]+)\/messages$/, (req, res, params) => {
+async function runDailyBackup(trigger = 'scheduled') {
+  const to = (process.env.BACKUP_EMAIL || '').trim();
   const db = load();
-  json(res, db.chats?.[params[0]] || []);
-});
-
-// POST /api/team/:id/message  { text }
-add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body) => {
-  const id = params[0];
-  const text = (body?.text || '').trim();
-  const image = (body?.image && body.image.data) ? { data: String(body.image.data), mime: body.image.mime || 'image/png' } : null;
-  if (!text && !image) return json(res, { error: 'חסר טקסט' }, 400);
-  if (!chatConfigured()) return json(res, { error: 'הצ\'אט לא מוגדר — הוסף ANTHROPIC_API_KEY ב-Render' }, 400);
-
-  const db = load();
-  db.chats = db.chats || {};
-  db.memory = db.memory || {};
-  const appMap = buildAppMap(db); // מפה מלאה ומתעדכנת של האפליקציה — מוזרקת לכל דמות
-  const now = new Date().toISOString();
-
-  if (id === 'group') {
-    const history = db.chats.group = db.chats.group || [];
-    history.push({ role: 'user', name: 'אתה', content: text, at: now });
-    try {
-      // כל חבר צוות עונה בתורו על סמך התמלול המתעדכן, עם הזיכרון האישי שלו ומפת האפליקציה
-      for (const member of TEAM) {
-        const transcript = history.map(m => `${m.name || (m.role === 'user' ? 'אתה' : 'צוות')}: ${m.content}`).join('\n');
-        const reply = await chatGroupReply(member, transcript, db.memory[member.id] || '', appMap);
-        history.push({ role: 'assistant', memberId: member.id, name: member.name, emoji: member.emoji, content: reply, at: new Date().toISOString() });
-      }
-      save(db);
-      json(res, { ok: true, messages: history });
-    } catch (e) { save(db); json(res, { error: e.message, messages: history }, 500); }
-    return;
+  const creds = companyMailCreds(db, giCompanyId());
+  if (!to) { console.log('[backup] דילוג — לא הוגדר BACKUP_EMAIL'); return { skipped: 'לא הוגדר BACKUP_EMAIL' }; }
+  if (!mailer.companyMailConfigured(creds)) { console.log('[backup] דילוג — אין חשבון מייל לחברה הראשית'); return { skipped: 'אין חשבון מייל' }; }
+  try {
+    const r = await runBackupMail(mailer.sendMailFrom, creds, to);
+    _lastBackup = { ...r, trigger, ok: true };
+    console.log(`[backup] נשלח ל-${to} · ${(r.gzBytes / 1048576).toFixed(2)}MB · ${r.counts.events} אירועים, ${r.counts.bankTx} תנועות בנק`);
+    return r;
+  } catch (e) {
+    _lastBackup = { ok: false, error: e.message, at: new Date().toISOString(), trigger };
+    console.error('[backup] נכשל:', e.message);
+    return { error: e.message };
   }
+}
 
-  const member = findMember(id);
-  if (!member) return json(res, { error: 'עובד לא נמצא' }, 404);
-  const history = db.chats[id] = db.chats[id] || [];
-  // לא שומרים את ה-base64 של התמונה ב-DB (רק סימון) כדי לא לנפח את המסמך
-  history.push({ role: 'user', content: image ? ('📷 צילום מסך' + (text ? ' — ' + text : '')) : text, hasImage: !!image, at: now });
-  try {
-    const reply = image
-      ? await chatWithMemberVision(member, history, db.memory[id] || '', appMap, image, text)
-      : await chatWithMember(member, history, db.memory[id] || '', appMap);
-    history.push({ role: 'assistant', content: reply, at: new Date().toISOString() });
-    save(db);
-    json(res, { ok: true, messages: history });
-    // למידה מתמשכת (ברקע, לא חוסם את התשובה): מזקק עובדות לזיכרון.
-    // רצה פעם ב-10 הודעות ולא בכל אחת — זו הייתה קריאת AI שנייה לכל הודעה, כפול עלות בלי ערך מקביל.
-    if (history.length % 10 === 0)
-    learnFromExchange(member, `משתמש: ${text}\n${member.name}: ${reply}`).then(notes => {
-      if (!notes) return;
-      const db2 = load(); db2.memory = db2.memory || {};
-      const prev = db2.memory[id] || '';
-      db2.memory[id] = (prev ? prev + '\n' : '') + notes.split('\n').map(l => l.replace(/^[-•\s]+/, '- ').trim()).join('\n');
-      // תקרת גודל לזיכרון (שומר את הסוף — העדכני ביותר)
-      if (db2.memory[id].length > 4000) db2.memory[id] = db2.memory[id].slice(-4000);
-      save(db2);
-    }).catch(() => {});
-  } catch (e) { save(db); json(res, { error: e.message, messages: history }, 500); }
+function scheduleDailyBackup() {
+  const msToNext = () => {
+    const now = new Date();
+    const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), BACKUP_HOUR_UTC, BACKUP_MIN_UTC, 0, 0));
+    if (t.getTime() <= now.getTime()) t.setUTCDate(t.getUTCDate() + 1);
+    return t.getTime() - now.getTime();
+  };
+  const arm = () => { setTimeout(async () => { await runDailyBackup(); arm(); }, msToNext()); };
+  arm();
+  console.log(`[backup] מתוזמן — ריצה ראשונה בעוד ~${Math.round(msToNext() / 60000)} דק'${process.env.BACKUP_EMAIL ? '' : ' (אך BACKUP_EMAIL לא מוגדר)'}`);
+}
+
+// GET /api/backup/status — מתי רץ לאחרונה ומה קרה (הנהלה בלבד)
+add('GET', /^\/api\/backup\/status$/, (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+  json(res, { ok: true, configured: Boolean((process.env.BACKUP_EMAIL || '').trim()), to: (process.env.BACKUP_EMAIL || '').trim() || null, last: _lastBackup });
 });
 
-// ---- בקשות פיתוח (נוצרות מסיכום שיחות עם הצוות) ----
-// POST /api/team/:id/summarize-request — הופך את השיחה לבקשת פיתוח בתיבה
-add('POST', /^\/api\/team\/([^/]+)\/summarize-request$/, async (req, res, params) => {
-  const chatId = params[0];
-  if (!chatConfigured()) return json(res, { error: 'הצ\'אט לא מוגדר — הוסף ANTHROPIC_API_KEY ב-Render' }, 400);
-  const db = load();
-  const history = db.chats?.[chatId] || [];
-  if (!history.length) return json(res, { error: 'אין שיחה לסכם — כתוב קודם מה תרצה' }, 400);
-  const member = chatId === 'group' ? { name: 'הצוות', role: 'צוות' } : (findMember(chatId) || { name: 'עוזר', role: '' });
-  const transcript = history.slice(-30).map(m => `${m.name || (m.role === 'user' ? 'מנהל' : member.name)}: ${m.content}`).join('\n');
+// GET /api/backup/download — הורדת גיבוי עכשיו למחשב (הנהלה בלבד)
+add('GET', /^\/api\/backup\/download$/, async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
   try {
-    const spec = await summarizeAsRequest(member, transcript);
-    db.requests = db.requests || [];
-    const request = {
-      id: id('req'),
-      memberId: chatId, memberName: member.name,
-      title: spec.title, summary: spec.summary, details: spec.details, priority: spec.priority,
-      status: 'open',
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    };
-    db.requests.unshift(request);
-    save(db);
-    json(res, { ok: true, request });
+    const info = await buildBackup();
+    const name = backupFileName(new Date(info.at));
+    res.writeHead(200, {
+      'Content-Type': 'application/gzip',
+      'Content-Length': info.buf.length,
+      'Content-Disposition': `attachment; filename="${name}"`,
+    });
+    res.end(info.buf);
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
-// GET /api/requests
-add('GET', /^\/api\/requests$/, (req, res) => json(res, load().requests || []));
-
-// PUT /api/requests/:id  { status?, title? }
-add('PUT', /^\/api\/requests\/([^/]+)$/, (req, res, params, _q, body) => {
-  const db = load();
-  const r = (db.requests || []).find(x => x.id === params[0]);
-  if (!r) return json(res, { error: 'לא נמצא' }, 404);
-  if (body.status) r.status = body.status;
-  if (body.title != null) r.title = body.title;
-  r.updatedAt = new Date().toISOString();
-  save(db);
-  json(res, { ok: true, request: r });
+// POST /api/backup/run — הרצת גיבוי במייל עכשיו (הנהלה בלבד)
+add('POST', /^\/api\/backup\/run$/, async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+  const r = await runDailyBackup('manual');
+  json(res, r.error ? { error: r.error } : { ok: true, ...r });
 });
 
-// DELETE /api/requests/:id
-add('DELETE', /^\/api\/requests\/([^/]+)$/, (req, res, params) => {
-  const db = load();
-  db.requests = (db.requests || []).filter(x => x.id !== params[0]);
-  save(db);
-  json(res, { ok: true });
-});
-
-// GET /api/dashboard?month=YYYY-MM  — נתוני דף הבית מחשבונית ירוקה
 add('GET', /^\/api\/dashboard$/, async (req, res, _p, q) => {
   // טווח: from/to בפורמט YYYY-MM (או YYYY-MM-DD). ברירת מחדל — החודש הנוכחי.
   const lastDay = (ym) => { const [y, m] = ym.split('-').map(Number); return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; };
@@ -5163,7 +5109,7 @@ add('GET', /^\/api\/month-detail$/, (req, res, _p, q) => {
 // ================= התחברות והרשאות =================
 // הלשוניות שניתן להקצות למשתמש צפייה — חייב להתאים ל-TAB_LABELS ב-app.js, אחרת בחירה של המנהל
 // נמחקת בשקט בשמירה. 'business' (פרטי העסק) אינו כאן בכוונה — הוא להנהלה בלבד.
-const VALID_TABS = ['home', 'summary', 'events', 'quotes', 'clients', 'contractors', 'payroll', 'bank', 'team', 'connections'];
+const VALID_TABS = ['home', 'summary', 'events', 'quotes', 'clients', 'contractors', 'payroll', 'bank', 'connections'];
 const uid = () => id('usr');
 const cleanUsername = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
 
@@ -5601,5 +5547,6 @@ server.listen(PORT, async () => {
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);
   startWhatsappBridge(async (text) => { try { const wc = process.env.WHATSAPP_COMPANY || 'co_bpm'; await greenInvoice.withCompany(wc, () => ingestText(text, wc)); } catch {} })
     .then(r => { if (r && !r.ok) console.log('ווטסאפ:', r.reason); });
-  try { scheduleNightlyMailScan(); } catch (e) { console.error('תזמון סריקת מייל נכשל:', e.message); } // סריקת מייל לילית אוטומטית לכל החברות
+  try { scheduleNightlyMailScan();
+  scheduleDailyBackup(); } catch (e) { console.error('תזמון סריקת מייל נכשל:', e.message); } // סריקת מייל לילית אוטומטית לכל החברות
 });
