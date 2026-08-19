@@ -20,7 +20,7 @@ import { startWhatsappBridge, getBridgeStatus } from './whatsappBridge.js';
 import { statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { chatConfigured, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields, classifyExpenseAttachment, aiUsage } from './chat.js';
-import { buildBackup, backupFileName, runBackupMail, backupMailText } from './backup.js';
+import { buildBackup, backupFileName, runBackupMail, planRetention } from './backup.js';
 import mailer from './mailer.js';
 import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
@@ -4221,9 +4221,25 @@ async function runDailyBackup(trigger = 'scheduled') {
   if (!mailer.companyMailConfigured(creds)) { console.log('[backup] דילוג — אין חשבון מייל לחברה הראשית'); return { skipped: 'אין חשבון מייל' }; }
   try {
     const r = await runBackupMail(mailer.sendMailFrom, creds, to);
-    _lastBackup = { ...r, trigger, ok: true };
     console.log(`[backup] נשלח ל-${to} · ${(r.gzBytes / 1048576).toFixed(2)}MB · ${r.counts.events} אירועים, ${r.counts.bankTx} תנועות בנק`);
-    return r;
+    // ניקוי ישנים בתיבת היעד לפי מדיניות השמירה. דורש גישת IMAP לאותה תיבה
+    // (BACKUP_MAIL_USER/PASS); בלעדיה הגיבוי עדיין נשלח, רק לא מתנקה.
+    let cleaned = null;
+    const bCreds = { user: (process.env.BACKUP_MAIL_USER || '').trim(), pass: (process.env.BACKUP_MAIL_PASS || '').trim() };
+    if (bCreds.user && bCreds.pass) {
+      try {
+        const listed = await mailReader.listBackupMails(bCreds);
+        if (listed.ok) {
+          const plan = planRetention(listed.items);
+          const del = plan.remove.map(f => f.id);
+          const res2 = del.length ? await mailReader.deleteMails(bCreds, del) : { ok: true, count: 0 };
+          cleaned = { total: listed.items.length, kept: plan.keep.length, removed: res2.count || 0, error: res2.error || null };
+          if (cleaned.removed) console.log(`[backup] ניקוי: נמחקו ${cleaned.removed} גיבויים ישנים, נשארו ${cleaned.kept}`);
+        } else cleaned = { error: listed.error };
+      } catch (e) { cleaned = { error: e.message }; }
+    }
+    _lastBackup = { ...r, trigger, ok: true, cleaned };
+    return { ...r, cleaned };
   } catch (e) {
     _lastBackup = { ok: false, error: e.message, at: new Date().toISOString(), trigger };
     console.error('[backup] נכשל:', e.message);

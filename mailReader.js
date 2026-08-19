@@ -263,4 +263,53 @@ export async function markMessagesSeen(creds, uids) {
   }
 }
 
-export default { imapTest, scanMailbox, inspectMailbox, markMessagesSeen };
+// ===== ניקוי גיבויים ישנים בתיבת הגיבוי =====
+// מחזיר את מיילי הגיבוי בתיבה (נושא מתחיל ב"גיבוי מערכת") עם תאריך ו-uid,
+// כדי שמדיניות השמירה תחליט מי נשאר. הקריאה והמחיקה מופרדות בכוונה: את מי
+// למחוק מחליטה פונקציה טהורה ונבדקת (planRetention), לא הקוד שנוגע בתיבה.
+export async function listBackupMails(creds) {
+  if (!creds || !creds.user || !creds.pass) return { ok: false, error: 'אין פרטי תיבה', items: [] };
+  const ImapFlow = await imapflow();
+  const client = new ImapFlow(conf(creds));
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock('INBOX');
+    const items = [];
+    try {
+      const uids = await client.search({ header: { subject: 'גיבוי מערכת' } }, { uid: true }) || [];
+      if (uids.length) {
+        for await (const msg of client.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
+          const d = msg.envelope && msg.envelope.date;
+          if (d) items.push({ id: msg.uid, createdTime: new Date(d).toISOString() });
+        }
+      }
+    } finally { lock.release(); }
+    await client.logout();
+    return { ok: true, items };
+  } catch (e) {
+    try { await client.logout(); } catch { }
+    try { await client.close(); } catch { }
+    return { ok: false, error: e.message, items: [] };
+  }
+}
+
+export async function deleteMails(creds, uids) {
+  const list = [...new Set((uids || []).map(Number).filter(Boolean))];
+  if (!creds || !creds.user || !creds.pass || !list.length) return { ok: true, count: 0 };
+  const ImapFlow = await imapflow();
+  const client = new ImapFlow(conf(creds));
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock('INBOX');
+    try { await client.messageDelete(list, { uid: true }); }
+    finally { lock.release(); }
+    await client.logout();
+    return { ok: true, count: list.length };
+  } catch (e) {
+    try { await client.logout(); } catch { }
+    try { await client.close(); } catch { }
+    return { ok: false, error: e.message, count: 0 };
+  }
+}
+
+export default { imapTest, scanMailbox, inspectMailbox, markMessagesSeen, listBackupMails, deleteMails };
