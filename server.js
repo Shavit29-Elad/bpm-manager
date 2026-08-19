@@ -4303,6 +4303,12 @@ function scheduleDailyReport() {
   };
   const arm = () => { setTimeout(async () => { await runDailyReport(); arm(); }, msToNext()); };
   arm();
+  // הרצה חד-פעמית בעליית השרת — לבדיקה/הפעלה ראשונה בלי להמתין ל-07:00.
+  // מופעל ע"י REPORT_ON_BOOT=1 ומכובה מיד אחרי, כדי שלא ישלח בכל פריסה.
+  if (process.env.REPORT_ON_BOOT === '1') {
+    setTimeout(() => { runDailyReport('boot').catch(e => console.error('[report] boot נכשל:', e.message)); }, 8000);
+    console.log('[report] REPORT_ON_BOOT=1 — ריצה חד-פעמית בעוד 8 שניות');
+  }
   console.log(`[report] סיכום יומי מתוזמן — ריצה ראשונה בעוד ~${Math.round(msToNext() / 60000)} דק'`);
 }
 
