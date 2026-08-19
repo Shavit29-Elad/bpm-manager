@@ -3,13 +3,13 @@
 // העיקרון: המייל מכיל **רק דברים שדורשים פעולה**. מייל שמדווח "הכל בסדר" נהיה
 // רעש ומפסיקים לפתוח אותו — ולכן כשאין שום פריט, לא נשלח מייל בכלל.
 //
-// בניית הטקסט מופרדת מאיסוף הנתונים (buildReport מקבל נתונים ומחזיר מחרוזת),
-// כדי שאפשר יהיה לבדוק את הניסוח בלי גישה לחשבונית ירוקה או לבסיס הנתונים.
+// המבנה: buildReport מייצר **מודל נתונים** (מקטעים → קבוצות → שורות), ושני
+// מרנדרים נפרדים הופכים אותו לטקסט או ל-HTML. כך התוכן והעיצוב אינם נדבקים זה
+// לזה, ואפשר לבדוק את התוכן בלי חשבונית ירוקה ובלי בסיס נתונים.
 
-const MONTHS_HE = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
 const ddmy = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : String(iso || ''); };
 const money = (n) => `${Math.round(Number(n) || 0).toLocaleString('he-IL')} ₪`;
-const MAX_ROWS = 8;   // מעבר לזה מקבצים, אחרת המייל נהיה בלתי קריא
+const MAX_ROWS = 12;   // תקרה לרשימות משניות; חשבוניות פתוחות אינן מוגבלות
 
 // כמה ימים מהפקת המסמך עד שהוא נחשב "מתעכב". ניתן לשינוי בפרטי העסק.
 export const DEFAULT_OVERDUE_DAYS = 45;
@@ -19,108 +19,186 @@ const daysSince = (iso) => {
   return isNaN(t) ? null : Math.floor((Date.now() - t) / 86400000);
 };
 
-// חודש האירוע נסגר? מתריעים על אירוע שלא חויב רק אחרי שעברנו את החודש שלו —
-// באמצע החודש אין טעם לרדוף אחרי אירועים שעוד לא הגיע זמן לחייב.
+// מתריעים על אירוע שלא חויב רק אחרי שעברנו את החודש שלו — באמצע החודש אין
+// טעם לרדוף אחרי אירועים שעוד לא הגיע זמן לחייב.
 export function monthClosed(evDate, now = new Date()) {
   const m = String(evDate || '').match(/^(\d{4})-(\d{2})/);
   if (!m) return false;
   return (Number(m[1]) * 12 + Number(m[2])) < (now.getFullYear() * 12 + (now.getMonth() + 1));
 }
 
-// limit=null → בלי קיצור. חשבוניות פתוחות מוצגות תמיד במלואן: זה הכסף שממתין לך,
-// ו"ועוד 4" שם אומר שארבעה חובות נעלמים מהעין.
-const listBlock = (rows, extraLine, limit = MAX_ROWS) => {
-  if (limit == null || rows.length <= limit) return rows.map(r => `  • ${r}`).join('\n');
-  const shown = rows.slice(0, limit).map(r => `  • ${r}`);
-  shown.push(`  ועוד ${rows.length - limit}${extraLine ? ' — ' + extraLine : ''}`);
-  return shown.join('\n');
-};
-
-// ---- בניית גוף המייל ----
-// data: { companyName, overdueInvoices[], uninvoicedEvents[], payablesReady[], payablesWaiting[],
-//         mailPending, bankUnmatched, eventsPending }
+// ---- מודל הדוח ----
+// section: { icon, title, total, tone, groups[] }
+// group:   { label, count, sum, note, cols[], limit, rows[{ cells[], flag, sub }] }
 export function buildReport(data, now = new Date()) {
-  const secs = [];
+  const sections = [];
+  const overdueDays = data.overdueDays;
 
-  // 1) כסף שממתין לך
-  const inRows = [];
-  const totalIn = (data.overdueInvoices || []).reduce((s, d) => s + (Number(d.amount) || 0), 0)
-    + (data.uninvoicedEvents || []).reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  if ((data.overdueInvoices || []).length) {
-    // כל החשבוניות הפתוחות, בלי קיצור. הסף אינו מסנן — הוא רק מסמן ב-⚠ מי מתעכבת,
-    // וכאלה עולות לראש הרשימה. אחריהן מיון לפי סכום יורד.
-    const all = data.overdueInvoices.slice().sort((a, b) => {
-      const la = (a.days || 0) >= data.overdueDays ? 0 : 1, lb = (b.days || 0) >= data.overdueDays ? 0 : 1;
-      return la !== lb ? la - lb : (Number(b.amount) || 0) - (Number(a.amount) || 0);
+  // ===== 1) כסף שממתין לך =====
+  const inGroups = [];
+  const invs = (data.overdueInvoices || []).slice().sort((a, b) => {
+    const la = (a.days || 0) >= overdueDays ? 0 : 1, lb = (b.days || 0) >= overdueDays ? 0 : 1;
+    return la !== lb ? la - lb : (Number(b.amount) || 0) - (Number(a.amount) || 0);
+  });
+  if (invs.length) {
+    const late = invs.filter(d => (d.days || 0) >= overdueDays).length;
+    inGroups.push({
+      label: 'חשבוניות פתוחות',
+      count: invs.length,
+      sum: invs.reduce((t, d) => t + (Number(d.amount) || 0), 0),
+      note: late ? `${late} מעל ${overdueDays} יום` : null,
+      cols: ['לקוח', 'מסמך', 'הופקה', 'גיל', 'סכום'],
+      limit: null,   // חובות פתוחים — אף פעם לא מקצרים
+      rows: invs.map(d => ({
+        flag: (d.days || 0) >= overdueDays,
+        cells: [
+          d.clientName || '—',
+          `${d.typeName || 'מסמך'}${d.number ? ' #' + d.number : ''}`,
+          d.date ? ddmy(d.date) : '—',
+          d.days != null ? `${d.days} יום` : '—',
+          money(d.amount),
+        ],
+        sub: d.description || null,
+      })),
     });
-    const late = all.filter(d => (d.days || 0) >= data.overdueDays);
-    const rows = all.map(d => `${(d.days || 0) >= data.overdueDays ? '⚠ ' : ''}${d.clientName || '—'} · ${d.typeName || 'מסמך'}${d.number ? ' #' + d.number : ''} · ${money(d.amount)}`
-      + `${d.date ? ' · הופקה ' + ddmy(d.date) : ''}${d.days != null ? ' · ' + d.days + ' יום' : ''}`
-      + `${d.description ? '\n     ' + d.description : ''}`);
-    const sumAll = all.reduce((t, d) => t + (Number(d.amount) || 0), 0);
-    const head = `חשבוניות פתוחות (${rows.length} · ${money(sumAll)})`
-      + (late.length ? ` — מתוכן ${late.length} מעל ${data.overdueDays} יום, מסומנות ב-⚠` : '');
-    inRows.push(`${head}:\n${listBlock(rows, null, null)}`);
   }
-  if ((data.uninvoicedEvents || []).length) {
-    const evs = data.uninvoicedEvents.slice().sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0));
-    const rows = evs.map(e => `${ddmy(e.date)}${e.artist ? ' · ' + e.artist : ''}${e.location ? ' · ' + e.location : ''} · ${money(e.amount)}`);
-    const sum = evs.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-    inRows.push(`אירועים שעברו וטרם חויבו (${rows.length} · ${money(sum)}):\n${listBlock(rows, `סה"כ ${money(sum)}`)}`);
+  const evs = (data.uninvoicedEvents || []).slice().sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0));
+  if (evs.length) {
+    inGroups.push({
+      label: 'אירועים שעברו וטרם חויבו',
+      count: evs.length,
+      sum: evs.reduce((t, e) => t + (Number(e.amount) || 0), 0),
+      cols: ['תאריך', 'אמן', 'מיקום', 'סכום'],
+      rows: evs.map(e => ({ cells: [ddmy(e.date), e.artist || '—', e.location || '—', money(e.amount)] })),
+    });
   }
-  if (inRows.length) secs.push(`💰 כסף שממתין לך — ${money(totalIn)}\n\n${inRows.join('\n\n')}`);
+  if (inGroups.length) {
+    sections.push({ icon: '💰', title: 'כסף שממתין לך', tone: 'green', total: inGroups.reduce((t, g) => t + g.sum, 0), groups: inGroups });
+  }
 
-  // 2) כסף שאתה חייב
-  const outRows = [];
-  const totalOut = [...(data.payablesReady || []), ...(data.payablesWaiting || [])]
-    .reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  if ((data.payablesReady || []).length) {
-    const rows = data.payablesReady.slice().sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0))
-      .map(p => `${p.supplierName || 'ספק'}${p.number ? ' · #' + p.number : ''} · ${money(p.amount)}`);
-    outRows.push(`מוכן לתשלום — הלקוח כבר שילם (${rows.length}):\n${listBlock(rows)}`);
+  // ===== 2) כסף שאתה חייב =====
+  const outGroups = [];
+  const payGroup = (label, list) => {
+    if (!list || !list.length) return;
+    const rows = list.slice().sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0));
+    outGroups.push({
+      label, count: rows.length, sum: rows.reduce((t, p) => t + (Number(p.amount) || 0), 0),
+      cols: ['ספק', 'מסמך', 'סכום'],
+      rows: rows.map(p => ({ cells: [p.supplierName || 'ספק', p.number ? '#' + p.number : '—', money(p.amount)] })),
+    });
+  };
+  payGroup('מוכן לתשלום — הלקוח כבר שילם', data.payablesReady);
+  payGroup('ממתין לתשלום מהלקוח', data.payablesWaiting);
+  if (outGroups.length) {
+    sections.push({ icon: '💸', title: 'כסף שאתה חייב', tone: 'red', total: outGroups.reduce((t, g) => t + g.sum, 0), groups: outGroups });
   }
-  if ((data.payablesWaiting || []).length) {
-    const rows = data.payablesWaiting.slice().sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0))
-      .map(p => `${p.supplierName || 'ספק'}${p.number ? ' · #' + p.number : ''} · ${money(p.amount)}`);
-    outRows.push(`ממתין לתשלום מהלקוח (${rows.length}):\n${listBlock(rows)}`);
-  }
-  if (outRows.length) secs.push(`💸 כסף שאתה חייב — ${money(totalOut)}\n\n${outRows.join('\n\n')}`);
 
-  // 3) דורש יד
+  // ===== 3) דורש יד =====
   const fix = [];
-  if (data.mailPending) fix.push(`${data.mailPending} חשבוניות נתקעו בקליטה מהמייל`);
-  if (data.bankUnmatched) fix.push(`${data.bankUnmatched} תנועות בנק לא הותאמו`);
-  if (data.eventsPending) fix.push(`${data.eventsPending} אירועים מהיומן ממתינים לאישור`);
-  if (fix.length) secs.push(`🔧 דורש יד\n\n${fix.map(x => `  • ${x}`).join('\n')}`);
+  if (data.mailPending) fix.push(['חשבוניות נתקעו בקליטה מהמייל', data.mailPending]);
+  if (data.bankUnmatched) fix.push(['תנועות זכות בבנק שלא הותאמו', data.bankUnmatched]);
+  if (data.eventsPending) fix.push(['אירועים מהיומן ממתינים לאישור', data.eventsPending]);
+  if (fix.length) {
+    sections.push({
+      icon: '🔧', title: 'דורש יד', tone: 'amber', total: null,
+      groups: [{ label: null, cols: ['', ''], rows: fix.map(([t, n]) => ({ cells: [t, String(n)] })) }],
+    });
+  }
 
-  if (!secs.length) return null;   // אין מה לדווח — לא שולחים מייל
+  if (!sections.length) return null;
 
   const d = now;
-  return {
-    subject: `סיכום יומי | ${data.companyName} | ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getFullYear()).slice(2)}`,
-    text: [
-      'בוקר טוב,',
-      `זה מה שדורש טיפול היום ב${data.companyName}.`,
-      '',
-      '',
-      secs.join('\n\n\n'),
-      '',
-      '',
-      data.appUrl ? `פתח את המערכת: ${data.appUrl}` : '',
-      '',
-      '— נשלח אוטומטית ממערכת הניהול הפיננסי',
-    ].filter(x => x !== undefined).join('\n'),
-  };
+  const dateLabel = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getFullYear()).slice(2)}`;
+  const report = { companyName: data.companyName, dateLabel, appUrl: data.appUrl || null, overdueDays, sections };
+  return { subject: `סיכום יומי | ${data.companyName} | ${dateLabel}`, report, text: reportText(report) };
 }
 
-// גרסת HTML — RTL, כפתור אמיתי לפתיחת המערכת, ושמירה על אותו מבנה בדיוק
-export function reportHtml(text, appUrl) {
-  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const body = esc(text.replace(/\nפתח את המערכת: .*/, '')).replace(/\n/g, '<br>');
-  const btn = appUrl
-    ? `<div style="margin:22px 0 6px"><a href="${esc(appUrl)}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:11px 26px;border-radius:9px;font-weight:600;font-size:14px">פתח את המערכת</a></div>`
+// ---- מרנדר טקסט (גרסת ה-plain-text של המייל) ----
+export function reportText(r) {
+  const out = ['בוקר טוב,', `זה מה שדורש טיפול היום ב${r.companyName}.`];
+  for (const s of r.sections) {
+    out.push('', '', `${s.icon} ${s.title}${s.total != null ? ` — ${money(s.total)}` : ''}`, '');
+    for (const g of s.groups) {
+      if (g.label) out.push(`${g.label} (${g.count}${g.sum != null ? ' · ' + money(g.sum) : ''})${g.note ? ' — ' + g.note : ''}:`);
+      const lim = g.limit === null ? null : (g.limit || MAX_ROWS);
+      for (const row of (lim == null ? g.rows : g.rows.slice(0, lim))) {
+        out.push(`  ${row.flag ? '⚠ ' : '• '}${row.cells.join(' · ')}`);
+        if (row.sub) out.push(`      ${row.sub}`);
+      }
+      if (lim != null && g.rows.length > lim) out.push(`  ועוד ${g.rows.length - lim}`);
+      out.push('');
+    }
+  }
+  if (r.appUrl) out.push('', `פתח את המערכת: ${r.appUrl}`);
+  out.push('', '— נשלח אוטומטית ממערכת הניהול הפיננסי');
+  return out.join('\n');
+}
+
+// ---- מרנדר HTML ----
+// עיצוב מיילים: טבלאות וסגנון inline בלבד. ג'ימייל מסיר <style> חיצוני ואינו
+// תומך ב-flex/grid, ולכן כל הפריסה בטבלאות — מיושן בקוד, אבל עובד בכל לקוח מייל.
+const TONES = {
+  green: { bar: '#059669', soft: '#ecfdf5' },
+  red: { bar: '#dc2626', soft: '#fef2f2' },
+  amber: { bar: '#d97706', soft: '#fffbeb' },
+};
+const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const F = 'font-family:Arial,Helvetica,sans-serif';
+
+export function reportHtml(r) {
+  const sections = r.sections.map(s => {
+    const tone = TONES[s.tone] || TONES.green;
+    const groups = s.groups.map(g => {
+      const head = g.label
+        ? `<tr><td colspan="${g.cols.length}" style="padding:14px 14px 6px;${F};font-size:13.5px;font-weight:700;color:#111827">${esc(g.label)}`
+          + ` <span style="font-weight:400;color:#6b7280">(${g.count}${g.sum != null ? ' · ' + esc(money(g.sum)) : ''})</span>`
+          + (g.note ? `<span style="font-weight:400;color:${tone.bar}"> — ${esc(g.note)}</span>` : '')
+          + `</td></tr>`
+        : '';
+      const cols = g.cols.some(c => c)
+        ? `<tr>${g.cols.map((c, i) => `<th align="${i === g.cols.length - 1 ? 'left' : 'right'}" style="padding:5px 14px;${F};font-size:11px;font-weight:600;color:#9ca3af;border-bottom:1px solid #e5e7eb;white-space:nowrap">${esc(c)}</th>`).join('')}</tr>`
+        : '';
+      const lim = g.limit === null ? null : (g.limit || MAX_ROWS);
+      const rows = (lim == null ? g.rows : g.rows.slice(0, lim)).map((row, idx) => {
+        const bg = row.flag ? tone.soft : (idx % 2 ? '#fafbfc' : '#ffffff');
+        const tds = row.cells.map((c, i) => {
+          const last = i === row.cells.length - 1;
+          const edge = (i === 0 && row.flag) ? `;border-right:3px solid ${tone.bar}` : '';
+          return `<td align="${last ? 'left' : 'right'}" style="padding:8px 14px;${F};font-size:13px;color:#1f2937;border-bottom:1px solid #f3f4f6${last ? ';font-weight:700;white-space:nowrap' : ''}${edge}">${esc(c)}</td>`;
+        }).join('');
+        const sub = row.sub
+          ? `<tr style="background:${bg}"><td colspan="${row.cells.length}" style="padding:0 14px 8px;${F};font-size:11.5px;color:#6b7280;border-bottom:1px solid #f3f4f6">${esc(row.sub)}</td></tr>`
+          : '';
+        return `<tr style="background:${bg}">${tds}</tr>${sub}`;
+      }).join('');
+      const more = (lim != null && g.rows.length > lim)
+        ? `<tr><td colspan="${g.cols.length}" style="padding:8px 14px;${F};font-size:12px;color:#6b7280">ועוד ${g.rows.length - lim}</td></tr>`
+        : '';
+      return head + cols + rows + more;
+    }).join('');
+    return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#fff;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:16px">
+      <tr><td style="padding:11px 14px;background:${tone.bar};border-radius:9px 9px 0 0;${F};font-size:14.5px;font-weight:700;color:#fff">
+        ${s.icon} ${esc(s.title)}${s.total != null ? `<span style="float:left">${esc(money(s.total))}</span>` : ''}
+      </td></tr>
+      <tr><td style="padding:0 0 6px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">${groups}</table></td></tr>
+    </table>`;
+  }).join('');
+
+  const btn = r.appUrl
+    ? `<div style="text-align:center;margin:4px 0"><a href="${esc(r.appUrl)}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:12px 34px;border-radius:9px;font-weight:700;font-size:14px;${F}">פתח את המערכת</a></div>`
     : '';
-  return `<div dir="rtl" style="text-align:right;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.75;color:#1c2333">${body}${btn}</div>`;
+
+  return `<div dir="rtl" style="background:#f6f7fb;padding:22px 12px;${F}">
+    <div style="max-width:680px;margin:0 auto">
+      <div style="margin-bottom:16px">
+        <div style="${F};font-size:19px;font-weight:700;color:#111827">בוקר טוב</div>
+        <div style="${F};font-size:13.5px;color:#6b7280;margin-top:3px">זה מה שדורש טיפול היום ב${esc(r.companyName)} · ${esc(r.dateLabel)}</div>
+      </div>
+      ${sections}
+      ${btn}
+      <div style="${F};font-size:11.5px;color:#9ca3af;text-align:center;margin-top:16px">נשלח אוטומטית ממערכת הניהול הפיננסי</div>
+    </div>
+  </div>`;
 }
 
-export { MONTHS_HE, ddmy, money, daysSince };
+export { ddmy, money, daysSince };

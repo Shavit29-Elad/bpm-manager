@@ -4163,9 +4163,12 @@ async function gatherReportData(cid) {
   }
 
   out.mailPending = ((db.mailPending || {})[cid] || []).length;
+  // תנועות זכות שלא הותאמו — כסף שנכנס ולא ידוע מול איזו חשבונית. זו אותה הגדרה
+  // בדיוק שבמסך הבנק (matchStatus === 'unmatched', ברירת המחדל שם היא זכות בלבד).
+  // קודם נספרה כל תנועה בלי חשבונית משויכת — כולל חובה, מאושרות ומקובצות — ולכן
+  // המספר היה גדול פי עשרות ממה שמוצג במסך.
   out.bankUnmatched = (db.bankTx || []).filter(t => ownedBy(t, cid)
-    && (!t.matchedInvoices || !t.matchedInvoices.length)
-    && t.matchStatus !== 'ignored' && t.matchStatus !== 'skip').length;
+    && t.matchStatus === 'unmatched' && t.direction === 'credit').length;
   return out;
 }
 
@@ -4182,7 +4185,7 @@ async function runDailyReport(trigger = 'scheduled', onlyCid = null) {
       const rep = buildReport(data);
       if (!rep) { per[cid] = { skipped: 'אין מה לדווח' }; continue; }
       await mailer.sendMailFrom(creds, {
-        to: [creds.user], subject: rep.subject, text: rep.text, html: reportHtml(rep.text, data.appUrl),
+        to: [creds.user], subject: rep.subject, text: rep.text, html: reportHtml(rep.report),
       });
       per[cid] = { ok: true, to: creds.user, overdue: data.overdueInvoices.length, uninvoiced: data.uninvoicedEvents.length };
       console.log(`[report] ${cid}: נשלח ל-${creds.user}`);
