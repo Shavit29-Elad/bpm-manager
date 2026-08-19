@@ -4192,11 +4192,15 @@ async function gatherReportData(cid) {
     if (!m || m[2] !== mm || m[3] !== yy) continue;
     const invs = Array.isArray(t.matchedInvoices) ? t.matchedInvoices : [];
     if (!invs.length) continue;
+    // תיאור המסמך — כמו בחשבוניות הפתוחות. אם למסמכים אין תיאור, נופלים לתיאור
+    // התנועה בבנק, שלרוב מכיל את שם המשלם.
+    const descs = [...new Set(invs.map(i => String(i.description || '').trim()).filter(Boolean))];
     out.paidInvoices.push({
       date: t.date,
       name: (invs[0] && (invs[0].clientName || invs[0].supplierName)) || t.nameHint || t.description || '—',
       docs: invs.map(i => `#${i.number || '—'}`).join(', '),
       amount: Math.abs(Number(t.absAmount != null ? t.absAmount : t.amount) || 0),
+      description: (descs.join(' · ') || String(t.description || '').trim() || '').slice(0, 120) || null,
     });
   }
 

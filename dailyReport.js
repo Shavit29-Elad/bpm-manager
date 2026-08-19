@@ -106,7 +106,7 @@ export function buildReport(data, now = new Date()) {
       groups.push({
         label: 'הכנסות — חשבוניות ששולמו והתקבלו', count: paid.length, sum: income,
         cols: ['תאריך', 'לקוח', 'מסמך', 'סכום'], limit: null,
-        rows: paid.map(p => ({ cells: [p.date || '—', p.name || '—', p.docs || '—', money(p.amount)] })),
+        rows: paid.map(p => ({ cells: [p.date || '—', p.name || '—', p.docs || '—', money(p.amount)], sub: p.description || null })),
       });
     }
     groups.push({
