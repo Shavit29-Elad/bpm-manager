@@ -4180,7 +4180,8 @@ async function gatherReportData(cid) {
     const v = Math.abs(Number(t.absAmount != null ? t.absAmount : t.amount) || 0);
     if (t.direction === 'credit') bCredit += v; else if (t.direction === 'debit') bDebit += v;
   }
-  out.bank = { credit: +bCredit.toFixed(2), debit: +bDebit.toFixed(2), label: `${MONTHS_HE[nowD.getMonth()]} ${yy}` };
+  out.bankDebit = +bDebit.toFixed(2);   // הוצאות החודש = סך תנועות החובה בבנק
+  out.monthLabel = `${MONTHS_HE[nowD.getMonth()]} ${yy}`;
 
   // חשבוניות ששולמו והתקבלו — תנועות זכות בבנק שהותאמו למסמך, בחודש הנוכחי.
   // זה הכסף שנכנס בפועל, עם המסמך שכנגדו.

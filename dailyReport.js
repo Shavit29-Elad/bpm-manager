@@ -93,39 +93,31 @@ export function buildReport(data, now = new Date()) {
     sections.push({ icon: '💸', title: 'כסף שאתה חייב', tone: 'red', total: outGroups.reduce((t, g) => t + g.sum, 0), groups: outGroups });
   }
 
-  // ===== 3) תנועה בבנק החודש =====
-  // תמונת מצב, לא משימה — ולכן היא לבדה אינה מצדיקה משלוח מייל (ראו hasAction בסוף).
-  const b = data.bank;
-  if (b && (b.credit || b.debit)) {
-    sections.push({
-      icon: '🏦', title: `תנועה בבנק · ${b.label || 'החודש'}`, tone: 'blue', total: null, info: true,
-      groups: [{
-        label: null, cols: ['', ''],
-        rows: [
-          { cells: ['נכנס', money(b.credit)] },
-          { cells: ['יצא', money(b.debit)] },
-          { cells: ['נטו', money((b.credit || 0) - (b.debit || 0))], strong: true },
-        ],
-      }],
-    });
-  }
-
-  // ===== 4) כסף שנכנס — חשבוניות ששולמו =====
-  // תנועות זכות בבנק שהותאמו לחשבונית, בחודש הנוכחי. תמונת מצב (info) ולא משימה.
+  // ===== 3) תזרים החודש =====
+  // הכנסה = חשבוניות ששולמו בפועל, כלומר תנועות זכות בבנק שהותאמו למסמך.
+  // הוצאה = סך תנועות החובה בבנק. תמונת מצב (info) ולא משימה — ולכן לבדה אינה
+  // מצדיקה משלוח מייל.
   const paid = (data.paidInvoices || []).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-  if (paid.length) {
-    sections.push({
-      icon: '✅', title: 'חשבוניות ששולמו והתקבלו', tone: 'teal', info: true,
-      total: paid.reduce((t, p) => t + (Number(p.amount) || 0), 0),
-      groups: [{
-        label: null, count: paid.length,
-        cols: ['תאריך', 'לקוח', 'מסמך', 'סכום'],
-        limit: null,
-        rows: paid.map(p => ({
-          cells: [p.date || '—', p.name || '—', p.docs || '—', money(p.amount)],
-        })),
-      }],
+  const income = paid.reduce((t, p) => t + (Number(p.amount) || 0), 0);
+  const expense = Number(data.bankDebit) || 0;
+  if (paid.length || expense) {
+    const groups = [];
+    if (paid.length) {
+      groups.push({
+        label: 'הכנסות — חשבוניות ששולמו והתקבלו', count: paid.length, sum: income,
+        cols: ['תאריך', 'לקוח', 'מסמך', 'סכום'], limit: null,
+        rows: paid.map(p => ({ cells: [p.date || '—', p.name || '—', p.docs || '—', money(p.amount)] })),
+      });
+    }
+    groups.push({
+      label: null, cols: ['', ''],
+      rows: [
+        { cells: ['סה"כ הכנסות', money(income)] },
+        { cells: ['הוצאות (חובה בבנק)', money(expense)] },
+        { cells: ['נטו', money(income - expense)], strong: true },
+      ],
     });
+    sections.push({ icon: '💵', title: `תזרים · ${data.monthLabel || 'החודש'}`, tone: 'teal', info: true, total: null, groups });
   }
 
   // מייל נשלח רק אם יש משהו לעשות. מקטע מידע (תנועת הבנק) אינו נחשב.
