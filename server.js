@@ -4192,17 +4192,38 @@ async function gatherReportData(cid) {
     if (!m || m[2] !== mm || m[3] !== yy) continue;
     const invs = Array.isArray(t.matchedInvoices) ? t.matchedInvoices : [];
     if (!invs.length) continue;
-    // תיאור המסמך — כמו בחשבוניות הפתוחות. אם למסמכים אין תיאור, נופלים לתיאור
-    // התנועה בבנק, שלרוב מכיל את שם המשלם.
-    const descs = [...new Set(invs.map(i => String(i.description || '').trim()).filter(Boolean))];
     out.paidInvoices.push({
       date: t.date,
       name: (invs[0] && (invs[0].clientName || invs[0].supplierName)) || t.nameHint || t.description || '—',
       docs: invs.map(i => `#${i.number || '—'}`).join(', '),
       amount: Math.abs(Number(t.absAmount != null ? t.absAmount : t.amount) || 0),
-      description: (descs.join(' · ') || String(t.description || '').trim() || '').slice(0, 120) || null,
+      _invIds: invs.map(i => i.id).filter(Boolean),
+      description: [...new Set(invs.map(i => String(i.description || '').trim()).filter(Boolean))].join(' · ') || null,
     });
   }
+
+  // השיוך בבנק לא תמיד שומר את תיאור המסמך. משלימים מחשבונית ירוקה — עד 25
+  // מסמכים לריצה, עם מטמון פר-מזהה, כדי לא להעמיס על ה-API. כישלון לא חוסם.
+  if (giEnabled(cid)) {
+    const cache = new Map();
+    let budget = 25;
+    for (const p of out.paidInvoices) {
+      if (p.description || !p._invIds.length || budget <= 0) continue;
+      const descs = [];
+      for (const id of p._invIds) {
+        if (budget <= 0) break;
+        if (!cache.has(id)) {
+          budget--;
+          try { const doc = await greenInvoice.getDocument(id); cache.set(id, String(doc.description || '').trim()); }
+          catch { cache.set(id, ''); }
+        }
+        const d = cache.get(id);
+        if (d) descs.push(d);
+      }
+      p.description = [...new Set(descs)].join(' · ') || null;
+    }
+  }
+  for (const p of out.paidInvoices) { delete p._invIds; if (p.description) p.description = p.description.slice(0, 120); }
 
   out.mailPending = ((db.mailPending || {})[cid] || []).length;
   // תנועות זכות שלא הותאמו — כסף שנכנס ולא ידוע מול איזו חשבונית. זו אותה הגדרה
