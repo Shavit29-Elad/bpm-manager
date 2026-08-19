@@ -21,7 +21,7 @@ import { statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { listTeam, findMember, TEAM } from './team.js';
 import { buildAppMap } from './appMap.js';
-import { chatWithMember, chatWithMemberVision, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields, classifyExpenseAttachment } from './chat.js';
+import { chatWithMember, chatWithMemberVision, chatGroupReply, chatConfigured, learnFromExchange, summarizeAsRequest, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields, classifyExpenseAttachment , aiUsage } from './chat.js';
 import mailer from './mailer.js';
 import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
@@ -3662,8 +3662,9 @@ function scheduleNightlyMailScan() {
   console.log(`[mail-nightly] מתוזמן — ריצה ראשונה בעוד ~${Math.round(msToNext() / 60000)} דק'`);
   // סריקה תכופה כל 15 דקות — קליטה "חיה" של מייל חדש. מצטברת בלבד (רק מייל חדש, בלי backfill, בלי dedupe כבד).
   // ה-guard _nightlyMailRunning מונע חפיפה עם הריצה הלילית.
-  setInterval(() => { runNightlyMailScan(undefined, false, { skipDedupe: true }).catch(() => {}); }, 15 * 60 * 1000);
-  console.log('[mail-poll] סריקה תכופה מתוזמנת — כל 15 דקות (מצטברת)');
+  const POLL_MIN = 45;   // היה 15 — 96 ריצות ביום על שלוש חברות, כמעט תמיד בלי מייל חדש
+  setInterval(() => { runNightlyMailScan(undefined, false, { skipDedupe: true }).catch(() => {}); }, POLL_MIN * 60 * 1000);
+  console.log(`[mail-poll] סריקה תכופה מתוזמנת — כל ${POLL_MIN} דקות (מצטברת)`);
 }
 // POST /api/mail-scan/nightly-now { since? } — הפעלה ידנית של הסריקה המלאה לכל החברות (רקע). לא ממתין לסיום.
 add('POST', /^\/api\/mail-scan\/nightly-now$/, async (req, res, _p, q, body) => {
@@ -3886,6 +3887,20 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
     }
     json(res, result);
   } catch (e) { json(res, { error: e.message }, 200); }
+});
+
+// GET /api/ai-usage — פירוט צריכת ה-AI מאז עליית השרת (הנהלה בלבד).
+// נועד להחליף ניחושים במדידה: כמה עולה כל סוג קריאה בפועל.
+add('GET', /^\/api\/ai-usage$/, (req, res) => {
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+  const rows = Object.entries(aiUsage.byLabel)
+    .map(([label, e]) => ({ label, ...e, cost: +e.cost.toFixed(4), avgCost: +(e.cost / Math.max(1, e.calls)).toFixed(5) }))
+    .sort((a, b) => b.cost - a.cost);
+  json(res, {
+    ok: true, since: aiUsage.since, calls: aiUsage.calls,
+    totalCost: +rows.reduce((t, r) => t + r.cost, 0).toFixed(4),
+    rows,
+  });
 });
 
 // GET /api/suppliers — ספקים מחשבונית ירוקה (fresh=1 מרענן)
@@ -4147,7 +4162,9 @@ add('POST', /^\/api\/team\/([^/]+)\/message$/, async (req, res, params, _q, body
     history.push({ role: 'assistant', content: reply, at: new Date().toISOString() });
     save(db);
     json(res, { ok: true, messages: history });
-    // למידה מתמשכת (ברקע, לא חוסם את התשובה): מזקק עובדות לזיכרון
+    // למידה מתמשכת (ברקע, לא חוסם את התשובה): מזקק עובדות לזיכרון.
+    // רצה פעם ב-10 הודעות ולא בכל אחת — זו הייתה קריאת AI שנייה לכל הודעה, כפול עלות בלי ערך מקביל.
+    if (history.length % 10 === 0)
     learnFromExchange(member, `משתמש: ${text}\n${member.name}: ${reply}`).then(notes => {
       if (!notes) return;
       const db2 = load(); db2.memory = db2.memory || {};

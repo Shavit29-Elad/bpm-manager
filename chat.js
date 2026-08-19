@@ -1,3 +1,23 @@
+// ---- מדידת שימוש: כל קריאה ל-Anthropic מדווחת טוקנים; אוספים אותם כדי לדעת לאן הולך הכסף ----
+// המחירים לפי מיליון טוקנים (מחירון Anthropic). cacheRead זול פי 10 מ-input רגיל.
+const PRICES = {
+  'claude-sonnet-5':            { in: 3,    out: 15,  cacheW: 3.75,  cacheR: 0.30 },
+  'claude-haiku-4-5-20251001':  { in: 1,    out: 5,   cacheW: 1.25,  cacheR: 0.10 },
+  'claude-3-5-sonnet-20241022': { in: 3,    out: 15,  cacheW: 3.75,  cacheR: 0.30 },
+};
+export const aiUsage = { calls: 0, byLabel: {}, since: new Date().toISOString() };
+function trackUsage(label, model, u) {
+  if (!u) return;
+  const i = Number(u.input_tokens) || 0, o = Number(u.output_tokens) || 0;
+  const cw = Number(u.cache_creation_input_tokens) || 0, cr = Number(u.cache_read_input_tokens) || 0;
+  const p = PRICES[model] || PRICES['claude-sonnet-5'];
+  const cost = (i * p.in + o * p.out + cw * p.cacheW + cr * p.cacheR) / 1e6;
+  const e = aiUsage.byLabel[label] || (aiUsage.byLabel[label] = { calls: 0, in: 0, out: 0, cacheW: 0, cacheR: 0, cost: 0, model });
+  e.calls++; e.in += i; e.out += o; e.cacheW += cw; e.cacheR += cr; e.cost += cost; e.model = model;
+  aiUsage.calls++;
+  console.log(`[ai] ${label} · ${model} · in ${i} out ${o}${cr ? ` cacheR ${cr}` : ''}${cw ? ` cacheW ${cw}` : ''} · $${cost.toFixed(4)}`);
+}
+
 // chat.js — שיחה עם דמויות הצוות. תומך בשני ספקים (בלי תלויות, fetch בלבד):
 //   • Google Gemini (חינמי!)  — GEMINI_API_KEY   ← מומלץ, קל וחינם
 //   • Anthropic Claude (בתשלום) — ANTHROPIC_API_KEY
@@ -39,13 +59,19 @@ async function callGemini(system, messages, { maxTokens = 1200 } = {}) {
 }
 
 // --- Anthropic Claude (בתשלום) ---
-async function callAnthropic(system, messages, { maxTokens = 1200 } = {}) {
+async function callAnthropic(system, messages, { maxTokens = 1200, label = 'chat' } = {}) {
   const key = process.env.ANTHROPIC_API_KEY;
-  // רשימת מודלים לניסיון (מהחכם/עדכני לישן) — עמידה בפני שינויי שמות
+  // Haiku ראשון: לצ'אט הפנימי ולחילוץ הוא מספיק לחלוטין ועולה פי 3 פחות מ-Sonnet.
+  // Sonnet נשאר כגיבוי אם Haiku לא זמין.
   const candidates = process.env.CHAT_MODEL
     ? [process.env.CHAT_MODEL]
-    : ['claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-latest'];
-  const bodyBase = { max_tokens: maxTokens, system, messages };
+    : ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-3-5-sonnet-20241022'];
+  // ההקשר הקבוע (אופי הדמות + מפת המערכת + הזיכרון) חוזר זהה בכל הודעה — ~3,800 טוקנים.
+  // cache_control מסמן אותו לשמירה במטמון; קריאה חוזרת ממנו עולה עשירית ממחיר input רגיל.
+  const sysBlocks = (typeof system === 'string' && system.length > 2000)
+    ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+    : system;
+  const bodyBase = { max_tokens: maxTokens, system: sysBlocks, messages };
   let lastErr = '';
   for (const model of candidates) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -57,6 +83,7 @@ async function callAnthropic(system, messages, { maxTokens = 1200 } = {}) {
     if (res.status === 404) { lastErr = `(404) ${text.slice(0, 120)}`; continue; } // מודל לא קיים — ננסה את הבא
     if (!res.ok) throw new Error(`שגיאת צ'אט (${res.status}): ${text.slice(0, 300)}`);
     let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מהשירות'); }
+    trackUsage(label, model, data.usage);
     return (data.content || []).map(c => c.text).filter(Boolean).join('') || '(אין תשובה)';
   }
   throw new Error(`אף מודל Claude לא זמין. אפשר לקבוע CHAT_MODEL ידנית. פרט: ${lastErr}`);
@@ -69,6 +96,7 @@ async function complete(system, messages, opts = {}) {
 }
 
 // שילוב מפת האפליקציה (מעודכנת) + הזיכרון המתמשך לתוך פרומפט המערכת של הדמות
+const CHAT_HISTORY_LIMIT = 20;   // כמה הודעות אחרונות נשלחות למודל
 function withContext(member, memory, appMap) {
   let sys = member.system;
   if (appMap) sys += `\n\n${appMap}`;
@@ -78,13 +106,16 @@ function withContext(member, memory, appMap) {
 
 // צ'אט אישי (עם מפת אפליקציה + זיכרון)
 export async function chatWithMember(member, history, memory = '', appMap = '') {
-  return complete(withContext(member, memory, appMap), history.map(m => ({ role: m.role, content: m.content })));
+  // חיתוך היסטוריה: כל הודעה שלחה מחדש את *כל* השיחה מתחילתה, בלי גבול.
+  // 20 ההודעות האחרונות מספיקות להקשר ועוצרות צמיחה אינסופית של העלות.
+  const recent = history.slice(-CHAT_HISTORY_LIMIT);
+  return complete(withContext(member, memory, appMap), recent.map(m => ({ role: m.role, content: m.content })), { label: 'chat' });
 }
 
 // צ'אט קבוצתי — כל חבר עונה בתורו על סמך תמלול השיחה (עם מפת אפליקציה + זיכרון)
 export async function chatGroupReply(member, transcript, memory = '', appMap = '') {
   const content = `זו שיחה קבוצתית של צוות החברה (כמה עובדים וירטואליים + המנהל). התמלול עד כה:\n\n${transcript}\n\nהשב/י עכשיו כ${member.name} (${member.role}) בלבד — בקצרה, באופי שלך, ורק בתחום שלך. אם אין לך מה להוסיף, כתב/י משפט קצר. אל תדבר/י בשם אחרים.`;
-  return complete(withContext(member, memory, appMap), [{ role: 'user', content }]);
+  return complete(withContext(member, memory, appMap), [{ role: 'user', content }], { label: 'chat-group' });
 }
 
 // צ'אט אישי עם צילום מסך — המנהל מראה למעצבת מסך מהמערכת, והיא מנתחת אותו (ראייה ממוחשבת)
@@ -113,7 +144,7 @@ export async function summarizeAsRequest(member, transcript) {
 
 השיחה:
 ${transcript}`;
-  const raw = await complete(system, [{ role: 'user', content: prompt }]);
+  const raw = await complete(system, [{ role: 'user', content: prompt }], { label: 'summarize' });
   try {
     const jsonStr = (raw.match(/\{[\s\S]*\}/) || [raw])[0];
     const out = JSON.parse(jsonStr);
@@ -204,7 +235,7 @@ export async function extractEvents(text, defaultYear) {
 
 הטקסט:
 ${text}`;
-  const raw = await complete(system, [{ role: 'user', content: prompt }], { maxTokens: 8000 });
+  const raw = await complete(system, [{ role: 'user', content: prompt }], { maxTokens: 8000, label: 'extract-events' });
   const arr = parseEventsJson(raw);
   const n = (v) => (v == null || v === '' || isNaN(+String(v).replace(/[^\d.\-]/g, ''))) ? null : +String(v).replace(/[^\d.\-]/g, '');
   return arr.map(e => {
@@ -250,7 +281,7 @@ export async function interpretBonuses(note, names) {
 - "ללא בונוס" / "בלי בונוס" / "אין בונוס" → bonus:0 (מאפס את הבונוס) לעובדים הרלוונטיים.
 - כלול רק עובדים שההוראה חלה עליהם, ורק שדות רלוונטיים (השאר null). אם אין הוראה תקפה — החזר [].`;
   try {
-    const raw = await complete(system, [{ role: 'user', content: prompt }], { maxTokens: 1000 });
+    const raw = await complete(system, [{ role: 'user', content: prompt }], { maxTokens: 1000, label: 'bonuses' });
     const arr = parseEventsJson(raw);
     return Array.isArray(arr) ? arr : [];
   } catch { return []; }
@@ -260,7 +291,8 @@ export async function interpretBonuses(note, names) {
 // כשמזוהה ש-Claude ללא קרדיט/הרשאה — מדלגים עליו זמנית וניגשים ישר ל-Gemini (חוסך קריאה מיותרת פר-מסמך ולוגים).
 let _claudeOutUntil = 0, _claudeOutReason = '';
 // קריאה מולטימודלית ל-Claude (מסמך/תמונה) — עם fallback למודלים
-async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = {}) {
+async function callAnthropicVision(system, contentBlocks, opts = {}) {
+  const { maxTokens = 900 } = opts;
   const key = process.env.ANTHROPIC_API_KEY;
   // מהירות: Haiku ראשון — מודל מהיר וזול שמספיק לחילוץ שדות מחשבונית; Sonnet רק כגיבוי אם Haiku נכשל.
   const candidates = process.env.VISION_MODEL
@@ -299,6 +331,7 @@ async function callAnthropicVision(system, contentBlocks, { maxTokens = 900 } = 
         throw new Error(`שגיאת AI (${res.status}): ${text.slice(0, 300)}`);
       }
       let data; try { data = JSON.parse(text); } catch { throw new Error('תשובה לא תקינה מ-AI'); }
+      trackUsage(opts.label || 'vision', model, data.usage);
       return (data.content || []).map(c => c.text).filter(Boolean).join('');
     }
   }
@@ -556,7 +589,7 @@ export async function learnFromExchange(member, exchangeText) {
   const system = `אתה עוזר שמתחזק זיכרון ארוך-טווח עבור ${member.name} (${member.role}). מטרתך לזקק עובדות/העדפות/החלטות יציבות ששווה לזכור לטווח ארוך.`;
   const prompt = `מתוך חילופי ההודעות הבאים, כתוב 0–2 נקודות תמציתיות (שורה כל אחת) של מידע חדש ויציב ששווה לזכור על העסק/המערכת/העדפות המנהל. אל תכלול דברים חד-פעמיים או טריוויאליים. אם אין מה לזכור, כתוב בדיוק: אין\n\n${exchangeText}`;
   try {
-    const out = (await complete(system, [{ role: 'user', content: prompt }])).trim();
+    const out = (await complete(system, [{ role: 'user', content: prompt }], { label: 'learn' })).trim();
     if (!out || out === 'אין' || out.length > 500) return '';
     return out;
   } catch { return ''; }
