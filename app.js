@@ -2733,12 +2733,15 @@ window.openEventFromCal = async (enc) => {
   }
   if (ev && ev.id) openEventEditor(ev);
 };
+// שדות הקישור של שורות הקבלן (paidPayableId, paidExpenseId, paidSource) חייבים לשרוד
+// את מחזור העריכה. קודם נבנתה כאן רשימה חדשה עם שישה שדות נבחרים בלבד, ולכן עצם
+// פתיחת האירוע ושמירתו מחקה את השיוך להוצאת הספק — גם בלי שנגעת בכלום.
 async function openEventEditor(ev) {
   _evEditing = ev;
   _evCtr = (ev.contractorDetails && ev.contractorDetails.length ? ev.contractorDetails
-    : (ev.contractors || []).map(n => ({ name: n, amount: null }))).map(c => ({ name: c.name || '', amount: c.amount ?? '', paid: !!c.paid, paidInvoice: c.paidInvoice || null, paidExpenseUrl: c.paidExpenseUrl || null, handled: !!c.handled }));
+    : (ev.contractors || []).map(n => ({ name: n, amount: null }))).map(c => ({ ...c, name: c.name || '', amount: c.amount ?? '' }));   // פריסה מלאה — ראה הערה למעלה
   _evEmp = (ev.employeeDetails && ev.employeeDetails.length ? ev.employeeDetails
-    : (ev.employees || []).map(n => ({ name: n }))).map(w => ({ name: w.name || '', factor: w.factor ?? '1', bonus: w.bonus ?? '', food: w.food ?? '', travel: w.travel ?? '', note: w.note ?? '', bonusFactor: w.bonusFactor ?? null }));
+    : (ev.employees || []).map(n => ({ name: n }))).map(w => ({ ...w, name: w.name || '', factor: w.factor ?? '1', bonus: w.bonus ?? '', food: w.food ?? '', travel: w.travel ?? '', note: w.note ?? '', bonusFactor: w.bonusFactor ?? null }));   // פריסה מלאה מאותה סיבה
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
   if (!_evEmployees) { try { _evEmployees = await api(`/api/employees?companyId=${state.company}`); } catch { _evEmployees = []; } }
   if (!_evSuppliers) { try { const s = await api('/api/suppliers'); _evSuppliers = Array.isArray(s) ? s : []; } catch { _evSuppliers = []; } }

@@ -135,6 +135,21 @@ check('openEditPayable נבנית בלי שגיאת ריצה', () => {
   fn(fakeDom());
   return true;
 });
+check('עורך האירוע לא מוחק שדות קישור של שורות קבלן', () => {
+  // באג אמיתי: הרשימה נבנתה מחדש עם שדות נבחרים בלבד, ולכן פתיחת אירוע ושמירתו
+  // מחקה את paidPayableId — והשיוך להוצאת הספק נעלם בלי שנגעו בכלום.
+  const L = app.split('\n');
+  const i = L.findIndex(l => l.includes('_evCtr = (ev.contractorDetails'));
+  if (i < 0) throw new Error('לא נמצאה בניית _evCtr');
+  const code = L[i] + '\n' + L[i + 1];
+  const fn = new Function('ev', 'let _evCtr;\n' + code + '\nreturn _evCtr;');
+  const row = fn({ contractorDetails: [{ name: 'ספק', amount: 4500, paid: true, paidSource: 'manual',
+    paidPayableId: 'pay_x', paidExpenseId: 'exp_9', paidInvoice: '500924', paidExpenseUrl: 'u', handled: true }] })[0];
+  const lost = ['paidPayableId', 'paidExpenseId', 'paidSource', 'paidInvoice', 'paidExpenseUrl', 'handled', 'paid']
+    .filter(k => row[k] === undefined);
+  if (lost.length) throw new Error('שדות שנמחקים: ' + lost.join(', '));
+  return true;
+});
 check('buildReport מייצר מייל שלם', async () => true);
 
 const rep = await import('./dailyReport.js');
