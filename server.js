@@ -2050,21 +2050,74 @@ function revertEventsForCreditedInvoice(db, srcId, credit, onlyEventIds) {
   return out;
 }
 
-// GET /api/documents/:id/events — האירועים המקושרים למסמך (לבחירת זיכוי חלקי לפי אירוע)
-add('GET', /^\/api\/documents\/([^/]+)\/events$/, async (req, res, params) => {
-  const srcId = params[0];
-  const db = load();
+// האירועים המקושרים למסמך כחיוב פעיל (לא זוכו/הומרו כבר דרכו). משמש גם לבחירת זיכוי חלקי
+// וגם לבניית שורות הזיכוי — כדי ששניהם לא ייפרדו זה מזה.
+function linkedEventsForDoc(db, srcId) {
   const out = [];
   for (const e of (db.events || [])) {
     const links = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
-    // מקושר למסמך זה כחיוב פעיל (לא זוכה/הומר כבר דרך המסמך הזה)
     const link = links.find(d => String(d.id) === String(srcId));
     const isActive = String(e.invoiceId || '') === String(srcId) || (link && !link.credited && !link.credit && !link.converted);
     if (!isActive) continue;
     out.push({ id: e.id, date: e.date || e.dateRaw || null, artist: e.artist || e.title || '', location: e.location || '', net: +Number(eventTotal(e)).toFixed(2) });
   }
   out.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  json(res, { ok: true, events: out });
+  return out;
+}
+const _ddmy = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : String(iso || ''); };
+// "28/07/26 · בן צור · קריית ים"
+const evLabel = (ev) => [_ddmy(ev.date), ev.artist, ev.location].map(x => String(x || '').trim()).filter(Boolean).join(' · ');
+const _numHe = (n) => Number(n || 0).toLocaleString('he-IL', { maximumFractionDigits: 2 });
+
+// בונה את שורות מסמך הזיכוי ואת תיאור המסמך לפי האירועים המקושרים/שנבחרו.
+// reqNet=null → זיכוי מלא. selIds → האירועים שסומנו (זיכוי חלקי לפי אירוע).
+// כלל ברזל: הסכום שהתבקש הוא הקובע — לעולם לא מחלקים סכום בין אירועים לבד.
+function buildCreditDoc(db, srcId, src, srcType, originalItems, reqNet, selIdsRaw) {
+  const kind = srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס';
+  const baseDesc = `זיכוי עבור ${kind} #${src.number}`;
+  const fullNet = originalItems.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
+  const evs = linkedEventsForDoc(db, srcId);
+  const selIds = new Set((Array.isArray(selIdsRaw) ? selIdsRaw : []).map(String).filter(Boolean));
+  const line = (desc, price) => ({ description: String(desc).slice(0, 250), quantity: 1, price: +Number(price).toFixed(2) });
+
+  if (reqNet == null) {
+    // זיכוי מלא — שורה לכל אירוע, אבל רק אם סכום האירועים מכסה בדיוק את המסמך.
+    // אחרת מעתיקים את שורות המקור: ביטול מלא חייב לבטל בדיוק את הסכום המקורי.
+    const sum = evs.reduce((t, e) => t + (Number(e.net) || 0), 0);
+    // תיאור המסמך המקורי נשאר רק כאן — בזיכוי מלא הוא מדויק, כי כל האירועים מזוכים.
+    // בזיכוי חלקי הוא מטעה (מונה אירועים שלא זוכו) ולכן יורד.
+    const fullDesc = src.description ? `${baseDesc} — ${src.description}` : baseDesc;
+    if (evs.length && Math.abs(sum - fullNet) <= 0.5) {
+      return { items: evs.map(e => line(`זיכוי עבור אירוע ${evLabel(e)}`, e.net)), description: fullDesc };
+    }
+    return { items: originalItems, description: fullDesc };
+  }
+
+  const sel = evs.filter(e => selIds.has(String(e.id)));
+  // לא סומן אירוע — אין דרך לדעת על מה הזיכוי; נשארים בניסוח הכללי
+  if (!sel.length) return { items: [line(`זיכוי חלקי — ${kind} #${src.number}`, reqNet)], description: `זיכוי חלקי — ${baseDesc}` };
+
+  if (sel.length === 1) {
+    const e = sel[0];
+    const full = Math.abs(reqNet - (Number(e.net) || 0)) <= 0.5;
+    return {
+      items: [line(full ? `זיכוי עבור אירוע ${evLabel(e)}` : `זיכוי חלקי — אירוע ${evLabel(e)} (מתוך ${_numHe(e.net)} ₪)`, reqNet)],
+      description: `זיכוי חלקי — ${baseDesc} — ${evLabel(e)}`,
+    };
+  }
+
+  const sum = sel.reduce((t, e) => t + (Number(e.net) || 0), 0);
+  // הסכום תואם את סך האירועים → שורה נפרדת לכל אירוע
+  if (Math.abs(reqNet - sum) <= 0.5) {
+    return { items: sel.map(e => line(`זיכוי עבור אירוע ${evLabel(e)}`, e.net)), description: `זיכוי חלקי — ${baseDesc}` };
+  }
+  // סכום ידני שאינו סך האירועים — שורה אחת שמזכירה את כולם, בסכום שנכתב
+  return { items: [line(`זיכוי חלקי — ${sel.map(evLabel).join(' + ')}`, reqNet)], description: `זיכוי חלקי — ${baseDesc}` };
+}
+
+// GET /api/documents/:id/events — האירועים המקושרים למסמך (לבחירת זיכוי חלקי לפי אירוע)
+add('GET', /^\/api\/documents\/([^/]+)\/events$/, async (req, res, params) => {
+  json(res, { ok: true, events: linkedEventsForDoc(load(), params[0]) });
 });
 
 // POST /api/documents/:id/credit-preview { date?, amount?, skipDateValidation? } — תצוגה מקדימה מעוצבת (PDF) של חשבונית הזיכוי, ללא יצירה
@@ -2079,13 +2132,13 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit-preview$/, async (req, res, para
     if (!items.length) return json(res, { error: 'אין שורות במסמך המקור' }, 400);
     const date = body && body.date ? String(body.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
     const skipDateValidation = Boolean(body && body.skipDateValidation);
-    const baseDesc = `זיכוי עבור ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`;
     // אותה לוגיקת שורות בדיוק כמו בהפקה האמיתית — כדי שהתצוגה תשקף את המסמך שייווצר
     const fullNet = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
     const reqNet = (body && body.amount != null && Number(body.amount) > 0) ? +Number(body.amount).toFixed(2) : null;
     const isPartial = reqNet != null && reqNet < fullNet - 0.5;
-    const creditItems = isPartial ? [{ description: `זיכוי חלקי — ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`, quantity: 1, price: reqNet }] : items;
-    const opts = { type: 330, client, items: creditItems, date, skipDateValidation, description: (isPartial ? `זיכוי חלקי (${reqNet} + מע"מ) — ` : '') + (src.description ? `${baseDesc} — ${src.description}` : baseDesc) };
+    // אותן שורות ותיאור בדיוק כמו בהפקה האמיתית — התצוגה חייבת לשקף את המסמך שייווצר
+    const built = buildCreditDoc(load(), params[0], src, srcType, items, isPartial ? reqNet : null, (body && (body.eventIds || body.revertEventIds)) || []);
+    const opts = { type: 330, client, items: built.items, date, skipDateValidation, description: built.description };
     let pv;
     try { pv = await greenInvoice.previewDocument(opts); }
     catch (e) {
@@ -2117,18 +2170,17 @@ add('POST', /^\/api\/documents\/([^/]+)\/credit$/, async (req, res, params, _q, 
     if (!items.length) return json(res, { error: 'אין שורות במסמך המקור' }, 400);
     const date = body && body.date ? String(body.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
     const skipDateValidation = Boolean(body && body.skipDateValidation); // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
-    const baseDesc = `זיכוי עבור ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`;
 
     // זיכוי חלקי: אם התבקש סכום (לפני מע"מ) קטן מסך המסמך — מזכים רק אותו, בשורה אחת, בלי לבטל את המקור ובלי להחזיר אירועים.
     const fullNet = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
     const reqNet = (body && body.amount != null && Number(body.amount) > 0) ? +Number(body.amount).toFixed(2) : null;
     const isPartial = reqNet != null && reqNet < fullNet - 0.5;
-    const creditItems = isPartial ? [{ description: `זיכוי חלקי — ${srcType === 320 ? 'חשבונית מס-קבלה' : 'חשבונית מס'} #${src.number}`, quantity: 1, price: reqNet }] : items;
+    const built = buildCreditDoc(load(), params[0], src, srcType, items, isPartial ? reqNet : null, (body && (body.revertEventIds || body.eventIds)) || []);
 
     // שלב 1 — חשבונית זיכוי (330). זיכוי מלא מקושר כ"ביטול"; זיכוי חלקי מקושר כקישור רגיל (לא מבטל את המקור).
     const credit = await createDocFwd({
-      type: 330, client, items: creditItems, date, skipDateValidation,
-      description: (isPartial ? `זיכוי חלקי (${reqNet} + מע"מ) — ` : '') + (src.description ? `${baseDesc} — ${src.description}` : baseDesc),
+      type: 330, client, items: built.items, date, skipDateValidation,
+      description: built.description,
       linkedDocumentIds: [params[0]], ...(isPartial ? {} : { linkType: 'cancel' }),
     });
 

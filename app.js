@@ -1811,7 +1811,9 @@ window.creditPreview = async () => {
   const skip = !!document.getElementById('creditSkipSeq')?.checked;
   const amtRaw = document.getElementById('creditAmount')?.value;
   const amt = (amtRaw === '' || amtRaw == null) ? null : Number(amtRaw);
-  const r = await fetch(`/api/documents/${id}/credit-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date, skipDateValidation: skip, ...(amt != null && amt > 0 ? { amount: amt } : {}) }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const r = await fetch(`/api/documents/${id}/credit-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date, skipDateValidation: skip, ...(amt != null && amt > 0 ? { amount: amt } : {}),
+      // האירועים שסומנו — בלעדיהם התצוגה מציגה טקסט שונה ממה שיופק בפועל
+      eventIds: Array.from(window._creditSelIds || []) }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok && r.pdfBase64) pbody.innerHTML = `<iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:100%;border:0" title="תצוגה מקדימה"></iframe>`;
   else pbody.innerHTML = `<div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--danger);padding:12px;text-align:center">${escapeHtml(String(r.error || 'שגיאה בתצוגה המקדימה'))}</div>`;
 };
