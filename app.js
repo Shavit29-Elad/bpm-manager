@@ -6557,6 +6557,19 @@ async function renderBusiness(c) {
         <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <b style="font-size:13.5px">📬 סיכום יומי</b>
+        <div class="muted" style="font-size:12px;margin:3px 0 8px">כל בוקר ב-07:00 נשלח לתיבה של החברה הזו סיכום של מה שדורש טיפול. אם אין כלום — לא נשלח מייל.</div>
+        <label style="display:block;max-width:320px">חשבונית נחשבת מתעכבת אחרי
+          <input id="biz_reportOverdueDays" type="number" min="0" max="365" placeholder="45 (ברירת מחדל)" value="${p.reportOverdueDays ? escapeHtml(String(p.reportOverdueDays)) : ''}"> ימים
+        </label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+          <button class="btn ghost" onclick="reportPreview(this)">👁 תצוגה מקדימה</button>
+          <button class="btn ghost" onclick="reportRunNow(this)">✉️ שלח לי עכשיו</button>
+          <span id="bizReportMsg" class="muted" style="font-size:12.5px"></span>
+        </div>
+        <pre id="bizReportPv" dir="rtl" style="display:none;white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12.5px;line-height:1.65;margin-top:9px;font-family:inherit;text-align:right;max-height:400px;overflow:auto"></pre>
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
         <b style="font-size:13.5px">💾 גיבוי נתונים</b>
         <div class="muted" style="font-size:12px;margin:3px 0 8px">כל הנתונים של שלוש החברות נשלחים אוטומטית ב-02:00 לכתובת גיבוי נפרדת. אפשר גם להוריד עותק עכשיו לפני שינוי גדול.</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -6758,7 +6771,7 @@ window.bizSave = async () => {
   const msg = document.getElementById('bizMsg'); if (msg) msg.textContent = 'שומר…';
   await bizWrite('/api/business-profile', 'PUT', {
     name: g('biz_name'), businessNumber: g('biz_number'), email: g('biz_email'), address: g('biz_address'), accountantEmail: g('biz_acct'), senderEmail: g('biz_sender'), payrollEmail: g('biz_payroll'), emailSignature: (document.getElementById('biz_sig')?.innerHTML || ''), docRemark: g('biz_docremark'),
-    mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'), mailBodyTemplate: (document.getElementById('biz_mailBody')?.value || ''), mailSubjectTemplate: (document.getElementById('biz_mailSubject')?.value || ''),
+    mailUser: g('biz_mailUser'), mailFromName: g('biz_mailFromName'), mailPass: g('biz_mailPass'), reportOverdueDays: g('biz_reportOverdueDays'), mailBodyTemplate: (document.getElementById('biz_mailBody')?.value || ''), mailSubjectTemplate: (document.getElementById('biz_mailSubject')?.value || ''),
     withholdingPct: Number(g('biz_wh')) || 0,
     managers: [
       { name: g('mgr0_name'), idNumber: g('mgr0_id'), phone: g('mgr0_phone'), email: g('mgr0_email') },
@@ -6767,6 +6780,28 @@ window.bizSave = async () => {
   });
   state.whRate = Math.min(0.3, Math.max(0, (Number(g('biz_wh')) || 0) / 100));   // רענון שיעור הניכוי בזיכרון מיד
   if (msg) { msg.textContent = 'נשמר ✓'; setTimeout(() => { if (msg) msg.textContent = ''; }, 2500); }
+};
+// סיכום יומי — תצוגה מקדימה ושליחת בדיקה
+window.reportPreview = async (btn) => {
+  const msg = document.getElementById('bizReportMsg'), pv = document.getElementById('bizReportPv');
+  btn.disabled = true; if (msg) msg.textContent = 'בונה…';
+  const r = await api('/api/daily-report/preview?fresh=1').catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false;
+  if (r.ok && r.empty) { if (msg) msg.innerHTML = '<span style="color:var(--accent2)">אין כרגע שום פריט שדורש טיפול — מייל כזה לא יישלח.</span>'; if (pv) pv.style.display = 'none'; return; }
+  if (!r.ok) { if (msg) msg.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String(r.error || 'נכשל'))}</span>`; return; }
+  if (msg) msg.innerHTML = `<span class="muted">נושא: ${escapeHtml(r.subject)}</span>`;
+  if (pv) { pv.textContent = r.text; pv.style.display = 'block'; }
+};
+window.reportRunNow = async (btn) => {
+  const msg = document.getElementById('bizReportMsg');
+  btn.disabled = true; if (msg) msg.textContent = 'שולח…';
+  const r = await fetch(`/api/daily-report/run?companyId=${encodeURIComponent(state.company)}`, { method: 'POST' })
+    .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  btn.disabled = false;
+  const res = r.result || {};
+  if (msg) msg.innerHTML = res.ok
+    ? `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml(String(res.to || ''))}</span>`
+    : `<span style="color:${res.skipped ? 'var(--muted)' : 'var(--danger)'}">${escapeHtml(String(res.skipped || res.error || r.error || 'נכשל'))}</span>`;
 };
 // גיבוי ידני — לבדיקה שהמסלול עובד, ולפני שינויים גדולים
 window.backupRunNow = async (btn) => {

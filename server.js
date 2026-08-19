@@ -21,6 +21,7 @@ import { statusMasked, loadEnvIntoProcess } from './settings.js';
 import { DEFS as CONN_DEFS, getRecords, setRecord, clearRecord } from './connections.js';
 import { chatConfigured, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields, classifyExpenseAttachment, aiUsage } from './chat.js';
 import { buildBackup, backupFileName, runBackupMail, planRetention } from './backup.js';
+import { buildReport, reportHtml, monthClosed, daysSince, DEFAULT_OVERDUE_DAYS } from './dailyReport.js';
 import mailer from './mailer.js';
 import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
@@ -3310,6 +3311,7 @@ function bizProfile(db, cid) {
   if (p.payrollEmail === undefined) p.payrollEmail = '';
   // חתימת מייל (HTML) — מודבקת מה-Gmail, כולל חותמת/תמונה. מצורפת בתחתית מיילים שנשלחים מהמערכת (פירוט עבודות). ריק = בלי חתימה.
   if (p.emailSignature === undefined) p.emailSignature = '';
+  if (p.reportOverdueDays === undefined) p.reportOverdueDays = 0;   // 0 = ברירת המחדל מ-dailyReport.js
   // חשבון מייל שולח פר-חברה (Gmail + App Password) — כל חברה שולחת מהתיבה שלה
   if (p.mailUser === undefined) p.mailUser = '';
   if (p.mailPass === undefined) p.mailPass = '';
@@ -3411,6 +3413,7 @@ add('PUT', /^\/api\/business-profile$/, (req, res, _p, q, body) => {
   if ('senderEmail' in b) p.senderEmail = String(b.senderEmail || '').trim();
   if ('payrollEmail' in b) p.payrollEmail = String(b.payrollEmail || '').trim();
   if ('emailSignature' in b) p.emailSignature = String(b.emailSignature || '');
+  if ('reportOverdueDays' in b) p.reportOverdueDays = Math.max(0, Math.min(365, Number(b.reportOverdueDays) || 0));
   // חשבון מייל שולח פר-חברה (Gmail). הסיסמה מתעדכנת רק אם נשלח ערך חדש לא-ריק (כדי לאפשר עדכון שאר השדות בלי לשלוח סיסמה שוב).
   if ('mailUser' in b) p.mailUser = String(b.mailUser || '').trim();
   if ('mailFromName' in b) p.mailFromName = String(b.mailFromName || '').trim();
@@ -4205,6 +4208,121 @@ add('POST', /^\/api\/connections\/disconnect$/, (req, res, _p, q, body) => {
   }
   clearRecord(key);
   json(res, { ok: true, connections: buildConnectionsView(cid) });
+});
+
+// ---- סיכום יומי פר-חברה ----
+// נשלח ב-07:00 לתיבת כל חברה, ורק אם יש בו משהו שדורש פעולה.
+const REPORT_HOUR_UTC = 4, REPORT_MIN_UTC = 0;   // 07:00 שעון ישראל
+let _lastReport = null;
+
+async function gatherReportData(cid) {
+  const db = load();
+  const prof = bizProfile(db, cid);
+  const comp = (db.companies || []).find(c => c.id === cid);
+  const overdueDays = Number(prof.reportOverdueDays) > 0 ? Number(prof.reportOverdueDays) : DEFAULT_OVERDUE_DAYS;
+  const out = {
+    companyName: (prof.mailFromName || prof.name || (comp && comp.name) || '').trim(),
+    overdueDays, appUrl: (process.env.APP_URL || 'https://asfinance.co.il'),
+    overdueInvoices: [], uninvoicedEvents: [], payablesReady: [], payablesWaiting: [],
+    mailPending: 0, bankUnmatched: 0, eventsPending: 0,
+  };
+
+  // חשבוניות פתוחות מעל הסף — מחשבונית ירוקה
+  if (giEnabled(cid)) {
+    try {
+      const docs = await greenInvoice.openDocuments() || [];
+      for (const d of docs) {
+        const days = daysSince(d.date || d.documentDate);
+        if (days == null || days < overdueDays) continue;
+        out.overdueInvoices.push({
+          clientName: d.clientName || (d.client && d.client.name) || '',
+          typeName: DOC_NAMES_HE[Number(d.type)] || 'מסמך',
+          number: d.number || null,
+          amount: d.amountDue != null ? Number(d.amountDue) : Number(d.amount) || 0,
+          days,
+        });
+      }
+    } catch { /* חשבונית ירוקה לא זמינה — שאר המקטעים עדיין שווים משלוח */ }
+  }
+
+  const evs = (db.events || []).filter(e => ownedBy(e, cid));
+  // אירועים שעברו וטרם חויבו — רק אחרי שהחודש שלהם נסגר
+  for (const e of evs) {
+    if (!e.confirmed || e.noInvoice) continue;
+    if (e.invoiceStatus === 'invoiced') continue;
+    const d = e.date || e.dateRaw || '';
+    if (!monthClosed(d)) continue;
+    out.uninvoicedEvents.push({ date: d, artist: e.artist || e.title || '', location: e.location || '', amount: eventTotal(e) });
+  }
+  out.eventsPending = evs.filter(e => !e.confirmed).length;
+
+  // ספקים לתשלום
+  for (const p of (db.supplierPayables || [])) {
+    if (!ownedBy(p, cid) || p.paid) continue;
+    const row = { supplierName: p.supplierName || '', number: p.number || null, amount: Number(p.amount) || 0 };
+    if (p.readiness === 'ready') out.payablesReady.push(row);
+    else if (p.readiness === 'waiting' || p.readiness === 'partial') out.payablesWaiting.push(row);
+  }
+
+  out.mailPending = ((db.mailPending || {})[cid] || []).length;
+  out.bankUnmatched = (db.bankTx || []).filter(t => ownedBy(t, cid)
+    && (!t.matchedInvoices || !t.matchedInvoices.length)
+    && t.matchStatus !== 'ignored' && t.matchStatus !== 'skip').length;
+  return out;
+}
+
+async function runDailyReport(trigger = 'scheduled', onlyCid = null) {
+  const db = load();
+  const per = {};
+  for (const c of (db.companies || [])) {
+    const cid = c.id;
+    if (onlyCid && cid !== onlyCid) continue;
+    const creds = companyMailCreds(db, cid);
+    if (!mailer.companyMailConfigured(creds)) { per[cid] = { skipped: 'אין חשבון מייל' }; continue; }
+    try {
+      const data = await greenInvoice.withCompany(cid, () => gatherReportData(cid));
+      const rep = buildReport(data);
+      if (!rep) { per[cid] = { skipped: 'אין מה לדווח' }; continue; }
+      await mailer.sendMailFrom(creds, {
+        to: [creds.user], subject: rep.subject, text: rep.text, html: reportHtml(rep.text, data.appUrl),
+      });
+      per[cid] = { ok: true, to: creds.user, overdue: data.overdueInvoices.length, uninvoiced: data.uninvoicedEvents.length };
+      console.log(`[report] ${cid}: נשלח ל-${creds.user}`);
+    } catch (e) { per[cid] = { error: e.message }; console.error(`[report] ${cid} נכשל:`, e.message); }
+  }
+  _lastReport = { at: new Date().toISOString(), trigger, per };
+  return per;
+}
+
+function scheduleDailyReport() {
+  const msToNext = () => {
+    const now = new Date();
+    const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), REPORT_HOUR_UTC, REPORT_MIN_UTC, 0, 0));
+    if (t.getTime() <= now.getTime()) t.setUTCDate(t.getUTCDate() + 1);
+    return t.getTime() - now.getTime();
+  };
+  const arm = () => { setTimeout(async () => { await runDailyReport(); arm(); }, msToNext()); };
+  arm();
+  console.log(`[report] סיכום יומי מתוזמן — ריצה ראשונה בעוד ~${Math.round(msToNext() / 60000)} דק'`);
+}
+
+// GET /api/daily-report/preview — תצוגה מקדימה של המייל לחברה הנוכחית, בלי לשלוח
+add('GET', /^\/api\/daily-report\/preview$/, async (req, res, _p, q) => {
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+  try {
+    const cid = reqCompany(q);
+    const data = await gatherReportData(cid);
+    const rep = buildReport(data);
+    json(res, { ok: true, empty: !rep, subject: rep ? rep.subject : null, text: rep ? rep.text : null, overdueDays: data.overdueDays });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/daily-report/run — שליחה עכשיו (חברה נוכחית בלבד, לבדיקה)
+add('POST', /^\/api\/daily-report\/run$/, async (req, res, q, body) => {
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+  const cid = reqCompany(q, body);
+  const per = await runDailyReport('manual', cid);
+  json(res, { ok: true, result: per[cid] || null });
 });
 
 // ---- גיבוי ----
@@ -5564,5 +5682,6 @@ server.listen(PORT, async () => {
   startWhatsappBridge(async (text) => { try { const wc = process.env.WHATSAPP_COMPANY || 'co_bpm'; await greenInvoice.withCompany(wc, () => ingestText(text, wc)); } catch {} })
     .then(r => { if (r && !r.ok) console.log('ווטסאפ:', r.reason); });
   try { scheduleNightlyMailScan();
-  scheduleDailyBackup(); } catch (e) { console.error('תזמון סריקת מייל נכשל:', e.message); } // סריקת מייל לילית אוטומטית לכל החברות
+  scheduleDailyBackup();
+  scheduleDailyReport(); } catch (e) { console.error('תזמון סריקת מייל נכשל:', e.message); } // סריקת מייל לילית אוטומטית לכל החברות
 });
