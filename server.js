@@ -3744,6 +3744,10 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
     const amts = [
       ...note.matchAll(new RegExp('(?:בונוס|תוספת)\\s*(?:של\\s*)?(?:₪\\s*)?' + AMT, 'g')),
       ...note.matchAll(new RegExp(AMT + '\\s*(?:₪|ש"?ח)?\\s*(?:בונוס|תוספת)', 'g')),
+      // גם סכום שצמוד למילת "כולל"/"סה״כ" ולא לבונוס עצמו ("סה״כ 1000 כולל בונוס", "כולל 1000").
+      // רלוונטי רק כשההערה כבר הוכרה כהוראת בונוס, ולכן לא תופס מספרים אקראיים.
+      ...note.matchAll(new RegExp('(?:כולל|סה"כ|סה״כ|סהכ|ביחד|בסך\\s*הכל)\\s*(?:של\\s*)?(?:₪\\s*)?' + AMT, 'g')),
+      ...note.matchAll(new RegExp(AMT + '\\s*(?:₪|ש"?ח)?\\s*(?:כולל|סה"כ|סה״כ|סהכ|ביחד)', 'g')),
     ].map(m => Number(String(m[1]).replace(',', '.'))).filter(n => !isNaN(n));
     const hasExplicitAmount = amts.length > 0;
     const uniqAmts = [...new Set(amts)];
@@ -3812,6 +3816,21 @@ add('POST', /^\/api\/interpret-bonuses$/, async (req, res, _p, q, body) => {
           if (def != null) { result.push({ name: nm, factor: '1', bonus: def, bonusFactor: null, defaultBonus: true }); present.add(nm); }
         }
       }
+    }
+    // רשת ביטחון גלובלית: הוראה שאין בה שם עובד ("כולל בונוס 1000", "בונוס לכולם", "כפולה")
+    // חלה על כל עובדי האירוע. חיונית כשה-AI מחזיר ריק (עומס/כשל/ניסוח לא מוכר) — בלעדיה
+    // ההוראה נבלעת והמשתמש מקבל "לא זוהתה הוראת בונוס/תשלום תקפה".
+    const eventNames = (Array.isArray(body?.employees) ? body.employees : []).map(n => String(n || '').trim()).filter(Boolean);
+    for (const nm of eventNames) {
+      if (present.has(nm)) continue;
+      const base = baseMap[nm];
+      if (globalDouble) { result.push({ name: nm, factor: '1', bonus: base != null ? base : null, bonusFactor: null, doubleAsBonus: true }); present.add(nm); continue; }
+      if (globalHalf) { result.push({ name: nm, factor: '1', bonus: base != null ? Math.round(base / 2) : null, bonusFactor: null, halfAsBonus: true }); present.add(nm); continue; }
+      if (!globalBonus) continue;
+      const r = { name: nm, factor: '1', bonus: null, bonusFactor: null };
+      if (hasExplicitAmount) { if (bonusFromNote(explicitAmount, base, r)) { result.push(r); present.add(nm); } }
+      else if (noBonusNote) { r.bonus = 0; result.push(r); present.add(nm); }
+      else if (useDefaultBonus) { const def = defMap[nm]; if (def != null) { r.bonus = def; r.defaultBonus = true; result.push(r); present.add(nm); } }
     }
     json(res, result);
   } catch (e) { json(res, { error: e.message }, 200); }
