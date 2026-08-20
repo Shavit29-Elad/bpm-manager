@@ -31,7 +31,9 @@ export function extractTnefAttachments(buf) {
     let pendingName = null;
     while (pos + 9 <= buf.length) {
       pos += 1;                        // level
-      const id = buf.readUInt32LE(pos); pos += 4;
+      // המזהה הוא 32 ביט: 16 עליונים = סוג הנתון (atpByte/atpString), 16 תחתונים =
+      // המזהה עצמו. השוואה של כל 32 הביטים לא מוצאת דבר.
+      const id = buf.readUInt32LE(pos) & 0xFFFF; pos += 4;
       const len = buf.readUInt32LE(pos); pos += 4;
       if (len < 0 || pos + len > buf.length) break;   // אורך לא תקין — עוצרים בבטחה
       const data = buf.subarray(pos, pos + len);

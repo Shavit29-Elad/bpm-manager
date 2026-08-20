@@ -200,10 +200,13 @@ check('winmail.dat — חילוץ ה-PDF שבפנים', () => {
   // Outlook ב-RTF אורז את כל הצרופות לקובץ בינארי אחד. בלי פענוח הסורק רואה
   // קובץ שאינו PDF ומדלג, והחשבונית נעלמת בלי שום חיווי.
   const pdf = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(120, 0x41)]);
-  const attr = (id, data) => { const b = Buffer.alloc(9); b.writeUInt8(2, 0); b.writeUInt32LE(id, 1); b.writeUInt32LE(data.length, 5);
+  // כמו שאאוטלוק כותב בפועל: 16 הביטים העליונים של המזהה הם סוג הנתון.
+  // השוואה של כל 32 הביטים לא מוצאת כלום — זה היה באג אמיתי.
+  const attr = (type, id, data) => { const b = Buffer.alloc(9); b.writeUInt8(2, 0);
+    b.writeUInt32LE(((type & 0xFFFF) << 16) | (id & 0xFFFF), 1); b.writeUInt32LE(data.length, 5);
     return Buffer.concat([b, data, Buffer.alloc(2)]); };
   const head = Buffer.alloc(6); head.writeUInt32LE(0x223E9F78, 0); head.writeUInt16LE(1, 4);
-  const tnef = Buffer.concat([head, attr(0x8010, Buffer.from('INVOICE.PDF\0', 'latin1')), attr(0x800F, pdf)]);
+  const tnef = Buffer.concat([head, attr(0x0001, 0x8010, Buffer.from('INVOICE.PDF\0', 'latin1')), attr(0x0006, 0x800F, pdf)]);
   const out = mr.expandTnef([{ filename: 'winmail.dat', contentType: 'application/ms-tnef', content: tnef }]);
   if (!out.some(a => String(a.contentType).includes('pdf'))) throw new Error('ה-PDF לא חולץ');
   if (mr.extractTnefAttachments(Buffer.from('garbage')).length) throw new Error('קובץ פגום לא מוחזר ריק');
