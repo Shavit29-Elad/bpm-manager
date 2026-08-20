@@ -4,6 +4,79 @@ let _ImapFlow = null, _simpleParser = null;
 async function imapflow() { if (!_ImapFlow) _ImapFlow = (await import('imapflow')).ImapFlow; return _ImapFlow; }
 async function mailparser() { if (!_simpleParser) _simpleParser = (await import('mailparser')).simpleParser; return _simpleParser; }
 
+// ===== winmail.dat (TNEF) =====
+// כשהשולח משתמש ב-Outlook בעיצוב RTF, כל הצרופות נארזות בקובץ בינארי אחד בשם
+// winmail.dat, וה-PDF האמיתי יושב בתוכו. בלי פענוח הסורק רואה קובץ שאינו PDF
+// ומדלג — החשבונית נעלמת בלי שום חיווי.
+//
+// מבנה TNEF: חתימה (4 בתים) + key (2), ואז רצף מאפיינים:
+//   level(1) · id(4) · length(4) · data(length) · checksum(2)
+// מזהי המאפיינים הרלוונטיים: 0x8010 = שם הצרופה, 0x800F = תוכן הצרופה.
+const TNEF_SIGNATURE = 0x223E9F78;
+const ATT_ATTACH_TITLE = 0x8010;
+const ATT_ATTACH_DATA = 0x800F;
+
+export function isTnef(filename, contentType) {
+  const f = String(filename || '').toLowerCase(), c = String(contentType || '').toLowerCase();
+  return f === 'winmail.dat' || c.includes('ms-tnef') || c.includes('application/vnd.ms-tnef');
+}
+
+// מחזיר [{ filename, content(Buffer) }] מתוך winmail.dat. לא זורק — קובץ פגום
+// מחזיר רשימה ריקה, וההודעה ממשיכה למסלול הרגיל.
+export function extractTnefAttachments(buf) {
+  const out = [];
+  try {
+    if (!buf || buf.length < 6 || buf.readUInt32LE(0) !== TNEF_SIGNATURE) return out;
+    let pos = 6;                       // אחרי החתימה וה-key
+    let pendingName = null;
+    while (pos + 9 <= buf.length) {
+      pos += 1;                        // level
+      const id = buf.readUInt32LE(pos); pos += 4;
+      const len = buf.readUInt32LE(pos); pos += 4;
+      if (len < 0 || pos + len > buf.length) break;   // אורך לא תקין — עוצרים בבטחה
+      const data = buf.subarray(pos, pos + len);
+      pos += len + 2;                  // דילוג על ה-checksum
+      if (id === ATT_ATTACH_TITLE) {
+        pendingName = data.toString('latin1').replace(/\0+$/, '').trim() || null;
+      } else if (id === ATT_ATTACH_DATA) {
+        out.push({ filename: pendingName || `attachment-${out.length + 1}`, content: Buffer.from(data) });
+        pendingName = null;
+      }
+      if (out.length > 20) break;      // בלם — קובץ פגום לא יגרור לולאה ארוכה
+    }
+  } catch { /* פורמט לא צפוי — מחזירים מה שנאסף */ }
+  return out;
+}
+
+// זיהוי סוג לפי חתימת הבתים, כי השם בתוך TNEF הוא לרוב 8.3 ולא תמיד אמין
+export function sniffMime(buf, filename) {
+  const f = String(filename || '').toLowerCase();
+  if (buf && buf.length > 4) {
+    if (buf.subarray(0, 4).toString('latin1') === '%PDF') return 'application/pdf';
+    if (buf[0] === 0xFF && buf[1] === 0xD8) return 'image/jpeg';
+    if (buf[0] === 0x89 && buf.subarray(1, 4).toString('latin1') === 'PNG') return 'image/png';
+  }
+  if (f.endsWith('.pdf')) return 'application/pdf';
+  if (/\.(jpe?g)$/.test(f)) return 'image/jpeg';
+  if (f.endsWith('.png')) return 'image/png';
+  return 'application/octet-stream';
+}
+
+// מרחיב צרופות winmail.dat לצרופות האמיתיות שבתוכן. צרופה שאינה TNEF עוברת כמות שהיא.
+export function expandTnef(attachments) {
+  const out = [];
+  for (const a of (attachments || [])) {
+    if (!isTnef(a.filename, a.contentType) || !a.content) { out.push(a); continue; }
+    const inner = extractTnefAttachments(a.content);
+    if (!inner.length) { out.push(a); continue; }
+    for (const f of inner) {
+      out.push({ ...a, filename: f.filename, content: f.content, size: f.content.length,
+        contentType: sniffMime(f.content, f.filename), fromTnef: true });
+    }
+  }
+  return out;
+}
+
 function conf(creds) {
   return { host: 'imap.gmail.com', port: 993, secure: true, auth: { user: creds.user, pass: creds.pass }, logger: false };
 }
@@ -147,7 +220,7 @@ export async function scanMailbox(creds, since, { excludeUids = [], limit = 10 }
         for await (const msg of client.fetch(use, { source: true }, { uid: true })) {
           processedUids.push(msg.uid);
           let parsed; try { parsed = await simpleParser(msg.source); } catch { continue; }
-          const atts = (parsed.attachments || []).filter(a => {
+          const atts = expandTnef(parsed.attachments || []).filter(a => {
             const ct = String(a.contentType || '').toLowerCase();
             if (ct.includes('pdf')) return true;
             if (!ct.startsWith('image/')) return false;
@@ -225,7 +298,7 @@ export async function inspectMailbox(creds, since, { query = '', limit = 8 } = {
         const from = (parsed.from && parsed.from.text) || '';
         const subject = parsed.subject || '';
         if (q && !(`${subject} ${from}`.toLowerCase().includes(q))) continue;
-        const atts = (parsed.attachments || []).map(a => ({
+        const atts = expandTnef(parsed.attachments || []).map(a => ({
           filename: a.filename || '', contentType: String(a.contentType || ''),
           size: a.size || (a.content ? a.content.length : 0),
           inline: String(a.contentDisposition || '').toLowerCase() === 'inline' || a.related === true || !!a.cid,

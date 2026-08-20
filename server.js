@@ -3655,9 +3655,17 @@ async function mailScanBatchFor(cid, since, limit) {
       // כלל: לא מעלים לאישור מסמך שתאריכו לפני 2026 (חשבוניות ישנות שנשלחו/הועברו במייל, או טעויות קריאה כמו 1976/2016).
       // נשמר כטביעת אצבע כדי לא לנתח את אותו קובץ שוב.
       const _docYear = (() => { const m = String(ai.date || '').match(/(20\d{2}|\d{4})/); return m ? +m[1] : null; })();
-      if (_docYear && _docYear < 2026) { skipped++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } continue; }
+      if (_docYear && _docYear < 2026) { skipped++; if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } console.log(`[mail-scan] ${cid}: דולג (מסמך משנת ${_docYear}) · ${ai.supplierName || '?'} · #${ai.invoiceNumber || '?'}`); continue; }
       if (ai.route === 'expense') {
-        try { await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++; if (it.uid != null) { takenUids.add(it.uid); handledUids.add(String(it.uid)); } existing.push({ num: nrm(ai.invoiceNumber), amt: Number(ai.amountInclVat) || 0, sup: nrm(ai.supplierName) }); if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } }
+        try {
+          await greenInvoice.uploadExpenseFile(it.contentBase64, it.filename, it.mime); uploaded++;
+          if (it.uid != null) { takenUids.add(it.uid); handledUids.add(String(it.uid)); }
+          existing.push({ num: nrm(ai.invoiceNumber), amt: Number(ai.amountInclVat) || 0, sup: nrm(ai.supplierName) });
+          if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); }
+          // רישום *מה* נקלט. עד כה נרשם רק המונה המצטבר, ולכן לא היה אפשר לדעת מהלוג
+          // אם מסמך מסוים נקלט — שאלה שחוזרת בכל בירור על חשבונית שלא נמצאת.
+          console.log(`[mail-scan] ${cid}: נקלט · ${ai.supplierName || '?'} · #${ai.invoiceNumber || '?'} · ${ai.amountInclVat || '?'} · מ-${it.from || '?'}`);
+        }
         catch (e) { errors++; erroredUids.add(String(it.uid)); console.error(`[mail-scan] ${cid} העלאה נכשלה (uid ${it.uid}):`, String(e.message || e).slice(0, 160)); }
       } else if (ai.route === 'record') {
         const saved = await saveFile({ employeeId: 'mailscan:' + cid, kind: 'mail-record', filename: it.filename, mime: it.mime, data: it.contentBase64 });
@@ -3665,7 +3673,10 @@ async function mailScanBatchFor(cid, since, limit) {
         if (h) { uploadedSet.add(h); st.uploadedHashes.push(h); } // נשמר — לא לנתח שוב את אותו קובץ
         if (it.uid != null) { takenUids.add(it.uid); handledUids.add(String(it.uid)); }
         recorded++;
-      } else { skipped++; }
+      } else {
+        skipped++;
+        console.log(`[mail-scan] ${cid}: דולג (סווג "${ai.route || 'לא חשבונית'}") · ${ai.supplierName || '?'} · #${ai.invoiceNumber || '?'} · ${it.filename || '?'} · מ-${it.from || '?'}`);
+      }
     }
     const seenUidSet = new Set(st.seenUids.map(String));
     // מסמנים כ"נסרקו" רק הודעות שלא נכשלו — כדי שכשלים ינוסו שוב בהרצה הבאה (ולא ייעלמו)

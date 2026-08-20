@@ -195,6 +195,23 @@ check('עורך האירוע לא מוחק שדות קישור של שורות �
 });
 check('buildReport מייצר מייל שלם', async () => true);
 
+const mr = await import('./mailReader.js');
+check('winmail.dat — חילוץ ה-PDF שבפנים', () => {
+  // Outlook ב-RTF אורז את כל הצרופות לקובץ בינארי אחד. בלי פענוח הסורק רואה
+  // קובץ שאינו PDF ומדלג, והחשבונית נעלמת בלי שום חיווי.
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(120, 0x41)]);
+  const attr = (id, data) => { const b = Buffer.alloc(9); b.writeUInt8(2, 0); b.writeUInt32LE(id, 1); b.writeUInt32LE(data.length, 5);
+    return Buffer.concat([b, data, Buffer.alloc(2)]); };
+  const head = Buffer.alloc(6); head.writeUInt32LE(0x223E9F78, 0); head.writeUInt16LE(1, 4);
+  const tnef = Buffer.concat([head, attr(0x8010, Buffer.from('INVOICE.PDF\0', 'latin1')), attr(0x800F, pdf)]);
+  const out = mr.expandTnef([{ filename: 'winmail.dat', contentType: 'application/ms-tnef', content: tnef }]);
+  if (!out.some(a => String(a.contentType).includes('pdf'))) throw new Error('ה-PDF לא חולץ');
+  if (mr.extractTnefAttachments(Buffer.from('garbage')).length) throw new Error('קובץ פגום לא מוחזר ריק');
+  const plain = mr.expandTnef([{ filename: 'a.pdf', contentType: 'application/pdf', content: pdf }]);
+  if (plain[0].filename !== 'a.pdf') throw new Error('צרופה רגילה שונתה');
+  return true;
+});
+
 const rep = await import('./dailyReport.js');
 check('דוח יומי — חברה שקטה לא מייצרת מייל', () => rep.buildReport({ companyName: 'x', overdueDays: 45 }) === null);
 check('דוח יומי — אירוע מהחודש הנוכחי לא מתריע', () => rep.monthClosed('2026-08-05', new Date('2026-08-19')) === false);
