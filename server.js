@@ -3577,6 +3577,7 @@ async function mailScanBatchFor(cid, since, limit) {
     const erroredUids = new Set();               // הודעות שנכשלו זמנית — לא נסמן כ"נסרקו" כדי שינוסו שוב בהרצה הבאה
     const takenUids = new Set();                 // הודעות שמהן נלקח מסמך לקליטה (הועלה/נרשם) — נסמן אותן כ"נקראו" ב-Gmail
     const handledUids = new Set();               // הודעות שטופלו (נקלטו/כפילות/כבר קיים) — לא ייכנסו לרשימת "לטיפול ידני"
+    const unresolvedUids = new Set();            // הודעות שמשהו בהן לא נקלט — יישארו לא-נקראות ובטיפול ידני
     const db = load();
     const st = mailScanState(db, cid);
     st.errCounts = st.errCounts || {};           // מונה כשלונות פר-הודעה — כדי להפסיק לנסות מסמכים שנכשלים שוב ושוב
@@ -3596,7 +3597,10 @@ async function mailScanBatchFor(cid, since, limit) {
       const _bytes = Math.floor((String(it.contentBase64 || '').length * 3) / 4);
       if (_bytes > AI_FILE_MAX_BYTES) {
         skipped++;
-        if (it.uid != null) handledUids.add(String(it.uid));
+        // לא מסומן כ"טופל" — הוא *לא* טופל. סימון כזה גם היה מסנן אותו מיד
+        // מרשימת "לטיפול ידני" (ראה הסינון לפי handledUids בהמשך) וגם משאיר
+        // את המייל כנקרא, כך שהחשבונית הייתה נעלמת פעמיים.
+        if (it.uid != null) unresolvedUids.add(String(it.uid));
         db.mailPending[cid].push({ uid: it.uid, from: it.from || '', subject: it.subject || '',
           receivedDate: it.receivedDate || '', link: it.link || null, seenAt: new Date().toISOString(),
           reason: `קובץ כבד (${Math.round(_bytes / 1048576)}MB) — לא נשלח ל-AI, טיפול ידני` });
@@ -3669,9 +3673,15 @@ async function mailScanBatchFor(cid, since, limit) {
     if (db.mailPending[cid].length > 300) db.mailPending[cid] = db.mailPending[cid].slice(-300);
     st.since = since; st.lastScanAt = new Date().toISOString();
     save(db);
-    // סימון כ"נקרא" ב-Gmail — רק להודעות שמהן נלקח מסמך לקליטה בפועל (הועלה/נרשם). best-effort, לא חוסם.
+    // סימון כ"נקרא" ב-Gmail — רק להודעה שכל מה שנמצא בה נקלט בפועל.
+    // מייל אחד יכול להכיל כמה צרופות/קישורים: אם אחד נקלט ואחר נכשל, סימון כנקרא
+    // היה מסתיר את הכישלון לגמרי. מייל שנשאר לא-נקרא הוא החיווי היחיד שנותר.
+    const _seenNow = [...takenUids].filter(u => !unresolvedUids.has(String(u)) && !erroredUids.has(String(u))
+      && !db.mailPending[cid].some(p => String(p.uid) === String(u)));
+    const _held = takenUids.size - _seenNow.length;
+    if (_held) console.log(`[mail-scan] ${cid}: ${_held} הודעות נשארו לא-נקראות — משהו בהן לא נקלט`);
     let markedSeen = 0;
-    if (takenUids.size) { try { const mr = await mailReader.markMessagesSeen({ user: creds.user, pass: creds.pass }, [...takenUids]); markedSeen = (mr && mr.count) || 0; } catch { } }
+    if (_seenNow.length) { try { const mr = await mailReader.markMessagesSeen({ user: creds.user, pass: creds.pass }, _seenNow); markedSeen = (mr && mr.count) || 0; } catch { } }
     return { ok: true, processed: (scan.processedUids || []).length, uploaded, recorded, duplicates, skipped, errors, unreadable, links, aiCalls, markedSeen, pending: (db.mailPending[cid] || []).length, remaining: scan.remaining, done: scan.remaining === 0 };
   });
 }
