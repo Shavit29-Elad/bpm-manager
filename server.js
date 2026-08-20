@@ -1232,13 +1232,24 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
   try {
     const draft = await greenInvoice.getExpenseDraft(draftId);
     if (!draft) return json(res, { error: 'הטיוטה לא נמצאה (ייתכן שכבר טופלה)' }, 404);
-    const supplierId = body.supplierId || draft.supplierId;
+    let supplierId = body.supplierId || draft.supplierId;
     // חשבון עסקה (20) = רישום פנימי. אופק = רשומה מקומית בלבד + מייל (ה-GI של אופק אינו מסיים הוצאות דרך ה-API — POST /expenses מחזיר 404).
     const isBusiness = Number(body.documentType) === 20;
     const isCredit = Number(body.documentType || draft.documentType) === 330;   // חשבונית זיכוי מספק
     const _activeCid = q.companyId || giCompanyId();
     const localOnly = isBusiness || _activeCid === 'co_ofek';
     if (!localOnly && !supplierId) return json(res, { error: 'יש לבחור ספק עבור ההוצאה' }, 400);
+    // רשומה מקומית אינה מחייבת בחירת ספק, אבל בלי מזהה היא לא מופיעה תחת אף ספק —
+    // לא בכרטיס הספק ולא במודל שיוך הבנק. אם השם מזוהה, מצמידים את המזהה כאן.
+    if (localOnly && !supplierId) {
+      const nm = String(body.supplierName || draft.supplierName || '').trim().toLowerCase();
+      if (nm) {
+        try {
+          const found = (await greenInvoice.listSuppliers() || []).find(x => String(x.name || '').trim().toLowerCase() === nm);
+          if (found) { supplierId = found.id; console.log(`[approve] רשומה מקומית קיבלה מזהה ספק לפי שם: ${found.name}`); }
+        } catch { /* לא חוסם — המיזוג לפי שם עדיין יתפוס */ }
+      }
+    }
     const paidFlag = body.paid !== false; // ברירת מחדל שולם (הפרונט שולח במפורש)
     const linkedEvents = Array.isArray(body.linkedEvents) ? body.linkedEvents : [];
 
@@ -4569,7 +4580,16 @@ add('GET', /^\/api\/suppliers\/([^/]+)\/documents$/, async (req, res, params, q)
     const db = load();
     const cid = q.companyId || giCompanyId();
     const already = new Set(docs.map(d => String(d.id)));
-    const locals = (db.supplierPayables || []).filter(p => p.localOnly && String(p.supplierId) === String(supId) && (p.companyId || 'co_bpm') === cid && !already.has(String(p.id)));
+    // התאמה לפי מזהה *או* לפי שם. רשומה מקומית אינה מחייבת בחירת ספק (ראה localOnly
+    // באישור הטיוטה), ולכן supplierId שלה יכול להיות ריק — ואז היא לא הופיעה תחת אף
+    // ספק, לא בכרטיס הספק ולא במודל שיוך הבנק, למרות שהיא מוצגת ב"ספקים לתשלום".
+    let supName = '';
+    try { const sp = await greenInvoice.getSupplier(supId); supName = String((sp && sp.name) || '').trim(); } catch { }
+    const nrmName = (x) => String(x || '').trim().toLowerCase();
+    const locals = (db.supplierPayables || []).filter(p => p.localOnly
+      && (p.companyId || 'co_bpm') === cid && !already.has(String(p.id))
+      && (String(p.supplierId || '') === String(supId)
+        || (!p.supplierId && supName && nrmName(p.supplierName) === nrmName(supName))));
     for (const p of locals) {
       docs.push({
         id: p.id, number: p.number, type: Number(p.documentType) || 305,
