@@ -3600,7 +3600,11 @@ async function mailScanBatchFor(cid, since, limit) {
       if (it.viaLink) links++;
       // סינון ראשון — לפני ה-AI: אם את הקובץ הזה בדיוק כבר העלינו פעם, מדלגים לגמרי (חוסך גם קריאת AI, מונע כפילות)
       const h = _fileHash(it.contentBase64);
-      if (h && uploadedSet.has(h)) { duplicates++; if (it.uid != null) handledUids.add(String(it.uid)); continue; }
+      if (h && uploadedSet.has(h)) {
+        duplicates++; if (it.uid != null) handledUids.add(String(it.uid));
+        console.log(`[mail-scan] ${cid}: דולג ככפילות (אותו קובץ כבר נקלט) · ${it.filename || '?'} · מ-${it.from || '?'}`);
+        continue;
+      }
       // תקרת גודל לפני ה-AI. חשבונית אמיתית היא כמעט תמיד מתחת ל-3MB; קובץ כבד מזה הוא
       // בדרך כלל דוח/סריקה של עשרות עמודים, שנספר כעשרות אלפי טוקנים לקריאה אחת.
       // ב-backfill של 15-16.08 רצו 536 קריאות כאלה ושרפו את רוב הקרדיט. הקובץ לא נזרק —
@@ -3713,6 +3717,16 @@ add('POST', /^\/api\/mail-scan\/run$/, async (req, res, _p, q, body) => {
   const cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
   const since = (body && body.since) || mailScanState(load(), cid).since || '2026-06-01';
   const limit = Math.min(12, Math.max(1, Number(body && body.limit) || 5));
+  // rescan=1 — שוכח אילו הודעות כבר נסרקו, כדי שהסורק יבחן אותן מחדש. נדרש אחרי
+  // שיפור ביכולת הקליטה (למשל תמיכה ב-winmail.dat): הודעה שדולגה בעבר סומנה
+  // כ"נסרקה" ומוחרגת לצמיתות, ולכן התיקון לעולם לא היה מגיע אליה.
+  if (body && body.rescan) {
+    const d = load(); const st0 = mailScanState(d, cid);
+    const n = (st0.seenUids || []).length;
+    st0.seenUids = []; st0.errCounts = {};
+    save(d);
+    console.log(`[mail-scan] ${cid}: סריקה מחדש — ${n} הודעות שנסרקו בעבר ייבחנו שוב`);
+  }
   const r = await mailScanBatchFor(cid, since, limit);
   json(res, r.ok ? r : { ok: false, error: r.error });
 });

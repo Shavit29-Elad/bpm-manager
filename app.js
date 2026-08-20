@@ -4690,6 +4690,7 @@ function draftsSection() {
       <span style="font-size:13px;font-weight:600">📥 סרוק חשבוניות מהמייל</span>
       <label style="font-size:12.5px">מתאריך <input type="date" id="mailSince" value="${_mailScanSince}" onchange="_mailScanSince=this.value" style="padding:3px 6px"></label>
       <button class="btn primary" id="mailScanBtn" style="padding:4px 12px;font-size:12.5px" onclick="scanMailNow()">🔍 סרוק עכשיו</button>
+      <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="rescanMailAll()" title="סורק גם מיילים שכבר נסרקו בעבר — שימושי כשחשבונית לא נקלטה">🔄 סרוק מחדש הכל</button>
       <span id="mailScanProg" class="muted" style="font-size:12.5px"></span>
       <span class="muted" style="font-size:11.5px;flex-basis:100%">הסורק מזהה חשבוניות/קבלות בתיבת המייל של החברה (AI) ומעלה אותן לכאן כטיוטות הוצאה — בדיוק כמו קובץ שגררת. מסמך שכבר נקלט (כולל בהתאמת בנק) מדולג.</span>
     </div>
@@ -6586,6 +6587,14 @@ function bizDocRow(label, slot, meta) {
 // ===== סריקת מייל → טיוטות הוצאה בחשבונית ירוקה (נכנסות לאותו מקום כמו קובץ שנגרר/הועלה) =====
 // ברירת מחדל לתאריך סריקת המייל = היום (ניתן לשינוי ידני בכל עת דרך שדה התאריך).
 let _mailScanSince = (() => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); })();
+let _rescanAll = false;
+// סריקה מחדש — שוכחת אילו הודעות כבר נסרקו. נדרשת אחרי שיפור ביכולת הקליטה:
+// הודעה שדולגה בעבר סומנה כ"נסרקה" ומוחרגת לצמיתות מכל סריקה עתידית.
+window.rescanMailAll = async () => {
+  if (!confirm('לסרוק מחדש את כל המיילים בטווח, כולל כאלה שכבר נסרקו?\n\nשימושי כשחשבונית לא נקלטה בעבר. עלול לקחת יותר זמן.')) return;
+  _rescanAll = true;
+  try { await scanMailNow(); } finally { _rescanAll = false; }
+};
 window.scanMailNow = async () => {
   const scanCid = state.company; // מקבעים את החברה לכל הסריקה — מעבר לחברה אחרת יעצור בבטחה (מה שכבר נסרק נשמר)
   const prog0 = document.getElementById('mailScanProg');
@@ -6598,7 +6607,7 @@ window.scanMailNow = async () => {
   while (!done && safety++ < 120) {
     if (state.company !== scanCid) { stopped = true; break; } // המשתמש עבר חברה — עוצרים לפני האצווה הבאה
     setProg(`סורק את המייל… (${up} חשבוניות חדשות עד כה)`);
-    const r = await fetch(`/api/mail-scan/run?companyId=${scanCid}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: scanCid, since, limit: 4 }) }).then(x => x.json()).catch(() => ({ ok: false, error: 'timeout/רשת — נסה שוב' }));
+    const r = await fetch(`/api/mail-scan/run?companyId=${scanCid}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId: scanCid, since, limit: 4, rescan: (_rescanAll && safety === 1) || undefined }) }).then(x => x.json()).catch(() => ({ ok: false, error: 'timeout/רשת — נסה שוב' }));
     if (state.company !== scanCid) { stopped = true; break; } // עבר חברה בזמן האצווה — לא נמשיך ולא נרנדר עליו
     if (!r.ok) { setProg(`<span style="color:var(--danger)">שגיאה: ${escapeHtml(r.error || '')}</span>`); enableBtn(); return; }
     up += (r.uploaded || 0); rec += (r.recorded || 0); dup += (r.duplicates || 0);
