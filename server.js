@@ -1649,6 +1649,75 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
   json(res, { ok: true, payables: out });
 });
 
+// GET /api/supplier-payables/compare — שלב 1 של איחוד מקור האמת: משווה את הרשימה
+// המקומית מול ההוצאות שבחשבונית ירוקה, בלי לשנות דבר. נועד להראות את גודל הפער
+// לפני שנוגעים בנתונים.
+//
+// שתי משפחות, ובכוונה:
+//   א׳ מסמכי הוצאה מוכרים (מס / מס-קבלה / קבלה / זיכוי) — מקור האמת הוא חשבונית
+//      ירוקה. העתק מקומי שלהם הוא הכפילות שצריכה למות.
+//   ב׳ חשבון עסקה / דרישת תשלום (20) — רישום פנימי בלבד. לא נוצר בחשבונית ירוקה,
+//      לא נשלח לרו"ח. מקור האמת הוא אנחנו, והרשומה המקומית היא תפקידו האמיתי.
+add('GET', /^\/api\/supplier-payables\/compare$/, async (req, res, _p, q) => {
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+  const db = load();
+  const cid = reqCompany(q);
+  const nrm = (x) => String(x || '').trim().toLowerCase().replace(/^0+/, '');
+  const locals = (db.supplierPayables || []).filter(p => ownedBy(p, cid));
+
+  const internal = locals.filter(p => Number(p.documentType) === 20 || p.isBusinessDoc);
+  const ofek = locals.filter(p => cid === 'co_ofek' && !(Number(p.documentType) === 20 || p.isBusinessDoc));
+  const mirrored = locals.filter(p => !internal.includes(p) && !ofek.includes(p));
+
+  let gi = [], giError = null;
+  if (giEnabled(cid)) {
+    const from = String(q.from || '2026-01-01').slice(0, 10);
+    const to = String(q.to || new Date().toISOString().slice(0, 10)).slice(0, 10);
+    try { gi = await greenInvoice.expensesInRange(from, to) || []; }
+    catch (e) { giError = e.message; }
+  } else giError = 'חשבונית ירוקה לא מחוברת לחברה זו';
+
+  const localByKey = new Map();
+  for (const p of mirrored) {
+    if (p.giExpenseId) localByKey.set('id:' + String(p.giExpenseId), p);
+    if (p.number) localByKey.set('num:' + nrm(p.number), p);
+  }
+  const seen = new Set();
+  const onlyInGi = [];
+  for (const e of gi) {
+    const hit = (e.id && localByKey.get('id:' + String(e.id))) || (e.number && localByKey.get('num:' + nrm(e.number)));
+    if (hit) { seen.add(hit.id); continue; }
+    onlyInGi.push({ id: e.id, number: e.number || null, supplierName: e.supplierName || '', date: e.date || null, amount: e.amount != null ? Number(e.amount) : null });
+  }
+  const onlyLocal = mirrored.filter(p => !seen.has(p.id))
+    .map(p => ({ id: p.id, number: p.number || null, supplierName: p.supplierName || '', date: p.date || null,
+      amount: p.amount != null ? Number(p.amount) : null, giExpenseId: p.giExpenseId || null }));
+
+  // כמה מהן קשורות לאירועים — אלה שהגירה שגויה תשבור
+  const linkedCount = (pid, num, name) => (db.events || []).filter(ev => ownedBy(ev, cid)
+    && (ev.contractorDetails || []).some(c => c && (String(c.paidPayableId || '') === String(pid)
+      || (num && c.paidInvoice && nrm(c.paidInvoice) === nrm(num) && String(c.name || '').trim() === String(name || '').trim())))).length;
+
+  json(res, {
+    ok: true, companyId: cid, giError,
+    counts: {
+      localTotal: locals.length,
+      internal: internal.length,          // משפחה ב׳ — נשארת כפי שהיא
+      ofekLocal: ofek.length,             // אופק — נשארת מקומית
+      mirrored: mirrored.length,          // משפחה א׳ — ההעתקים שאמורים להצטמצם לשכבת-על
+      giTotal: gi.length,
+      matched: seen.size,
+      onlyInGi: onlyInGi.length,          // ← הפער: קיים בחשבונית ירוקה ולא אצלנו
+      onlyLocal: onlyLocal.length,        // ← העתק בלי מקור בחשבונית ירוקה
+      mirroredWithGiId: mirrored.filter(p => p.giExpenseId).length,
+      mirroredWithManualPaid: mirrored.filter(p => p.paid).length,
+      mirroredLinkedToEvents: mirrored.filter(p => linkedCount(p.id, p.number, p.supplierName) > 0).length,
+    },
+    onlyInGi: onlyInGi.slice(0, 40),
+    onlyLocal: onlyLocal.slice(0, 40),
+  });
+});
+
 // POST /api/supplier-payables/:id/link-events { items:[{eventId,index}] } — שיוך אירועים להוצאת ספק קיימת (מסמן "שולם לספק")
 add('POST', /^\/api\/supplier-payables\/([^/]+)\/link-events$/, (req, res, params, _q, body) => {
   const db = load();
