@@ -4915,7 +4915,27 @@ add('PUT', /^\/api\/expenses\/([^/]+)$/, async (req, res, params, _q, body) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   const id = params[0], b = body || {};
   try { await greenInvoice.updateExpense(id, b); }
-  catch (e) { return json(res, { error: e.message }, 500); }
+  catch (e) {
+    // errorCode 1010 = כפילות: כבר קיימת הוצאה אחרת של אותו ספק עם אותו מספר מסמך.
+    // ה-errorMessage הוא המזהה של ההוצאה הקיימת — שולפים אותה כדי להראות למשתמש במה מדובר,
+    // במקום להציג את שגיאת ה-API הגולמית.
+    const m = /"errorCode"\s*:\s*1010[\s\S]*?"errorMessage"\s*:\s*"([^"]+)"/.exec(e.message || '');
+    if (m) {
+      let dup = null;
+      try { dup = await greenInvoice.getExpense(m[1]); } catch { }
+      const num = (dup && dup.number) || b.number || '';
+      const who = (dup && (dup.supplier?.name || dup.supplierName)) || '';
+      const when = dup && dup.date ? String(dup.date).slice(0, 10).split('-').reverse().join('/') : '';
+      const amt = dup && dup.amount != null ? `₪${Math.round(Number(dup.amount)).toLocaleString('he-IL')}` : '';
+      const detail = [who, when && `מתאריך ${when}`, amt].filter(Boolean).join(' · ');
+      return json(res, {
+        error: `כבר קיימת הוצאה עם מספר מסמך ${num}${detail ? ` (${detail})` : ''}. חשבונית ירוקה לא מאפשרת שתי הוצאות של אותו ספק עם אותו מספר. שנה את מספר המסמך, או מחק את הכפילות.`,
+        duplicateId: m[1], duplicateNumber: num, duplicate: true,
+      }, 409);
+    }
+    console.log(`[expense-update] ${reqCompany(_q, b)}: ${id} נכשל · ${e.message}`);
+    return json(res, { error: e.message }, 500);
+  }
   const db = load();
   if (b.description != null) {
     db.expenseNotes = db.expenseNotes || {};
@@ -4927,7 +4947,6 @@ add('PUT', /^\/api\/expenses\/([^/]+)$/, async (req, res, params, _q, body) => {
   save(db);
   json(res, { ok: true, id });
 });
-// DELETE /api/expenses/:id — מחיקת הוצאה מחשבונית ירוקה + ניקוי מקומי
 // ניתוק מסמך שנמחק מכל שורות הבנק של החברה.
 // שני מקומות, לא אחד: matchedInvoices (השיוך בפועל) ו-suggestions (ההצעות).
 // ההצעות הן תצלום קפוא שנשמר על השורה בזמן הייבוא/הרענון — אם לא ננקה אותן,
@@ -4949,6 +4968,7 @@ function dropDocFromBank(db, docId, companyId) {
   return { unmatched, dropped };
 }
 
+// DELETE /api/expenses/:id — מחיקת הוצאה מחשבונית ירוקה + ניקוי מקומי
 add('DELETE', /^\/api\/expenses\/([^/]+)$/, async (req, res, params, q) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   const id = params[0];

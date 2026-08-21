@@ -5966,6 +5966,8 @@ window.saveExpenseEdit = async (id) => {
     st.innerHTML = '<span class="muted">מעדכן בחשבונית ירוקה…</span>';
     const r = await fetch(`/api/expenses/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     giOk = !!(r && r.ok); giErr = (r && r.error) || '';
+    // כפילות בחשבונית ירוקה — מציעים לפתוח את ההוצאה הקיימת כדי להשוות ולהחליט מה למחוק
+    if (r && r.duplicate && r.duplicateId) window._exeDupId = r.duplicateId; else window._exeDupId = null;
     if (giOk) {
       _expenseNotes[id] = body.description.trim();
       for (const d of (_supDocs || [])) if (d.id === id) { d.category = body.description.trim(); if (amount != null) { d.amount = amount; d.amountIncVat = amount; } if (body.date) d.date = body.date; if (body.number) d.number = body.number; }
@@ -6005,7 +6007,13 @@ window.saveExpenseEdit = async (id) => {
       ? '<span style="color:var(--accent2)">הסכומים פר-אירוע נשמרו ✓</span> <span class="muted">· שדות ההוצאה לא עודכנו בחשבונית ירוקה (ההוצאה לא נמצאה שם כרגע)</span>'
       : '<span style="color:var(--accent2)">נשמר ✓</span>';
     setTimeout(() => { const mm = document.getElementById('expEditModal'); if (mm) mm.classList.add('hidden'); if (state.tab === 'contractors') renderSupplierDetail(); }, 1100);
-  } else { if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; } st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(giErr || ''))}</span>`; }
+  } else {
+    if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; }
+    const dupBtn = window._exeDupId
+      ? ` <button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="openExpenseEdit('${window._exeDupId}')">פתח את ההוצאה הקיימת</button>`
+      : '';
+    st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String(giErr || ''))}</span>${dupBtn}`;
+  }
 };
 window.deleteExpenseDoc = async (id) => {
   if (!confirm('למחוק את ההוצאה לצמיתות מחשבונית ירוקה?\nלא ניתן לשחזר. אם ההוצאה כבר דווחה — ייתכן שהמחיקה תיכשל.')) return;

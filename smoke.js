@@ -274,6 +274,20 @@ check('מחיקת הוצאת ספק — ברירת המחדל לא נוגעת ב
   return true;
 });
 
+check('כפילות בחשבונית ירוקה מתורגמת להסבר בעברית', () => {
+  const rx = srv.match(/const m = (\/"errorCode"[\s\S]*?\/)\.exec/);
+  if (!rx) throw new Error('זיהוי שגיאת 1010 לא נמצא');
+  const re = eval(rx[1]);
+  const real = 'חשבונית ירוקה PUT /expenses/ae63: 400 {"errorCode":1010,"errorMessage":"b187a24d-20f1"}';
+  const hit = re.exec(real);
+  if (!hit) throw new Error('שגיאת הכפילות האמיתית לא זוהתה');
+  if (hit[1] !== 'b187a24d-20f1') throw new Error('מזהה ההוצאה הקיימת לא חולץ');
+  if (eval(rx[1]).exec('... 500 {"errorCode":1,"errorMessage":"boom"}')) throw new Error('שגיאה רגילה סווגה בטעות ככפילות');
+  if (!/כבר קיימת הוצאה עם מספר מסמך/.test(srv)) throw new Error('אין הודעה בעברית');
+  if (!/_exeDupId/.test(app)) throw new Error('אין כפתור לפתיחת ההוצאה הקיימת');
+  return true;
+});
+
 check('מסמך שנמחק יורד גם מרשימת ההצעות של הבנק', () => {
   const m = srv.match(/function dropDocFromBank\(db, docId, companyId\) \{[\s\S]*?\n\}/);
   if (!m) throw new Error('dropDocFromBank לא נמצאה');
