@@ -4573,6 +4573,12 @@ function scheduleDailyBackup() {
   };
   const arm = () => { setTimeout(async () => { await runDailyBackup(); arm(); }, msToNext()); };
   arm();
+  // BACKUP_ON_BOOT=1 — גיבוי חד-פעמי בעליית השרת, בלי להמתין ל-02:00. משמש לפני
+  // שינויים מבניים בנתונים. מכובה מיד אחרי השימוש.
+  if ((process.env.BACKUP_ON_BOOT || '').trim() === '1') {
+    setTimeout(() => { runDailyBackup('boot').catch(e => console.error('[backup] boot נכשל:', e.message)); }, 6000);
+    console.log('[backup] BACKUP_ON_BOOT=1 — גיבוי חד-פעמי בעוד 6 שניות');
+  }
   console.log(`[backup] מתוזמן — ריצה ראשונה בעוד ~${Math.round(msToNext() / 60000)} דק'${process.env.BACKUP_EMAIL ? '' : ' (אך BACKUP_EMAIL לא מוגדר)'}`);
 }
 
