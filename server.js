@@ -2035,12 +2035,7 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/delete$/, async (req, res, para
         const db2 = load();
         if (db2.expenseNotes) delete db2.expenseNotes[p.giExpenseId];
         // ניקוי שיוכים בתנועות בנק — אחרת נשאר שיוך למסמך שאינו קיים
-        for (const t of (db2.bankTx || [])) {
-          if (Array.isArray(t.matchedInvoices) && t.matchedInvoices.some(inv => String(inv.id) === String(p.giExpenseId))) {
-            t.matchedInvoices = t.matchedInvoices.filter(inv => String(inv.id) !== String(p.giExpenseId));
-            if (!t.matchedInvoices.length && t.matchStatus === 'manual') t.matchStatus = 'unmatched';
-          }
-        }
+        dropDocFromBank(db2, p.giExpenseId, _cid);
         save(db2);
         console.log(`[payable-delete] ${_cid}: נמחקה גם מחשבונית ירוקה · ${p.supplierName || ''} #${p.number || ''}`);
       } catch (e) { giError = e.message; }
@@ -4933,7 +4928,28 @@ add('PUT', /^\/api\/expenses\/([^/]+)$/, async (req, res, params, _q, body) => {
   json(res, { ok: true, id });
 });
 // DELETE /api/expenses/:id — מחיקת הוצאה מחשבונית ירוקה + ניקוי מקומי
-add('DELETE', /^\/api\/expenses\/([^/]+)$/, async (req, res, params) => {
+// ניתוק מסמך שנמחק מכל שורות הבנק של החברה.
+// שני מקומות, לא אחד: matchedInvoices (השיוך בפועל) ו-suggestions (ההצעות).
+// ההצעות הן תצלום קפוא שנשמר על השורה בזמן הייבוא/הרענון — אם לא ננקה אותן,
+// המסמך המחוק ימשיך להופיע ככפתור הצעה עד שמישהו ילחץ "רענן הצעות".
+// שורה שנשארה בלי אף מסמך משויך חוזרת ל"לא מותאמת" (שורה שהוסתרה נשארת מוסתרת).
+function dropDocFromBank(db, docId, companyId) {
+  const same = (x) => x && String(x.id) === String(docId);
+  let unmatched = 0, dropped = 0;
+  for (const t of (db.bankTx || [])) {
+    if (companyId && !ownedBy(t, companyId)) continue;
+    if (Array.isArray(t.suggestions) && t.suggestions.some(same)) {
+      t.suggestions = t.suggestions.filter(x => !same(x)); dropped++;
+    }
+    if (Array.isArray(t.matchedInvoices) && t.matchedInvoices.some(same)) {
+      t.matchedInvoices = t.matchedInvoices.filter(x => !same(x));
+      if (!t.matchedInvoices.length && t.matchStatus !== 'ignored') { t.matchStatus = 'unmatched'; unmatched++; }
+    }
+  }
+  return { unmatched, dropped };
+}
+
+add('DELETE', /^\/api\/expenses\/([^/]+)$/, async (req, res, params, q) => {
   if (!greenInvoice.haveCredentials()) return json(res, { error: 'חשבונית ירוקה לא מחוברת' }, 400);
   const id = params[0];
   try { await greenInvoice.deleteExpense(id); }
@@ -4949,12 +4965,7 @@ add('DELETE', /^\/api\/expenses\/([^/]+)$/, async (req, res, params) => {
     if (here) { cd.paid = false; cd.paidPayableId = null; cd.paidInvoice = null; cd.paidExpenseId = null; cd.paidExpenseUrl = null; }
   }
   db.supplierPayables = (db.supplierPayables || []).filter(p => p.giExpenseId !== id);
-  for (const t of (db.bankTx || [])) {
-    if (Array.isArray(t.matchedInvoices) && t.matchedInvoices.some(inv => inv.id === id)) {
-      t.matchedInvoices = t.matchedInvoices.filter(inv => inv.id !== id);
-      if (!t.matchedInvoices.length && t.matchStatus === 'manual') t.matchStatus = 'unmatched';
-    }
-  }
+  dropDocFromBank(db, id, reqCompany(q));
   save(db);
   json(res, { ok: true, id });
 });
@@ -5316,6 +5327,23 @@ add('PUT', /^\/api\/bank\/([^/]+)$/, async (req, res, params, _q, body) => {
       const amt = Number(inv.amount) || 0; if (amt <= 0) continue;
       const used = allocatedElsewhere(inv.id);
       if (used >= amt - Math.max(3, amt * 0.004)) return json(res, { error: `החשבונית #${inv.number || ''} כבר שולמה במלואה בשורות בנק אחרות (₪${Math.round(used)} מתוך ₪${Math.round(amt)}). כדי לשייך בכל זאת, סמן "אפשר לבחור גם חשבוניות שכבר משויכות".` }, 409);
+    }
+  }
+  // רשת ביטחון למסמך שנמחק ישירות בחשבונית ירוקה: רשימת ההצעות על השורה היא תצלום קפוא
+  // מזמן הייבוא/הרענון, ולכן הכפתור ממשיך להופיע. לפני שיוך מוודאים שההוצאה עדיין קיימת.
+  // נחסם רק על 404 מפורש — תקלת רשת או שגיאה אחרת לא ימנעו שיוך תקין.
+  if (Array.isArray(body.matchedInvoices) && body.matchedInvoices.length && greenInvoice.haveCredentials()) {
+    for (const inv of body.matchedInvoices) {
+      if (!inv || inv.kind !== 'expense' || !inv.id || /^(exp_|pay_)/.test(String(inv.id))) continue;
+      let gone = false;
+      try { const r = await greenInvoice.getExpense(inv.id); gone = !r || (!r.id && !r.number); }
+      catch (e) { gone = /:\s*404\b/.test(e.message || ''); }
+      if (!gone) continue;
+      const cleaned = dropDocFromBank(db, inv.id, t.companyId || giCompanyId());
+      db.supplierPayables = (db.supplierPayables || []).filter(x => String(x.giExpenseId || '') !== String(inv.id));
+      save(db);
+      console.log(`[bank-match] ${t.companyId}: הוצאה ${inv.id} #${inv.number || ''} נמחקה מחשבונית ירוקה — נוקתה מ-${cleaned.dropped} הצעות ו-${cleaned.unmatched} שיוכים`);
+      return json(res, { error: `ההוצאה #${inv.number || ''} כבר לא קיימת בחשבונית ירוקה — היא נמחקה. ניקיתי אותה מרשימת ההצעות; רענן את המסך.`, stale: true }, 409);
     }
   }
   if (body.group !== undefined) t.group = body.group || null;

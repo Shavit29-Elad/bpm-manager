@@ -274,18 +274,36 @@ check('מחיקת הוצאת ספק — ברירת המחדל לא נוגעת ב
   return true;
 });
 
-check('מחיקת מסמך מותאם — התנועה בבנק חוזרת ללא-תיאום', () => {
-  const m = srv.match(/for \(const t of \(db2\.bankTx \|\| \[\]\)\) \{[\s\S]*?\n        \}/);
-  if (!m) throw new Error('לולאת ניקוי שיוכי הבנק לא נמצאה');
-  const run = new Function('db2', 'p', m[0]);
-  const one = { matchStatus: 'manual', matchedInvoices: [{ id: 'gi_z' }] };
-  run({ bankTx: [one] }, { giExpenseId: 'gi_z' });
-  if (one.matchedInvoices.length) throw new Error('המסמך לא הוסר מהתנועה');
-  if (one.matchStatus !== 'unmatched') throw new Error('התנועה נותרה מסומנת כמותאמת');
-  const two = { matchStatus: 'manual', matchedInvoices: [{ id: 'gi_z' }, { id: 'other' }] };
-  run({ bankTx: [two] }, { giExpenseId: 'gi_z' });
-  if (two.matchStatus !== 'manual' || two.matchedInvoices.length !== 1)
-    throw new Error('תנועה עם מסמך נוסף אבדה את התיאום שלה');
+check('מסמך שנמחק יורד גם מרשימת ההצעות של הבנק', () => {
+  const m = srv.match(/function dropDocFromBank\(db, docId, companyId\) \{[\s\S]*?\n\}/);
+  if (!m) throw new Error('dropDocFromBank לא נמצאה');
+  const drop = new Function('ownedBy', m[0] + '; return dropDocFromBank;')(() => true);
+  const cases = [
+    ['הצעה בלבד', { matchStatus: 'unmatched', suggestions: [{ id: 'g' }, { id: 'x' }], matchedInvoices: [] }, 'unmatched', 1, 0],
+    ['שויך ידנית', { matchStatus: 'manual', suggestions: [], matchedInvoices: [{ id: 'g' }] }, 'unmatched', 0, 0],
+    ['אושר', { matchStatus: 'approved', suggestions: [], matchedInvoices: [{ id: 'g' }] }, 'unmatched', 0, 0],
+    ['נשאר מסמך נוסף', { matchStatus: 'manual', suggestions: [], matchedInvoices: [{ id: 'g' }, { id: 'y' }] }, 'manual', 0, 1],
+    ['מוסתרת נשארת מוסתרת', { matchStatus: 'ignored', suggestions: [], matchedInvoices: [{ id: 'g' }] }, 'ignored', 0, 0],
+    ['שורה אחרת לא נפגעת', { matchStatus: 'manual', suggestions: [{ id: 'z' }], matchedInvoices: [{ id: 'z' }] }, 'manual', 1, 1],
+  ];
+  for (const [name, tx, st, sg, mi] of cases) {
+    drop({ bankTx: [tx] }, 'g', 'co_bpm');
+    if (tx.matchStatus !== st) throw new Error(`${name}: status=${tx.matchStatus} במקום ${st}`);
+    if (tx.suggestions.length !== sg) throw new Error(`${name}: ${tx.suggestions.length} הצעות במקום ${sg}`);
+    if (tx.matchedInvoices.length !== mi) throw new Error(`${name}: ${tx.matchedInvoices.length} משויכים במקום ${mi}`);
+  }
+  if (!/dropDocFromBank\(db, id, reqCompany\(q\)\)/.test(srv)) throw new Error('מחיקת הוצאה לא קוראת לעוזר');
+  if (!/dropDocFromBank\(db2, p\.giExpenseId, _cid\)/.test(srv)) throw new Error('מחיקת הוצאת ספק לא קוראת לעוזר');
+  return true;
+});
+
+check('שיוך להוצאה שנמחקה בחשבונית ירוקה נחסם ומתנקה', () => {
+  if (!/greenInvoice\.getExpense\(inv\.id\)/.test(srv)) throw new Error('אין בדיקת קיום לפני שיוך');
+  if (!/stale: true/.test(srv)) throw new Error('השרת לא מסמן stale');
+  if (!/r\.stale/.test(app)) throw new Error('הפרונט לא מנקה את ההצעה מהמסך');
+  const guard = srv.match(/let gone = false;[\s\S]*?if \(!gone\) continue;/);
+  if (!guard) throw new Error('בדיקת ה-404 לא נמצאה');
+  if (!/404/.test(guard[0])) throw new Error('נחסם על כל שגיאה ולא רק על 404 — תקלת רשת תמנע שיוך תקין');
   return true;
 });
 

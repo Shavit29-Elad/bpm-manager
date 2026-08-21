@@ -7420,7 +7420,22 @@ function bankConfidence(t) {
 }
 async function bankAction(id, body) {
   const r = await fetch(`/api/bank/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => null);
-  if (r && r.error) { alert(r.error); return; }
+  if (r && r.error) {
+    alert(r.error);
+    // stale = המסמך נמחק בחשבונית ירוקה. השרת כבר ניקה אותו; מנקים גם במסך כדי שהכפתור ייעלם מיד.
+    if (r.stale) {
+      const ids = (body.matchedInvoices || []).map(x => String(x.id));
+      const hit = (x) => ids.includes(String(x && x.id));
+      for (const t of (_bankList || [])) {
+        t.suggestions = (t.suggestions || []).filter(x => !hit(x));
+        if (!(t.matchedInvoices || []).some(hit)) continue;
+        t.matchedInvoices = t.matchedInvoices.filter(x => !hit(x));
+        if (!t.matchedInvoices.length && t.matchStatus !== 'ignored') t.matchStatus = 'unmatched';
+      }
+      clearApiCache(); renderBankBody();
+    }
+    return;
+  }
   if (r && r.covered === false) { alert(`המסמכים המשויכים מכסים ₪${money(r.matchedSum)} מתוך ₪${money(r.bankAmount)} — חסר ₪${money(r.shortfall)}.\nהשורה נשארת לא מתואמת עד שהסכום המלא מכוסה (או שההעברה = הסכום פחות 5% ניכוי מס). שייך מסמכים נוספים דרך "שייך מסמכים".`); return; }
   const tx = r && r.tx;
   if (tx) { const i = _bankList.findIndex(t => t.id === id); if (i >= 0) _bankList[i] = tx; renderBankBody(); }
