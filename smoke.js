@@ -267,6 +267,28 @@ check('קישור לחשבונית מחשבונית ירוקה יוצר רשומ
   return true;
 });
 
+check('מחיקת הוצאת ספק — ברירת המחדל לא נוגעת בחשבונית ירוקה', () => {
+  if (!/body && body\.alsoGi === true/.test(srv)) throw new Error('המחיקה מ-GI אינה מותנית בדגל מפורש');
+  if (!/greenInvoice\.deleteExpense\(p\.giExpenseId\)/.test(srv)) throw new Error('אין מחיקה בפועל מחשבונית ירוקה');
+  if (!/alsoGi/.test(app)) throw new Error('הפרונט לא שולח את הדגל');
+  return true;
+});
+
+check('מחיקת מסמך מותאם — התנועה בבנק חוזרת ללא-תיאום', () => {
+  const m = srv.match(/for \(const t of \(db2\.bankTx \|\| \[\]\)\) \{[\s\S]*?\n        \}/);
+  if (!m) throw new Error('לולאת ניקוי שיוכי הבנק לא נמצאה');
+  const run = new Function('db2', 'p', m[0]);
+  const one = { matchStatus: 'manual', matchedInvoices: [{ id: 'gi_z' }] };
+  run({ bankTx: [one] }, { giExpenseId: 'gi_z' });
+  if (one.matchedInvoices.length) throw new Error('המסמך לא הוסר מהתנועה');
+  if (one.matchStatus !== 'unmatched') throw new Error('התנועה נותרה מסומנת כמותאמת');
+  const two = { matchStatus: 'manual', matchedInvoices: [{ id: 'gi_z' }, { id: 'other' }] };
+  run({ bankTx: [two] }, { giExpenseId: 'gi_z' });
+  if (two.matchStatus !== 'manual' || two.matchedInvoices.length !== 1)
+    throw new Error('תנועה עם מסמך נוסף אבדה את התיאום שלה');
+  return true;
+});
+
 const rep = await import('./dailyReport.js');
 check('דוח יומי — חברה שקטה לא מייצרת מייל', () => rep.buildReport({ companyName: 'x', overdueDays: 45 }) === null);
 check('דוח יומי — אירוע מהחודש הנוכחי לא מתריע', () => rep.monthClosed('2026-08-05', new Date('2026-08-19')) === false);

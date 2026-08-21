@@ -2004,7 +2004,7 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/update$/, (req, res, params, _q
 });
 
 // POST /api/supplier-payables/:id/delete — הסרת רשומת הוצאת ספק פנימית
-add('POST', /^\/api\/supplier-payables\/([^/]+)\/delete$/, (req, res, params, q, body) => {
+add('POST', /^\/api\/supplier-payables\/([^/]+)\/delete$/, async (req, res, params, q, body) => {
   const db = load();
   const _cid = (q && q.companyId) || (body && body.companyId) || giCompanyId();
   const p = (db.supplierPayables || []).find(x => x.id === params[0]);
@@ -2022,7 +2022,31 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/delete$/, (req, res, params, q,
     }
   }
   db.supplierPayables = (db.supplierPayables || []).filter(x => x.id !== params[0]);
-  save(db); json(res, { ok: true, removed: 1, released });
+  save(db);
+  // מחיקה מלאה — כולל המסמך בחשבונית ירוקה. רק בבקשה מפורשת: זה מסמך חשבונאי,
+  // והמחיקה אינה ניתנת לביטול. בלי הדגל נמחק רק הרישום המקומי, והמסמך נשאר.
+  let giDeleted = false, giError = null;
+  if (body && body.alsoGi === true && p.giExpenseId) {
+    if (!greenInvoice.haveCredentials()) giError = 'חשבונית ירוקה לא מחוברת';
+    else {
+      try {
+        await greenInvoice.deleteExpense(p.giExpenseId);
+        giDeleted = true;
+        const db2 = load();
+        if (db2.expenseNotes) delete db2.expenseNotes[p.giExpenseId];
+        // ניקוי שיוכים בתנועות בנק — אחרת נשאר שיוך למסמך שאינו קיים
+        for (const t of (db2.bankTx || [])) {
+          if (Array.isArray(t.matchedInvoices) && t.matchedInvoices.some(inv => String(inv.id) === String(p.giExpenseId))) {
+            t.matchedInvoices = t.matchedInvoices.filter(inv => String(inv.id) !== String(p.giExpenseId));
+            if (!t.matchedInvoices.length && t.matchStatus === 'manual') t.matchStatus = 'unmatched';
+          }
+        }
+        save(db2);
+        console.log(`[payable-delete] ${_cid}: נמחקה גם מחשבונית ירוקה · ${p.supplierName || ''} #${p.number || ''}`);
+      } catch (e) { giError = e.message; }
+    }
+  }
+  json(res, { ok: true, removed: 1, released, giDeleted, giError, hadGi: Boolean(p.giExpenseId) });
 });
 
 // GET /api/mail/status — האם שליחת מייל מוגדרת ולאן מועברות הוצאות

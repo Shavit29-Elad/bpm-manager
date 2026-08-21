@@ -5154,10 +5154,32 @@ window.markPayablePaid = async (pid) => {
   const r = await fetch(`/api/supplier-payables/${pid}/paid`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paid: true }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) renderContractors($('#content')); else alert('שגיאה: ' + (r.error || ''));
 };
+// מחיקת הוצאת ספק. שתי רמות, ובכוונה: הסרה מהמעקב אינה מוחקת מסמך חשבונאי.
+// מחיקה מחשבונית ירוקה אינה ניתנת לביטול, ולכן דורשת אישור נפרד ומפורש.
 window.deletePayable = async (pid) => {
-  if (!confirm('להסיר את רישום הוצאת הספק הזה מהרשימה?')) return;
-  const r = await fetch(`/api/supplier-payables/${pid}/delete`, { method: 'POST' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (r.ok) renderContractors($('#content')); else alert('שגיאה: ' + (r.error || ''));
+  const p = (_supPayables || []).find(x => x.id === pid);
+  const hasGi = Boolean(p && p.giExpenseId);
+  const label = p ? `${p.supplierName || 'ספק'}${p.number ? ' #' + p.number : ''}` : 'הרישום';
+  if (!confirm(`להסיר את ${label} מרשימת הספקים לתשלום?`)) return;
+  let alsoGi = false;
+  if (hasGi) {
+    alsoGi = confirm(`למחוק גם מחשבונית ירוקה?\n\n`
+      + `אישור — המסמך יימחק לצמיתות מחשבונית ירוקה, יוסר משיוכי תנועות הבנק,\n`
+      + `ותנועה שתישאר בלי אף מסמך תחזור ל"לא מותאמת". הפעולה אינה ניתנת לביטול.\n\n`
+      + `ביטול — הרישום יוסר מהמסך בלבד, והמסמך יישאר בחשבונית ירוקה.`);
+  }
+  const r = await fetch(`/api/supplier-payables/${pid}/delete`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alsoGi }),
+  }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r.ok) { alert('שגיאה: ' + (r.error || '')); return; }
+  clearApiCache();
+  renderContractors($('#content'));
+  if (alsoGi && r.giError) alert(`הרישום הוסר מהמסך, אך המחיקה מחשבונית ירוקה נכשלה:\n${r.giError}`);
+  else if (r.giDeleted) {
+    const t = _expToast();
+    t.textContent = `${label} נמחק גם מחשבונית ירוקה · השיוכים בבנק נוקו`;
+    setTimeout(() => { t.style.display = 'none'; }, 4500);
+  }
 };
 
 function draftCard(d) {
