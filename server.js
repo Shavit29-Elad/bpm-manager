@@ -1564,6 +1564,26 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
   let openNums = null;
   try { if (greenInvoice.haveCredentials()) { const open = await greenInvoice.openDocuments(); openNums = new Set((open || []).map(d => String(d.number))); } } catch { openNums = null; }
   // פירוט: האירועים שההוצאה מכסה — שורות קבלן באירועים ששויכו להוצאה זו (לפי מזהה רישום / מזהה מסמך ירוק / מספר חשבונית)
+  // בוחר את חשבונית הלקוח שתוצג לצד האירוע. סדר: חשבונית מס → מס-קבלה → חשבון עסקה.
+  // קבלה (400) לעולם לא — היא אישור תשלום ולא המסמך החשבונאי.
+  // מסמך שזוכה במלואו (credited) מדולג ויורדים לבא בתור; מסמך מס שזוכה חלקית מוצג
+  // כרגיל עם ציון הזיכוי — הוא עדיין בתוקף על היתרה.
+  const INVOICE_PRIORITY = [305, 320, 300];
+  const pickEventInvoice = (ev) => {
+    const links = Array.isArray(ev && ev.linkedDocs) ? ev.linkedDocs : [];
+    const active = links.filter(d => d && !d.credited && !d.credit && !d.converted);
+    for (const t of INVOICE_PRIORITY) {
+      const d = active.find(x => Number(x.type) === t);
+      if (!d) continue;
+      // הזיכוי מוצג רק על מסמך מס — נפילה ל"חשבון עסקה" אחרי זיכוי מלא אינה נושאת הערה
+      const creditDoc = (t === 305 || t === 320) ? links.find(x => x && Number(x.type) === 330) : null;
+      return { id: d.id, number: d.number || null, type: t, uploaded: !!d.uploaded,
+        creditId: creditDoc ? creditDoc.id : null, creditNumber: creditDoc ? (creditDoc.number || null) : null,
+        creditAmount: creditDoc && creditDoc.amount != null ? Number(creditDoc.amount) : null };
+    }
+    return null;
+  };
+
   const coveredFor = (p) => {
     const out = [];
     for (const ev of evs) {
@@ -1573,7 +1593,7 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
         const byId = p.id && c.paidPayableId && String(c.paidPayableId) === String(p.id);
         const byExp = p.giExpenseId && c.paidExpenseId && String(c.paidExpenseId) === String(p.giExpenseId);
         const byNum = p.number && c.paidInvoice && String(c.paidInvoice) === String(p.number) && (c.name || '').trim() === (p.supplierName || '').trim();
-        if (byId || byExp || byNum) out.push({ eventId: ev.id, index: (ev.contractorDetails || []).indexOf(c), date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0, supplierPaid: !!c.paid, clientPaid: eventClientPaid(ev, bankPaid, openNums) });
+        if (byId || byExp || byNum) out.push({ eventId: ev.id, index: (ev.contractorDetails || []).indexOf(c), date: ev.date || ev.dateRaw || null, artist: ev.artist || '', location: ev.location || '', amount: Number(c.amount) || 0, supplierPaid: !!c.paid, invoice: pickEventInvoice(ev), clientPaid: eventClientPaid(ev, bankPaid, openNums) });
       }
     }
     return out.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
@@ -1593,6 +1613,25 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
       return { ...p, hasFile: !!(p.giExpenseId || p.draftId || p.localFileId), coveredEvents: cov, readiness: readinessOf(cov),
         bankPaidAmount: m.paid, remaining: Math.max(0, (m.total || 0) - (m.paid || 0)), supplierPayStatus: m.status };
     });
+  // השלמת סכומי זיכוי שלא נשמרו בעבר. משיכה אחת פר-מסמך עם מטמון ותקרה, כדי שמסך
+  // עם עשרות הוצאות לא יתורגם לעשרות קריאות ל-API. כישלון לא חוסם — תוצג הערה בלי סכום.
+  if (giEnabled(reqCompany(q))) {
+    const seen = new Map();
+    let budget = 15;
+    for (const p of out) {
+      for (const r of (p.coveredEvents || [])) {
+        const inv = r && r.invoice;
+        if (!inv || !inv.creditId || inv.creditAmount != null) continue;
+        if (seen.has(inv.creditId)) { inv.creditAmount = seen.get(inv.creditId); continue; }
+        if (budget-- <= 0) continue;
+        try {
+          const doc = await greenInvoice.getDocument(inv.creditId);
+          const amt = Number(doc && (doc.amount != null ? doc.amount : doc.total)) || null;
+          seen.set(inv.creditId, amt); inv.creditAmount = amt;
+        } catch { seen.set(inv.creditId, null); }
+      }
+    }
+  }
   json(res, { ok: true, payables: out });
 });
 
@@ -2171,7 +2210,10 @@ function revertEventsForCreditedInvoice(db, srcId, credit, onlyEventIds) {
     if (onlySet && !onlySet.has(String(e.id))) continue; // זיכוי חלקי לפי אירוע — מדלגים על אירועים שלא נבחרו
     links.forEach(d => { if (String(d.id) === String(srcId)) d.credited = true; });
     if (credit && credit.id && !links.some(d => String(d.id) === String(credit.id))) {
-      links.push({ id: credit.id, number: credit.number || null, type: 330, credit: true });
+      // שומרים גם את הסכום: בלעדיו כל הצגה של "ישנו זיכוי על סך X" דורשת
+      // משיכה מחשבונית ירוקה, פר-מסמך, בכל טעינת מסך.
+      links.push({ id: credit.id, number: credit.number || null, type: 330, credit: true,
+        amount: Number(credit.amount != null ? credit.amount : (credit.total != null ? credit.total : 0)) || null });
     }
     e.linkedDocs = links.slice(0, 12);
     const activeReal = e.linkedDocs.filter(d => REAL.includes(Number(d.type)) && !d.converted && !d.credited && !d.credit);

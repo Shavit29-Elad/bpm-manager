@@ -71,6 +71,31 @@ check('כל onclick/oninput/onchange מצביע לפונקציה קיימת', ()
   return true;
 });
 
+console.log('\n── משתני מודול ──');
+check('אין משתנה שבשימוש בלי הכרזה', () => {
+  // באג חוזר: תיקון שנכשל באמצע משאיר הפניה למשתנה שמעולם לא הוכרז.
+  // node --check עובר על זה בשקט — זו שגיאת ריצה, לא תחביר.
+  // רק שימוש כמשתנה: לא אחרי נקודה (תכונה של אובייקט), לא מפתח באובייקט,
+  // ולא בתוך מחרוזת. אחרת מתקבלות התראות שווא כמו _blank מתוך target="_blank".
+  const src = app.replace(/'[^'\n]*'|"[^"\n]*"/g, "''");
+  const used = new Set([...src.matchAll(/(?<![.\w$])(_[a-zA-Z][a-zA-Z0-9_]*)\b(?!\s*:)/g)].map(m => m[1]));
+  const declared = new Set([
+    ...[...app.matchAll(/(?:let|const|var)\s+([^;\n]+)/g)]
+      .flatMap(m => m[1].split(',').map(x => x.trim().split(/[\s=({[]/)[0])).filter(Boolean),
+    ...[...app.matchAll(/function\s+(\w+)/g)].map(m => m[1]),
+    ...[...app.matchAll(/window\.(\w+)\s*=/g)].map(m => m[1]),
+    // רק רשימות פרמטרים אמיתיות. הדפוס "(...)\s*{" תופס גם if/for/while, ואז
+    // תנאי כמו "if (_x && ...)" נספר כהצהרה של _x — והבדיקה מפספסת את הבאג.
+    ...[...app.matchAll(/function\s*\w*\s*\(([^)]*)\)/g)].flatMap(m => m[1].split(',').map(x => x.trim().split(/[\s=]/)[0])),
+    ...[...app.matchAll(/\(([^)]*)\)\s*=>/g)].flatMap(m => m[1].split(',').map(x => x.trim().split(/[\s=]/)[0])),
+    ...[...app.matchAll(/catch\s*\((\w+)\)/g)].map(m => m[1]),
+    ...[...app.matchAll(/for\s*\((?:const|let|var)\s+(\w+)/g)].map(m => m[1]),
+  ]);
+  const miss = [...used].filter(v => !declared.has(v));
+  if (miss.length) throw new Error('בשימוש בלי הכרזה: ' + miss.join(', '));
+  return true;
+});
+
 console.log('\n── בידוד חברות ──');
 warn('ראוטים שנוגעים בנתוני חברה בלי ownedBy (לבדיקה ידנית)', () => {
   const risky = [];

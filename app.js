@@ -2725,6 +2725,10 @@ function rowEvent(e) {
 
 // ================= עורך אירוע (תבנית מלאה + מחירים + שיוך לקוח) =================
 let _evEditing = null, _evCtr = [], _evClients = null, _evEmp = [], _evEmployees = null, _evSuppliers = null;
+// כשנכנסים לאירוע מתוך "ספקים לתשלום" — חשבונית הלקוח של אותו אירוע נפתחת מיד
+// בצד, בלי שתצטרך לחפש אותה בין תגיות המסמכים.
+let _pendingEvDocPreview = null;
+let _evDocNote = '';   // כותרת הפאנל: סוג ומספר המסמך, ואם יש זיכוי חלקי — גם הוא
 const EV_FACTORS = [['0.5', 'חצי יומית'], ['1', 'יומית'], ['1.5', 'יומית וחצי'], ['2', 'כפולה']];
 function evClickAttr(e) {
   const p = jenc({ eventId: e.eventId || null, gcalId: e.gcalId || null, date: e.date, title: e.title, location: e.location });
@@ -2816,6 +2820,14 @@ async function openEventEditor(ev) {
   </div>`;
   const card = m.querySelector('.modal-card'); if (card) card.addEventListener('change', window.autoSaveEvent);
   m.onclick = (e) => { if (e.target === m) { saveEventCore(); m.classList.add('hidden'); renderCombined($('#content')); } };
+  // נכנסנו מתוך "ספקים לתשלום" — פותחים מיד את חשבונית הלקוח בצד
+  if (_pendingEvDocPreview && _pendingEvDocPreview.docId) {
+    const pv = _pendingEvDocPreview; _pendingEvDocPreview = null;
+    const tname = { 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 300: 'חשבון עסקה' }[Number(pv.docType)] || 'מסמך';
+    _evDocNote = `${tname}${pv.docNumber ? ' #' + pv.docNumber : ''}`
+      + (pv.creditAmount != null ? ` · ⊖ ישנו זיכוי על סך ${money(pv.creditAmount)}` : '');
+    setTimeout(() => { evPreviewDoc(pv.docId); }, 60);
+  } else _evDocNote = '';
 }
 // תצוגת מסמך משוייך בתוך העורך: מרחיב את החלונית ומציג את המסמך מימין, העריכה נשארת משמאל
 window.evPreviewDoc = async (docId, el) => {
@@ -2827,7 +2839,7 @@ window.evPreviewDoc = async (docId, el) => {
   cardEl.style.width = 'min(1180px,98vw)';
   pane.style.display = 'flex';
   pane.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);background:#fff">
-      <b style="font-size:13.5px">תצוגת מסמך</b>
+      <b style="font-size:13.5px">${_evDocNote ? escapeHtml(_evDocNote) : 'תצוגת מסמך'}</b>
       <button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="evClosePreview()">✕ סגור תצוגה</button>
     </div><div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען מסמך…</div>`;
   try {
@@ -2843,7 +2855,7 @@ window.evPreviewDoc = async (docId, el) => {
       ? `<div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;background:#fff;padding:6px"><img src="${_evDocBlobUrl}" style="max-width:100%;max-height:100%;object-fit:contain" alt="מסמך"/></div>`
       : `<iframe src="${_evDocBlobUrl}#toolbar=1" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
     cur.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);background:#fff">
-        <b style="font-size:13.5px">תצוגת מסמך</b>
+        <b style="font-size:13.5px">${_evDocNote ? escapeHtml(_evDocNote) : 'תצוגת מסמך'}</b>
         <div style="display:flex;gap:8px"><a href="${url}" target="_blank" class="btn ghost" style="padding:4px 11px;font-size:12px;text-decoration:none">הורדה ↓</a><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="evClosePreview()">✕ סגור תצוגה</button></div>
       </div>${body}`;
   } catch {
@@ -4734,6 +4746,20 @@ window.dismissMailPending = async (uid) => {
 // ===== הוצאות ספקים לתשלום (מסמכי מס שלא שולמו + חשבונות עסקה פנימיים) =====
 const PAYABLE_TYPE_NAMES = { 20: 'חשבון עסקה', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'מס-קבלה', 400: 'קבלה', 330: 'זיכוי' };
 // חיווי מוכנות לתשלום לספק — לפי אם הלקוח כבר שילם על האירועים שההוצאה מכסה
+// כפתור "מעבר לאירוע" מוצג רק כשיש חשבונית ללקוח על אותו אירוע — כלומר כשהסטטוס
+// 🟡 ממתין לתשלום או 🟢 הלקוח שילם. בלי חשבונית אין מה להציג בצד, והכפתור היה מוביל
+// למסך חצי-ריק.
+const _canGoToEvent = (e) => Boolean(e && e.eventId && e.invoice && e.invoice.id
+  && ['paid', 'charged', 'pending'].includes(((e.clientPaid || {}).status) || ''));
+
+// פותח את עורך האירוע עם חשבונית הלקוח בתצוגה מקדימה בצד
+window.goToEventFromPayable = async (eventId, docId, docNumber, docType, creditAmount) => {
+  const evs = await api(`/api/events?companyId=${encodeURIComponent(state.company)}`).catch(() => []);
+  const ev = (Array.isArray(evs) ? evs : []).find(x => String(x.id) === String(eventId));
+  if (!ev) { alert('האירוע לא נמצא.'); return; }
+  _pendingEvDocPreview = { docId, docNumber, docType, creditAmount };
+  await openEventEditor(ev);
+};
 function payReadinessBadge(p) {
   const r = p.readiness;
   if (r === 'ready') return `<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap" title="הלקוח שילם על כל האירועים שההוצאה מכסה">🟢 מוכן לתשלום</span>`;
@@ -4769,7 +4795,7 @@ function supplierPayablesSection(list) {
     ${p.description ? `<div style="font-size:12.5px;margin:5px 0 0;white-space:pre-wrap;word-break:break-word"><span class="muted">תיאור:</span> ${escapeHtml(p.description)}</div>` : ''}
     ${(p.coveredEvents && p.coveredEvents.length) ? `<div style="margin:7px 0 0;padding:7px 9px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;font-size:12px">
       <div class="muted" style="font-weight:600;margin-bottom:3px">📋 פירוט אירועים (${p.coveredEvents.length}):</div>
-      ${p.coveredEvents.slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || ''))).map(e => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0;border-top:1px dashed var(--line)"><span style="flex:1;min-width:90px">${ddmy(e.date)}${e.artist ? ` · ${escapeHtml(e.artist)}` : ''}${e.location ? ` · ${escapeHtml(e.location)}` : ''}</span>${clientPaidBadge(e.clientPaid)}${e.supplierPaid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap">✅ שולם לספק</span>' : `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap">⏳ טרם שולם לספק</span>${e.eventId != null ? `<button class="btn ghost" style="padding:1px 7px;font-size:11px;color:var(--accent2);white-space:nowrap" onclick="markSupplierPaidEvent('${e.eventId}',${e.index},this)" title="סימון ידני: שילמת לספק בפועל (מחוץ למעקב הבנק)">✓ סמן ששולם ידנית</button>` : ''}`}<span style="white-space:nowrap;font-weight:600">${money(e.amount)}</span></div>`).join('')}
+      ${p.coveredEvents.slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || ''))).map(e => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0;border-top:1px dashed var(--line)"><span style="flex:1;min-width:90px">${ddmy(e.date)}${e.artist ? ` · ${escapeHtml(e.artist)}` : ''}${e.location ? ` · ${escapeHtml(e.location)}` : ''}</span>${clientPaidBadge(e.clientPaid)}${e.supplierPaid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap">✅ שולם לספק</span>' : `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap">⏳ טרם שולם לספק</span>${e.eventId != null ? `<button class="btn ghost" style="padding:1px 7px;font-size:11px;color:var(--accent2);white-space:nowrap" onclick="markSupplierPaidEvent('${e.eventId}',${e.index},this)" title="סימון ידני: שילמת לספק בפועל (מחוץ למעקב הבנק)">✓ סמן ששולם ידנית</button>` : ''}${_canGoToEvent(e) ? `<button class="btn ghost" style="padding:1px 8px;font-size:11px;white-space:nowrap" onclick="goToEventFromPayable('${e.eventId}','${escAttr(String(e.invoice.id))}','${escAttr(String(e.invoice.number || ''))}',${Number(e.invoice.type) || 0},${e.invoice.creditAmount != null ? Number(e.invoice.creditAmount) : 'null'})" title="פתיחת האירוע לעריכה, עם חשבונית הלקוח בצד">↗ מעבר לאירוע</button>` : ''}`}<span style="white-space:nowrap;font-weight:600">${money(e.amount)}</span></div>`).join('')}
     </div>` : ''}
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:7px">
       <span style="font-size:12.5px">ללא מע"מ: <b>${money(p.amountExcludeVat)}</b></span>
