@@ -6786,6 +6786,12 @@ async function renderBusiness(c) {
         <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <b style="font-size:13.5px">🔍 השוואת הוצאות מול חשבונית ירוקה</b>
+        <div class="muted" style="font-size:12px;margin:3px 0 8px">בדיקה בלבד — לא משנה כלום. מראה אילו הוצאות קיימות בחשבונית ירוקה ולא במערכת, ולהפך.</div>
+        <button class="btn ghost" onclick="runPayCompare(this)">הרץ השוואה</button>
+        <pre id="bizCompare" dir="rtl" style="display:none;white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12.5px;line-height:1.7;margin-top:9px;font-family:inherit;text-align:right;max-height:420px;overflow:auto"></pre>
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
         <b style="font-size:13.5px">🏷 סיווג הוצאה — ברירת מחדל</b>
         <div class="muted" style="font-size:12px;margin:3px 0 8px">מולא אוטומטית בקליטת חשבונית ספק כשאין לספק סיווג משלו, כדי שלא תצטרך לבחור בכל פעם.</div>
         <select id="biz_defaultClassificationId" style="max-width:340px"><option value="">— טוען… —</option></select>
@@ -7047,6 +7053,34 @@ window.backupRunNow = async (btn) => {
   if (msg) msg.innerHTML = r.ok
     ? `<span style="color:var(--accent2)">✓ נשלח ל-${escapeHtml(String(r.to || ''))} · ${(r.gzBytes / 1048576).toFixed(2)}MB · ${r.counts.events} אירועים, ${r.counts.bankTx} תנועות בנק</span>`
     : `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || r.skipped || 'נכשל'))}</span>`;
+};
+// השוואת הרשימה המקומית מול חשבונית ירוקה — לכל שלוש החברות ברצף
+window.runPayCompare = async (btn) => {
+  const box = document.getElementById('bizCompare'); if (!box) return;
+  btn.disabled = true; box.style.display = 'block'; box.textContent = 'מריץ…';
+  const out = [];
+  for (const c of (state.companies || [])) {
+    const r = await api(`/api/supplier-payables/compare?companyId=${encodeURIComponent(c.id)}&fresh=1`).catch(() => ({ error: 'שגיאת רשת' }));
+    if (!r || !r.ok) { out.push(`${c.name}: שגיאה — ${(r && r.error) || '?'}`); continue; }
+    const n = r.counts;
+    out.push([
+      `══ ${c.name} ══`,
+      `  רשומות מקומיות: ${n.localTotal}`,
+      `    · חשבון עסקה פנימי (לא נוגעים): ${n.internal}`,
+      `    · אופק מקומי (לא נוגעים): ${n.ofekLocal}`,
+      `    · העתקים של מסמכים רשמיים: ${n.mirrored}`,
+      `  בחשבונית ירוקה: ${n.giTotal}${r.giError ? ` (שגיאה: ${r.giError})` : ''}`,
+      `  התאמה: ${n.matched}`,
+      `  ⚠ קיים בחשבונית ירוקה ולא אצלנו: ${n.onlyInGi}`,
+      `  ⚠ העתק בלי מקור בחשבונית ירוקה: ${n.onlyLocal}`,
+      `  מתוך ההעתקים — עם מזהה GI: ${n.mirroredWithGiId} · סומנו ידנית כשולמו: ${n.mirroredWithManualPaid}`,
+      `  🔴 העתקים שקשורים לאירועים: ${n.mirroredLinkedToEvents}`,
+      (r.onlyInGi || []).length ? '  דוגמאות שחסרות אצלנו:' : '',
+      ...(r.onlyInGi || []).slice(0, 6).map(d => `    #${d.number || '?'} · ${d.supplierName || '?'} · ${d.date || ''} · ${d.amount != null ? money(d.amount) : ''}`),
+    ].filter(Boolean).join('\n'));
+  }
+  box.textContent = out.join('\n\n');
+  btn.disabled = false;
 };
 // מילוי בורר סיווג ברירת המחדל בפרטי העסק
 async function fillBizClassSelect(current) {
