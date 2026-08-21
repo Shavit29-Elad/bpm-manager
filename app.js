@@ -7078,6 +7078,11 @@ window.runPayCompare = async (btn) => {
       `  ⚠ העתק בלי מקור בחשבונית ירוקה: ${n.onlyLocal}`,
       `  מתוך ההעתקים — עם מזהה GI: ${n.mirroredWithGiId} · סומנו ידנית כשולמו: ${n.mirroredWithManualPaid}`,
       `  🔴 העתקים שקשורים לאירועים: ${n.mirroredLinkedToEvents}`,
+      `  ── כיסוי בנקאי מתוך ${n.giTotal} ──`,
+      `    שולמו (מותאם בבנק): ${(r.bank || {}).covered ?? '?'}`,
+      `    ⚠ טרם שולמו: ${(r.bank || {}).uncovered ?? '?'} · ${(r.bank || {}).uncoveredSum != null ? money(r.bank.uncoveredSum) : '?'}`,
+      (r.uncoveredTop || []).length ? '    הגדולות שטרם שולמו:' : '',
+      ...(r.uncoveredTop || []).slice(0, 6).map(d => `      #${d.number || '?'} · ${d.supplierName || '?'} · ${d.date || ''} · ${money(d.amount)}`),
       (r.onlyInGi || []).length ? '  דוגמאות שחסרות אצלנו:' : '',
       ...(r.onlyInGi || []).slice(0, 6).map(d => `    #${d.number || '?'} · ${d.supplierName || '?'} · ${d.date || ''} · ${d.amount != null ? money(d.amount) : ''}`),
     ].filter(Boolean).join('\n'));

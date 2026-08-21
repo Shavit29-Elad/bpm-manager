@@ -1698,8 +1698,28 @@ add('GET', /^\/api\/supplier-payables\/compare$/, async (req, res, _p, q) => {
     && (ev.contractorDetails || []).some(c => c && (String(c.paidPayableId || '') === String(pid)
       || (num && c.paidInvoice && nrm(c.paidInvoice) === nrm(num) && String(c.name || '').trim() === String(name || '').trim())))).length;
 
+  // כמה מההוצאות שבחשבונית ירוקה מכוסות בפועל ע"י תנועת חובה בבנק. זה מה שיקבע
+  // אם סינון "רק שטרם שולמו" מצמצם באמת או מציג כמעט הכל.
+  const debitByKey = supplierBankDebitByKey(db, cid);
+  let covered = 0, uncovered = 0, uncoveredSum = 0;
+  const uncoveredBig = [];
+  for (const e of gi) {
+    const amt = Number(e.amount) || 0;
+    let paidAmt = 0;
+    if (e.id != null) paidAmt = Math.max(paidAmt, debitByKey['id:' + String(e.id)] || 0);
+    if (e.number != null) paidAmt = Math.max(paidAmt, debitByKey['num:' + _nrmExpKey(e.number)] || 0);
+    if (amt > 0 && paidAmt >= amt - 1) covered++;
+    else {
+      uncovered++; uncoveredSum += amt;
+      uncoveredBig.push({ number: e.number || null, supplierName: e.supplierName || '', date: e.date || null, amount: amt });
+    }
+  }
+  uncoveredBig.sort((a, b) => b.amount - a.amount);
+
   json(res, {
     ok: true, companyId: cid, giError,
+    bank: { covered, uncovered, uncoveredSum: +uncoveredSum.toFixed(2) },
+    uncoveredTop: uncoveredBig.slice(0, 8),
     counts: {
       localTotal: locals.length,
       internal: internal.length,          // משפחה ב׳ — נשארת כפי שהיא
