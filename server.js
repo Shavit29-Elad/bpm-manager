@@ -3110,23 +3110,38 @@ add('POST', /^\/api\/contractors\/mark-paid-bulk$/, (req, res, _p, _q, body) => 
   const paid = body.paid !== false;
   const linkOnly = body.link === true && !paid; // קישור בלבד — שומר את השיוך לחשבונית בלי לסמן "שולם"
   const cid = reqCompany(_q, body);
-  let n = 0;
+  // מזהה רישום ההוצאה המתאים, אם קיים — כדי שהקישור ייקבע למזהה ולא יסתמך על
+  // התאמת "מספר + שם", שנשברת בכל עריכה של אחד מהשדות האלה.
+  const nrm = (x) => String(x || '').trim().toLowerCase();
+  const findPayable = (cd) => (db.supplierPayables || []).find(p => ownedBy(p, cid) && (
+    (body.expenseId && p.giExpenseId && String(p.giExpenseId) === String(body.expenseId))
+    || (body.expenseId && String(p.id) === String(body.expenseId))
+    || (body.invoiceNumber && p.number && String(p.number) === String(body.invoiceNumber)
+        && nrm(cd.name) === nrm(p.supplierName))));
+  let n = 0; const skipped = [];
   for (const it of items) {
     const ev = db.events.find(e => e.id === it.eventId);
-    if (ev && !ownedBy(ev, cid)) continue;   // בידוד
-    if (ev && ev.contractorDetails && ev.contractorDetails[it.index]) {
-      const cd = ev.contractorDetails[it.index];
-      cd.paid = paid;
-      if (paid) cd.paidSource = 'manual'; else if (!linkOnly) cd.paidSource = null;
-      if (paid || linkOnly) {
-        cd.paidInvoice = body.invoiceNumber || null;
-        cd.paidExpenseId = body.expenseId || null;
-        cd.paidExpenseUrl = body.expenseUrl || null;
-      } else { cd.paidInvoice = null; cd.paidExpenseId = null; cd.paidExpenseUrl = null; }
-      n++;
-    }
+    if (!ev) { skipped.push({ eventId: it.eventId, why: 'אירוע לא נמצא' }); continue; }
+    if (!ownedBy(ev, cid)) { skipped.push({ eventId: it.eventId, why: 'שייך לחברה אחרת' }); continue; }
+    const cd = (ev.contractorDetails || [])[it.index];
+    if (!cd) { skipped.push({ eventId: it.eventId, why: `שורת קבלן ${it.index} לא נמצאה` }); continue; }
+    cd.paid = paid;
+    if (paid) cd.paidSource = 'manual'; else if (!linkOnly) cd.paidSource = null;
+    if (paid || linkOnly) {
+      cd.paidInvoice = body.invoiceNumber || null;
+      cd.paidExpenseId = body.expenseId || null;
+      cd.paidExpenseUrl = body.expenseUrl || null;
+      const pay = findPayable(cd);
+      if (pay) cd.paidPayableId = pay.id;
+    } else { cd.paidInvoice = null; cd.paidExpenseId = null; cd.paidExpenseUrl = null; cd.paidPayableId = null; }
+    n++;
   }
-  save(db); json(res, { ok: true, updated: n });
+  save(db);
+  const matchedPayable = items.length ? Boolean((db.supplierPayables || []).some(p => ownedBy(p, cid)
+    && ((body.expenseId && ((p.giExpenseId && String(p.giExpenseId) === String(body.expenseId)) || String(p.id) === String(body.expenseId)))
+      || (body.invoiceNumber && p.number && String(p.number) === String(body.invoiceNumber))))) : false;
+  console.log(`[link-events] ${cid}: קושרו ${n}/${items.length} שורות לחשבונית ${body.invoiceNumber || body.expenseId || '?'}${matchedPayable ? '' : ' · אין רישום הוצאה תואם'}${skipped.length ? ' · דולגו: ' + skipped.map(x => x.why).join(', ') : ''}`);
+  json(res, { ok: true, updated: n, total: items.length, skipped, matchedPayable });
 });
 
 // POST /api/contractors/dismiss-supplier { name } — סימון כל האירועים שנותרו (לא שולמו) של הספק כ"טופל"

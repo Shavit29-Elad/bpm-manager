@@ -2883,8 +2883,18 @@ window.deleteEvent = async () => {
   if (!confirm('למחוק את האירוע מרשימת האירועים שלך? (לא נמחק מיומן גוגל)')) return;
   await fetch(`/api/events/${_evEditing.id}`, { method: 'DELETE' }).catch(() => {});
   const m = document.getElementById('evModal'); if (m) m.classList.add('hidden');
-  renderCombined($('#content'));
+  afterEventEditorClose();
 };
+// סגירת עורך האירוע מרעננת את הלשונית שממנה נפתח, לא את לשונית האירועים.
+// קודם נקרא כאן renderCombined תמיד — ולכן כניסה לאירוע מתוך "ספקים לתשלום"
+// זרקה אותך למסך האירועים במקום להחזיר אותך למקום שבו היית.
+function afterEventEditorClose() {
+  _evDocNote = '';
+  clearApiCache();
+  if (state.tab === 'contractors') { renderContractors($('#content')); return; }
+  if (state.tab === 'home') { renderHome($('#content')); return; }
+  renderCombined($('#content'));
+}
 function evCtrHtml() {
   if (!_evCtr.length) return '<span class="muted" style="font-size:13px">אין קבלנים. הוסף אם רלוונטי לתשלום. אפשר לבחור ספק מחשבונית ירוקה.</span>';
   return _evCtr.map((c, i) => {
@@ -2985,7 +2995,7 @@ window.saveEvent = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
   await saveEventCore();
   const m = document.getElementById('evModal'); if (m) m.classList.add('hidden');
-  renderCombined($('#content'));
+  afterEventEditorClose();
 };
 // אישור אירוע מתוך העריכה — שומר את הפרטים ומסמן כמאושר
 window.approveFromEditor = async (btn) => {
@@ -2995,7 +3005,7 @@ window.approveFromEditor = async (btn) => {
   _evEditing.confirmed = true;
   await fetch(`/api/events/${_evEditing.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: true }) }).catch(() => {});
   const m = document.getElementById('evModal'); if (m) m.classList.add('hidden');
-  renderCombined($('#content'));
+  afterEventEditorClose();
 };
 window.unapproveFromEditor = async (btn) => {
   if (!_evEditing) return;
@@ -3003,7 +3013,7 @@ window.unapproveFromEditor = async (btn) => {
   _evEditing.confirmed = false;
   await fetch(`/api/events/${_evEditing.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: false }) }).catch(() => {});
   const m = document.getElementById('evModal'); if (m) m.classList.add('hidden');
-  renderCombined($('#content'));
+  afterEventEditorClose();
 };
 
 // סימון ידני של אי-התאמה כ"הותאם" — האירוע יורד מרשימת אי-ההתאמות מול היומן
@@ -4513,10 +4523,32 @@ window.ctLinkConfirm = async (btn) => {
   const invoiceNumber = manual || (sel ? String(sel.number) : '') || null;
   if (!invoiceNumber && !sel) { const st = document.getElementById('ctLinkStatus'); if (st) st.innerHTML = '<span style="color:var(--danger)">בחר חשבונית או הזן מספר.</span>'; return; }
   if (btn) btn.disabled = true;
+  const st = document.getElementById('ctLinkStatus');
+  if (st) st.innerHTML = '<span class="muted">מקשר…</span>';
   // קישור בלבד — שומר את השיוך לחשבונית מבלי לסמן "שולם". "שולם לספק" ייקבע לפי התאמת בנק / סימון ידני.
-  await fetch('/api/contractors/mark-paid-bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items: _ctLink.items, invoiceNumber, expenseId: sel ? sel.id : null, expenseUrl: sel ? sel.url : null, paid: false, link: true }) }).catch(() => {});
+  // התשובה נבדקת: קודם השגיאה נבלעה ב-catch ריק והחלונית פשוט נסגרה, כך שכישלון
+  // נראה בדיוק כמו הצלחה — וזו הסיבה שקישור שלא עבד לא השאיר שום עקבות.
+  const r = await fetch('/api/contractors/mark-paid-bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items: _ctLink.items, invoiceNumber, expenseId: sel ? sel.id : null, expenseUrl: sel ? sel.url : null, paid: false, link: true }) })
+    .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) btn.disabled = false;
+  if (!r.ok) { if (st) st.innerHTML = `<span style="color:var(--danger)">השיוך נכשל: ${escapeHtml(String(r.error || 'שגיאה לא ידועה'))}</span>`; return; }
+  if (!r.updated) {
+    if (st) st.innerHTML = `<span style="color:var(--danger)">לא עודכן אף אירוע${(r.skipped || []).length ? ' — ' + escapeHtml(r.skipped.map(x => x.why).join(' · ')) : ''}</span>`;
+    return;
+  }
+  // אין רישום הוצאה תואם — הקישור נשמר על האירועים, אבל הם לא יופיעו תחת שום
+  // הוצאה ב"ספקים לתשלום", כי אין שם רשומה כזו. עדיף לומר את זה מאשר להיראות כאילו כלום לא קרה.
+  if (!r.matchedPayable) {
+    if (st) st.innerHTML = `<span style="color:var(--warn)">✓ ${r.updated} אירועים קושרו לחשבונית ${escapeHtml(String(invoiceNumber || ''))},`
+      + ` אך אין במערכת רישום הוצאה עם המספר הזה — לכן הם לא יופיעו תחת הוצאה ברשימה.`
+      + ` כדי שיופיעו, יש לקלוט את החשבונית (גרירת הקובץ ב"טיפות הוצאה") ואז לשייך אליה.</span>`;
+    clearApiCache(); renderContractors($('#content'));
+    return;
+  }
+  if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ ${r.updated} אירועים קושרו</span>`;
   document.getElementById('ctLinkModal').classList.add('hidden');
+  clearApiCache();
   renderContractors($('#content'));
 };
 // "טופל" — סימון כל האירועים שנותרו מול הספק כטופלו (יורדים מהרשימה הפתוחה)
