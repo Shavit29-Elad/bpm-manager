@@ -7412,10 +7412,16 @@ function bankMatchedIds(exceptTxId) {
     // כל שורה שיש עליה מסמך משויך — בלי תלות בסטטוס. זהה להיגיון של linkedDocIds בחלונית
     // "שייך", כדי ששני המסלולים יסתירו בדיוק את אותן חשבוניות. קודם נבדקו רק manual/auto,
     // ולכן חשבונית ששויכה לתנועה מאושרת (approved) או מוסתרת (ignored) המשיכה להיות מוצעת.
-    for (const inv of (t.matchedInvoices || [])) if (inv && inv.id != null) s.add(String(inv.id));
-    // גם לפי מספר המסמך — שיוך שנעשה דרך קליטת הוצאה שומר מזהה שונה (payableId/exp_<מספר>),
-    // ואז השוואת מזהים לבדה מפספסת ואותה חשבונית הוצעה שוב.
-    for (const inv of (t.matchedInvoices || [])) if (inv && inv.number != null) s.add('num:' + String(inv.number).trim());
+    // כולל חשבונית המקור המקוננת תחת קבלה (sourceInvoice) — היא הוסרה מהרשימה הראשית
+    // כדי לא לספור את הכסף פעמיים, ובלעדיה היא הייתה ממשיכה להיות מוצעת לשיוך בשורה אחרת.
+    const each = (inv) => {
+      if (!inv) return;
+      if (inv.id != null) s.add(String(inv.id));
+      // גם לפי מספר המסמך — שיוך שנעשה דרך קליטת הוצאה שומר מזהה שונה (payableId/exp_<מספר>),
+      // ואז השוואת מזהים לבדה מפספסת ואותה חשבונית הוצעה שוב.
+      if (inv.number != null) s.add('num:' + String(inv.number).trim());
+    };
+    for (const inv of (t.matchedInvoices || [])) { each(inv); each(inv && inv.sourceInvoice); }
   }
   return s;
 }

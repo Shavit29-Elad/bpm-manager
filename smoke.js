@@ -274,6 +274,35 @@ check('מחיקת הוצאת ספק — ברירת המחדל לא נוגעת ב
   return true;
 });
 
+check('תשלום שהותאם דרך קבלה מזוהה גם על חשבונית המס', () => {
+  const src = srv.match(/function buildBankPaidMap\(db, companyId\) \{[\s\S]*?\n\}/);
+  if (!src) throw new Error('buildBankPaidMap לא נמצאה');
+  const build = new Function('ownedBy', src[0] + '; return buildBankPaidMap;')((t, c) => !c || t.companyId === c);
+  // תנועה מותאמת לקבלה 6002; חשבונית המס 6001 קוננה תחתיה והוסרה מהרשימה הראשית
+  const tx = { companyId: 'co_bpm', direction: 'credit', matchStatus: 'approved', date: '08/07/2026',
+    matchedInvoices: [{ id: 'r1', number: '6002', type: 400, sourceInvoice: { id: 'i1', number: '6001', type: 305 } }] };
+  const m = build({ bankTx: [tx] }, 'co_bpm');
+  if (m.get('num:6001') !== '08/07/2026') throw new Error('חשבונית המס המקוננת לא נמצאה במפה');
+  if (m.get('num:6002') !== '08/07/2026') throw new Error('הקבלה עצמה לא נמצאה');
+  if (m.get('id:i1') !== '08/07/2026') throw new Error('חשבונית המס לא נמצאה לפי מזהה');
+  for (const [name, bad] of [
+    ['שורה לא מאושרת', { ...tx, matchStatus: 'unmatched' }],
+    ['תנועת חובה', { ...tx, direction: 'debit' }],
+    ['חברה אחרת', { ...tx, companyId: 'co_moshe' }],
+  ]) if (build({ bankTx: [bad] }, 'co_bpm').size) throw new Error(name + ' נספרה בטעות');
+  // האירוע מחזיק את חשבונית המס — ועכשיו נחשב שולם
+  const ecp = new Function(
+    srv.match(/const OPEN_DOCS_MONTHS[\s\S]*?\n\}\n/)[0]
+    + srv.match(/function ddmmyyyyToISO[^\n]*\n/)[0]
+    + srv.match(/function eventClientPaid\(e, bankPaid, openNums\) \{[\s\S]*?\n\}\n/)[0]
+    + '; return eventClientPaid;')();
+  const r = ecp({ linkedDocs: [{ type: 305, number: '6001', date: '2026-07-08' }] }, m, new Set(['6001']));
+  if (r.status !== 'paid' || r.via !== 'bank') throw new Error(`האירוע יצא ${r.status}/${r.via} במקום paid/bank`);
+  if (r.date !== '08/07/2026') throw new Error('תאריך התנועה לא הועבר');
+  if (!/each\(inv && inv\.sourceInvoice\)/.test(app)) throw new Error('סינון ההצעות לא כולל חשבונית מקור מקוננת');
+  return true;
+});
+
 check('חשבונית שנסגרה בחשבונית ירוקה נחשבת שולמה', () => {
   const src = srv.match(/const OPEN_DOCS_MONTHS[\s\S]*?\n\}\n/)[0]
             + srv.match(/function ddmmyyyyToISO[^\n]*\n/)[0]

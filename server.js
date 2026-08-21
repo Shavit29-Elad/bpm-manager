@@ -1564,15 +1564,7 @@ add('GET', /^\/api\/supplier-payables$/, async (req, res, _p, q) => {
   const list = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === want);
   const evs = (db.events || []).filter(e => (e.companyId || giCompanyId()) === want);
   // מפת "הלקוח שילם" — כדי לקבוע לכל הוצאה אם היא מוכנה לתשלום (הכסף מהלקוח כבר נכנס על האירועים שההוצאה מכסה)
-  const bankPaid = new Map();
-  for (const t of (db.bankTx || [])) {
-    if (want && t.companyId !== want) continue;
-    if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
-    for (const inv of (t.matchedInvoices || [])) {
-      if (inv && inv.number != null && !bankPaid.has('num:' + inv.number)) bankPaid.set('num:' + inv.number, t.date || null);
-      if (inv && inv.id != null && !bankPaid.has('id:' + inv.id)) bankPaid.set('id:' + inv.id, t.date || null);
-    }
-  }
+  const bankPaid = buildBankPaidMap(db, want);
   // תשלום לספק לפי צבירת התאמות בנק + נרמול שורות הקבלן (מאפס סימוני "שולם" ישנים שמקורם בקישור בלבד)
   const payMeta = applyBankSupplierPayments(db, want);
   let openNums = null;
@@ -1772,15 +1764,7 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/linked-events$/, async (req, res
   const payMetaLE = applyBankSupplierPayments(db, _cid);
   const meP = payMetaLE.get(p) || { paid: 0, total: Number(p.amount) || 0, status: null };
   // סטטוס תשלום מהלקוח לכל אירוע — לפי בנק (זיכוי מאושר) או חשבונית ירוקה
-  const bankPaid = new Map();
-  for (const t of (db.bankTx || [])) {
-    if (_cid && t.companyId !== _cid) continue;
-    if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
-    for (const inv of (t.matchedInvoices || [])) {
-      if (inv && inv.number != null && !bankPaid.has('num:' + inv.number)) bankPaid.set('num:' + inv.number, t.date || null);
-      if (inv && inv.id != null && !bankPaid.has('id:' + inv.id)) bankPaid.set('id:' + inv.id, t.date || null);
-    }
-  }
+  const bankPaid = buildBankPaidMap(db, _cid);
   let openNums = null;
   try { if (greenInvoice.haveCredentials()) { const open = await greenInvoice.openDocuments(); openNums = new Set((open || []).map(d => String(d.number))); } } catch { openNums = null; }
   const out = [];
@@ -3169,16 +3153,7 @@ add('GET', /^\/api\/contractors\/payables$/, async (req, res, _p, q) => {
   const db = load();
   const payables = contractorPayables(companyEvents(db, q.companyId));
   // 1) חשבוניות ששולמו לפי הבנק — זיכוי (credit) שהותאם לחשבונית ואושר/הותאם ידני/אוטומטי
-  const bankPaid = new Map(); // 'num:'/'id:' -> תאריך התנועה
-  for (const t of (db.bankTx || [])) {
-    if (q.companyId && t.companyId !== q.companyId) continue;
-    if (t.direction !== 'credit') continue;
-    if (!['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
-    for (const inv of (t.matchedInvoices || [])) {
-      if (inv && inv.number != null && !bankPaid.has('num:' + inv.number)) bankPaid.set('num:' + inv.number, t.date || null);
-      if (inv && inv.id != null && !bankPaid.has('id:' + inv.id)) bankPaid.set('id:' + inv.id, t.date || null);
-    }
-  }
+  const bankPaid = buildBankPaidMap(db, q.companyId); // 'num:'/'id:' -> תאריך התנועה
   // 2) חשבוניות פתוחות (טרם שולמו) לפי חשבונית ירוקה — לפי מספר מסמך
   let openNums = null;
   try { if (greenInvoice.haveCredentials()) { const open = await greenInvoice.openDocuments(); openNums = new Set((open || []).map(d => String(d.number))); } } catch { openNums = null; }
@@ -3186,6 +3161,26 @@ add('GET', /^\/api\/contractors\/payables$/, async (req, res, _p, q) => {
   for (const g of payables) for (const ev of g.events) ev.clientPaid = eventClientPaid(evMap.get(ev.eventId), bankPaid, openNums);
   json(res, payables);
 });
+
+// מפת "החשבונית שולמה לפי הבנק": 'num:<מספר>' / 'id:<מזהה>' → תאריך התנועה.
+// סורקת גם את חשבונית המקור המקוננת (inv.sourceInvoice): כשתנועה מותאמת לקבלה (400),
+// attachSourceInvoices מקנן תחתיה את חשבונית המס שממנה נגזרה ומסיר אותה מהרשימה הראשית
+// כדי לא לספור את הכסף פעמיים. על האירוע רשומה חשבונית המס — לא הקבלה — ולכן בלי
+// הסריקה הזו אירוע ששולם דרך קבלה נראה כאילו לא שולם.
+function buildBankPaidMap(db, companyId) {
+  const m = new Map();
+  const put = (inv, date) => {
+    if (!inv) return;
+    if (inv.number != null && !m.has('num:' + inv.number)) m.set('num:' + inv.number, date || null);
+    if (inv.id != null && !m.has('id:' + inv.id)) m.set('id:' + inv.id, date || null);
+  };
+  for (const t of (db.bankTx || [])) {
+    if (companyId && !ownedBy(t, companyId)) continue;
+    if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
+    for (const inv of (t.matchedInvoices || [])) { put(inv, t.date); put(inv && inv.sourceInvoice, t.date); }
+  }
+  return m;
+}
 
 // חלון הסריקה של openDocuments (24 חודשים). מסמך מחוץ לחלון אינו מופיע ברשימת
 // המסמכים הפתוחים גם כשלא שולם — ולכן אסור להסיק מהיעדרו שהוא שולם.
