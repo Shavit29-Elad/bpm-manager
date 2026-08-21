@@ -6788,7 +6788,10 @@ async function renderBusiness(c) {
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
         <b style="font-size:13.5px">🔍 השוואת הוצאות מול חשבונית ירוקה</b>
         <div class="muted" style="font-size:12px;margin:3px 0 8px">בדיקה בלבד — לא משנה כלום. מראה אילו הוצאות קיימות בחשבונית ירוקה ולא במערכת, ולהפך.</div>
-        <button class="btn ghost" onclick="runPayCompare(this)">הרץ השוואה</button>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn ghost" onclick="runPayCompare(this)">הרץ השוואה</button>
+          <button class="btn ghost" id="bizCompareCopy" style="display:none" onclick="copyPayCompare(this)">📋 העתק תוצאה</button>
+        </div>
         <pre id="bizCompare" dir="rtl" style="display:none;white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12.5px;line-height:1.7;margin-top:9px;font-family:inherit;text-align:right;max-height:420px;overflow:auto"></pre>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
@@ -7080,7 +7083,14 @@ window.runPayCompare = async (btn) => {
     ].filter(Boolean).join('\n'));
   }
   box.textContent = out.join('\n\n');
+  const cp = document.getElementById('bizCompareCopy'); if (cp) cp.style.display = '';
   btn.disabled = false;
+};
+window.copyPayCompare = async (btn) => {
+  const box = document.getElementById('bizCompare'); if (!box) return;
+  try { await navigator.clipboard.writeText(box.textContent || ''); }
+  catch { const ta = document.createElement('textarea'); ta.value = box.textContent || ''; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+  btn.textContent = '✓ הועתק'; setTimeout(() => { btn.textContent = '📋 העתק תוצאה'; }, 1800);
 };
 // מילוי בורר סיווג ברירת המחדל בפרטי העסק
 async function fillBizClassSelect(current) {
