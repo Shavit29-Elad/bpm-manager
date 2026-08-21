@@ -4421,7 +4421,9 @@ function clientPaidBadge(cp) {
   // ירוק — מס-קבלה/קבלה (320/400) או תשלום שזוהה בבנק
   if (cp.status === 'paid') {
     const d = cp.date ? ' · ' + ddmy(cp.date) : '';
-    const src = cp.via === 'bank' ? 'זוהה תשלום בבנק' : 'הופקה מס-קבלה/קבלה';
+    const src = cp.via === 'bank' ? 'זוהה תשלום בבנק'
+      : cp.via === 'closed' ? 'החשבונית נסגרה בחשבונית ירוקה (הופקה עליה קבלה)'
+      : 'הופקה מס-קבלה/קבלה';
     return `<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap" title="${src}">🟢 הלקוח שילם${d}</span>`;
   }
   // צהוב — הופקה חשבונית עסקה/מס (300/305), טרם שולם

@@ -274,6 +274,31 @@ check('מחיקת הוצאת ספק — ברירת המחדל לא נוגעת ב
   return true;
 });
 
+check('חשבונית שנסגרה בחשבונית ירוקה נחשבת שולמה', () => {
+  const src = srv.match(/const OPEN_DOCS_MONTHS[\s\S]*?\n\}\n/)[0]
+            + srv.match(/function ddmmyyyyToISO[^\n]*\n/)[0]
+            + srv.match(/function eventClientPaid\(e, bankPaid, openNums\) \{[\s\S]*?\n\}\n/)[0];
+  const f = new Function(src + '; return eventClientPaid;')();
+  const none = new Map();
+  const doc = (o = {}) => ({ type: 305, number: '7001', date: new Date().toISOString().slice(0, 10), ...o });
+  const cases = [
+    ['סגורה = שולם', { linkedDocs: [doc()] }, new Set(['9999']), 'paid'],
+    ['פתוחה = ממתין', { linkedDocs: [doc()] }, new Set(['7001']), 'charged'],
+    ['GI לא זמין = ממתין', { linkedDocs: [doc()] }, null, 'charged'],
+    ['שזוכה = ממתין', { linkedDocs: [doc({ credited: true })] }, new Set(['9999']), 'charged'],
+    ['הומרה = ממתין', { linkedDocs: [doc({ type: 300, converted: true })] }, new Set(['9999']), 'charged'],
+    ['ישנה מדי = ממתין', { linkedDocs: [doc({ date: '2019-01-05' })] }, new Set(['9999']), 'charged'],
+    ['בלי מספר = ממתין', { linkedDocs: [doc({ number: null })] }, new Set(['9999']), 'charged'],
+  ];
+  for (const [name, ev, open, want] of cases) {
+    const got = f(ev, none, open).status;
+    if (got !== want) throw new Error(`${name}: ${got} במקום ${want}`);
+  }
+  if (!/openNums instanceof Set/.test(srv)) throw new Error('openNums לא מחובר');
+  if (!/cp\.via === 'closed'/.test(app)) throw new Error('אין חיווי למקור הסגירה');
+  return true;
+});
+
 check('כפילות בחשבונית ירוקה מתורגמת להסבר בעברית', () => {
   const rx = srv.match(/const m = (\/"errorCode"[\s\S]*?\/)\.exec/);
   if (!rx) throw new Error('זיהוי שגיאת 1010 לא נמצא');

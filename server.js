@@ -3187,6 +3187,19 @@ add('GET', /^\/api\/contractors\/payables$/, async (req, res, _p, q) => {
   json(res, payables);
 });
 
+// חלון הסריקה של openDocuments (24 חודשים). מסמך מחוץ לחלון אינו מופיע ברשימת
+// המסמכים הפתוחים גם כשלא שולם — ולכן אסור להסיק מהיעדרו שהוא שולם.
+const OPEN_DOCS_MONTHS = 24;
+function withinOpenDocsWindow(dateLike, now = new Date()) {
+  const raw = String(dateLike || '');
+  const iso = /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : ddmmyyyyToISO(raw);
+  if (!iso) return false;   // בלי תאריך ודאי לא מסיקים כלום
+  const d = new Date(iso + 'T00:00:00Z');
+  if (isNaN(d.getTime())) return false;
+  const from = new Date(now); from.setMonth(from.getMonth() - OPEN_DOCS_MONTHS);
+  return d >= from && d.getTime() <= now.getTime() + 86400000;
+}
+
 // קובע האם הלקוח שילם על אירוע (עבור חיווי "קבלנים לתשלום"): בנק או חשבונית ירוקה
 function eventClientPaid(e, bankPaid, openNums) {
   if (!e) return { status: 'unknown' };
@@ -3208,6 +3221,23 @@ function eventClientPaid(e, bankPaid, openNums) {
   }
   // מס-קבלה (320) / קבלה (400) → שולם (ירוק)
   if (docs.some(d => [320, 400].includes(Number(d.type)))) return { status: 'paid', via: 'greeninvoice' };
+  // עסקה (300) / מס (305) שכבר אינה ברשימת המסמכים הפתוחים של חשבונית ירוקה — נסגרה, כלומר שולמה.
+  // זה האות היחיד כשהקבלה הופקה ישירות בחשבונית ירוקה: היא לא נכנסת ל-linkedDocs של האירוע,
+  // ואם גם אין התאמת בנק — האירוע נתקע על "ממתין לתשלום מהלקוח" לנצח.
+  // שלוש הגנות מפני ירוק שגוי:
+  //   1. openNums הוא Set — כלומר נטען בהצלחה. אם חשבונית ירוקה לא זמינה הוא null, ואז
+  //      "לא ברשימה" לא אומר כלום וכל האירועים היו נצבעים ירוק.
+  //   2. רק 300/305 — אלה הסוגים היחידים ש-openDocuments סורק בכלל.
+  //   3. רק בתוך חלון 24 החודשים שהוא סורק, ורק מסמך פעיל: מסמך שזוכה או שהומר
+  //      נסגר בחשבונית ירוקה בלי ששולם, ואסור להסיק ממנו תשלום.
+  if (openNums instanceof Set) {
+    const closed = docs.some(d => [300, 305].includes(Number(d.type))
+      && !d.credited && !d.credit && !d.converted
+      && d.number != null && String(d.number).trim() !== ''
+      && withinOpenDocsWindow(d.date || e.date || e.dateRaw)
+      && !openNums.has(String(d.number).trim()));
+    if (closed) return { status: 'paid', via: 'closed' };
+  }
   // עסקה (300) / מס (305) בלבד → הלקוח חויב אך טרם שילם (צהוב)
   return { status: 'charged' };
 }
