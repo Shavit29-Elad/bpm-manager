@@ -4422,7 +4422,7 @@ function clientPaidBadge(cp) {
   if (cp.status === 'paid') {
     const d = cp.date ? ' · ' + ddmy(cp.date) : '';
     const src = cp.via === 'bank' ? 'זוהה תשלום בבנק'
-      : cp.via === 'closed' ? 'החשבונית נסגרה בחשבונית ירוקה (הופקה עליה קבלה)'
+      : cp.via === 'closed' ? 'החשבונית נסגרה בחשבונית ירוקה — הופקה עליה קבלה. תאריך התשלום אינו ידוע כאן: הקבלה לא הופקה דרך המערכת ואין התאמה בבנק'
       : 'הופקה מס-קבלה/קבלה';
     return `<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap" title="${src}">🟢 הלקוח שילם${d}</span>`;
   }

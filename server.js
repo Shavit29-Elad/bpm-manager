@@ -3219,8 +3219,9 @@ function eventClientPaid(e, bankPaid, openNums) {
     const key = (num && bankPaid.has('num:' + num)) ? 'num:' + num : (id && bankPaid.has('id:' + id)) ? 'id:' + id : null;
     if (key) return { status: 'paid', via: 'bank', date: bankPaid.get(key) || null };
   }
-  // מס-קבלה (320) / קבלה (400) → שולם (ירוק)
-  if (docs.some(d => [320, 400].includes(Number(d.type)))) return { status: 'paid', via: 'greeninvoice' };
+  // מס-קבלה (320) / קבלה (400) → שולם (ירוק). תאריך המסמך הוא תאריך התשלום.
+  const rcpt = docs.find(d => [320, 400].includes(Number(d.type)));
+  if (rcpt) return { status: 'paid', via: 'greeninvoice', date: rcpt.date || null };
   // עסקה (300) / מס (305) שכבר אינה ברשימת המסמכים הפתוחים של חשבונית ירוקה — נסגרה, כלומר שולמה.
   // זה האות היחיד כשהקבלה הופקה ישירות בחשבונית ירוקה: היא לא נכנסת ל-linkedDocs של האירוע,
   // ואם גם אין התאמת בנק — האירוע נתקע על "ממתין לתשלום מהלקוח" לנצח.

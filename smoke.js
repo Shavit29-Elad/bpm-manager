@@ -294,6 +294,14 @@ check('חשבונית שנסגרה בחשבונית ירוקה נחשבת שול
     const got = f(ev, none, open).status;
     if (got !== want) throw new Error(`${name}: ${got} במקום ${want}`);
   }
+  // תאריך התשלום: מהתאמת בנק או מתאריך הקבלה. סגירה בחשבונית ירוקה — בלי תאריך.
+  const bank = new Map([['num:5001', '10/08/2026']]);
+  const withBank = f({ linkedDocs: [{ type: 305, number: '5001', date: '2026-07-30' }] }, bank, new Set(['5001']));
+  if (withBank.date !== '10/08/2026') throw new Error('תאריך מהתאמת בנק אבד');
+  const withRcpt = f({ linkedDocs: [{ type: 400, number: '6002', date: '2026-07-12' }] }, none, new Set());
+  if (withRcpt.date !== '2026-07-12') throw new Error('תאריך הקבלה לא מוחזר');
+  const closedNoDate = f({ linkedDocs: [doc()] }, none, new Set(['9999']));
+  if (closedNoDate.date) throw new Error('הומצא תאריך תשלום למסמך שרק נסגר');
   if (!/openNums instanceof Set/.test(srv)) throw new Error('openNums לא מחובר');
   if (!/cp\.via === 'closed'/.test(app)) throw new Error('אין חיווי למקור הסגירה');
   return true;
