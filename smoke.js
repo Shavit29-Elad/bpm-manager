@@ -257,6 +257,16 @@ check('חשבונית מותאמת בבנק נחשבת שולמה גם בלי ר
   return true;
 });
 
+check('קישור לחשבונית מחשבונית ירוקה יוצר רשומת הוצאה', () => {
+  // בלי זה הקישור נשמר על האירועים אבל אין שורה במסך שתחתיה יוצגו — והפעולה
+  // נראית כאילו לא עשתה כלום. זה היה המקרה של קבלה 40114.
+  if (!/createdPayable/.test(srv)) throw new Error('לא נוצרת רשומה בקישור');
+  if (!/!doc\.localOnly/.test(srv)) throw new Error('חסרה הגנה מפני יצירת כפילות לרשומה מקומית');
+  if (!/String\(p\.giExpenseId \|\| ''\) === String\(doc\.id\)/.test(srv)) throw new Error('חסרה בדיקת קיום לפי מזהה GI');
+  if (!/createdPayable \|\| \(db\.supplierPayables/.test(srv)) throw new Error('הקישור לא מצביע לרשומה החדשה');
+  return true;
+});
+
 const rep = await import('./dailyReport.js');
 check('דוח יומי — חברה שקטה לא מייצרת מייל', () => rep.buildReport({ companyName: 'x', overdueDays: 45 }) === null);
 check('דוח יומי — אירוע מהחודש הנוכחי לא מתריע', () => rep.monthClosed('2026-08-05', new Date('2026-08-19')) === false);

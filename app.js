@@ -4498,7 +4498,13 @@ function renderCtLink() {
   const docs = _ctLink.docs || [];
   const rows = docs.map(d => {
     const on = _ctLink.selected && _ctLink.selected.id === d.id;
-    const jj = encodeURIComponent(JSON.stringify({ id: d.id, number: d.number, url: d.url || null }));
+    // כל פרטי המסמך נשלחים לשרת — כדי שיוכל ליצור רשומת הוצאה אם אין כזו
+    const jj = encodeURIComponent(JSON.stringify({ id: d.id, number: d.number, url: d.url || null,
+      type: d.type != null ? Number(d.type) : null, date: d.date || null,
+      amount: d.amountIncVat != null ? Number(d.amountIncVat) : (d.amount != null ? Number(d.amount) : null),
+      amountExVat: d.amountExVat != null ? Number(d.amountExVat) : null,
+      supplierName: d.supplierName || null, supplierId: d.supplierId || null,
+      description: d.description || d.category || null, localOnly: !!d.localOnly }));
     return `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:6px 8px;border-top:1px solid var(--line);${on ? 'background:#e7f7ee' : ''}">
       <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${fmtDate(d.date)} · ${money(d.amountIncVat ?? d.amount)}</span>
       ${d.url ? `<button class="btn ghost" style="padding:1px 8px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">👁</button>` : ''}
@@ -4529,7 +4535,8 @@ window.ctLinkConfirm = async (btn) => {
   // התשובה נבדקת: קודם השגיאה נבלעה ב-catch ריק והחלונית פשוט נסגרה, כך שכישלון
   // נראה בדיוק כמו הצלחה — וזו הסיבה שקישור שלא עבד לא השאיר שום עקבות.
   const r = await fetch('/api/contractors/mark-paid-bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items: _ctLink.items, invoiceNumber, expenseId: sel ? sel.id : null, expenseUrl: sel ? sel.url : null, paid: false, link: true }) })
+    body: JSON.stringify({ items: _ctLink.items, invoiceNumber, expenseId: sel ? sel.id : null, expenseUrl: sel ? sel.url : null,
+      doc: sel || null, supplierName: _ctLink.name || null, supplierId: _ctLink.supplierId || null, paid: false, link: true }) })
     .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
   if (!r.ok) { if (st) st.innerHTML = `<span style="color:var(--danger)">השיוך נכשל: ${escapeHtml(String(r.error || 'שגיאה לא ידועה'))}</span>`; return; }
@@ -4540,13 +4547,16 @@ window.ctLinkConfirm = async (btn) => {
   // אין רישום הוצאה תואם — הקישור נשמר על האירועים, אבל הם לא יופיעו תחת שום
   // הוצאה ב"ספקים לתשלום", כי אין שם רשומה כזו. עדיף לומר את זה מאשר להיראות כאילו כלום לא קרה.
   if (!r.matchedPayable) {
+    // נשאר רק כשקושרים לפי מספר ידני בלי לבחור מסמך — אז אין מה ליצור ממנו רשומה
     if (st) st.innerHTML = `<span style="color:var(--warn)">✓ ${r.updated} אירועים קושרו לחשבונית ${escapeHtml(String(invoiceNumber || ''))},`
       + ` אך אין במערכת רישום הוצאה עם המספר הזה — לכן הם לא יופיעו תחת הוצאה ברשימה.`
-      + ` כדי שיופיעו, יש לקלוט את החשבונית (גרירת הקובץ ב"טיפות הוצאה") ואז לשייך אליה.</span>`;
+      + ` בחר את החשבונית מהרשימה למעלה במקום להזין מספר, והמערכת תיצור לה רישום.</span>`;
     clearApiCache(); renderContractors($('#content'));
     return;
   }
-  if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ ${r.updated} אירועים קושרו</span>`;
+  if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ ${r.updated} אירועים קושרו`
+    + (r.createdPayable ? ` · נוצר רישום הוצאה ${escapeHtml(String(r.createdPayable.supplierName || ''))} #${escapeHtml(String(r.createdPayable.number || ''))}` : '')
+    + `</span>`;
   document.getElementById('ctLinkModal').classList.add('hidden');
   clearApiCache();
   renderContractors($('#content'));

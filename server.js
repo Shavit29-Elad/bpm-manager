@@ -3216,11 +3216,43 @@ add('POST', /^\/api\/contractors\/mark-paid-bulk$/, (req, res, _p, _q, body) => 
   // מזהה רישום ההוצאה המתאים, אם קיים — כדי שהקישור ייקבע למזהה ולא יסתמך על
   // התאמת "מספר + שם", שנשברת בכל עריכה של אחד מהשדות האלה.
   const nrm = (x) => String(x || '').trim().toLowerCase();
-  const findPayable = (cd) => (db.supplierPayables || []).find(p => ownedBy(p, cid) && (
+  const findPayable = (cd) => createdPayable || (db.supplierPayables || []).find(p => ownedBy(p, cid) && (
     (body.expenseId && p.giExpenseId && String(p.giExpenseId) === String(body.expenseId))
     || (body.expenseId && String(p.id) === String(body.expenseId))
     || (body.invoiceNumber && p.number && String(p.number) === String(body.invoiceNumber)
         && nrm(cd.name) === nrm(p.supplierName))));
+  // חשבונית שנבחרה מחשבונית ירוקה ואין לה רשומה מקומית — יוצרים אותה כאן.
+  // בלי זה הקישור נשמר על האירועים אך אין שורה במסך שתחתיה יוצגו, והפעולה נראית
+  // כאילו לא עשתה כלום. לא ממזגים את *כל* ההוצאות מחשבונית ירוקה — רק את מה
+  // שבחרת לשייך אליו אירועים, כלומר מה שאתה באמת עוקב אחריו.
+  let createdPayable = null;
+  const doc = body && body.doc;
+  if ((paid || linkOnly) && doc && doc.id && !doc.localOnly) {
+    const exists = (db.supplierPayables || []).some(p => ownedBy(p, cid)
+      && (String(p.giExpenseId || '') === String(doc.id) || String(p.id) === String(doc.id)));
+    if (!exists) {
+      const amt = Number(doc.amount) || 0;
+      const net = doc.amountExVat != null ? Number(doc.amountExVat) : +(amt / 1.18).toFixed(2);
+      createdPayable = {
+        id: 'pay_' + Math.random().toString(36).slice(2, 10),
+        companyId: cid,
+        supplierId: doc.supplierId || body.supplierId || null,
+        supplierName: doc.supplierName || body.supplierName || '',
+        documentType: Number(doc.type) || 305,
+        number: doc.number != null ? String(doc.number) : (body.invoiceNumber || null),
+        date: doc.date ? String(doc.date).slice(0, 10) : null,
+        amount: amt, amountExcludeVat: net, vat: +(amt - net).toFixed(2),
+        description: doc.description || '',
+        giExpenseId: String(doc.id),
+        paid: false, paidAt: null, linkedEvents: [],
+        createdAt: new Date().toISOString(), fromLink: true,
+      };
+      db.supplierPayables = db.supplierPayables || [];
+      db.supplierPayables.push(createdPayable);
+      console.log(`[link-events] ${cid}: נוצרה רשומת הוצאה מחשבונית ירוקה · ${createdPayable.supplierName} #${createdPayable.number} · ${amt}`);
+    }
+  }
+
   let n = 0; const skipped = [];
   for (const it of items) {
     const ev = db.events.find(e => e.id === it.eventId);
@@ -3244,7 +3276,7 @@ add('POST', /^\/api\/contractors\/mark-paid-bulk$/, (req, res, _p, _q, body) => 
     && ((body.expenseId && ((p.giExpenseId && String(p.giExpenseId) === String(body.expenseId)) || String(p.id) === String(body.expenseId)))
       || (body.invoiceNumber && p.number && String(p.number) === String(body.invoiceNumber))))) : false;
   console.log(`[link-events] ${cid}: קושרו ${n}/${items.length} שורות לחשבונית ${body.invoiceNumber || body.expenseId || '?'}${matchedPayable ? '' : ' · אין רישום הוצאה תואם'}${skipped.length ? ' · דולגו: ' + skipped.map(x => x.why).join(', ') : ''}`);
-  json(res, { ok: true, updated: n, total: items.length, skipped, matchedPayable });
+  json(res, { ok: true, updated: n, total: items.length, skipped, matchedPayable: matchedPayable || Boolean(createdPayable), createdPayable: createdPayable ? { id: createdPayable.id, number: createdPayable.number, supplierName: createdPayable.supplierName } : null });
 });
 
 // POST /api/contractors/dismiss-supplier { name } — סימון כל האירועים שנותרו (לא שולמו) של הספק כ"טופל"
