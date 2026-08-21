@@ -1521,6 +1521,19 @@ function applyBankSupplierPayments(db, want) {
     if (p.giExpenseId != null) statusByKey['eid:' + String(p.giExpenseId)] = v;
     if (p.number != null) statusByKey['num:' + _nrmExpKey(p.number)] = v;
   }
+  // חשבונית שקיימת בחשבונית ירוקה ומותאמת בבנק, אך מעולם לא נקלטה דרך האתר, אין
+  // לה רשומה מקומית — ולכן היא לא נכללה בלולאה למעלה, והשיוך אליה לא זוהה כתשלום.
+  // כאן נגזר הסטטוס ישירות מהתאמת הבנק: אם הבנק מכסה את סכום החשבונית, שולם.
+  const bankOnlyStatus = (c) => {
+    let paidAmt = 0;
+    if (c.paidExpenseId != null) paidAmt = Math.max(paidAmt, debitByKey['id:' + String(c.paidExpenseId)] || 0);
+    if (c.paidInvoice != null) paidAmt = Math.max(paidAmt, debitByKey['num:' + _nrmExpKey(c.paidInvoice)] || 0);
+    if (paidAmt <= 0) return null;
+    // אין רשומה מקומית ולכן אין "סכום חשבונית" להשוות אליו. תנועת חובה מותאמת
+    // לחשבונית הזו היא עדות מספקת שהיא שולמה.
+    return { kind: 'full', source: 'bank' };
+  };
+
   let dirty = false;
   for (const ev of (db.events || [])) {
     if (want && (ev.companyId || giCompanyId()) !== want) continue;
@@ -1528,7 +1541,8 @@ function applyBankSupplierPayments(db, want) {
       if (!c) continue;
       const v = (c.paidPayableId != null && statusByKey['pid:' + String(c.paidPayableId)])
         || (c.paidExpenseId != null && statusByKey['eid:' + String(c.paidExpenseId)])
-        || (c.paidInvoice != null && statusByKey['num:' + _nrmExpKey(c.paidInvoice)]) || null;
+        || (c.paidInvoice != null && statusByKey['num:' + _nrmExpKey(c.paidInvoice)])
+        || bankOnlyStatus(c) || null;
       const hasLink = !!(c.paidInvoice || c.paidPayableId || c.paidExpenseId);
       if (v && v.kind === 'full') {
         if (!c.paid || c.paidSource !== v.source) { c.paid = true; c.paidSource = v.source; dirty = true; }

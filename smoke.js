@@ -240,6 +240,23 @@ check('winmail.dat — חילוץ ה-PDF שבפנים', () => {
   return true;
 });
 
+check('חשבונית מותאמת בבנק נחשבת שולמה גם בלי רשומה מקומית', () => {
+  // "רישום הוצאת ספק" נוצר רק כשקולטים חשבונית דרך האתר. חשבונית שנוצרה ישירות
+  // בחשבונית ירוקה ומותאמת בבנק לא הייתה קיימת בחישוב, ולכן שיוך אליה לא סומן
+  // כשולם — למרות שהכסף יצא בפועל.
+  const fnSrc = srv.match(/const bankOnlyStatus = \(c\) => \{[\s\S]*?\n  \};/);
+  if (!fnSrc) throw new Error('bankOnlyStatus לא קיימת');
+  const nrm = (x) => String(x || '').trim().toLowerCase().replace(/^0+/, '');
+  const fn = new Function('debitByKey', '_nrmExpKey', 'c', fnSrc[0] + ' return bankOnlyStatus(c);');
+  const keys = { 'num:40114': 16107 };
+  if (!fn(keys, nrm, { paidInvoice: '40114' })) throw new Error('חשבונית מותאמת לא זוהתה כשולמה');
+  if (fn(keys, nrm, { paidInvoice: '99999' })) throw new Error('חשבונית לא מותאמת סומנה כשולמה');
+  if (fn(keys, nrm, {})) throw new Error('שורה בלי קישור סומנה כשולמה');
+  // ובעיקר — שהפונקציה באמת מחוברת לשרשרת. בלי זה הבדיקה עוברת בזמן שהתיקון מנותק.
+  if (!/\|\|\s*bankOnlyStatus\(c\)/.test(srv)) throw new Error('bankOnlyStatus לא מחוברת לחישוב הסטטוס');
+  return true;
+});
+
 const rep = await import('./dailyReport.js');
 check('דוח יומי — חברה שקטה לא מייצרת מייל', () => rep.buildReport({ companyName: 'x', overdueDays: 45 }) === null);
 check('דוח יומי — אירוע מהחודש הנוכחי לא מתריע', () => rep.monthClosed('2026-08-05', new Date('2026-08-19')) === false);
