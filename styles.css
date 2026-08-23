@@ -55,7 +55,7 @@ body{
   font-size:15px;
   line-height:1.6;
   letter-spacing:-.1px;
-  min-height:100vh;
+  min-height:100vh;min-height:100dvh;
   background:
     radial-gradient(1200px 620px at 100% -12%, rgba(79,70,229,.08), transparent 60%),
     radial-gradient(920px 540px at -10% 2%, rgba(245,158,11,.07), transparent 58%),
@@ -249,7 +249,10 @@ tbody tr:last-child td{border-bottom:none}
   input,select,textarea{font-size:16px;padding:11px 12px}
 
   /* סרגל עליון — נערם, בורר החברה ופרטי המשתמש ברוחב מלא ונוחים למגע */
-  .topbar{padding:10px 14px;gap:10px}
+  /* הסרגל נערם לארבע שורות ומגיע ל-197px — כמעט רבע ממסך הפלאפון. כשהוא דביק
+     הוא גוזל את השטח הזה תמיד; static מחזיר אותו לזרימת העמוד והוא נגלל החוצה. */
+  .topbar{padding:10px 14px;gap:8px;position:static}
+  .pills{font-size:12px}
   .brand{font-size:16px;flex:1 1 100%;order:-1}
   .company-switch{width:100%}
   .company-switch label{white-space:nowrap}
@@ -263,7 +266,8 @@ tbody tr:last-child td{border-bottom:none}
   .tab{padding:8px 13px;font-size:13.5px;white-space:nowrap;flex:0 0 auto}
 
   /* תוכן ופאנלים — פחות ריווח, יותר מקום */
-  main{padding:12px}
+  /* מרווח תחתון כדי שהכפתור הצף לא יסתיר לצמיתות את השורה האחרונה */
+  main{padding:12px;padding-bottom:96px}
   .panel{padding:15px;border-radius:16px;margin-bottom:14px}
   .panel h2{font-size:17px}
   .big{font-size:24px}
@@ -274,12 +278,46 @@ tbody tr:last-child td{border-bottom:none}
   .panel table{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
   th,td{padding:10px 9px;font-size:13px}
 
+  /* טבלה כרשימת כרטיסים. כל שורה הופכת לכרטיס וכל תא לשורת "תווית: ערך",
+     במקום גלילה אופקית של 960px. התוויות יושבות ב-data-label על ה-td — מאפיין
+     אינרטי שלא משנה כלום בדסקטופ, כך שהמעבר הוא CSS בלבד ומוגבל לפלאפון. */
+  table.cardify{display:block;min-width:0 !important;white-space:normal;overflow:visible}
+  table.cardify thead{display:none}
+  table.cardify tbody{display:block}
+  table.cardify tr{display:block;border:1px solid var(--line);border-radius:12px;margin-bottom:10px;background:var(--panel);overflow:hidden}
+  table.cardify td{display:flex;gap:12px;justify-content:space-between;align-items:flex-start;
+    border:none;border-bottom:1px dashed var(--line);padding:8px 12px;white-space:normal;text-align:start}
+  table.cardify td:last-child{border-bottom:none}
+  table.cardify td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:600;flex:0 0 auto;padding-top:2px}
+  table.cardify td:empty{display:none}
+
+  /* טבלאות שלא הומרו לכרטיסים נשארות נגללות — אבל העמודה המזהה (תאריך/שם)
+     נשארת קבועה, כדי שתמיד יהיה ברור באיזו שורה אתה בזמן הגלילה. */
+  .panel table:not(.cardify) th:first-child,
+  .panel table:not(.cardify) td:first-child{position:sticky;right:0;background:var(--panel);z-index:1}
+
   /* כרטיסים בעמודה אחת */
   .cards{grid-template-columns:1fr}
 
+  /* מטרות מגע — המלצת אפל/גוגל היא 44px. כפתורי הפעולה בטבלאות מוגדרים inline
+     עם padding זעיר (עד 2px), ו-min-height גובר עליהם בלי לגעת בדסקטופ.
+     חשוב במיוחד בשיוך תנועות בנק: הקשה שגויה שם משייכת כסף לתנועה הלא נכונה. */
+  .btn,button{min-height:42px}
+  input[type=checkbox],input[type=radio]{width:20px;height:20px;flex:0 0 auto}
+  td .btn,td button{margin-block:2px}
+
+  /* יומן — שבוע נפרס כרשימה יומית ברוחב מלא; 7 עמודות על 390px נותנות 50px ליום.
+     תצוגת חודש שומרת על צורת הלוח ונגללת אופקית, כי הרשת עצמה היא המידע. */
+  .cal-week{grid-template-columns:1fr !important}
+  .cal-month-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .cal-month{min-width:560px}
+
+  /* ההודעה הצפה מתרוממת מעל הכפתור הצף, ולא חורגת מרוחב המסך */
+  #expToast{bottom:88px !important;max-width:min(92vw,420px);text-align:center;line-height:1.45}
+
   /* מודלים כ"מגירה" תחתונה ברוחב מלא — נוח למגע */
   .modal{align-items:flex-end}
-  .modal-card{width:100vw !important;max-width:100vw !important;max-height:94vh;overflow:auto;border-radius:18px 18px 0 0;padding:18px}
+  .modal-card{width:100vw !important;max-width:100vw !important;max-height:94vh;max-height:94dvh;overflow:auto;border-radius:18px 18px 0 0;padding:18px}
   .modal-actions{flex-wrap:wrap}
   .modal-actions .btn{flex:1 1 auto}
 }

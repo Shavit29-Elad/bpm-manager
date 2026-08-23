@@ -17,6 +17,11 @@
     #fabMenu.hidden { display: none; }
     #fabMenu .fab-opt { display: block; width: 100%; text-align: right; background: none; border: none; padding: 9px 12px; font-size: 14px; cursor: pointer; border-radius: 8px; color: #1f2937; font-family: inherit; }
     #fabMenu .fab-opt:hover { background: #eef0fb; }
+    /* בפלאפון הסרגל העליון נערם לארבע שורות (~190px). כפתור צף ב-top:62px עם z-index
+       גבוה מהסרגל היה יושב על בורר החברה וחוסם אותו. התחתית גם נוחה יותר לאגודל. */
+    @media (max-width:640px) {
+      #fabNew { top: auto; bottom: 18px; left: 14px; flex-direction: column-reverse; }
+    }
   </style>
 </head>
 <body>

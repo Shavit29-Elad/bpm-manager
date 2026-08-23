@@ -92,7 +92,7 @@ function renderAuthScreen(mode) {
   document.querySelectorAll('.topbar, .tabs').forEach(el => el.style.display = 'none');
   const isSetup = mode === 'setup';
   const c = $('#content');
-  c.innerHTML = `<div style="min-height:70vh;display:flex;align-items:center;justify-content:center">
+  c.innerHTML = `<div style="min-height:70vh;min-height:70dvh;display:flex;align-items:center;justify-content:center">
     <div class="panel" style="width:min(420px,94vw);padding:28px 26px">
       <div style="text-align:center;margin-bottom:6px"><div style="font-size:28px">🎛️</div><h2 style="margin:6px 0 2px">א.ש ניהול פיננסי</h2>
       <div class="muted" style="font-size:13px">${isSetup ? 'הגדרה ראשונית — יצירת משתמש הנהלה' : 'התחברות למערכת'}</div></div>
@@ -261,7 +261,7 @@ window.openUsersModal = async () => {
   let m = document.getElementById('usersModal');
   if (!m) { m = document.createElement('div'); m.id = 'usersModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;overflow:auto"><div class="empty">טוען משתמשים…</div></div>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;max-height:90dvh;overflow:auto"><div class="empty">טוען משתמשים…</div></div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const r = await api('/api/users').catch(() => ({ users: [] }));
   _usersList = r.users || [];
@@ -278,7 +278,7 @@ function renderUsersModal() {
       <div style="display:flex;gap:6px"><button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="editUserRow('${u.id}')">✏️ ערוך</button><button class="btn ghost" style="padding:2px 9px;font-size:11.5px;color:var(--danger)" onclick="deleteUser('${u.id}')">מחק ✕</button></div></div>
     <div class="muted" style="font-size:11.5px;margin-top:4px">לשוניות: ${(u.tabs || []).filter(t => companyTabsFor(cid).includes(t)).map(t => TAB_LABELS[t] || t).join(', ') || '—'}</div>
     <div id="edit-${u.id}"></div></div>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;max-height:90dvh;overflow:auto">
     <div class="row-between"><h3>👥 ניהול משתמשים — ${escapeHtml(compName)}</h3><button class="btn ghost" onclick="document.getElementById('usersModal').classList.add('hidden')">סגור</button></div>
     <div class="muted" style="font-size:12px;margin:2px 0 10px">משתמשי הנהלה רואים הכל. משתמשי הצפייה כאן שייכים ל<b>${escapeHtml(compName)}</b> בלבד, ורואים רק את הלשוניות שתסמן — במצב קריאה בלבד.</div>
     ${admins.map(a => `<div class="muted" style="font-size:12.5px">👑 הנהלה: <b>${escapeHtml(a.username)}</b></div>`).join('')}
@@ -474,7 +474,7 @@ window.previewDoc = async (url, opts = {}) => {
   // מזהה המסמך (אם ידוע) — מאפשר כפתור "מסמכים מקושרים" שמציג את כל שרשרת המסמכים (הצעת מחיר→עסקה→מס→קבלה + זיכויים)
   const _docId = opts.docId || (String(url).match(/\/api\/documents\/([^/]+)\/(?:url|file)/) || [])[1] || null;
   const linkBtn = _docId ? `<button class="btn ghost" style="padding:6px 13px" onclick="openDocLinks('${escAttr(String(_docId))}')">🔗 מסמכים מקושרים</button>` : '';
-  const shell = (inner) => `<div class="modal-card" style="width:min(920px,95vw);height:90vh;padding:0;display:flex;flex-direction:column;overflow:hidden">
+  const shell = (inner) => `<div class="modal-card" style="width:min(920px,95vw);height:90vh;height:90dvh;padding:0;display:flex;flex-direction:column;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">
       <b>תצוגה מקדימה של המסמך</b>
       <div style="display:flex;gap:8px;align-items:center">
@@ -518,7 +518,7 @@ window.openDocLinks = async (docId) => {
   if (!m) { m = document.createElement('div'); m.id = 'docLinks'; m.className = 'modal'; document.body.appendChild(m); }
   m.style.zIndex = '210'; // מעל חלונית התצוגה המקדימה (200)
   m.classList.remove('hidden');
-  const shell = (inner) => `<div class="modal-card" style="width:min(560px,94vw);max-height:82vh;display:flex;flex-direction:column;overflow:hidden">
+  const shell = (inner) => `<div class="modal-card" style="width:min(560px,94vw);max-height:82vh;max-height:82dvh;display:flex;flex-direction:column;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <b>🔗 מסמכים מקושרים</b>
       <button class="btn ghost" style="padding:4px 12px" onclick="closeDocLinks()">סגור ✕</button>
@@ -951,7 +951,7 @@ function renderMonthDetail() {
     const color = side === 'income' ? 'var(--accent2)' : 'var(--danger)';
     return `<div style="flex:1;min-width:340px">
       <h3 style="margin:0 0 6px;color:${color}">${side === 'income' ? 'הכנסות' : 'הוצאות'} · ${sumOf(rows)}</h3>
-      <div style="overflow:auto;max-height:66vh"><table style="width:100%;font-size:13px"><thead><tr>
+      <div style="overflow:auto;max-height:66vh;max-height:66dvh"><table style="width:100%;font-size:13px"><thead><tr>
         <th>תאריך</th><th>סכום</th><th>שם עסק</th><th>חשבונית מס/מס-קבלה</th><th>קבלה</th><th>הערות</th><th>קבוצה</th>
       </tr></thead><tbody>${body}</tbody></table></div></div>`;
   };
@@ -1149,7 +1149,7 @@ function renderPayStatus() {
        <div class="muted" style="font-size:11.5px;margin-top:6px">${e.docs.length === 1 ? 'חשבונית אחת תצורף' : `${e.docs.length} חשבוניות יצורפו`} כ-PDF. המייל יישלח מתיבת החברה הפעילה${e.hasSig ? ', עם חתימת החברה בתחתית' : ' (לא הוגדרה חתימה בפרטי העסק)'}.</div>`
     : `<div class="muted" style="font-size:12.5px;margin-bottom:6px">העתק את ההודעה ושלח ללקוח בווטסאפ. ווטסאפ אינו תומך בצירוף קבצים דרך קישור — לכן הורד את ${e.docs.length === 1 ? 'המסמך' : 'המסמכים'} וצרף ידנית לשיחה.</div>
        <div id="psPreview" dir="rtl" style="white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;line-height:1.7;text-align:right">${escapeHtml(psWhatsappText(e.docs))}</div>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw);max-height:92vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw);max-height:92vh;max-height:92dvh;overflow:auto">
     <div class="row-between" style="margin:0"><h3 style="margin:0">📨 בדיקת סטטוס תשלום</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('psModal').classList.add('hidden')">✕</button></div>
     <div class="muted" style="font-size:12.5px;margin:6px 0 10px">${escapeHtml(e.clientName)} · ${list}</div>
@@ -1490,9 +1490,9 @@ function renderDeriveEditor() {
   const srcPane = (e.linked && e.srcUrl) ? `<div style="flex:0 0 44%;min-width:0;display:flex;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
       <div class="row-between" style="margin-bottom:6px"><b style="font-size:13px">מסמך מקור${e.srcLabel ? ' — ' + escapeHtml(e.srcLabel) : ''}</b>
         <a href="${e.srcUrl}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none">פתח ↗</a></div>
-      <div id="derSrcBody" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:62vh;border:1px solid var(--line);border-radius:8px;background:#fff">${srcBody}</div>
+      <div id="derSrcBody" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:62vh;min-height:62dvh;border:1px solid var(--line);border-radius:8px;background:#fff">${srcBody}</div>
     </div>` : '';
-  m.innerHTML = `<div class="modal-card" style="width:${srcPane ? 'min(1160px,97vw)' : 'min(720px,96vw)'};max-height:92vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:${srcPane ? 'min(1160px,97vw)' : 'min(720px,96vw)'};max-height:92vh;max-height:92dvh;overflow:auto">
     <div style="display:flex;gap:14px;align-items:stretch">
     ${srcPane}
     <div style="flex:1;min-width:0">
@@ -1798,7 +1798,7 @@ window.openCreditModal = (id, number, srcType, grossAmount) => {
   let m = document.getElementById('creditModal');
   if (!m) { m = document.createElement('div'); m.id = 'creditModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" id="creditCard" style="width:min(500px,95vw);max-height:92vh;overflow:auto;display:flex;gap:14px;align-items:stretch">
+  m.innerHTML = `<div class="modal-card" id="creditCard" style="width:min(500px,95vw);max-height:92vh;max-height:92dvh;overflow:auto;display:flex;gap:14px;align-items:stretch">
     <div id="creditFormPane" style="flex:1 1 auto;min-width:330px">
     <h3 style="color:var(--danger)">הפקת זיכוי — ${srcName} #${escapeHtml(String(number))}</h3>
     <div class="warn-banner" style="margin:8px 0">${twoStage
@@ -1827,7 +1827,7 @@ window.openCreditModal = (id, number, srcType, grossAmount) => {
     <div id="creditPvPane" style="flex:0 0 46%;min-width:0;display:none;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
       <div class="row-between" style="margin-bottom:6px"><b style="font-size:13px">👁 תצוגה מקדימה — חשבונית זיכוי</b>
         <button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="creditPreview()">רענן ↻</button></div>
-      <div id="creditPvBody" style="flex:1;min-height:60vh;border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden"></div>
+      <div id="creditPvBody" style="flex:1;min-height:60vh;min-height:60dvh;border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden"></div>
     </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
@@ -2029,12 +2029,12 @@ async function renderClients(c) {
     <div class="panel">
     <div class="row-between"><div><h2>לקוחות</h2><span class="muted">${state.clientsList.length} לקוחות</span></div>
       <button class="btn primary" onclick="openContactForm('client')">+ הוסף לקוח</button></div>
-    <div style="display:flex;gap:16px;align-items:stretch;min-height:64vh">
+    <div style="display:flex;gap:16px;align-items:stretch;min-height:64vh;min-height:64dvh">
       <div style="flex:0 0 300px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden">
         <input id="clientSearch" placeholder="חיפוש לקוח / מספר מסמך / תיאור…" style="border:none;border-bottom:1px solid var(--line);border-radius:0"/>
-        <div id="clientsList" style="overflow-y:auto;flex:1;max-height:70vh">${clientRows(state.clientsList)}</div>
+        <div id="clientsList" style="overflow-y:auto;flex:1;max-height:70vh;max-height:70dvh">${clientRows(state.clientsList)}</div>
       </div>
-      <div id="clientDetail" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;max-height:70vh">
+      <div id="clientDetail" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;max-height:70vh;max-height:70dvh">
         <div class="empty">בחר לקוח כדי לראות את כל המסמכים שלו</div>
       </div>
     </div>
@@ -2430,7 +2430,7 @@ async function renderWeekCalendar() {
     </div>
     <div style="margin-bottom:10px">${calLegend(data)}</div>
     ${data.calendarError ? `<div class="warn-banner">${data.calendarError}</div>` : ''}
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:8px">${cols}</div>`;
+    <div class="cal-week" style="display:grid;grid-template-columns:repeat(7,1fr);gap:8px">${cols}</div>`;
 }
 
 // תצוגה חודשית (תמונה גדולה)
@@ -2483,10 +2483,10 @@ async function renderMonthCalendar() {
     </div>
     <div style="margin-bottom:10px">${calLegend(data)}</div>
     ${data.calendarError ? `<div class="warn-banner">${data.calendarError}</div>` : ''}
-    <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;width:100%">
+    <div class="cal-month-scroll"><div class="cal-month" style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;width:100%">
       ${DAYS_HE.map(d => `<div style="text-align:center;color:var(--muted);font-size:12px;font-weight:600;padding-bottom:4px;min-width:0">${d}</div>`).join('')}
       ${cells}
-    </div>`;
+    </div></div>`;
 }
 const EVENTS_THEAD = `<thead><tr><th>תאריך</th><th>זמר</th><th>מיקום</th><th>לקוח</th><th>תמחור (ללא מע"מ)</th><th>תמחור כולל מע"מ</th><th>עובדים</th><th>קבלנים</th><th>מסמכי חיוב</th><th>אישור</th><th>פעולה</th></tr></thead>`;
 // תוויות קצרות לתאי מסמכי החיוב (כדי שהתג יישב על שורה אחת ולא ייתפס 2 שורות)
@@ -2640,7 +2640,7 @@ function eventsByMonthHtml(events, mode = 'approved') {
           ${monthLabel(k)} <span class="muted" style="font-weight:400;font-size:13px">· ${list.length} אירועים</span></h3>
         <span class="muted" style="font-size:13px">${summary}</span>
       </div>
-      <div id="${id}" class="${collapsed ? 'hidden' : ''}" style="overflow-x:auto"><table style="min-width:960px">${EVENTS_THEAD}
+      <div id="${id}" class="${collapsed ? 'hidden' : ''}" style="overflow-x:auto"><table class="cardify" style="min-width:960px">${EVENTS_THEAD}
         <tbody>${list.map(rowEvent).join('')}</tbody></table></div>
     </div>`;
   }).join('');
@@ -2698,17 +2698,17 @@ function rowEvent(e) {
     : e.confirmed ? EV_PAY_BG[evPayState(e)]
     : (isOverdueUnbilled(e) ? 'background:rgba(225,29,72,.06)' : '');
   return `<tr${rowBg ? ` style="${rowBg}"` : ''}>
-    <td style="white-space:nowrap">${ddmy(e.date || e.dateRaw)}</td>
-    <td>${e.artist || '—'}${(!e.confirmed && e._possibleMatch) ? `<div style="font-size:11px;color:#b45309;margin-top:2px">🟡 אולי כבר קיים במאושרים · ${escapeHtml(e._possibleMatch.why)}${e._possibleMatch.client ? ` · ${escapeHtml(e._possibleMatch.client)}` : ''}</div>` : ''}</td>
-    <td>${e.location || '—'}</td>
-    <td>${e.clientName ? escapeHtml(e.clientName) : '<span class="muted">—</span>'}</td>
-    <td>${money(e.price)}${(e.priceLighting || e.priceSound || e.priceBackline || (e.ledMeters && e.ledPricePerMeter) || e.priceExtras) ? `<div class="muted" style="font-size:11px">${e.priceLighting ? `תאורה ${money(e.priceLighting)} · ` : ''}${e.priceSound ? `סאונד ${money(e.priceSound)}` : ''}${e.priceBackline ? ` · בקליין ${money(e.priceBackline)}` : ''}${(e.ledMeters && e.ledPricePerMeter) ? ` · לד ${e.ledMeters}מ׳×${money(e.ledPricePerMeter)}` : ''}${e.priceExtras ? ` · תוספות ${money(e.priceExtras)}` : ''}</div>` : ''}</td>
-    <td style="white-space:nowrap;font-weight:600">${money(evGross(e) * (1 + VAT_RATE))}</td>
-    <td>${(e.employees || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
-    <td>${(e.contractors || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
-    <td>${invoiceCell(e)}</td>
-    <td>${confBtn}</td>
-    <td>${e.confirmed
+    <td data-label="תאריך" style="white-space:nowrap">${ddmy(e.date || e.dateRaw)}</td>
+    <td data-label="זמר">${e.artist || '—'}${(!e.confirmed && e._possibleMatch) ? `<div style="font-size:11px;color:#b45309;margin-top:2px">🟡 אולי כבר קיים במאושרים · ${escapeHtml(e._possibleMatch.why)}${e._possibleMatch.client ? ` · ${escapeHtml(e._possibleMatch.client)}` : ''}</div>` : ''}</td>
+    <td data-label="מיקום">${e.location || '—'}</td>
+    <td data-label="לקוח">${e.clientName ? escapeHtml(e.clientName) : '<span class="muted">—</span>'}</td>
+    <td data-label="תמחור (ללא מע&quot;מ)">${money(e.price)}${(e.priceLighting || e.priceSound || e.priceBackline || (e.ledMeters && e.ledPricePerMeter) || e.priceExtras) ? `<div class="muted" style="font-size:11px">${e.priceLighting ? `תאורה ${money(e.priceLighting)} · ` : ''}${e.priceSound ? `סאונד ${money(e.priceSound)}` : ''}${e.priceBackline ? ` · בקליין ${money(e.priceBackline)}` : ''}${(e.ledMeters && e.ledPricePerMeter) ? ` · לד ${e.ledMeters}מ׳×${money(e.ledPricePerMeter)}` : ''}${e.priceExtras ? ` · תוספות ${money(e.priceExtras)}` : ''}</div>` : ''}</td>
+    <td data-label="כולל מע&quot;מ" style="white-space:nowrap;font-weight:600">${money(evGross(e) * (1 + VAT_RATE))}</td>
+    <td data-label="עובדים">${(e.employees || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
+    <td data-label="קבלנים">${(e.contractors || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
+    <td data-label="מסמכי חיוב">${invoiceCell(e)}</td>
+    <td data-label="אישור">${confBtn}</td>
+    <td data-label="פעולה">${e.confirmed
       ? `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn ghost" style="padding:4px 11px;font-size:12px" onclick="openEventFromCal('${encodeURIComponent(JSON.stringify({ eventId: e.id }))}')">עריכה</button><button class="btn ghost" style="padding:4px 10px;font-size:12px" title="שכפול אירוע — עותק חדש ב״אירועים לאישור״ לחיוב עצמאי (למשל ללקוח אחר)" onclick="duplicateEventRow('${e.id}')">⧉ שכפול</button>${(() => {
         const fu = followupDocForEvent(e);
         if (fu) {
@@ -2767,9 +2767,9 @@ async function openEventEditor(ev) {
   m.classList.remove('hidden');
   const v = (x) => x == null ? '' : String(x).replace(/"/g, '&quot;');
   const fld = (lbl, inner, span) => `<label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted)${span ? ';grid-column:1/3' : ''}">${lbl}${inner}</label>`;
-  m.innerHTML = `<div class="modal-card" id="evModalCard" style="width:min(720px,95vw);max-height:90vh;overflow:hidden;padding:0;display:flex;flex-direction:row">
-    <div id="evDocPane" style="display:none;flex:1 1 52%;min-width:0;max-height:90vh;flex-direction:column;border-inline-end:1px solid var(--line);background:#f4f5fb"></div>
-    <div id="evFormPane" style="flex:1 1 100%;min-width:0;overflow:auto;max-height:90vh;padding:26px">
+  m.innerHTML = `<div class="modal-card" id="evModalCard" style="width:min(720px,95vw);max-height:90vh;max-height:90dvh;overflow:hidden;padding:0;display:flex;flex-direction:row">
+    <div id="evDocPane" style="display:none;flex:1 1 52%;min-width:0;max-height:90vh;max-height:90dvh;flex-direction:column;border-inline-end:1px solid var(--line);background:#f4f5fb"></div>
+    <div id="evFormPane" style="flex:1 1 100%;min-width:0;overflow:auto;max-height:90vh;max-height:90dvh;padding:26px">
     <h3>עריכת אירוע${ev.gcalId && ev.source === 'calendar' ? ' <span class="muted" style="font-size:12px;font-weight:400">(מיומן גוגל)</span>' : ''}</h3>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">
       ${fld('תאריך', `<input id="evDate" type="date" value="${ev.date || ''}"/>`)}
@@ -3189,7 +3189,7 @@ async function openDocLinkModal(ids, client, clientId, onDone) {
   const body = docs.length
     ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">${docs.map(d => linkDocRow(d)).join('')}</div>`
     : `<div class="empty" style="margin-top:10px">אין חשבוניות עסקה/מס פתוחות ללקוח זה. לחץ "הצג מסמכים אחרונים" כדי לשייך למסמך קיים.</div>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(700px,95vw);max-height:88vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(700px,95vw);max-height:88vh;max-height:88dvh;overflow:auto">
     <div class="row-between"><h3>שיוך ${ids.length} אירועים למסמכים קיימים</h3><span class="muted">${escapeHtml(client)}</span></div>
     <p class="muted" style="font-size:12.5px">סמן עד 4 מסמכים של הלקוח לשיוך (הצעת מחיר / עסקה / מס / קבלה), ואז לחץ "שייך וסגור את האירוע". האירוע יסומן כחויב ויוסר מרשימת החיוב.</p>
     <div id="linkBody">${body}</div>
@@ -3237,7 +3237,7 @@ window.openEventDocLink = async (eventId, presetClient, presetClientId) => {
   m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const clientVal = presetClient || '';
-  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:90vh;max-height:90dvh;overflow:auto">
     <div class="row-between"><h3>🔗 שיוך מסמך לאירוע</h3></div>
     <p class="muted" style="font-size:12.5px">בחר לקוח — יוצגו מסמכים של אותו לקוח (הצעת מחיר / עסקה / מס / מס-קבלה / זיכוי). כברירת מחדל מוצגים רק פתוחים שאינם משויכים לאירוע אחר; אפשר לסמן להצגת סגורים ו/או מסמכים שכבר משויכים לאירוע אחר. אפשר לשייך הצעת מחיר ולהפיק ממנה מסמך המשך.</p>
     <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
@@ -3597,7 +3597,7 @@ window.openBulkOldInvoices = async () => {
   if (!m) { m = document.createElement('div'); m.id = 'bulkOldModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.style.zIndex = '210'; m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
-  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:92vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:92vh;max-height:92dvh;overflow:auto">
     <div class="row-between"><h3>📎 העלאה מרובה — מסמכי הכנסה</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('bulkOldModal').classList.add('hidden')">✕</button></div>
     <p class="muted" style="font-size:12.5px">בחר כמה קבצי PDF/תמונה (מפייפרלס). לכל קובץ ימולאו אוטומטית סוג/מספר/תאריך/סכום/לקוח 🤖 — בדוק ותקן, ואז "העלה הכל". המסמכים נשמרים כרשומת הכנסה של הלקוח (לא מופקים מחדש בחשבונית ירוקה).</p>
@@ -3777,9 +3777,9 @@ function renderInvoicePreviewModal() {
   const quotePane = quote ? `<div style="flex:0 0 42%;min-width:0;display:flex;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
       <div class="row-between" style="margin-bottom:6px"><b style="font-size:13px">📄 הצעת מחיר מקושרת${quote.number ? ' #' + escapeHtml(String(quote.number)) : ''}</b>
         <a href="${quote.url}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none">פתח ↗</a></div>
-      <div id="invQuoteBody" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:62vh;border:1px solid var(--line);border-radius:8px;background:#fff"><div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען הצעת מחיר…</div></div>
+      <div id="invQuoteBody" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:62vh;min-height:62dvh;border:1px solid var(--line);border-radius:8px;background:#fff"><div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען הצעת מחיר…</div></div>
     </div>` : '';
-  m.innerHTML = `<div class="modal-card" style="width:${quote ? 'min(1180px,97vw)' : 'min(780px,96vw)'};max-height:92vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:${quote ? 'min(1180px,97vw)' : 'min(780px,96vw)'};max-height:92vh;max-height:92dvh;overflow:auto">
     <div style="display:flex;gap:14px;align-items:stretch">
     ${quotePane}
     <div style="flex:1;min-width:0">
@@ -3921,7 +3921,7 @@ async function openDesignedPdf(endpoint, body, { statusEl, btn, label, onIssue, 
     const dateNote = r.dateAdjusted
       ? `<div class="warn-banner" style="margin-bottom:8px;font-size:12.5px">⚠ התאריך שנבחר (${dmy(r.requestedDate)}) מוקדם מהמסמך האחרון מסוגו — חשבונית ירוקה לא מאפשרת אותו (רצף כרונולוגי). אפשר להפיק החל מ-${dmy(r.usedDate)}; התצוגה מוצגת עם תאריך זה.</div>`
       : '';
-    m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;overflow:hidden;display:flex;flex-direction:column">
+    m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;max-height:95dvh;overflow:hidden;display:flex;flex-direction:column">
       ${designPvHeader(onIssue, issueLabel)}
       ${dateNote}
       <iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:${r.dateAdjusted ? '72vh' : '80vh'};border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
@@ -3954,7 +3954,7 @@ window.showDesignedPreview = async (btn) => {
     const dateNote = r.dateAdjusted
       ? `<div class="warn-banner" style="margin-bottom:8px;font-size:12.5px">⚠ התאריך שנבחר (${dmy(r.requestedDate)}) מוקדם מהמסמך האחרון מסוגו — חשבונית ירוקה לא מאפשרת אותו (רצף כרונולוגי). אפשר להפיק החל מ-${dmy(r.usedDate)}; התצוגה מוצגת עם תאריך זה. לחלופין סמן "אפשר תאריך מוקדם" כדי להפיק בכל זאת.</div>`
       : '';
-    m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;overflow:hidden;display:flex;flex-direction:column">
+    m.innerHTML = `<div class="modal-card" style="width:min(920px,97vw);max-height:95vh;max-height:95dvh;overflow:hidden;display:flex;flex-direction:column">
       ${designPvHeader(true, '✓ הפק בחשבונית ירוקה')}
       ${dateNote}
       <iframe src="data:application/pdf;base64,${r.pdfBase64}" style="width:100%;height:${r.dateAdjusted ? '72vh' : '80vh'};border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
@@ -4129,7 +4129,7 @@ function renderNewQuote() {
   const email = e.email || (selClient && selClient.email) || '';
   const isIncome = e.type && e.type !== 10;
   const titleTxt = isIncome ? `${DOC_TYPE_NAMES[e.type] || 'מסמך'} חדשה — מאפס` : (e.isDuplicate ? 'שכפול הצעת מחיר — ערוך ושמור כהצעה חדשה' : 'הצעת מחיר חדשה');
-  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;max-height:92dvh;overflow:auto">
     <h3>${titleTxt}</h3>
     ${isIncome ? `<div class="muted" style="font-size:12px;margin:2px 0 6px">ייווצר ${DOC_TYPE_NAMES[e.type]} בחשבונית ירוקה, עם תקבול בהעברה בנקאית על מלוא הסכום בתאריך התנועה${e.bankTxId ? ' ויקושר לתנועת הבנק' : ''}.</div>` : ''}
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px">
@@ -4381,12 +4381,12 @@ async function renderContractors(c) {
         <button class="btn primary" onclick="openContactForm('supplier')">+ הוסף ספק</button>
         <button class="btn ghost" onclick="refreshSuppliers(this)">↻ רענן מחשבונית ירוקה</button>
       </div></div>
-    <div style="display:flex;gap:16px;align-items:stretch;min-height:56vh;margin-top:12px">
+    <div style="display:flex;gap:16px;align-items:stretch;min-height:56vh;min-height:56dvh;margin-top:12px">
       <div style="flex:0 0 300px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden">
         <input id="supSearch" placeholder="חיפוש לפי שם קבלן / מספר מסמך / תיאור…" style="border:none;border-bottom:1px solid var(--line);border-radius:0"/>
-        <div id="supList" style="overflow-y:auto;flex:1;max-height:62vh">${supplierRows(_suppliers)}</div>
+        <div id="supList" style="overflow-y:auto;flex:1;max-height:62vh;max-height:62dvh">${supplierRows(_suppliers)}</div>
       </div>
-      <div id="supDetail" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;max-height:66vh">
+      <div id="supDetail" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;max-height:66vh;max-height:66dvh">
         <div class="empty">בחר קבלן כדי לראות את כל המסמכים שלו</div>
       </div>
     </div>
@@ -4489,7 +4489,7 @@ window.ctMarkPaid = async (safe, nameEnc) => {
   let m = document.getElementById('ctLinkModal');
   if (!m) { m = document.createElement('div'); m.id = 'ctLinkModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:88vh;overflow:auto"><div class="empty">טוען חשבוניות של ${escapeHtml(name)}…</div></div>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:88vh;max-height:88dvh;overflow:auto"><div class="empty">טוען חשבוניות של ${escapeHtml(name)}…</div></div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   if (_ctLink.supplierId) { const docs = await api(`/api/suppliers/${_ctLink.supplierId}/documents`).catch(() => []); _ctLink.docs = Array.isArray(docs) ? docs : []; }
   else _ctLink.docs = [];
@@ -4512,7 +4512,7 @@ function renderCtLink() {
       ${d.url ? `<button class="btn ghost" style="padding:1px 8px;font-size:11px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">👁</button>` : ''}
       <button class="btn ${on ? 'success' : 'ghost'}" style="padding:2px 12px;font-size:11px" onclick="ctLinkPick('${jj}')">${on ? '✓ נבחר' : 'בחר'}</button></div>`;
   }).join('');
-  m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:88vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:88vh;max-height:88dvh;overflow:auto">
     <h3>קישור לחשבונית ספק — ${escapeHtml(_ctLink.name)}</h3>
     <p class="muted" style="font-size:12.5px;margin:2px 0 8px">${_ctLink.items.length} אירועים נבחרו. בחר את חשבונית ההוצאה של הספק שאליה הם שייכים, או הזן מספר ידנית. הקישור <b>לא</b> מסמן כשולם — "שולם לספק" ייקבע לפי התאמת ההוצאה בבנק (או סימון ידני).</p>
     ${_ctLink.supplierId ? (docs.length ? `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div>` : '<div class="muted" style="font-size:12.5px">לא נמצאו מסמכי הוצאה לספק זה בחשבונית ירוקה. הזן מספר ידנית למטה.</div>') : '<div class="muted" style="font-size:12.5px">הספק לא מזוהה בחשבונית ירוקה. הזן מספר חשבונית ידנית.</div>'}
@@ -4606,7 +4606,7 @@ window.openRenameContractors = async () => {
       <select class="renamesel" data-from="${escAttr(n.name)}" style="padding:6px 8px">${opts}</select>
     </div>`;
   }).join('');
-  m.innerHTML = `<div class="modal-card" style="width:min(760px,96vw);max-height:90vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(760px,96vw);max-height:90vh;max-height:90dvh;overflow:auto">
     <h3>עדכון שמות קבלנים לפי חשבונית ירוקה</h3>
     <p class="muted" style="font-size:12.5px">לכל שם קבלן מהאירועים בחר את השם המדויק מרשימת הספקים בחשבונית ירוקה. התאמות ודאיות סומנו "הוצע" ונבחרו מראש; "תואם" = כבר זהה. "ללא שינוי" משאיר כמו שהוא. העדכון חל על כל האירועים.</p>
     ${list.length ? rows : '<div class="empty">אין שמות קבלנים באירועים.</div>'}
@@ -4884,7 +4884,7 @@ window.openLinkEventsToPayable = async (pid) => {
   if (!m) { m = document.createElement('div'); m.id = 'linkEvModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
-  m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:88vh;overflow:auto"><div class="empty">טוען אירועים…</div></div>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:88vh;max-height:88dvh;overflow:auto"><div class="empty">טוען אירועים…</div></div>`;
   const pay = await api(`/api/contractors/payables?companyId=${state.company}`).catch(() => []);
   const events = [];
   (pay || []).forEach(g => (g.events || []).forEach(ev => events.push({ ...ev, contractor: g.name })));
@@ -5049,7 +5049,7 @@ window.openEditPayable = (pid) => {
     </div>` : '';
   const fileUrl = p.hasFile ? `/api/supplier-payables/${pid}/file` : null;
 
-  m.innerHTML = `<div class="modal-card" style="width:${fileUrl ? 'min(1120px,97vw)' : 'min(680px,96vw)'};max-height:92vh;padding:0;display:flex;flex-direction:column;overflow:hidden">
+  m.innerHTML = `<div class="modal-card" style="width:${fileUrl ? 'min(1120px,97vw)' : 'min(680px,96vw)'};max-height:92vh;max-height:92dvh;padding:0;display:flex;flex-direction:column;overflow:hidden">
    <div style="display:flex;flex:1;min-height:0">
     ${fileUrl ? `<div style="flex:1;min-width:0;background:#f3f4f6;border-inline-end:1px solid var(--line);display:flex;flex-direction:column">
       <div style="padding:8px 12px;font-size:12.5px;font-weight:600;border-bottom:1px solid var(--line);background:var(--panel)">📄 המסמך</div>
@@ -5270,12 +5270,12 @@ window.openApproveDraft = (id, fromBankTxId) => {
   const preview = d.url
     ? `<div id="apprFilePreview" style="width:100%;height:100%;background:#fff"><div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">טוען קובץ…</div></div>`
     : `<div class="empty" style="height:100%;display:flex;align-items:center;justify-content:center">אין קובץ לתצוגה</div>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-width:97vw;max-height:92vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-width:97vw;max-height:92vh;max-height:92dvh;overflow:auto">
     <div class="row-between" style="margin-bottom:6px"><h3 style="margin:0">אישור וקליטת הוצאה</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('apprModal').classList.add('hidden')">✕</button></div>
     <p class="muted" style="font-size:12.5px;margin:0 0 10px">ה-AI קורא את החשבונית וממלא את השדות אוטומטית — עליך רק לוודא ולאשר. תיווצר הוצאה בחשבונית ירוקה שתשויך לספק.</p>
     <div style="display:flex;gap:16px;align-items:stretch;flex-wrap:wrap">
-      <div style="flex:1 1 380px;min-width:320px;border:1px solid var(--line);border-radius:10px;overflow:hidden;height:82vh;position:sticky;top:0">${preview}</div>
+      <div style="flex:1 1 380px;min-width:320px;border:1px solid var(--line);border-radius:10px;overflow:hidden;height:82vh;height:82dvh;position:sticky;top:0">${preview}</div>
       <div style="flex:1 1 320px;min-width:280px;display:flex;flex-direction:column">
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
           <div id="apAi" style="font-size:12.5px;flex:1"></div>
@@ -5827,7 +5827,7 @@ window.openExpenseEdit = async (id) => {
   rows.sort((a, b) => String(b.ev.date || '').localeCompare(String(a.ev.date || '')));
   window._exeCtx = { id, supplierName: d.supplierName || '', rows, added: [], allEvents: events, invoiceAmount: Number(d.amount) || 0, giUnavailable: !!d.giUnavailable };
   const F = (l, i, v, extra = '') => `<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600">${l}<input id="${i}" value="${escAttr(v == null ? '' : String(v))}" ${extra}></label>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:94vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:94vh;max-height:94dvh;overflow:auto">
     <div class="row-between" style="margin:0"><h3 style="margin:0">✏️ עריכת הוצאה #${escapeHtml(String(d.number || ''))}</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('expEditModal').classList.add('hidden')">✕</button></div>
     <p class="muted" style="font-size:12px;margin:6px 0 12px">${escapeHtml(d.supplierName || '')} · השינויים נשמרים בחשבונית ירוקה.${d.reported ? ' ⚠ ההוצאה כבר דווחה — ייתכן שלא ניתן לעדכן/למחוק אותה.' : ''}</p>
@@ -5876,8 +5876,8 @@ window.exeLoadDoc = async (url) => {
     if (window._exeDocBlob) URL.revokeObjectURL(window._exeDocBlob);
     window._exeDocBlob = URL.createObjectURL(blob);
     const inner = t.startsWith('image')
-      ? `<div style="height:70vh;overflow:auto;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid var(--line);border-radius:8px"><img src="${window._exeDocBlob}" style="max-width:100%;max-height:100%;object-fit:contain"></div>`
-      : `<iframe src="${window._exeDocBlob}#toolbar=1" style="width:100%;height:70vh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>`;
+      ? `<div style="height:70vh;height:70dvh;overflow:auto;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid var(--line);border-radius:8px"><img src="${window._exeDocBlob}" style="max-width:100%;max-height:100%;object-fit:contain"></div>`
+      : `<iframe src="${window._exeDocBlob}#toolbar=1" style="width:100%;height:70vh;height:70dvh;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>`;
     pane.innerHTML = inner + `<div style="margin-top:6px"><a href="${escAttr(url)}" target="_blank" rel="noopener" class="muted" style="font-size:12px">פתח בכרטיסייה חדשה ↗</a></div>`;
   } catch {
     pane.innerHTML = `<div class="empty" style="padding:14px;display:flex;flex-direction:column;gap:8px;align-items:center"><div>לא ניתן להציג את המסמך כאן.</div><a href="${escAttr(url)}" target="_blank" class="btn primary" style="text-decoration:none">פתח בכרטיסייה חדשה ↗</a></div>`;
@@ -6039,6 +6039,23 @@ window.expDragOver = (e) => { e.preventDefault(); const z = document.getElementB
 window.expDragLeave = (e) => { e.preventDefault(); const z = document.getElementById('expDropZone'); if (z) { z.style.borderColor = 'var(--line)'; z.style.background = ''; } };
 window.expDrop = (e) => { e.preventDefault(); window.expDragLeave(e); const fs = e.dataTransfer && e.dataTransfer.files; if (fs && fs.length) handleExpenseFiles(fs); };
 const _expToast = () => { let t = document.getElementById('expToast'); if (!t) { t = document.createElement('div'); t.id = 'expToast'; t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 18px;font-size:14px;z-index:9999;box-shadow:0 6px 24px rgba(0,0,0,.15)'; document.body.appendChild(t); } t.style.display = 'block'; return t; };
+// ---- טולטיפים במגע ----
+// 81 אלמנטים במערכת נושאים title, ו-27 מהם מסבירים כסף ותשלומים ("זוהה תשלום בבנק",
+// "החשבונית נסגרה בחשבונית ירוקה"). במכשיר מגע אין ריחוף, ולכן ההסברים האלה פשוט
+// לא קיימים שם. הקשה על אלמנט מסביר מציגה אותם כהודעה קצרה.
+// לא נוגעים באלמנטים פעילים (כפתור/קישור/שדה) — שם הפעולה חשובה יותר מההסבר.
+let _tipTimer = null;
+document.addEventListener('click', (e) => {
+  if (!window.matchMedia('(hover: none)').matches) return;
+  const el = e.target && e.target.closest && e.target.closest('[title]');
+  if (!el || el.closest('button,a,select,input,label,textarea')) return;
+  const txt = (el.getAttribute('title') || '').trim();
+  if (!txt) return;
+  const t = _expToast();
+  t.textContent = txt;
+  clearTimeout(_tipTimer);
+  _tipTimer = setTimeout(() => { t.style.display = 'none'; }, 4500);
+}, true);
 // העלאת קובץ בודד (תאימות לאחור) — מפנה לטיפול הרב-קבצי
 window.handleExpenseFile = (f) => handleExpenseFiles(f ? [f] : []);
 // העלאת כמה קובצי הוצאה — כל קובץ כהוצאה נפרדת + זיהוי אוטומטי (OCR) לכל אחד בנפרד
@@ -6274,7 +6291,7 @@ function openEmpJobsModal(name, r) {
   };
   let m = document.getElementById('jobsModal'); if (!m) { m = document.createElement('div'); m.id = 'jobsModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:90vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:90vh;max-height:90dvh;overflow:auto">
     <div class="row-between" style="align-items:center">
       <div><h3 style="margin:0">${escapeHtml(fullName)}</h3><span class="muted" style="font-size:13.5px">דוח עבודות · ${monthLabelFromKey(_report.month)} · ${_report.salaryType === 'net' ? 'נטו' : 'ברוטו'} · לחיצה על תא לעריכה</span></div>
       <div style="display:flex;gap:8px">
@@ -7186,8 +7203,8 @@ window.bizView = (fileId, mime, filename) => {
   const isPdf = /pdf/.test(mime || '');
   let m = document.getElementById('bizViewModal');
   if (!m) { m = document.createElement('div'); m.id = 'bizViewModal'; m.className = 'modal hidden'; document.body.appendChild(m); }
-  const inner = isImg ? `<img src="${url}" style="max-width:100%;max-height:70vh;border-radius:10px">`
-    : isPdf ? `<iframe src="${url}" style="width:100%;height:70vh;border:0;border-radius:10px"></iframe>`
+  const inner = isImg ? `<img src="${url}" style="max-width:100%;max-height:70vh;max-height:70dvh;border-radius:10px">`
+    : isPdf ? `<iframe src="${url}" style="width:100%;height:70vh;height:70dvh;border:0;border-radius:10px"></iframe>`
       : `<p class="muted">אין תצוגה מקדימה לקובץ מסוג זה — ניתן להוריד אותו.</p>`;
   m.innerHTML = `<div class="modal-card" style="max-width:860px;width:92%">
     <div class="row-between" style="margin:0"><h3 style="margin:0">${escapeHtml(filename || 'מסמך')}</h3>
@@ -7536,7 +7553,7 @@ async function renderBank(c, soft) {
   const bs = state.bankSort || { key: 'date', dir: 'desc' };
   const th = (key, label) => { const on = bs.key === key; const arw = on ? (bs.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'; return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="setBankSort('${key}')">${label}<span class="muted" style="font-size:11px">${arw}</span></th>`; };
   const p = (label) => `<th style="white-space:nowrap">${label}</th>`;
-  const table = rows.length ? `<div style="overflow-x:auto;margin-top:14px"><table style="width:100%;min-width:${mosheBank() ? 1040 : 960}px;font-size:13px">
+  const table = rows.length ? `<div style="overflow-x:auto;margin-top:14px"><table class="cardify" style="width:100%;min-width:${mosheBank() ? 1040 : 960}px;font-size:13px">
     <thead><tr>
       ${th('date', 'תאריך')}${th('amount', 'סכום בבנק')}${p('סכום חשבונית')}${p('ניכוי במקור')}${th('name', 'שם עסק')}
       ${p('חשבונית מס / מס-קבלה')}${p(dir === 'debit' ? 'תיאור החשבונית' : 'קבלה')}${mosheBank() ? p('קבוצה') : ''}${p('הערות')}${p('אישור')}
@@ -7747,16 +7764,16 @@ function bankTr(t) {
     : (!isMatched && (t.direction === 'debit' || t.matchStatus === 'unmatched')) ? 'background:rgba(251,92,125,.12);border-inline-start:3px solid var(--danger)'
     : '';
   return `<tr id="btr-${t.id}" style="${rowStyle}">
-    <td style="white-space:nowrap">${t.date}</td>
-    <td style="white-space:nowrap;color:${credit ? 'var(--accent2)' : 'var(--danger)'};font-weight:600">${amt}</td>
-    <td style="white-space:nowrap">${invAmt}</td>
-    <td style="white-space:nowrap">${wh}</td>
-    <td>${biz}</td>
-    <td>${invNo}</td>
-    <td>${recNo}</td>
-    ${mosheBank() ? `<td>${groupSelect(t)}</td>` : ''}
-    <td>${notesInput}</td>
-    <td style="white-space:nowrap"><div style="display:flex;gap:5px;flex-wrap:wrap">${action}${incomeBtn}${linkBtn}</div></td>
+    <td data-label="תאריך" style="white-space:nowrap">${t.date}</td>
+    <td data-label="סכום בבנק" style="white-space:nowrap;color:${credit ? 'var(--accent2)' : 'var(--danger)'};font-weight:600">${amt}</td>
+    <td data-label="סכום חשבונית" style="white-space:nowrap">${invAmt}</td>
+    <td data-label="ניכוי במקור" style="white-space:nowrap">${wh}</td>
+    <td data-label="שם עסק">${biz}</td>
+    <td data-label="חשבונית מס / מס-קבלה">${invNo}</td>
+    <td data-label="קבלה / תיאור">${recNo}</td>
+    ${mosheBank() ? `<td data-label="קבוצה">${groupSelect(t)}</td>` : ''}
+    <td data-label="הערות">${notesInput}</td>
+    <td data-label="אישור" style="white-space:nowrap"><div style="display:flex;gap:5px;flex-wrap:wrap">${action}${incomeBtn}${linkBtn}</div></td>
   </tr>`;
 }
 // פעולות מתעדכנות במקום (בלי לרנדר מחדש את כל הטבלה ובלי לקפוץ למעלה)
@@ -7797,7 +7814,7 @@ window.openLinkModal = async (txId) => {
   if (!m) { m = document.createElement('div'); m.id = 'linkModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
   const seg = (mode, label) => `<button onclick="setLinkMode('${mode}')" class="btn ${_linkMode === mode ? 'primary' : 'ghost'}" style="padding:5px 14px;font-size:13px" id="linkSeg-${mode}">${label}</button>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(700px,95vw);max-height:88vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(700px,95vw);max-height:88vh;max-height:88dvh;overflow:auto">
     <h3>שיוך ידני של מסמך${tx ? ` — ${tx.date} · ${money(tx.absAmount)}${tx.direction === 'debit' ? ' (חובה)' : ' (זכות)'}` : ''}</h3>
     <div style="margin:8px 0;padding:8px 10px;background:var(--panel2);border-radius:10px"><b style="font-size:13px">מקושר כרגע:</b><div id="linkSelBox" style="margin-top:4px">${linkSelHtml()}</div></div>
     <div style="display:flex;gap:6px;margin:6px 0">${seg('clients', '🏢 לקוחות')}${seg('suppliers', '🏭 ספקים')}</div>
@@ -8075,7 +8092,7 @@ window.openCreateIncome = async (txId) => {
   let m = document.getElementById('incModal');
   if (!m) { m = document.createElement('div'); m.id = 'incModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.innerHTML = `<div class="modal-card" style="width:min(720px,95vw);max-height:90vh;overflow:auto"><div class="empty">טוען חשבוניות פתוחות…</div></div>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,95vw);max-height:90vh;max-height:90dvh;overflow:auto"><div class="empty">טוען חשבוניות פתוחות…</div></div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   if (!_incOpenDocs) { const r = await api('/api/open-invoices').catch(() => ({ docs: [] })); _incOpenDocs = r.docs || []; }
   renderCreateIncome();
@@ -8103,7 +8120,7 @@ function renderCreateIncome() {
       <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${money(Number(d.amountDue ?? d.amount) || 0)}</span>
       <button class="btn ghost" style="padding:3px 10px;font-size:11.5px;white-space:nowrap" onclick="incProduce('${d.id}',${d.type},'${txId}',${X},false)">בחר → ${tgtName(d.type)}</button></div>`;
   const txDate = (_bankList.find(t => t.id === txId) || {}).date || '';
-  m.innerHTML = `<div class="modal-card" style="width:min(720px,95vw);max-height:90vh;overflow:auto">
+  m.innerHTML = `<div class="modal-card" style="width:min(720px,95vw);max-height:90vh;max-height:90dvh;overflow:auto">
     <h3>➕ צור הכנסה — ${txDate} · ${money(X)}</h3>
     <p class="muted" style="font-size:12.5px;margin:2px 0 10px">בחר חשבונית עסקה/מס פתוחה כדי להפיק לה מסמך-המשך (מס-קבלה / קבלה), או צור מסמך חדש לגמרי. התקבול והתאריך ימולאו לפי התנועה.</p>
     ${matches.length ? `<div style="border:1px solid var(--accent);border-radius:10px;padding:8px 10px;background:var(--panel2);margin-bottom:10px">
