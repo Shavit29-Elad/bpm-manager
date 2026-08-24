@@ -356,6 +356,30 @@ function sniffMediaType(base64, fallback) {
   return 'image/jpeg';
 }
 
+// התאמת ספק לפי שם. קודם היה כאן `s.name.includes(nm) || nm.includes(s.name)` —
+// הכלה חופשית לשני הכיוונים, שהפילה חשבוניות על ספק שגוי: ספק בשם קצר כמו "לד"
+// מוכל בתוך "גולדשטיין", "אלדד", "מולדת" וכל שם שהאותיות האלה נופלות בו באמצע מילה.
+// בנוסף find() החזיר את הראשון ברשימה ולא את הטוב ביותר.
+// עכשיו: התאמה מדויקת קודמת; אחריה הכלה רק כשהצד הקצר הוא מילה שלמה באורך 4+ תווים;
+// ואם יותר ממועמד אחד עונה — לא בוחרים כלום. שיוך שגוי גרוע משדה ריק שהמשתמש ימלא.
+function matchSupplierByName(suppliers, rawName) {
+  const norm = (x) => String(x || '').replace(/\u05d1\u05e2["'\u05f3\u05f4]?\s*\u05de\.?/g, ' ')
+    .replace(/[.,"'\u05f3\u05f4()\-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  const nm = norm(rawName);
+  if (!nm) return '';
+  const cands = (suppliers || []).filter(s => s && s.name);
+  const exact = cands.find(s => norm(s.name) === nm);
+  if (exact) return String(exact.id);
+  const whole = (hay, needle) =>
+    new RegExp(`(^|\\s)${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`).test(hay);
+  const loose = cands.filter(s => {
+    const sn = norm(s.name);
+    if (sn.length < 4) return false;                 // שם ספק קצר — התאמה מדויקת בלבד
+    return whole(nm, sn) || (nm.length >= 4 && whole(sn, nm));
+  });
+  return loose.length === 1 ? String(loose[0].id) : '';
+}
+
 export async function extractInvoiceFields(fileBase64, mime, suppliers = []) {
   if (!chatConfigured()) throw new Error('AI לא מוגדר (חסר ANTHROPIC_API_KEY או GEMINI_API_KEY)');
   const mediaType = sniffMediaType(fileBase64, mime);
@@ -391,7 +415,7 @@ ${supList || '(אין)'}`;
   // ודא שהספק שהוחזר קיים באמת ברשימה; אחרת התאמה לפי ח.פ/שם
   let supplierId = out.supplierId && (suppliers || []).some(s => String(s.id) === String(out.supplierId)) ? String(out.supplierId) : '';
   if (!supplierId && out.taxId) { const m = (suppliers || []).find(s => s.taxId && String(s.taxId).replace(/\D/g, '') === String(out.taxId).replace(/\D/g, '')); if (m) supplierId = String(m.id); }
-  if (!supplierId && out.supplierName) { const nm = String(out.supplierName).trim(); const m = (suppliers || []).find(s => s.name && (s.name === nm || s.name.includes(nm) || nm.includes(s.name))); if (m) supplierId = String(m.id); }
+  if (!supplierId && out.supplierName) supplierId = matchSupplierByName(suppliers, out.supplierName);
   return {
     supplierId,
     supplierName: String(out.supplierName || '').trim(),
@@ -482,7 +506,7 @@ ${supList || '(אין)'}`;
   if (!incl && net && vat) incl = +(net + vat).toFixed(2);
   let supplierId = out.supplierId && (suppliers || []).some(s => String(s.id) === String(out.supplierId)) ? String(out.supplierId) : '';
   if (!supplierId && out.taxId) { const m = (suppliers || []).find(s => s.taxId && String(s.taxId).replace(/\D/g, '') === String(out.taxId).replace(/\D/g, '')); if (m) supplierId = String(m.id); }
-  if (!supplierId && out.supplierName) { const nm = String(out.supplierName).trim(); const m = (suppliers || []).find(s => s.name && (s.name === nm || s.name.includes(nm) || nm.includes(s.name))); if (m) supplierId = String(m.id); }
+  if (!supplierId && out.supplierName) supplierId = matchSupplierByName(suppliers, out.supplierName);
   // כל מסמך חשבונית של ספק — עסקה(300)/מס(305)/מס-קבלה(320)/זיכוי(330)/קבלה(400) — נקלט כהוצאה (מופיע בקליטה לאישור).
   // הצעת מחיר(10) — רישום בלבד. כל השאר — דילוג.
   const route = [300, 305, 320, 330, 400].includes(dt) ? 'expense' : (dt === 10 ? 'record' : 'skip');

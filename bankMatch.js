@@ -79,7 +79,7 @@ export function matchCredits(txns, invoices, whRate = 0.05) {
     const scored = invoices.map(inv => ({ inv, ...scoreMatch(t, inv, wh) }))
       .filter(s => s.score >= 40)                     // רלוונטי: התאמת סכום / שם / מספר חשבונית
       .sort((a, b) => b.score - a.score);             // שם+סכום ומספר חשבונית קודמים לסכום-בלבד
-    const suggestions = scored.slice(0, 6).map(s => toInv(s.inv, { reasons: s.reasons, score: s.score }));
+    const suggestions = scored.filter(s => bankLinkable(s.inv)).slice(0, 6).map(s => toInv(s.inv, { reasons: s.reasons, score: s.score }));
     return { ...t, matchStatus: 'unmatched', matchedInvoices: [], suggestions };
   });
 }
@@ -101,12 +101,20 @@ const toExp = (e, extra = {}) => ({ id: e.id, number: e.number, type: e.type, cl
 // מחזיר מערך של { i, matchStatus, matchedInvoices, suggestions } עבור אינדקסי תנועות החובה בלבד.
 // אין התאמה אוטומטית להוצאות (לפי בקשת המנהל) — כל תנועת חובה נשארת "לא מותאמת" לשיוך ידני,
 // עם רשימת הצעות בלבד (עוזר לשיוך הידני, לא מוחל אוטומטית).
+// לתנועת בנק משייכים רק מסמכים שמייצגים תנועת כסף אמיתית: חשבונית מס (305),
+// מס-קבלה (320), קבלה (400) וזיכוי (330). חשבון עסקה (300), הצעת מחיר (10)
+// ודרישת תשלום (20) אינם מסמכי תשלום ואין להציע אותם.
+// המודל "שייך מסמכים" אכף את זה מזמן — כפתורי ההצעה על השורה לא, ולכן עסקה
+// הוצעה שם בלחיצה אחת. סוג לא ידוע (null) נשאר מוצע, כדי לא להעלים מסמך תקין.
+export const BANK_DOC_TYPES = [305, 320, 400, 330];
+const bankLinkable = (d) => { const t = Number(d && d.type); return !t || BANK_DOC_TYPES.includes(t); };
+
 export function matchDebits(txns, expenses) {
   const debits = []; txns.forEach((t, i) => { if (t.direction === 'debit') debits.push({ t, i }); });
   const out = [];
   for (const { t, i } of debits) {
     // הצעות בעלות סיכוי גבוה בלבד: סכום זהה (+ תאריך קרוב לדירוג) או מספר חשבונית — לא שם בלבד
-    const sugg = (expenses || []).map(exp => ({ exp, ...scoreExpense(t, exp) }))
+    const sugg = (expenses || []).filter(bankLinkable).map(exp => ({ exp, ...scoreExpense(t, exp) }))
       .filter(s => s.amountKind === 'exact' || s.reasons.includes('מספר חשבונית'))
       .sort((a, b) => b.score - a.score).slice(0, 6).map(s => toExp(s.exp, { reasons: s.reasons, score: s.score }));
     out.push({ i, matchStatus: 'unmatched', matchedInvoices: [], suggestions: sugg });
@@ -134,4 +142,4 @@ export function attachReceipts(matched, receipts) {
   return matched;
 }
 
-export default { scoreMatch, matchCredits, matchDebits, attachReceipts };
+export default { scoreMatch, matchCredits, matchDebits, attachReceipts, BANK_DOC_TYPES };

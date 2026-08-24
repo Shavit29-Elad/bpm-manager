@@ -274,6 +274,42 @@ check('מחיקת הוצאת ספק — ברירת המחדל לא נוגעת ב
   return true;
 });
 
+const bm = await import('./bankMatch.js');
+check('חשבון עסקה לא מוצע לשיוך בבנק', () => {
+  const exps = [
+    { id: 'a', number: '64535', type: 305, supplierName: 'ט. ברגר', amountIncVat: 2360, date: '2026-08-20' },
+    { id: 'b', number: '49177', type: 300, supplierName: 'ט. ברגר', amountIncVat: 2360, date: '2026-08-21' },
+    { id: 'c', number: '70001', type: 400, supplierName: 'ט. ברגר', amountIncVat: 2360, date: '2026-08-22' },
+    { id: 'd', number: '80001', type: null, supplierName: 'ט. ברגר', amountIncVat: 2360, date: '2026-08-22' },
+  ];
+  const r = bm.matchDebits([{ id: 't1', direction: 'debit', date: '23/08/2026', absAmount: 2360 }], exps)[0];
+  const types = r.suggestions.map(x => Number(x.type) || 0);
+  if (types.includes(300)) throw new Error('חשבון עסקה מוצע לשיוך');
+  if (!types.includes(305)) throw new Error('חשבונית מס נעלמה מההצעות');
+  if (!types.includes(0)) throw new Error('מסמך ללא סוג ידוע נעלם — עלול להעלים מסמך תקין');
+  // גם בתצוגה: הצעות ישנות ששמורות על השורה כוללות עסקה עד לרענון
+  if (!/\[305, 320, 400, 330\]\.includes\(ty\)/.test(app)) throw new Error('הפרונט לא מסנן הצעות שמורות');
+  return true;
+});
+
+check('התאמת ספק לפי שם לא נופלת על שם מוכל באמצע מילה', () => {
+  const src = fs.readFileSync('chat.js', 'utf8').match(/function matchSupplierByName[\s\S]*?\n\}/)[0];
+  const f = new Function(src + '; return matchSupplierByName;')();
+  const sup = [{ id: 'led', name: 'לד' }, { id: 'gold', name: 'גולדשטיין הפקות' }, { id: 'yosef', name: 'יוסף כהן הפקות' }];
+  const cases = [
+    ['גולדשטיין הפקות בע"מ', 'gold'],
+    ['מולדת אירועים', ''],          // מכיל "לד" באמצע מילה
+    ['לד', 'led'],                   // התאמה מדויקת לשם קצר עדיין עובדת
+    ['יוסף כהן', 'yosef'],
+    ['הפקות', ''],                   // מעורפל — שני מועמדים
+  ];
+  for (const [name, want] of cases) {
+    const got = f(sup, name) || '';
+    if (got !== want) throw new Error(`"${name}" → ${got || 'אין'} במקום ${want || 'אין'}`);
+  }
+  return true;
+});
+
 check('תשלום שהותאם דרך קבלה מזוהה גם על חשבונית המס', () => {
   const src = srv.match(/function buildBankPaidMap\(db, companyId\) \{[\s\S]*?\n\}/);
   if (!src) throw new Error('buildBankPaidMap לא נמצאה');

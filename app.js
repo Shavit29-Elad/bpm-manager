@@ -7741,7 +7741,9 @@ function bankTr(t) {
     const _usedIds = bankMatchedIds(t.id);
     // מסתירים הצעה שהמסמך שלה כבר משויך לתנועה אחרת — לפי מזהה *או* לפי מספר מסמך
     const _taken = (s) => _usedIds.has(String(s.id)) || (s.number != null && _usedIds.has('num:' + String(s.number).trim()));
-    const sugg = (t.suggestions || []).filter(s => !_taken(s)).map(s => { const j = jenc(s); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
+    // ההצעות הן תצלום קפוא מזמן הייבוא, וישנות מהן עשויות להכיל חשבון עסקה (300)
+    // או הצעת מחיר — מסמכים שאינם תנועת כסף. מסננים גם כאן, כדי שלא נחכה לרענון הצעות.
+    const sugg = (t.suggestions || []).filter(s => { const ty = Number(s && s.type); return !ty || [305, 320, 400, 330].includes(ty); }).filter(s => !_taken(s)).map(s => { const j = jenc(s); return `<button class="btn ghost" style="padding:2px 8px;font-size:11px" onclick="matchBank('${t.id}','${j}')">#${s.number} ${escapeHtml(s.clientName || '')} · ${money(s.amount)}</button>`; }).join(' ');
     invNo = `<span class="tag miss" style="font-size:10px">לא מותאם</span>${sugg ? `<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap;max-width:280px">${sugg}</div>` : ''}`;
     // אשר (מסמן מאושר ללא מסמך) + בטל (מסיר מהרשימה) — בשתי החברות
     action = `<button class="btn success" style="padding:3px 9px;font-size:12px" onclick="approveBank('${t.id}')">אשר</button> <button class="btn ghost" style="padding:3px 9px;font-size:12px" onclick="setBankIgnore('${t.id}',true)">בטל</button>`;
