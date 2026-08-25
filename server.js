@@ -3182,6 +3182,13 @@ add('GET', /^\/api\/contractors\/payables$/, async (req, res, _p, q) => {
 // attachSourceInvoices מקנן תחתיה את חשבונית המס שממנה נגזרה ומסיר אותה מהרשימה הראשית
 // כדי לא לספור את הכסף פעמיים. על האירוע רשומה חשבונית המס — לא הקבלה — ולכן בלי
 // הסריקה הזו אירוע ששולם דרך קבלה נראה כאילו לא שולם.
+// השוואת שם לקוח סלחנית — זהה ללוגיקה שמזווגת חשבונית לקבלה במסך הבנק
+function sameClientName(a, b) {
+  const norm = (x) => String(x || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[."'׳״,()\-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const na = norm(a), nb = norm(b);
+  return !!na && !!nb && (na === nb || na.includes(nb) || nb.includes(na));
+}
+
 function buildBankPaidMap(db, companyId) {
   const m = new Map();
   // הערך הוא { date, doc }: תאריך התנועה, ו-doc = המסמך שהתנועה שויכה אליו בפועל.
@@ -3196,10 +3203,23 @@ function buildBankPaidMap(db, companyId) {
   for (const t of (db.bankTx || [])) {
     if (companyId && !ownedBy(t, companyId)) continue;
     if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
-    for (const inv of (t.matchedInvoices || [])) {
-      // הקבלה כבר מוצמדת לחשבונית בשורת הבנק (attachReceipts) — היא מסמך התשלום.
-      // כשאין הצמדה כזו, המסמך ששויך בפועל הוא עצמו מסמך התשלום (למשל שיוך לקבלה).
-      const payer = inv && inv.receipt ? { ...inv.receipt, type: 400 } : inv;
+    // מסמך התשלום של השורה. שלושה מצבים, כי הקבלה מגיעה בשלוש דרכים:
+    //   1. מוצמדת לחשבונית בשמירה (attachReceipts) → inv.receipt
+    //   2. רשומה נפרדת באותה שורת בנק — כך זה כשמשייכים ידנית גם חשבונית וגם קבלה.
+    //      מסך הבנק מזווג ביניהן רק בזמן התצוגה, ולכן אין שום סימן שמור על החשבונית.
+    //   3. השיוך עצמו נעשה לקבלה → הרשומה היא הקבלה.
+    const entries = t.matchedInvoices || [];
+    const rowRcpts = entries.filter(x => x && x.kind !== 'expense' && [400, 320].includes(Number(x.type)));
+    const rcptFor = (inv) => {
+      if (inv && inv.receipt) return { ...inv.receipt, type: Number(inv.receipt.type) || 400 };
+      if (inv && [400, 320].includes(Number(inv.type))) return inv;
+      if (rowRcpts.length === 1) return rowRcpts[0];
+      // כמה קבלות על אותה שורה — מזווגים לפי שם הלקוח, ולא מנחשים
+      const byName = rowRcpts.filter(r => sameClientName(r.clientName, inv && inv.clientName));
+      return byName.length === 1 ? byName[0] : null;
+    };
+    for (const inv of entries) {
+      const payer = rcptFor(inv) || inv;
       put(inv, t.date, payer);
       put(inv && inv.sourceInvoice, t.date, payer);
     }

@@ -353,8 +353,9 @@ check('התאמת ספק לפי שם לא נופלת על שם מוכל באמצ
 
 check('תשלום שהותאם דרך קבלה מזוהה גם על חשבונית המס', () => {
   const src = srv.match(/function buildBankPaidMap\(db, companyId\) \{[\s\S]*?\n\}/);
-  if (!src) throw new Error('buildBankPaidMap לא נמצאה');
-  const build = new Function('ownedBy', src[0] + '; return buildBankPaidMap;')((t, c) => !c || t.companyId === c);
+  const nameFn = srv.match(/function sameClientName\(a, b\) \{[\s\S]*?\n\}/);
+  if (!src || !nameFn) throw new Error('buildBankPaidMap לא נמצאה');
+  const build = new Function('ownedBy', nameFn[0] + '\n' + src[0] + '; return buildBankPaidMap;')((t, c) => !c || t.companyId === c);
   // תנועה מותאמת לקבלה 6002; חשבונית המס 6001 קוננה תחתיה והוסרה מהרשימה הראשית
   const tx = { companyId: 'co_bpm', direction: 'credit', matchStatus: 'approved', date: '08/07/2026',
     matchedInvoices: [{ id: 'r1', number: '6002', type: 400, sourceInvoice: { id: 'i1', number: '6001', type: 305 } }] };
@@ -364,6 +365,28 @@ check('תשלום שהותאם דרך קבלה מזוהה גם על חשבוני
   if ((m.get('id:i1') || {}).date !== '08/07/2026') throw new Error('חשבונית המס לא נמצאה לפי מזהה');
   // המפה נושאת גם את המסמך שהתנועה שויכה אליו — כדי להציג את הקבלה על האירוע
   if ((m.get('num:6001') || {}).doc?.number !== '6002') throw new Error('מסמך התשלום לא נשמר במפה');
+
+  // הקבלה מגיעה בשלוש דרכים שונות — כולן חייבות להניב מסמך תשלום
+  const paths = [
+    ['רשומות נפרדות באותה שורה', [
+      { id: 'i', number: '50424', type: 305, clientName: 'אבי גואטה בע"מ', amount: 5900 },
+      { id: 'r', number: '80375', type: 400, clientName: 'אבי גואטה בע"מ', amount: 5900, url: 'u' }], '80375'],
+    ['קבלה מוצמדת לחשבונית', [
+      { id: 'i', number: '50424', type: 305, amount: 5900, receipt: { number: '777', url: 'u' } }], '777'],
+    ['שיוך ישיר לקבלה', [
+      { id: 'r', number: '999', type: 400, url: 'u', sourceInvoice: { id: 'i', number: '50424', type: 305 } }], '999'],
+  ];
+  for (const [name, matchedInvoices, want] of paths) {
+    const map = build({ bankTx: [{ companyId: 'co_bpm', direction: 'credit', date: '16/08/2026',
+      matchStatus: 'approved', matchedInvoices }] }, 'co_bpm');
+    const got = (map.get('num:50424') || {}).doc;
+    if (!got || String(got.number) !== want) throw new Error(`${name}: ${got ? got.number : 'אין'} במקום ${want}`);
+  }
+  // חשבונית לבדה — אין קבלה, ואסור להמציא אחת
+  const alone = build({ bankTx: [{ companyId: 'co_bpm', direction: 'credit', date: '16/08/2026', matchStatus: 'approved',
+    matchedInvoices: [{ id: 'i', number: '50424', type: 305, amount: 5900 }] }] }, 'co_bpm');
+  const soloDoc = (alone.get('num:50424') || {}).doc;
+  if (soloDoc && [320, 400].includes(Number(soloDoc.type))) throw new Error('הומצאה קבלה שלא קיימת');
   for (const [name, bad] of [
     ['שורה לא מאושרת', { ...tx, matchStatus: 'unmatched' }],
     ['תנועת חובה', { ...tx, direction: 'debit' }],
