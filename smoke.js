@@ -290,8 +290,26 @@ check('הקבלה מוצגת לצד חשבונית המס, ותאריך התשל
 
 check('לשונית האירועים מקבלת את סטטוס התשלום מהשרת', () => {
   // השרת מחשב אותו עם אותה פונקציה שמשרתת את "קבלנים לתשלום" — לא חישוב נפרד
-  if (!/clientPayStatus: eventClientPaid\(e, bankPaid, openNums\)/.test(srv))
+  if (!/ev\.clientPayStatus = eventClientPaid\(ev, bankPaid, openNums\)/.test(srv))
     throw new Error('הראוט לא מצרף clientPayStatus');
+  // ההשלמה חייבת לקרות לפני חישוב הסטטוס — אחרת חשבונית המס שנמצאה לא נלקחת בחשבון
+  const evRoute = srv.slice(srv.indexOf("add('GET', /^\\/api\\/events$/"));
+  const iDerive = evRoute.indexOf('resolveConvertedInvoice');
+  const iStatus = evRoute.indexOf('ev.clientPayStatus =');
+  if (iDerive < 0 || iStatus < 0 || iDerive > iStatus)
+    throw new Error('הסטטוס מחושב לפני השלמת חשבונית המס');
+  if (!/linkedDocs: docs/.test(srv)) throw new Error('המסמך שהושלם לא מוזרק לאירוע');
+  // ההשלמה היא לתצוגה בלבד — אירועים לא נשמרים מחדש
+  const evBody = srv.slice(srv.indexOf("add('GET', /^\\/api\\/events$/"));
+  const evEnd = evBody.indexOf('\n});');
+  if (/save\(db2\); *\n(?![\s\S]*?docChain)/.test(evBody.slice(0, evEnd)) && !/db2\.docChain = work\.docChain/.test(evBody.slice(0, evEnd)))
+    throw new Error('הראוט שומר משהו מעבר למטמון השרשרת');
+  // רק המקרה שבו האירוע תקוע על חשבון עסקה — לא שולפים לכל אירוע
+  if (!/stuckOnProforma/.test(srv)) throw new Error('אין הגבלה למקרה של חשבון עסקה בלבד');
+  if (!/chainBudget/.test(srv)) throw new Error('אין תקציב שליפות');
+  const chain = srv.match(/async function resolveConvertedInvoice[\s\S]*?\n\}/)[0];
+  if (!/\[305, 320\]\.includes\(ty\)/.test(chain)) throw new Error('מס-קבלה לא מזוהה כתוצאת המרה');
+  if (!/catch \{ return null; \}/.test(chain)) throw new Error('תקלת רשת עלולה לשבור את טעינת האירועים');
   if (!/buildBankPaidMap\(db, cid\)/.test(srv)) throw new Error('הראוט לא משתמש במפת הבנק');
   if (/clientPaid: eventClientPaid\(e, bankPaid, openNums\)\s*\}\)\);/.test(srv))
     throw new Error('דורס את clientPaid — שדה בוליאני קיים על אירוע שמור');

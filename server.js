@@ -168,7 +168,37 @@ add('GET', /^\/api\/events$/, async (req, res, _p, q) => {
       openNums = new Set((open || []).map(d => String(d.number)));
     }
   } catch { openNums = null; }
-  const out = events.map(e => ({ ...e, clientPayStatus: eventClientPaid(e, bankPaid, openNums) }));
+  // אירוע שנשאר על חשבון עסקה שהומרה בחשבונית ירוקה: משלימים את חשבונית המס
+  // שנגזרה ממנו, כדי שהיא תוצג לצד הקבלה שלה ושהסטטוס ייקבע לפיה. ההשלמה היא
+  // לתצוגה בלבד — linkedDocs אינו נשלח בחזרה בשמירת אירוע, ולכן שום נתון לא משתנה.
+  const gi = giEnabled(cid) && greenInvoice.haveCredentials();
+  const work = load();
+  const chainBefore = JSON.stringify(work.docChain || {});
+  let chainBudget = 5;
+  const out = [];
+  for (const e of events) {
+    let docs = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
+    const active = docs.filter(d => d && !d.credited && !d.credit && !d.converted);
+    const stuckOnProforma = active.length > 0 && active.every(d => Number(d.type) === 300);
+    if (gi && stuckOnProforma) {
+      const p = active[0];
+      if (p.id && !/^(exp_|pay_)/.test(String(p.id))) {
+        const hit = chainCached(work, cid, p.id);
+        let derived = hit ? hit.doc : null;
+        if (!hit && chainBudget > 0) { chainBudget--; derived = await resolveConvertedInvoice(work, cid, p); }
+        if (derived) {
+          docs = docs.map(d => String(d.id) === String(p.id) ? { ...d, converted: true } : d)
+            .concat([{ ...derived, derived: true }]);
+        }
+      }
+    }
+    const ev = { ...e, linkedDocs: docs };
+    ev.clientPayStatus = eventClientPaid(ev, bankPaid, openNums);
+    out.push(ev);
+  }
+  if (JSON.stringify(work.docChain || {}) !== chainBefore) {
+    const db2 = load(); db2.docChain = work.docChain; save(db2);
+  }
   json(res, out.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
 });
 
@@ -3187,6 +3217,44 @@ function sameClientName(a, b) {
   const norm = (x) => String(x || '').replace(/בע["'׳״]?\s*מ\.?/g, '').replace(/[."'׳״,()\-]/g, ' ').replace(/\s+/g, ' ').trim();
   const na = norm(a), nb = norm(b);
   return !!na && !!nb && (na === nb || na.includes(nb) || nb.includes(na));
+}
+
+// חשבון עסקה שהומר לחשבונית מס — איתור חשבונית המס שנגזרה ממנו.
+// כשההמרה נעשית דרך המערכת, המסמך החדש נרשם על האירוע והמקור מסומן converted.
+// כשהיא נעשית ישירות בחשבונית ירוקה, הקישור קיים רק שם — ב-linkedDocumentIds.
+// זה המקרה היחיד שבו המידע באמת לא אצלנו, ולכן נדרשת שליפה. התוצאה אינה משתנה
+// (המרה היא חד־פעמית), ולכן נשמרת לצמיתות — כולל תוצאה שלילית, אחרת עסקה שלא
+// הומרה הייתה נבדקת שוב בכל טעינה.
+const CHAIN_RETRY_MS = 7 * 24 * 60 * 60 * 1000;
+function chainCached(db, cid, docId) {
+  const hit = (db.docChain || {})[`${cid}|${docId}`];
+  if (!hit) return null;
+  if (hit.doc) return hit;
+  return (Date.now() - new Date(hit.at || 0).getTime()) < CHAIN_RETRY_MS ? hit : null;
+}
+async function resolveConvertedInvoice(db, cid, proforma, incomeByNumber) {
+  db.docChain = db.docChain || {};
+  const key = `${cid}|${proforma.id}`;
+  let doc = null;
+  try {
+    const raw = await greenInvoice.getDocument(proforma.id);
+    const ids = Array.isArray(raw && raw.linkedDocumentIds) ? raw.linkedDocumentIds : [];
+    for (const id of ids) {
+      if (String(id) === String(proforma.id)) continue;
+      // קודם מהרשימה שכבר נטענה — חוסך קריאה שנייה לכל מסמך
+      const fromList = incomeByNumber && incomeByNumber.byId.get(String(id));
+      const d = fromList || await greenInvoice.getDocument(id).catch(() => null);
+      if (!d) continue;
+      const ty = Number(d.type);
+      if (![305, 320].includes(ty)) continue;
+      const url = (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null);
+      doc = { id: String(d.id), number: d.number != null ? String(d.number) : null, type: ty,
+        date: d.date || d.documentDate || null, amount: d.amount != null ? Number(d.amount) : null, url };
+      break;
+    }
+  } catch { return null; }   // תקלת רשת — לא מרעילים את המטמון
+  db.docChain[key] = { doc, at: new Date().toISOString() };
+  return doc;
 }
 
 // זיווג חשבונית ↔ קבלה בתוך שורת בנק אחת.
