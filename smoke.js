@@ -610,6 +610,81 @@ check('רכבי חברה — בידוד חברות, הרשאת קבצים וחי
   return true;
 });
 
+const va = await import('./vehicleAlerts.js');
+check('התראות תוקף רכב — שלושה ספים, בלי כפילות, ומתאפסות בחידוש', () => {
+  const now = new Date('2026-08-25T09:00:00Z');
+  const at = (d) => { const x = new Date(now); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
+  const mk = (over = {}) => ({ id: 'v1', plate: '12-345-67', kind: 'truck', alertsSent: {}, ...over });
+
+  // כל סף מפעיל תזכורת אחת
+  for (const t of [30, 14, 1]) {
+    const d = va.dueAlerts([mk({ licenseExpiry: at(t) })], now);
+    if (d.length !== 1 || d[0].threshold !== t) throw new Error(`סף ${t} לא הפעיל תזכורת`);
+  }
+  // מחוץ לטווח — שקט
+  if (va.dueAlerts([mk({ licenseExpiry: at(45) })], now).length) throw new Error('תזכורת נשלחה 45 יום מראש');
+  // מסמך שכבר פג — אין התראה מקדימה (הוא כבר אדום במסך)
+  if (va.dueAlerts([mk({ licenseExpiry: at(-2) })], now).length) throw new Error('התראה מקדימה על מסמך שכבר פג');
+
+  // אותה תזכורת לא נשלחת פעמיים
+  const v = mk({ licenseExpiry: at(14) });
+  const first = va.dueAlerts([v], now);
+  v.alertsSent[first[0].key] = new Date().toISOString();
+  if (va.dueAlerts([v], now).length) throw new Error('אותה תזכורת נשלחה פעמיים');
+
+  // הסף הדחוף גובר: אחרי שנשלחה תזכורת 30, ביום ה-14 נשלחת תזכורת חדשה
+  const v2 = mk({ licenseExpiry: at(14) });
+  v2.alertsSent[va.sentKey('license', at(14), 30)] = 'x';
+  const d14 = va.dueAlerts([v2], now);
+  if (d14.length !== 1 || d14[0].threshold !== 14) throw new Error('תזכורת 14 לא נשלחה אחרי תזכורת 30');
+
+  // חידוש — התוקף החדש מייצר מפתחות חדשים, כלומר מחזור תזכורות נקי
+  const v3 = mk({ licenseExpiry: at(14) });
+  v3.alertsSent[va.dueAlerts([v3], now)[0].key] = 'x';
+  v3.licenseExpiry = at(370);
+  if (va.dueAlerts([v3], now).length) throw new Error('תוקף חדש הפעיל תזכורת מיידית');
+  v3.licenseExpiry = at(20);
+  const after = va.dueAlerts([v3], now);
+  if (after.length !== 1 || after[0].threshold !== 30) throw new Error('אחרי חידוש התזכורות לא התחילו מחדש');
+  v3.alertsSent[after[0].key] = 'x';
+  // המבחן האמיתי: אותו סף חוזר על התוקף החדש. מפתח שלא כולל את התאריך היה
+  // בולע אותו, כי סף 14 כבר "נשלח" — על המסמך הקודם.
+  v3.licenseExpiry = at(12);   // תוקף חדש, אבל שוב בטווח סף 14
+  const again = va.dueAlerts([v3], now);
+  if (again.length !== 1 || again[0].threshold !== 14)
+    throw new Error('סף שחזר על התוקף החדש נבלע — מפתח השליחה אינו כולל את התאריך');
+
+  // שלושה מסמכים שפגים באותו יום → מייל אחד, הדחוף בראש
+  const many = va.dueAlerts([mk({ licenseExpiry: at(30), ctoExpiry: at(14), compExpiry: at(1) })], now);
+  if (many.length !== 3) throw new Error('לא כל המסמכים נכללו');
+  if (many[0].slot !== 'comp') throw new Error('הדחוף ביותר אינו ראשון');
+  if (!/דחוף/.test(va.alertSubject(many))) throw new Error('נושא המייל לא משקף דחיפות');
+  for (const it of many) if (!va.alertHtml('בי פי אם', many).includes(it.slotHe)) throw new Error('מסמך חסר בגוף המייל');
+  if (/<style/.test(va.alertHtml('x', many))) throw new Error('<style> — Gmail מתעלם ממנו');
+
+  // ספירת ימים לפי חצות
+  if (va.daysUntil(at(1), now) !== 1) throw new Error('ספירת ימים שגויה');
+  if (va.daysUntil('', now) !== null) throw new Error('תאריך ריק לא מטופל');
+  return true;
+});
+
+check('חידוש מסמך רכב מחייב תוקף חדש ומאוחר יותר', () => {
+  const i = srv.indexOf("add('POST', /^\\/api\\/vehicles\\/([^/]+)\\/renew$/");
+  if (i < 0) throw new Error('ראוט החידוש לא נמצא');
+  const r = srv.slice(i, srv.indexOf('\n});', i));
+  if (!/חסר תאריך תוקף חדש/.test(r)) throw new Error('אפשר לסמן טופל בלי תוקף חדש');
+  if (!/next <= today/.test(r)) throw new Error('אפשר להזין תוקף שכבר עבר');
+  if (!/next <= String\(prev\)/.test(r)) throw new Error('אפשר להזין תוקף שאינו מאוחר מהקיים');
+  if (!/wrongCompany\(res, 'הרכב'\)/.test(r)) throw new Error('החידוש בלי בדיקת בעלות');
+  if (!/v\.renewals = /.test(r)) throw new Error('החידוש לא נרשם בהיסטוריה');
+  // הסימון "נשלח" נעשה רק אחרי שליחה מוצלחת — אחרת כישלון רשת בולע תזכורת
+  const run = srv.match(/async function runVehicleAlerts[\s\S]*?\n\}/)[0];
+  const iSend = run.indexOf('sendMailFrom'), iMark = run.indexOf('v.alertsSent[it.key]');
+  if (iSend < 0 || iMark < 0 || iSend > iMark) throw new Error('תזכורת מסומנת כנשלחה לפני השליחה');
+  if (!/ownedBy\(v, cid\)/.test(run)) throw new Error('ההתראות עוברות על רכבים של חברות אחרות');
+  return true;
+});
+
 const rep = await import('./dailyReport.js');
 check('דוח יומי — חברה שקטה לא מייצרת מייל', () => rep.buildReport({ companyName: 'x', overdueDays: 45 }) === null);
 check('דוח יומי — אירוע מהחודש הנוכחי לא מתריע', () => rep.monthClosed('2026-08-05', new Date('2026-08-19')) === false);

@@ -21,6 +21,7 @@ import { statusMasked, loadEnvIntoProcess } from './settings.js';
 import { chatConfigured, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields, classifyExpenseAttachment, aiUsage } from './chat.js';
 import { buildBackup, backupFileName, runBackupMail, planRetention } from './backup.js';
 import { buildReport, reportHtml, monthClosed, daysSince, DEFAULT_OVERDUE_DAYS } from './dailyReport.js';
+import { dueAlerts, alertSubject, alertHtml, alertText, THRESHOLDS as VEH_THRESHOLDS } from './vehicleAlerts.js';
 import mailer from './mailer.js';
 import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
@@ -4884,6 +4885,103 @@ async function runDailyReport(trigger = 'scheduled', onlyCid = null) {
   return per;
 }
 
+// ---- התראות תוקף רכבים ----
+// שלוש תזכורות לכל מסמך (30 / 14 / 1 יום). נשלחות לתיבת החברה עצמה, כמו הדוח היומי.
+// הסימון "נשלח" נשמר על הרכב וכולל את תאריך התוקף, כך שחידוש פותח מחזור חדש מעצמו.
+let _lastVehicleAlerts = null;
+async function runVehicleAlerts(trigger = 'scheduled', onlyCid = null) {
+  const per = {};
+  for (const c of (load().companies || [])) {
+    const cid = c.id;
+    if (onlyCid && cid !== onlyCid) continue;
+    const db = load();
+    const mine = (db.vehicles || []).filter(v => ownedBy(v, cid));
+    const items = dueAlerts(mine);
+    if (!items.length) { per[cid] = { skipped: 'אין תזכורות' }; continue; }
+    const creds = companyMailCreds(db, cid);
+    if (!mailer.companyMailConfigured(creds)) { per[cid] = { skipped: 'אין חשבון מייל', pending: items.length }; continue; }
+    try {
+      await mailer.sendMailFrom(creds, {
+        to: [creds.user], subject: alertSubject(items),
+        text: alertText(c.name || cid, items), html: alertHtml(c.name || cid, items),
+      });
+      // מסמנים רק אחרי שליחה מוצלחת — כישלון ינסה שוב מחר ולא ייבלע
+      const db2 = load();
+      for (const it of items) {
+        const v = (db2.vehicles || []).find(x => x.id === it.vehicleId);
+        if (!v) continue;
+        v.alertsSent = v.alertsSent || {};
+        v.alertsSent[it.key] = new Date().toISOString();
+      }
+      save(db2);
+      per[cid] = { ok: true, to: creds.user, sent: items.length };
+      console.log(`[veh-alerts] ${cid}: ${items.length} תזכורות ל-${creds.user}`);
+    } catch (e) { per[cid] = { error: e.message }; console.error(`[veh-alerts] ${cid} נכשל:`, e.message); }
+  }
+  _lastVehicleAlerts = { at: new Date().toISOString(), trigger, per };
+  return per;
+}
+const VEH_ALERT_HOUR_UTC = 4, VEH_ALERT_MIN_UTC = 20;   // 07:20 שעון ישראל — אחרי הדוח היומי
+function scheduleVehicleAlerts() {
+  const msToNext = () => {
+    const now = new Date();
+    const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), VEH_ALERT_HOUR_UTC, VEH_ALERT_MIN_UTC, 0, 0));
+    if (t.getTime() <= now.getTime()) t.setUTCDate(t.getUTCDate() + 1);
+    return t.getTime() - now.getTime();
+  };
+  const arm = () => { setTimeout(async () => { await runVehicleAlerts(); arm(); }, msToNext()); };
+  arm();
+  console.log(`[veh-alerts] מתוזמן — ריצה ראשונה בעוד ~${Math.round(msToNext() / 60000)} דק'`);
+}
+// GET /api/vehicle-alerts — מה ממתין לשליחה ומה נשלח לאחרונה
+add('GET', /^\/api\/vehicle-alerts$/, (req, res, _p, q) => {
+  const db = load(), cid = reqCompany(q);
+  const pending = dueAlerts((db.vehicles || []).filter(v => ownedBy(v, cid)));
+  json(res, { pending, thresholds: VEH_THRESHOLDS, last: _lastVehicleAlerts });
+});
+// POST /api/vehicle-alerts/run-now — שליחה מיידית (מנהל בלבד, דרך שכבת ההרשאות)
+add('POST', /^\/api\/vehicle-alerts\/run-now$/, async (req, res, _p, q, body) => {
+  const cid = (body && body.allCompanies) ? null : reqCompany(q, body);
+  json(res, { ok: true, per: await runVehicleAlerts('manual', cid) });
+});
+
+// POST /api/vehicles/:id/renew — "טופל": חידוש מסמך.
+// דורש תוקף חדש. סימון "טופל" בלי מסמך חדש רק משתיק התראה בלי שדבר השתנה
+// בפועל, ולכן אינו אפשרי כאן. התוקף החדש מייצר מפתחות תזכורת חדשים מעצמו.
+add('POST', /^\/api\/vehicles\/([^/]+)\/renew$/, async (req, res, params, q, body) => {
+  const db = load(), cid = reqCompany(q, body), b = body || {};
+  const v = (db.vehicles || []).find(x => x.id === params[0]);
+  if (!v) return json(res, { error: 'הרכב לא נמצא' }, 404);
+  if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
+  const slot = String(b.slot || '');
+  if (!VEHICLE_SLOTS.includes(slot)) return json(res, { error: 'שדה מסמך לא מוכר' }, 400);
+  const field = { license: 'licenseExpiry', cto: 'ctoExpiry', comp: 'compExpiry' }[slot];
+  const next = String(b.expiry || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(next)) return json(res, { error: 'חסר תאריך תוקף חדש' }, 400);
+  const today = new Date().toISOString().slice(0, 10);
+  if (next <= today) return json(res, { error: 'התוקף החדש חייב להיות בעתיד' }, 400);
+  const prev = v[field] || null;
+  if (prev && next <= String(prev).slice(0, 10)) {
+    return json(res, { error: `התוקף החדש (${next.split('-').reverse().join('/')}) אינו מאוחר מהקיים (${String(prev).slice(0, 10).split('-').reverse().join('/')})` }, 400);
+  }
+  let file = null;
+  if (b.fileBase64) {
+    const saved = await saveFile({ employeeId: 'veh:' + v.id, kind: 'vehicle-' + slot,
+      filename: b.filename || (VEHICLE_SLOT_HE[slot] + '.pdf'), mime: b.mime || 'application/octet-stream', data: b.fileBase64 });
+    v.files = v.files || {};
+    const old = v.files[slot];
+    v.files[slot] = { id: saved.id, filename: b.filename || null, mime: b.mime || null, at: new Date().toISOString() };
+    file = v.files[slot];
+    if (old && old.id && old.id !== saved.id) { try { await deleteFile(old.id); } catch { } }
+  }
+  v[field] = next;
+  v.renewals = (v.renewals || []).concat([{ slot, from: prev, to: next, at: new Date().toISOString(),
+    by: (req.user && req.user.username) || null, withFile: Boolean(file) }]).slice(-30);
+  save(db);
+  console.log(`[veh-renew] ${cid}: ${v.plate} · ${VEHICLE_SLOT_HE[slot]} · ${prev || '—'} → ${next}`);
+  json(res, { ok: true, vehicle: v, file });
+});
+
 function scheduleDailyReport() {
   const msToNext = () => {
     const now = new Date();
@@ -6373,5 +6471,5 @@ server.listen(PORT, async () => {
     .then(r => { if (r && !r.ok) console.log('ווטסאפ:', r.reason); });
   try { scheduleNightlyMailScan();
   scheduleDailyBackup();
-  scheduleDailyReport(); } catch (e) { console.error('תזמון סריקת מייל נכשל:', e.message); } // סריקת מייל לילית אוטומטית לכל החברות
+  scheduleDailyReport(); scheduleVehicleAlerts(); } catch (e) { console.error('תזמון סריקת מייל נכשל:', e.message); } // סריקת מייל לילית אוטומטית לכל החברות
 });

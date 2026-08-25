@@ -6858,10 +6858,15 @@ function vehCard(v) {
   const edge = worst === null ? 'var(--line)' : worst < 0 ? 'var(--danger)' : worst <= 30 ? '#f59e0b' : 'var(--accent2)';
   const rows = VEH_SLOTS.map(s => {
     const f = (v.files || {})[s.k];
-    const acts = f
+    const n = vehDaysLeft(v[s.date]);
+    // "טופל" מוצע רק כשיש על מה — מסמך שפג או שקרוב לפקיעה
+    const renewBtn = (n !== null && n <= 45)
+      ? `<button class="btn success" style="padding:2px 9px;font-size:11px" onclick="openVehRenew('${v.id}','${s.k}')">✅ טופל</button>`
+      : '';
+    const acts = (f
       ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('/api/files/${f.id}')">👁 צפייה</button>
          <a class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none" href="/api/files/${f.id}?download=1">⬇ הורדה</a>`
-      : `<span class="muted" style="font-size:11px">אין קובץ</span>`;
+      : `<span class="muted" style="font-size:11px">אין קובץ</span>`) + renewBtn;
     return `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line);flex-wrap:wrap">
       <span style="font-size:12.5px;font-weight:600;min-width:78px">${s.he}</span>
       ${vehExpiryTag(v[s.date])}
@@ -6884,6 +6889,61 @@ function vehCard(v) {
     <div style="margin-top:8px">${rows}</div>
   </div>`;
 }
+
+// "טופל" = חידוש. חובה להזין תוקף חדש: סימון בלי מסמך חדש רק משתיק התראה
+// בלי שדבר השתנה בפועל, ואז רישיון פג נשאר פג בלי שאיש יידע.
+window.openVehRenew = (vid, slot) => {
+  const v = (_vehicles || []).find(x => x.id === vid);
+  const s = VEH_SLOTS.find(x => x.k === slot);
+  if (!v || !s) return;
+  _vehPending = {};
+  let m = document.getElementById('vehRenewModal');
+  if (!m) { m = document.createElement('div'); m.id = 'vehRenewModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  m.innerHTML = `<div class="modal-card" style="width:min(460px,95vw)">
+    <h3 style="margin:0 0 4px">✅ טופל — ${s.he}</h3>
+    <div class="muted" style="font-size:12.5px;margin-bottom:12px">${escapeHtml(v.plate || '')}${v.maker ? ' · ' + escapeHtml(v.maker) : ''} · תוקף נוכחי: ${v[s.date] ? payDateFmt(v[s.date]) : '—'}</div>
+    <label style="font-size:12.5px;display:block">תוקף חדש
+      <input type="date" id="vehRenewDate" style="width:100%;padding:9px" /></label>
+    <div style="border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:10px">
+      <b style="font-size:12.5px">המסמך החדש (מומלץ)</b>
+      <div id="vehDrop_${slot}" class="veh-drop"
+        ondragover="event.preventDefault();this.classList.add('over')"
+        ondragleave="this.classList.remove('over')"
+        ondrop="vehDrop(event,'${slot}')"
+        onclick="document.getElementById('vehFile_${slot}').click()">
+        <span id="vehDropTxt_${slot}">גרור את המסמך המחודש לכאן, או לחץ לבחירה</span>
+      </div>
+      <input type="file" id="vehFile_${slot}" accept=".pdf,.png,.jpg,.jpeg,image/*,application/pdf" style="display:none" onchange="vehFilePick(this,'${slot}')" />
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:8px">ההתראות על ${s.he} ייפסקו ויתחילו מחדש לפי התוקף החדש.</div>
+    <div id="vehRenewStatus" style="min-height:20px;margin-top:8px;font-size:12.5px"></div>
+    <div class="modal-actions">
+      <button class="btn success" onclick="saveVehRenew('${vid}','${slot}',this)">שמור חידוש</button>
+      <button class="btn ghost" onclick="document.getElementById('vehRenewModal').classList.add('hidden')">ביטול</button>
+    </div>
+  </div>`;
+};
+
+window.saveVehRenew = async (vid, slot, btn) => {
+  const st = document.getElementById('vehRenewStatus');
+  const expiry = (document.getElementById('vehRenewDate') || {}).value || '';
+  if (!expiry) { if (st) st.innerHTML = '<span style="color:var(--danger)">חובה להזין תוקף חדש</span>'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
+  const body = { slot, expiry, ...(_vehPending[slot] || {}) };
+  const r = await fetch(`/api/vehicles/${vid}/renew`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || !r.ok) {
+    if (btn) { btn.disabled = false; btn.textContent = 'שמור חידוש'; }
+    if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || 'השמירה נכשלה'))}</span>`;
+    return;
+  }
+  _vehPending = {};
+  document.getElementById('vehRenewModal').classList.add('hidden');
+  clearApiCache();
+  renderVehicles($('#content'));
+};
 
 window.openVehicleEdit = (id) => {
   const v = id ? (_vehicles || []).find(x => x.id === id) : null;
