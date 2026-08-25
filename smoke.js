@@ -573,6 +573,43 @@ check('שיוך להוצאה שנמחקה בחשבונית ירוקה נחסם �
   return true;
 });
 
+check('רכבי חברה — בידוד חברות, הרשאת קבצים וחיווי תוקף', () => {
+  // כל ראוט שנוגע ברכב חייב לעבור דרך ownedBy — אחרת חברה אחת רואה רכבים של אחרת
+  const routes = [];
+  for (let i = srv.indexOf("add('"); i >= 0; i = srv.indexOf("add('", i + 1)) {
+    const head = srv.slice(i, i + 90);
+    if (!/\/api\\\/vehicles/.test(head)) continue;
+    const end = srv.indexOf('\n});', i);
+    routes.push(srv.slice(i, end > 0 ? end : i + 2000));
+  }
+  if (routes.length < 5) throw new Error(`נמצאו ${routes.length} ראוטים של רכבים מתוך 5`);
+  for (const r of routes) {
+    if (!/reqCompany\(/.test(r)) throw new Error('ראוט רכבים בלי reqCompany');
+    const isList = /add\('GET'/.test(r);
+    if (!isList && !/wrongCompany\(res, 'הרכב'\)/.test(r)) throw new Error('ראוט רכבים בלי בדיקת בעלות');
+    if (isList && !/ownedBy\(v, cid\)/.test(r)) throw new Error('רשימת הרכבים לא מסוננת לפי חברה');
+  }
+  // קובץ של רכב חייב להיפתר לחברה של הרכב, אחרת /api/files/:id יגיש אותו לכל אחד
+  if (!/owner\.match\(\/\^veh:\(\.\+\)\$\/\)/.test(srv)) throw new Error('fileCompanyId לא מזהה קובץ של רכב');
+  if (!/employeeId: 'veh:' \+ v\.id/.test(srv)) throw new Error('קובץ רכב לא מתויג בחברה');
+  // מסמך שהוחלף — הקודם נמחק, אחרת האחסון מתמלא בקבצים יתומים
+  if (!/if \(old && old\.id && old\.id !== saved\.id\)/.test(srv)) throw new Error('קובץ שהוחלף לא נמחק');
+
+  // חיווי התוקף
+  const f = new Function(app.match(/function vehDaysLeft\(iso\) \{[\s\S]*?\n\}/)[0] + '; return vehDaysLeft;')();
+  const iso = (d) => { const x = new Date(); x.setDate(x.getDate() + d); return x.toISOString().slice(0, 10); };
+  if (f(iso(-5)) !== -5) throw new Error('מסמך שפג לא מזוהה');
+  if (f(iso(10)) !== 10) throw new Error('ספירת ימים שגויה');
+  if (f('') !== null || f(null) !== null) throw new Error('תאריך חסר לא מטופל');
+  const worst = new Function(app.match(/const VEH_SLOTS = \[[\s\S]*?\n\];/)[0]
+    + app.match(/function vehDaysLeft\(iso\) \{[\s\S]*?\n\}/)[0]
+    + app.match(/function vehWorst\(v\) \{[\s\S]*?\n\}/)[0] + '; return vehWorst;')();
+  if (worst({ licenseExpiry: iso(200), ctoExpiry: iso(-3), compExpiry: iso(50) }) !== -3)
+    throw new Error('הכרטיס לא נצבע לפי המסמך הדחוף ביותר');
+  if (worst({}) !== null) throw new Error('רכב בלי תאריכים סווג בטעות');
+  return true;
+});
+
 const rep = await import('./dailyReport.js');
 check('דוח יומי — חברה שקטה לא מייצרת מייל', () => rep.buildReport({ companyName: 'x', overdueDays: 45 }) === null);
 check('דוח יומי — אירוע מהחודש הנוכחי לא מתריע', () => rep.monthClosed('2026-08-05', new Date('2026-08-19')) === false);

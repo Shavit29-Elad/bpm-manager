@@ -61,7 +61,7 @@ const api = (p) => {
   };
 })();
 
-const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', business: '🏢 פרטי העסק' };
+const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', vehicles: '🚚 רכבי חברה', business: '🏢 פרטי העסק' };
 // לשוניות רלוונטיות לחברה מסוימת (לניהול הרשאות משתמשים) — נגזר מאותם כללים כמו applyCompanyTabs. "פרטי העסק" — הנהלה בלבד.
 function companyTabsFor(cid) {
   const isBpm = cid === 'co_bpm', isMoshe = cid === 'co_moshe';
@@ -361,7 +361,7 @@ const pill = (label, ok, text) =>
 
 function render() {
   const c = $('#content');
-  ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes,      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, business: renderBusiness }[state.tab])(c);
+  ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes,      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, vehicles: renderVehicles, business: renderBusiness }[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----
@@ -6788,6 +6788,232 @@ window.scanMailNow = async () => {
       if (panel) { panel.innerHTML = draftsSection(); kickDraftsAi(); }
     } catch { }
   }, 3000);
+};
+
+// ================= רכבי חברה =================
+// לכל רכב שלושה מסמכים — רישיון, ביטוח חובה, ביטוח מקיף — ולכל אחד תוקף וקובץ.
+// התוקף הוא העיקר: הוא נצבע לפי הקרבה לפקיעה, כדי שרכב שרישיונו עומד לפוג יקפוץ לעין.
+const VEH_SLOTS = [
+  { k: 'license', he: 'רישיון רכב', date: 'licenseExpiry' },
+  { k: 'cto', he: 'ביטוח חובה', date: 'ctoExpiry' },
+  { k: 'comp', he: 'ביטוח מקיף', date: 'compExpiry' },
+];
+const VEH_KIND_HE = { truck: 'משאית', private: 'פרטי' };
+let _vehicles = [];
+let _vehPending = {};   // קבצים שנבחרו בחלונית וטרם נשמרו (רכב חדש עדיין אין לו מזהה)
+
+// ימים עד פקיעה — שלילי = פג
+function vehDaysLeft(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(String(iso || ''))) return null;
+  const d = new Date(String(iso).slice(0, 10) + 'T00:00:00');
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  return Math.round((d - t) / 86400000);
+}
+function vehExpiryTag(iso) {
+  const n = vehDaysLeft(iso);
+  if (n === null) return `<span class="muted" style="font-size:12px">אין תאריך</span>`;
+  const txt = payDateFmt(iso);
+  if (n < 0) return `<span class="tag" style="background:#fde8e8;color:#b42318;font-weight:700" title="פג לפני ${-n} ימים">🔴 ${txt} · פג</span>`;
+  if (n <= 30) return `<span class="tag" style="background:#fff4e5;color:#a15c00;font-weight:600" title="נותרו ${n} ימים">🟡 ${txt} · עוד ${n} ימים</span>`;
+  return `<span class="tag" style="background:#e7f7ee;color:#0a7d33">🟢 ${txt}</span>`;
+}
+// המצב הדחוף ביותר מבין שלושת המסמכים — לסימון הכרטיס כולו
+function vehWorst(v) {
+  let worst = null;
+  for (const s of VEH_SLOTS) {
+    const n = vehDaysLeft(v[s.date]);
+    if (n === null) continue;
+    if (worst === null || n < worst) worst = n;
+  }
+  return worst;
+}
+
+async function renderVehicles(c) {
+  c.innerHTML = `<div class="panel"><div class="empty">טוען רכבים…</div></div>`;
+  _vehicles = await api('/api/vehicles').catch(() => []);
+  if (!Array.isArray(_vehicles)) _vehicles = [];
+  const canEdit = (state.user || {}).role === 'admin';
+  const expired = _vehicles.filter(v => { const n = vehWorst(v); return n !== null && n < 0; }).length;
+  const soon = _vehicles.filter(v => { const n = vehWorst(v); return n !== null && n >= 0 && n <= 30; }).length;
+  const nVeh = (n) => n === 1 ? 'רכב אחד' : `${n} רכבים`;
+  const banner = expired || soon
+    ? `<div class="warn-banner" style="margin-bottom:12px">${expired ? `🔴 ${nVeh(expired)} עם מסמך שפג תוקפו` : ''}${expired && soon ? ' · ' : ''}${soon ? `🟡 ${nVeh(soon)} עם מסמך שפג בתוך 30 יום` : ''}</div>`
+    : '';
+  const cards = _vehicles.length
+    ? _vehicles.map(vehCard).join('')
+    : `<div class="empty">עדיין לא הוספת רכבים.</div>`;
+  c.innerHTML = `<div class="panel">
+    <div class="row-between" style="margin-bottom:12px">
+      <h2>🚚 רכבי חברה${_vehicles.length ? ` <span class="muted" style="font-size:14px;font-weight:400">· ${_vehicles.length}</span>` : ''}</h2>
+      ${canEdit ? `<button class="btn primary" onclick="openVehicleEdit()">➕ הוסף רכב</button>` : ''}
+    </div>
+    ${banner}
+    <div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px">${cards}</div>
+  </div>`;
+}
+
+function vehCard(v) {
+  const canEdit = (state.user || {}).role === 'admin';
+  const worst = vehWorst(v);
+  const edge = worst === null ? 'var(--line)' : worst < 0 ? 'var(--danger)' : worst <= 30 ? '#f59e0b' : 'var(--accent2)';
+  const rows = VEH_SLOTS.map(s => {
+    const f = (v.files || {})[s.k];
+    const acts = f
+      ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('/api/files/${f.id}')">👁 צפייה</button>
+         <a class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none" href="/api/files/${f.id}?download=1">⬇ הורדה</a>`
+      : `<span class="muted" style="font-size:11px">אין קובץ</span>`;
+    return `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line);flex-wrap:wrap">
+      <span style="font-size:12.5px;font-weight:600;min-width:78px">${s.he}</span>
+      ${vehExpiryTag(v[s.date])}
+      <span style="display:flex;gap:5px;flex-wrap:wrap">${acts}</span>
+    </div>`;
+  }).join('');
+  return `<div class="panel" style="margin:0;border-inline-start:4px solid ${edge}">
+    <div class="row-between" style="align-items:flex-start;gap:8px">
+      <div>
+        <div style="font-size:17px;font-weight:800;letter-spacing:.5px">${escapeHtml(v.plate || '—')}</div>
+        <div class="muted" style="font-size:12.5px;margin-top:2px">${VEH_KIND_HE[v.kind] || 'פרטי'}${v.maker ? ' · ' + escapeHtml(v.maker) : ''}</div>
+        ${v.ownerName ? `<div class="muted" style="font-size:12.5px">על שם: ${escapeHtml(v.ownerName)}</div>` : ''}
+      </div>
+      ${canEdit ? `<div style="display:flex;gap:5px;flex-wrap:wrap">
+        <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openVehicleEdit('${v.id}')">עריכה</button>
+        <button class="btn ghost" style="padding:3px 10px;font-size:12px;color:var(--danger)" onclick="deleteVehicle('${v.id}')">🗑 מחק</button>
+      </div>` : ''}
+    </div>
+    ${v.notes ? `<div class="muted" style="font-size:12px;margin-top:6px">${escapeHtml(v.notes)}</div>` : ''}
+    <div style="margin-top:8px">${rows}</div>
+  </div>`;
+}
+
+window.openVehicleEdit = (id) => {
+  const v = id ? (_vehicles || []).find(x => x.id === id) : null;
+  _vehPending = {};
+  let m = document.getElementById('vehModal');
+  if (!m) { m = document.createElement('div'); m.id = 'vehModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  const g = (k) => escapeHtml(String((v && v[k]) || ''));
+  const zones = VEH_SLOTS.map(s => {
+    const f = v && (v.files || {})[s.k];
+    return `<div style="border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px">
+      <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+        <b style="font-size:13px">${s.he}</b>
+        <input type="date" id="veh_${s.k}_date" value="${(v && v[s.date]) || ''}" style="padding:6px 8px" />
+      </div>
+      <div id="vehDrop_${s.k}" class="veh-drop"
+        ondragover="event.preventDefault();this.classList.add('over')"
+        ondragleave="this.classList.remove('over')"
+        ondrop="vehDrop(event,'${s.k}')"
+        onclick="document.getElementById('vehFile_${s.k}').click()">
+        <span id="vehDropTxt_${s.k}">${f ? `📄 ${escapeHtml(f.filename || 'קובץ קיים')} — לחץ או גרור להחלפה` : 'גרור קובץ לכאן, או לחץ לבחירה'}</span>
+      </div>
+      <input type="file" id="vehFile_${s.k}" accept=".pdf,.png,.jpg,.jpeg,image/*,application/pdf" style="display:none" onchange="vehFilePick(this,'${s.k}')" />
+      ${f ? `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('/api/files/${f.id}')">👁 צפייה</button>
+        <a class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none" href="/api/files/${f.id}?download=1">⬇ הורדה</a>
+        <button class="btn ghost" style="padding:2px 9px;font-size:11px;color:var(--danger)" onclick="vehRemoveFile('${v.id}','${s.k}')">הסר קובץ</button>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+  m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw);max-height:92vh;max-height:92dvh;overflow:auto">
+    <h3 style="margin:0 0 10px">${v ? 'עריכת רכב' : 'רכב חדש'}</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <label style="font-size:12.5px">סוג רכב
+        <select id="vehKind" style="width:100%;padding:8px">
+          <option value="private" ${(!v || v.kind !== 'truck') ? 'selected' : ''}>פרטי</option>
+          <option value="truck" ${v && v.kind === 'truck' ? 'selected' : ''}>משאית</option>
+        </select></label>
+      <label style="font-size:12.5px">מספר רכב
+        <input id="vehPlate" value="${g('plate')}" placeholder="12-345-67" style="width:100%;padding:8px" /></label>
+      <label style="font-size:12.5px">יצרן
+        <input id="vehMaker" value="${g('maker')}" placeholder="למשל וולוו" style="width:100%;padding:8px" /></label>
+      <label style="font-size:12.5px">על שם מי הרכב
+        <input id="vehOwner" value="${g('ownerName')}" placeholder="שם בעל הרכב" style="width:100%;padding:8px" /></label>
+    </div>
+    <label style="font-size:12.5px;display:block;margin-top:10px">הערות
+      <input id="vehNotes" value="${g('notes')}" style="width:100%;padding:8px" /></label>
+    ${zones}
+    <div id="vehStatus" style="min-height:20px;margin-top:10px;font-size:12.5px"></div>
+    <div class="modal-actions">
+      <button class="btn primary" onclick="saveVehicle('${v ? v.id : ''}',this)">💾 שמור</button>
+      <button class="btn ghost" onclick="document.getElementById('vehModal').classList.add('hidden')">סגור</button>
+    </div>
+  </div>`;
+};
+
+// קריאת קובץ שנבחר או נגרר. נשמר בזיכרון עד השמירה — רכב חדש עדיין אין לו מזהה לתלות בו קובץ.
+async function vehTakeFile(file, slot) {
+  const txt = document.getElementById('vehDropTxt_' + slot);
+  if (!file) return;
+  if (file.size > 10 * 1024 * 1024) { if (txt) txt.textContent = '⚠ הקובץ גדול מ-10MB'; return; }
+  const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.readAsDataURL(file); });
+  _vehPending[slot] = { fileBase64: b64, filename: file.name, mime: file.type || 'application/octet-stream' };
+  if (txt) txt.textContent = `📎 ${file.name} — יישמר בלחיצה על "שמור"`;
+}
+window.vehFilePick = (input, slot) => { vehTakeFile(input.files && input.files[0], slot); };
+window.vehDrop = (ev, slot) => {
+  ev.preventDefault();
+  const z = document.getElementById('vehDrop_' + slot); if (z) z.classList.remove('over');
+  const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+  vehTakeFile(f, slot);
+};
+
+window.saveVehicle = async (id, btn) => {
+  const st = document.getElementById('vehStatus');
+  const gv = (x) => (document.getElementById(x) || {}).value || '';
+  const body = {
+    id: id || undefined,
+    kind: gv('vehKind'), plate: gv('vehPlate').trim(), maker: gv('vehMaker').trim(),
+    ownerName: gv('vehOwner').trim(), notes: gv('vehNotes').trim(),
+    licenseExpiry: gv('veh_license_date') || null,
+    ctoExpiry: gv('veh_cto_date') || null,
+    compExpiry: gv('veh_comp_date') || null,
+  };
+  if (!body.plate) { if (st) st.innerHTML = '<span style="color:var(--danger)">חסר מספר רכב</span>'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
+  const r = await fetch('/api/vehicles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || !r.ok) {
+    if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; }
+    if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || 'שמירה נכשלה'))}</span>`;
+    return;
+  }
+  const vid = r.vehicle.id;
+  const slots = Object.keys(_vehPending);
+  for (let i = 0; i < slots.length; i++) {
+    if (st) st.innerHTML = `<span class="muted">מעלה מסמכים… ${i + 1}/${slots.length}</span>`;
+    const up = await fetch(`/api/vehicles/${vid}/file`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slot: slots[i], ..._vehPending[slots[i]] }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (!up || !up.ok) {
+      if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; }
+      if (st) st.innerHTML = `<span style="color:var(--danger)">הרכב נשמר, אך העלאת "${VEH_SLOTS.find(s => s.k === slots[i]).he}" נכשלה: ${escapeHtml(String(up && up.error || ''))}</span>`;
+      _vehicles = []; renderVehicles($('#content'));
+      return;
+    }
+  }
+  _vehPending = {};
+  document.getElementById('vehModal').classList.add('hidden');
+  clearApiCache();
+  renderVehicles($('#content'));
+};
+
+window.vehRemoveFile = async (id, slot) => {
+  if (!confirm('להסיר את הקובץ?')) return;
+  const r = await fetch(`/api/vehicles/${id}/file/${slot}`, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || !r.ok) { alert('שגיאה: ' + ((r && r.error) || '')); return; }
+  clearApiCache();
+  await renderVehicles($('#content'));
+  openVehicleEdit(id);
+};
+
+window.deleteVehicle = async (id) => {
+  const v = (_vehicles || []).find(x => x.id === id);
+  const nDocs = Object.keys((v && v.files) || {}).length;
+  if (!confirm(`למחוק את הרכב ${v ? v.plate : ''}?${nDocs ? `\n${nDocs} מסמכים שמורים יימחקו איתו.` : ''}\nהפעולה אינה ניתנת לביטול.`)) return;
+  const r = await fetch(`/api/vehicles/${id}`, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || !r.ok) { alert('שגיאה: ' + ((r && r.error) || '')); return; }
+  clearApiCache();
+  renderVehicles($('#content'));
 };
 
 async function renderBusiness(c) {

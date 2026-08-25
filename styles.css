@@ -237,6 +237,12 @@ tbody tr:last-child td{border-bottom:none}
 .biz-file-name{font-size:13px;font-weight:600;margin-inline-end:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px}
 @media (max-width:760px){.biz-grid,.biz-mgrs{grid-template-columns:1fr}.biz-row{flex-direction:column;align-items:stretch}.biz-row-label{flex-basis:auto}}
 
+/* אזור גרירת קובץ — רכבי חברה */
+.veh-drop{margin-top:8px;border:1.5px dashed var(--line);border-radius:10px;padding:14px 10px;text-align:center;
+  font-size:12.5px;color:var(--muted);cursor:pointer;transition:border-color .12s,background .12s}
+.veh-drop:hover{border-color:var(--accent);color:var(--accent-strong)}
+.veh-drop.over{border-color:var(--accent);background:rgba(79,70,229,.07);color:var(--accent-strong)}
+
 /* ===================== התאמה לפלאפון (Responsive) ===================== */
 /* טאבלט וגלישה בינונית */
 @media (max-width:900px){

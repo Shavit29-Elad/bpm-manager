@@ -140,7 +140,9 @@ const reqCompany = (q, body) => (q && q.companyId) || (body && body.companyId) |
 // האם רשומה שייכת לחברה. רשומה ישנה ללא companyId שייכת לחברת ברירת המחדל (מוסכמה קיימת).
 const ownedBy = (rec, cid) => Boolean(rec) && (rec.companyId || giCompanyId()) === cid;
 // תשובת 403 אחידה לניסיון גישה לרשומה של חברה אחרת
-const wrongCompany = (res, what = 'הרשומה') => json(res, { error: `${what} שייכת לחברה אחרת` }, 403);
+// ניסוח נטול מגדר: הפונקציה מקבלת גם שמות בזכר (האירוע, הרכב, הכלל) וגם בנקבה
+// (ההוצאה, התנועה), ו"שייכת" הקבוע הפך את ההודעה לשגויה ברוב הקריאות.
+const wrongCompany = (res, what = 'הרשומה') => json(res, { error: `אין הרשאה — ${what} מחברה אחרת` }, 403);
 
 // GET /api/companies — משתמש צפייה רואה רק את העסקים שהורשה אליהם
 add('GET', /^\/api\/companies$/, (req, res) => {
@@ -3746,6 +3748,8 @@ function fileCompanyId(db, fileRec, fileId) {
   const owner = String((fileRec && (fileRec.employee_id || fileRec.employeeId)) || '');
   let m = owner.match(/^(?:biz|mailscan):(.+)$/);
   if (m) return m[1];
+  m = owner.match(/^veh:(.+)$/);
+  if (m) { const v = (db.vehicles || []).find(x => x.id === m[1]); return v ? (v.companyId || giCompanyId()) : null; }
   m = owner.match(/^evdoc:(.+)$/);
   if (m) { const ev = (db.events || []).find(e => e.id === m[1]); return ev ? (ev.companyId || giCompanyId()) : null; }
   if (owner && owner !== 'oldinv' && owner !== 'payable') {
@@ -3773,6 +3777,90 @@ function mayReadFile(req, fileRec, fileId) {
   const owner = fileCompanyId(load(), fileRec, fileId);
   return Boolean(owner) && allowed.includes(owner);
 }
+
+// ---- רכבי חברה ----
+// מסמך לכל רכב: רישיון, ביטוח חובה, ביטוח מקיף. לכל אחד תוקף וקובץ.
+// קבצים מתויגים veh:<id> כדי ש-fileCompanyId יאכוף הרשאה לפי החברה של הרכב.
+const VEHICLE_SLOTS = ['license', 'cto', 'comp'];
+const VEHICLE_SLOT_HE = { license: 'רישיון רכב', cto: 'ביטוח חובה', comp: 'ביטוח מקיף' };
+const cleanVehicle = (b, prev = {}) => ({
+  kind: b.kind === 'truck' ? 'truck' : 'private',
+  plate: String(b.plate == null ? prev.plate || '' : b.plate).trim(),
+  maker: String(b.maker == null ? prev.maker || '' : b.maker).trim(),
+  ownerName: String(b.ownerName == null ? prev.ownerName || '' : b.ownerName).trim(),
+  licenseExpiry: b.licenseExpiry !== undefined ? (b.licenseExpiry || null) : (prev.licenseExpiry || null),
+  ctoExpiry: b.ctoExpiry !== undefined ? (b.ctoExpiry || null) : (prev.ctoExpiry || null),
+  compExpiry: b.compExpiry !== undefined ? (b.compExpiry || null) : (prev.compExpiry || null),
+  notes: String(b.notes == null ? prev.notes || '' : b.notes).trim(),
+});
+
+add('GET', /^\/api\/vehicles$/, (req, res, _p, q) => {
+  const db = load(), cid = reqCompany(q);
+  const list = (db.vehicles || []).filter(v => ownedBy(v, cid));
+  list.sort((a, b) => String(a.plate || '').localeCompare(String(b.plate || ''), 'he'));
+  json(res, list);
+});
+
+// POST /api/vehicles — יצירה, או עדכון כשנשלח id
+add('POST', /^\/api\/vehicles$/, (req, res, _p, q, body) => {
+  const db = load(), cid = reqCompany(q, body), b = body || {};
+  db.vehicles = db.vehicles || [];
+  let v = b.id ? db.vehicles.find(x => x.id === b.id) : null;
+  if (b.id && !v) return json(res, { error: 'הרכב לא נמצא' }, 404);
+  if (v && !ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
+  const fields = cleanVehicle(b, v || {});
+  if (!fields.plate) return json(res, { error: 'חסר מספר רכב' }, 400);
+  // מספר רכב כפול באותה חברה — כמעט תמיד טעות הקלדה, ולא רכב נוסף
+  const dup = db.vehicles.find(x => ownedBy(x, cid) && x.id !== (v && v.id)
+    && String(x.plate || '').replace(/\D/g, '') === fields.plate.replace(/\D/g, ''));
+  if (dup) return json(res, { error: `מספר רכב ${fields.plate} כבר קיים ברשימה` }, 409);
+  if (v) Object.assign(v, fields);
+  else { v = { id: id('veh'), companyId: cid, createdAt: new Date().toISOString(), files: {}, ...fields }; db.vehicles.push(v); }
+  save(db);
+  json(res, { ok: true, vehicle: v });
+});
+
+// POST /api/vehicles/:id/file — העלאת מסמך לאחד השדות { slot, fileBase64, filename, mime }
+add('POST', /^\/api\/vehicles\/([^/]+)\/file$/, async (req, res, params, q, body) => {
+  const db = load(), cid = reqCompany(q, body), b = body || {};
+  const v = (db.vehicles || []).find(x => x.id === params[0]);
+  if (!v) return json(res, { error: 'הרכב לא נמצא' }, 404);
+  if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
+  const slot = String(b.slot || '');
+  if (!VEHICLE_SLOTS.includes(slot)) return json(res, { error: 'שדה מסמך לא מוכר' }, 400);
+  if (!b.fileBase64) return json(res, { error: 'חסר קובץ' }, 400);
+  const saved = await saveFile({ employeeId: 'veh:' + v.id, kind: 'vehicle-' + slot,
+    filename: b.filename || (VEHICLE_SLOT_HE[slot] + '.pdf'), mime: b.mime || 'application/octet-stream', data: b.fileBase64 });
+  v.files = v.files || {};
+  const old = v.files[slot];
+  v.files[slot] = { id: saved.id, filename: b.filename || null, mime: b.mime || null, at: new Date().toISOString() };
+  save(db);
+  // מסמך שהוחלף — מוחקים את הקודם, אחרת האחסון מתמלא בקבצים שאין אליהם הפניה
+  if (old && old.id && old.id !== saved.id) { try { await deleteFile(old.id); } catch { } }
+  json(res, { ok: true, file: v.files[slot] });
+});
+
+add('DELETE', /^\/api\/vehicles\/([^/]+)\/file\/([^/]+)$/, async (req, res, params, q) => {
+  const db = load(), cid = reqCompany(q);
+  const v = (db.vehicles || []).find(x => x.id === params[0]);
+  if (!v) return json(res, { error: 'הרכב לא נמצא' }, 404);
+  if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
+  const slot = params[1];
+  const f = (v.files || {})[slot];
+  if (f) { delete v.files[slot]; save(db); try { await deleteFile(f.id); } catch { } }
+  json(res, { ok: true });
+});
+
+add('DELETE', /^\/api\/vehicles\/([^/]+)$/, async (req, res, params, q) => {
+  const db = load(), cid = reqCompany(q);
+  const v = (db.vehicles || []).find(x => x.id === params[0]);
+  if (!v) return json(res, { error: 'הרכב לא נמצא' }, 404);
+  if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
+  db.vehicles = db.vehicles.filter(x => x.id !== v.id);
+  save(db);
+  for (const f of Object.values(v.files || {})) { try { await deleteFile(f.id); } catch { } }
+  json(res, { ok: true });
+});
 
 // GET /api/files/:id — הגשת הקובץ (צפייה=inline / הורדה=?download=1)
 add('GET', /^\/api\/files\/([^/]+)$/, async (req, res, params, q) => {
@@ -5863,7 +5951,7 @@ add('GET', /^\/api\/month-detail$/, (req, res, _p, q) => {
 // ================= התחברות והרשאות =================
 // הלשוניות שניתן להקצות למשתמש צפייה — חייב להתאים ל-TAB_LABELS ב-app.js, אחרת בחירה של המנהל
 // נמחקת בשקט בשמירה. 'business' (פרטי העסק) אינו כאן בכוונה — הוא להנהלה בלבד.
-const VALID_TABS = ['home', 'summary', 'events', 'quotes', 'clients', 'contractors', 'payroll', 'bank'];
+const VALID_TABS = ['home', 'summary', 'events', 'quotes', 'clients', 'contractors', 'payroll', 'bank', 'vehicles'];
 const uid = () => id('usr');
 const cleanUsername = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
 
