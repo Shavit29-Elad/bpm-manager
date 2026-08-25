@@ -1298,7 +1298,9 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
     const isBusiness = Number(body.documentType) === 20;
     const isCredit = Number(body.documentType || draft.documentType) === 330;   // חשבונית זיכוי מספק
     const _activeCid = q.companyId || giCompanyId();
-    const localOnly = isBusiness || _activeCid === 'co_ofek';
+    // רשומה מקומית: חשבון עסקה (פנימי תמיד), או חברה שאינה מחוברת לחשבונית ירוקה.
+    // נגזר ממצב החיבור ולא משם החברה — ברגע שיוזנו מפתחות ההתנהגות מתיישרת מעצמה.
+    const localOnly = isBusiness || !giEnabled(_activeCid);
     if (!localOnly && !supplierId) return json(res, { error: 'יש לבחור ספק עבור ההוצאה' }, 400);
     // רשומה מקומית אינה מחייבת בחירת ספק, אבל בלי מזהה היא לא מופיעה תחת אף ספק —
     // לא בכרטיס הספק ולא במודל שיוך הבנק. אם השם מזוהה, מצמידים את המזהה כאן.
@@ -1377,7 +1379,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       } catch { }
       // העברת קובץ ההוצאה למייל ההוצאות של החברה (פייפרלס/רו"ח) — רק לאופק (חשבון עסקה פנימי של BPM נשאר בלי מייל, כמו קודם)
       let forwarded = false, forwardError = null;
-      if (_activeCid === 'co_ofek') try {
+      if (!giEnabled(_activeCid)) try {   // העברה במייל לרו"ח — המסלול של חברה בלי חשבונית ירוקה
         const _mcreds = companyMailCreds(load(), _activeCid);
         if (!_acctEmail) forwardError = 'לא הוגדר מייל להעברת הוצאות בפרטי העסק';
         else if (!fileBuf) forwardError = 'הורדת קובץ ההוצאה נכשלה';
@@ -1719,7 +1721,7 @@ add('GET', /^\/api\/supplier-payables\/compare$/, async (req, res, _p, q) => {
   const locals = (db.supplierPayables || []).filter(p => ownedBy(p, cid));
 
   const internal = locals.filter(p => Number(p.documentType) === 20 || p.isBusinessDoc);
-  const ofek = locals.filter(p => cid === 'co_ofek' && !(Number(p.documentType) === 20 || p.isBusinessDoc));
+  const ofek = locals.filter(p => !giEnabled(cid) && !(Number(p.documentType) === 20 || p.isBusinessDoc));
   const mirrored = locals.filter(p => !internal.includes(p) && !ofek.includes(p));
 
   let gi = [], giError = null;
@@ -3778,6 +3780,139 @@ function mayReadFile(req, fileRec, fileId) {
   const owner = fileCompanyId(load(), fileRec, fileId);
   return Boolean(owner) && allowed.includes(owner);
 }
+
+// ---- העברת רשומות מקומיות לחשבונית ירוקה ----
+// חברה שלא הייתה מחוברת ל-GI שמרה הוצאות כרשומה מקומית בלבד. אחרי חיבור,
+// אלה צריכות לעבור לשם. זו יצירת מסמכים חשבונאיים אמיתיים, ולכן:
+//   · דוח יבש קודם (GET) — בלי לגעת בכלום,
+//   · ההעברה עצמה דורשת confirm מפורש ורצה באצוות,
+//   · אינה שולחת מיילים — ההעברה לרו"ח כבר נעשתה בקליטה המקורית,
+//   · מדלגת על רשומה שכבר הועברה, ומטפלת בכפילות (1010) כ"כבר קיימת".
+// האם ההוצאה הועברה במייל לרו"ח בקליטה. נשמר על הטיוטה שאושרה.
+const wasForwarded = (db, p) => {
+  const rec = p && p.draftId ? (db.approvedDrafts || {})[p.draftId] : null;
+  return Boolean(rec && rec.forwarded);
+};
+const localMigratable = (db, cid) => (db.supplierPayables || []).filter(p =>
+  ownedBy(p, cid) && !p.giExpenseId
+  && Number(p.documentType) !== 20 && !p.isBusinessDoc);   // חשבון עסקה — פנימי, לא עובר ל-GI
+
+const migNormName = (x) => String(x || '').replace(/בע["'׳״]?\s*מ\.?/g, ' ')
+  .replace(/[.,"'׳״()\-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+
+add('GET', /^\/api\/local-expenses\/report$/, async (req, res, _p, q) => {
+  const db = load(), cid = reqCompany(q);
+  const list = localMigratable(db, cid);
+  const connected = giEnabled(cid) && greenInvoice.haveCredentials();
+  const out = { companyId: cid, connected, total: list.length,
+    withFile: list.filter(p => p.localFileId).length,
+    sum: Math.round(list.reduce((a, p) => a + (Number(p.amount) || 0), 0)),
+    // המייל לרו"ח נשלח בקליטה המקורית. כאן סופרים כמה מהן השליחה נכשלה בהן,
+    // כי רק אותן יש טעם לשלוח שוב — שליחה גורפת תייצר עותקים כפולים אצל הרו"ח.
+    notForwarded: list.filter(p => !wasForwarded(db, p)).length,
+    byType: {}, suppliers: { matched: 0, toCreate: 0, names: [] }, classifications: 0, blocked: [] };
+  for (const p of list) out.byType[p.documentType || '?'] = (out.byType[p.documentType || '?'] || 0) + 1;
+  if (!connected) { out.blocked.push('חשבונית ירוקה אינה מחוברת לחברה זו — יש להזין מפתחות'); return json(res, out); }
+  let sups = [], cls = [];
+  try { sups = await greenInvoice.listSuppliers(); } catch (e) { out.blocked.push('שליפת ספקים נכשלה: ' + e.message); }
+  try { cls = await greenInvoice.listAccountingClassifications(); } catch { }
+  out.classifications = cls.length;
+  const byName = new Map(sups.map(x => [migNormName(x.name), x]));
+  const seen = new Set();
+  for (const p of list) {
+    const n = migNormName(p.supplierName);
+    if (!n || seen.has(n)) continue;
+    seen.add(n);
+    if (byName.has(n)) out.suppliers.matched++;
+    else { out.suppliers.toCreate++; out.suppliers.names.push(p.supplierName); }
+  }
+  if (!cls.length) out.blocked.push('אין סיווגי הוצאה בחשבונית ירוקה — נדרשים ליצירת הוצאה');
+  json(res, out);
+});
+
+add('POST', /^\/api\/local-expenses\/migrate$/, async (req, res, _p, q, body) => {
+  const b = body || {}, cid = reqCompany(q, b);
+  if (b.confirm !== true) return json(res, { error: 'נדרש אישור מפורש (confirm)' }, 400);
+  if (!(giEnabled(cid) && greenInvoice.haveCredentials())) return json(res, { error: 'חשבונית ירוקה אינה מחוברת לחברה זו' }, 400);
+  const limit = Math.min(Math.max(Number(b.limit) || 20, 1), 100);
+  let sups = [], cls = [];
+  try { sups = await greenInvoice.listSuppliers(); } catch (e) { return json(res, { error: 'שליפת ספקים נכשלה: ' + e.message }, 502); }
+  try { cls = await greenInvoice.listAccountingClassifications(); } catch { }
+  const byName = new Map(sups.map(x => [migNormName(x.name), x]));
+  const results = [];
+  const batch = localMigratable(load(), cid).slice(0, limit);
+  for (const src of batch) {
+    const db = load();
+    const p = (db.supplierPayables || []).find(x => x.id === src.id);
+    if (!p || p.giExpenseId) continue;                  // הועברה בינתיים
+    const label = `${p.supplierName || '—'} #${p.number || ''}`;
+    try {
+      // ספק: קיים לפי שם, אחרת נוצר
+      let sup = byName.get(migNormName(p.supplierName));
+      if (!sup && p.supplierName) {
+        sup = await greenInvoice.createSupplier({ name: p.supplierName, taxId: p.taxId || undefined });
+        if (sup && sup.id) byName.set(migNormName(p.supplierName), sup);
+      }
+      if (!sup || !sup.id) { results.push({ id: p.id, label, skipped: 'אין ספק' }); continue; }
+      const classId = sup.accountingClassificationId || (cls[0] && cls[0].id) || null;
+      const amount = Math.abs(Number(p.amount) || 0);
+      const net = Math.abs(Number(p.amountExcludeVat) || 0) || +(amount / 1.18).toFixed(2);
+      const expBody = {
+        supplier: { id: sup.id },
+        documentType: Number(p.documentType) || 305,
+        number: String(p.number || ''), date: p.date, reportingDate: p.date,
+        currency: 'ILS', paymentType: p.paid ? 4 : -1,
+        amount, amountExcludeVat: net, vat: +(amount - net).toFixed(2),
+        ...(classId ? { accountingClassification: { id: classId } } : {}),
+        description: p.description || '',
+      };
+      let created = null;
+      try { created = await greenInvoice.createExpense(expBody); }
+      catch (e) {
+        const dup = /"errorCode"\s*:\s*1010[\s\S]*?"errorMessage"\s*:\s*"([^"]+)"/.exec(e.message || '');
+        if (!dup) throw e;
+        created = { id: dup[1] };                        // כבר קיימת שם — מקשרים אליה
+        results.push({ id: p.id, label, duplicate: true });
+      }
+      // הקובץ השמור מצורף להוצאה שנוצרה
+      let fileOk = null;
+      if (p.localFileId) {
+        try {
+          const f = await getFile(p.localFileId);
+          if (f && f.data) { await greenInvoice.uploadExpenseFile(f.data, f.filename || 'expense.pdf', f.mime || 'application/pdf', created.id); fileOk = true; }
+        } catch { fileOk = false; }
+      }
+      // שליחה חוזרת לרו"ח — רק להוצאות שהשליחה בהן נכשלה בקליטה, ורק בבקשה מפורשת
+      let mailed = null;
+      if (b.emailMissing === true && !wasForwarded(db, p) && p.localFileId) {
+        try {
+          const acct = (bizProfile(db, cid).accountantEmail || '').trim();
+          const creds = companyMailCreds(db, cid);
+          const f = await getFile(p.localFileId);
+          if (acct && f && f.data && mailer.companyMailConfigured(creds)) {
+            await mailer.sendMailFrom(creds, {
+              to: acct, subject: `הוצאה #${p.number || ''}`,
+              text: `מצורפת חשבונית הוצאה.\nספק: ${p.supplierName || ''}\nמספר מסמך: ${p.number || ''}\nתאריך: ${p.date || ''}\nסכום כולל מע"מ: ${Math.abs(Number(p.amount) || 0)}`,
+              attachments: [{ filename: `expense-${String(p.number || 'doc').replace(/[^\w.-]/g, '_')}.pdf`,
+                content: Buffer.from(f.data, 'base64'), contentType: f.mime || 'application/pdf' }],
+            });
+            mailed = true;
+          } else mailed = false;
+        } catch { mailed = false; }
+      }
+      const db2 = load();
+      const p2 = (db2.supplierPayables || []).find(x => x.id === p.id);
+      if (p2) { p2.giExpenseId = created.id; p2.localOnly = false; p2.migratedAt = new Date().toISOString(); save(db2); }
+      if (!results.some(r => r.id === p.id)) results.push({ id: p.id, label, ok: true, fileUploaded: fileOk, mailed });
+    } catch (e) {
+      results.push({ id: p.id, label, error: e.message });
+    }
+  }
+  const remaining = localMigratable(load(), cid).length;
+  const ok = results.filter(r => r.ok || r.duplicate).length;
+  console.log(`[migrate-local] ${cid}: ${ok}/${results.length} הועברו · נותרו ${remaining}`);
+  json(res, { ok: true, processed: results.length, migrated: ok, remaining, results });
+});
 
 // ---- רכבי חברה ----
 // מסמך לכל רכב: רישיון, ביטוח חובה, ביטוח מקיף. לכל אחד תוקף וקובץ.
@@ -6439,27 +6574,11 @@ function runMigrations() {
     console.log('מיגרציה: הוסר חשבון ההתחברות iris (מיותר — איריס היא סוכנת)');
   }
   db.companies = db.companies || [];
-  // ניקוי חד-פעמי של נתוני אופק שנותרו מהניסויים הקודמים — כדי שהחברה תתחיל נקייה לגמרי.
-  // מוגן בדגל _ofekDataCleared כך שירוץ פעם אחת בלבד ולא ימחק נתונים אמיתיים שיוזנו בעתיד.
-  if (!db._ofekDataCleared) {
-    db.bankTx = (db.bankTx || []).filter(t => t.companyId !== 'co_ofek');
-    db.events = (db.events || []).filter(e => e.companyId !== 'co_ofek');
-    db.supplierPayables = (db.supplierPayables || []).filter(p => (p.companyId || 'co_bpm') !== 'co_ofek');
-    db.artistClientMap = (db.artistClientMap || []).filter(m => (m.companyId || 'co_bpm') !== 'co_ofek');
-    db.txGroupRules = (db.txGroupRules || []).filter(r => r.companyId !== 'co_ofek');
-    if (db.docGroupOverrides) delete db.docGroupOverrides['co_ofek'];
-    if (db.calendarAutoAdopt) delete db.calendarAutoAdopt['co_ofek'];
-    db._ofekDataCleared = true;
-    changed = true;
-    console.log('מיגרציה: נוקו נתוני אופק הישנים (חברה נקייה) — פעם אחת בלבד');
-  }
-  // ניקוי חד-פעמי נוסף: יתרת עו"ש ישנה של אופק (נשמרת בנפרד מהתנועות) — כדי שגם היתרה תתאפס.
-  if (!db._ofekBankBalanceCleared) {
-    db.bankBalance = (db.bankBalance || []).filter(b => b.companyId !== 'co_ofek');
-    db._ofekBankBalanceCleared = true;
-    changed = true;
-    console.log('מיגרציה: נוקתה יתרת עו"ש ישנה של אופק');
-  }
+  // כאן הייתה מיגרציה חד-פעמית שמחקה את כל נתוני אופק — תנועות בנק, אירועים
+  // והוצאות ספקים. היא הוגנה בדגל שנשמר במסד הנתונים, אבל הדגל הזה חי בנתונים
+  // ולא בקוד: שחזור מגיבוי שנוצר לפני שנקבע היה מריץ אותה שוב ומוחק הוצאות
+  // אמיתיות. הוסרה. קוד שמוחק נתוני משתמש אינו נשאר אחרי שסיים את תפקידו.
+  // מאותה סיבה הוסרה גם מחיקת יתרת העו"ש של אותה חברה.
   // ודא שכל החברות (כולל אופק) קיימות ושלכל אחת מוגדר ספק חשבונאי (accounting)
   for (const seed of COMPANY_SEED) {
     let c = db.companies.find(x => x.id === seed.id);

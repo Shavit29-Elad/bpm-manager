@@ -686,7 +686,10 @@ check('רכבי חברה — בידוד חברות, הרשאת קבצים וחי
 
   // חיווי התוקף
   const f = new Function(app.match(/function vehDaysLeft\(iso\) \{[\s\S]*?\n\}/)[0] + '; return vehDaysLeft;')();
-  const iso = (d) => { const x = new Date(); x.setDate(x.getDate() + d); return x.toISOString().slice(0, 10); };
+  // תאריך לפי לוח השנה המקומי. toISOString הוא UTC, ובשעות הערב בישראל הוא
+  // מחזיר את היום הקודם — מה שהפך את הבדיקה עצמה לתלוית שעה.
+  const iso = (d) => { const x = new Date(); x.setDate(x.getDate() + d);
+    return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
   if (f(iso(-5)) !== -5) throw new Error('מסמך שפג לא מזוהה');
   if (f(iso(10)) !== 10) throw new Error('ספירת ימים שגויה');
   if (f('') !== null || f(null) !== null) throw new Error('תאריך חסר לא מטופל');
@@ -697,6 +700,44 @@ check('רכבי חברה — בידוד חברות, הרשאת קבצים וחי
   if (worst({ licenseExpiry: iso(200), ctoExpiry: iso(-3), compExpiry: iso(50) }) !== -3)
     throw new Error('הכרטיס לא נצבע לפי המסמך הדחוף ביותר');
   if (worst({}) !== null) throw new Error('רכב בלי תאריכים סווג בטעות');
+  return true;
+});
+
+check('העברת רשומות מקומיות לחשבונית ירוקה — מוגנת ולא מוחקת', () => {
+  const iRep = srv.indexOf("add('GET', /^\\/api\\/local-expenses\\/report$/");
+  const iMig = srv.indexOf("add('POST', /^\\/api\\/local-expenses\\/migrate$/");
+  if (iRep < 0 || iMig < 0) throw new Error('ראוטי ההעברה לא נמצאו');
+  const mig = srv.slice(iMig, srv.indexOf('\n});', iMig));
+  if (!/b\.confirm !== true/.test(mig)) throw new Error('אפשר להריץ העברה בלי אישור מפורש');
+  if (!/ownedBy\(p, cid\)/.test(srv.slice(srv.indexOf('const localMigratable'), iRep)))
+    throw new Error('ההעברה עוברת על רשומות של חברות אחרות');
+  if (!/Number\(p\.documentType\) !== 20 && !p\.isBusinessDoc/.test(srv))
+    throw new Error('חשבון עסקה פנימי נשלח לחשבונית ירוקה');
+  if (!/if \(!p \|\| p\.giExpenseId\) continue;/.test(mig))
+    throw new Error('רשומה שכבר הועברה תיווצר שוב');
+  if (!/errorCode"\\s\*:\\s\*1010/.test(mig)) throw new Error('כפילות לא מטופלת כ"כבר קיימת"');
+  // שליחה חוזרת לרו"ח רק בבקשה מפורשת ורק למה שנכשל — אחרת עותקים כפולים
+  if (!/b\.emailMissing === true && !wasForwarded/.test(mig))
+    throw new Error('המיגרציה עלולה לשלוח מיילים כפולים לרו"ח');
+  // ההעברה לא מוחקת שום דבר
+  const destructive = mig.match(/db\w*\.\w+ = [^;]*\.filter\(|delete db|deleteFile\(/g) || [];
+  if (destructive.length) throw new Error('ההעברה מכילה פעולת מחיקה: ' + destructive.join(','));
+  // שני החישובים חייבים להיות זהים, אחרת המסך אומר 30 יום והמייל אומר 29
+  const feDays = app.match(/function vehDaysLeft\(iso\) \{[\s\S]*?\n\}/)[0];
+  if (!/Date\.UTC\(y, m - 1, d\)/.test(feDays) || !/Date\.UTC\(now\.getFullYear\(\), now\.getMonth\(\), now\.getDate\(\)\)/.test(feDays))
+    throw new Error('המסך מחשב ימים אחרת מההתראות');
+
+  // הקוד שמחק את נתוני אופק הוסר לגמרי
+  if (/_ofekDataCleared|_ofekBankBalanceCleared/.test(srv))
+    throw new Error('נותר קוד שמוחק נתוני חברה — שחזור מגיבוי ישן ימחק הוצאות אמיתיות');
+  if (/companyId !== 'co_ofek'/.test(srv)) throw new Error('נותר סינון שמוחק נתוני אופק');
+
+  // מסלול ההוצאה נגזר ממצב החיבור ולא משם החברה
+  // מסלול קליטת ההוצאה נגזר ממצב החיבור ולא משם החברה — בשרת ובפרונט
+  if (!/const localOnly = isBusiness \|\| !giEnabled\(_activeCid\)/.test(srv))
+    throw new Error('השרת מקבע חברה מסוימת כמקומית');
+  if (/_activeCid === 'co_ofek'/.test(srv)) throw new Error('נותר קיבוע לפי שם חברה במסלול ההוצאה');
+  if (!/state\.giConnected === false/.test(app)) throw new Error('הפרונט לא נגזר ממצב החיבור');
   return true;
 });
 

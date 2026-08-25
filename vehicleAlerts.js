@@ -24,12 +24,15 @@ export const THRESHOLDS = [30, 14, 1];
 const KIND_HE = { truck: 'משאית', private: 'רכב פרטי' };
 const isIso = (s) => /^\d{4}-\d{2}-\d{2}/.test(String(s || ''));
 
-// ימים שלמים עד התאריך, לפי חצות — כך ש"מחר" הוא תמיד 1 ולא 0.9
+// ימים שלמים עד התאריך. "היום" נגזר מלוח השנה המקומי (מה שאדם מתכוון אליו),
+// וההפרש מחושב ב-UTC כדי שלא יושפע משעון קיץ. חישוב מעורב — יום מקומי מול חצות
+// UTC — נותן תשובה שונה ביום בשעות הערב, והמסך וההתראה היו חלוקים ביום שלם.
 export function daysUntil(iso, now = new Date()) {
   if (!isIso(iso)) return null;
-  const target = new Date(String(iso).slice(0, 10) + 'T00:00:00Z');
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  return Math.round((target.getTime() - today.getTime()) / 86400000);
+  const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
+  const target = Date.UTC(y, m - 1, d);
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target - today) / 86400000);
 }
 
 export const sentKey = (slot, expiry, threshold) => `${slot}:${String(expiry).slice(0, 10)}:${threshold}`;

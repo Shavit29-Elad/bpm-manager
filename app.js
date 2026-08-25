@@ -353,6 +353,7 @@ async function renderStatus() {
   const el = $('#statusPills'); if (!el) return;
   // כל החברות (כולל אופק) — חשבונית ירוקה + יומן, מצב חיבור אמיתי מהשרת לפי החברה הנבחרת (בידוד מלא, מפתחות נפרדים)
   const h = await api('/api/health?companyId=' + encodeURIComponent(co || ''));
+  state.giConnected = h.greenInvoiceConnected;   // קובע אם הוצאה נוצרת בחשבונית ירוקה או נשמרת מקומית
   const pills = [await vehiclePill(), pill('יומן גוגל', h.calendarConnected)];
   el.innerHTML = pills.join('');
 }
@@ -5716,12 +5717,14 @@ window.approveDraft = async (id, btn) => {
   if (!amount || amount <= 0) { st.innerHTML = '<span style="color:var(--danger)">חסר סכום תקין.</span>'; return; }
   const docType = +g('apType').value;
   const isBiz = docType === 20; // חשבון עסקה — רישום פנימי
-  const isOfek = state.company === 'co_ofek'; // אופק: רשומה מקומית + מייל בלבד (בלי חשבונית ירוקה, בלי דרישת סיווג)
+  // חברה שאינה מחוברת לחשבונית ירוקה — רשומה מקומית + מייל בלבד. נגזר ממצב החיבור
+  // בפועל ולא משם החברה, כך שברגע שיוזנו מפתחות היא תתנהג כמו השאר בלי שינוי קוד.
+  const noGi = state.giConnected === false;
   const alloc = (g('apAlloc')?.value || '').trim();
   const classId = (g('apClass')?.value || '').trim();
   const saveClass = !!(g('apClassSave') && g('apClassSave').checked);
   // סיווג נדרש רק למסמך מס אמיתי שנוצר בחשבונית ירוקה (לא לחשבון עסקה ולא לאופק)
-  if (!isBiz && !isOfek && !classId && _classifications && _classifications.length) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור סיווג הוצאה (חשבונית ירוקה דורשת סיווג).</span>'; return; }
+  if (!isBiz && !noGi && !classId && _classifications && _classifications.length) { st.innerHTML = '<span style="color:var(--danger)">יש לבחור סיווג הוצאה (חשבונית ירוקה דורשת סיווג).</span>'; return; }
   // אזהרה רכה: מספר הקצאה חסר לחשבונית מס/מס-קבלה מעל 5,000 ₪
   const needsAlloc = [305, 320].includes(docType) && Math.max(amount, net || 0) > 5000;
   if (needsAlloc && !alloc && !confirm('חסר מספר הקצאה לחשבונית מס/מס-קבלה מעל 5,000 ₪.\nלהמשיך בכל זאת ולקלוט בלי מספר הקצאה?')) return;
@@ -5729,7 +5732,7 @@ window.approveDraft = async (id, btn) => {
   const supplierName = (_suppliers || []).find(s => String(s.id) === String(supplierId))?.name || '';
   const linkedEvents = apGetLinkedEvents();
   const body = { supplierId, supplierName, number, amount, amountExcludeVat: net, taxId: g('apTax').value.trim() || null, date: g('apDate').value || todayIso(), documentType: docType, description: g('apDesc').value.trim(), allocationNumber: alloc || null, accountingClassificationId: classId, saveClassToSupplier: saveClass, paid, linkedEvents };
-  btn.disabled = true; btn.textContent = 'מאשר…'; st.innerHTML = `<span class="muted">${isBiz ? 'רושם חשבון עסקה (פנימי)…' : isOfek ? 'שומר רשומה + שולח למייל ההוצאות…' : 'יוצר הוצאה בחשבונית ירוקה…'}</span>`;
+  btn.disabled = true; btn.textContent = 'מאשר…'; st.innerHTML = `<span class="muted">${isBiz ? 'רושם חשבון עסקה (פנימי)…' : noGi ? 'שומר רשומה + שולח למייל ההוצאות…' : 'יוצר הוצאה בחשבונית ירוקה…'}</span>`;
   const r = await fetch(`/api/expense-drafts/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   btn.disabled = false; btn.textContent = '✓ אשר וצור הוצאה';
   if (r.ok) {
@@ -6828,11 +6831,12 @@ let _vehicles = [];
 let _vehPending = {};   // קבצים שנבחרו בחלונית וטרם נשמרו (רכב חדש עדיין אין לו מזהה)
 
 // ימים עד פקיעה — שלילי = פג
+// זהה ל-daysUntil ב-vehicleAlerts.js — אחרת המסך וההתראה במייל חלוקים ביום
 function vehDaysLeft(iso) {
   if (!/^\d{4}-\d{2}-\d{2}/.test(String(iso || ''))) return null;
-  const d = new Date(String(iso).slice(0, 10) + 'T00:00:00');
-  const t = new Date(); t.setHours(0, 0, 0, 0);
-  return Math.round((d - t) / 86400000);
+  const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
+  const now = new Date();
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
 }
 function vehExpiryTag(iso) {
   const n = vehDaysLeft(iso);
