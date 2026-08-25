@@ -12,10 +12,10 @@ export const VEHICLE_SLOTS = [
     renew: 'חידוש פוליסת ביטוח חובה' },
   { key: 'comp', field: 'compExpiry', he: 'ביטוח מקיף',
     renew: 'חידוש פוליסת ביטוח מקיף' },
-  { key: 'security', field: 'securityExpiry', he: 'אישור קיום אמצעי מיגון',
-    renew: 'חידוש אישור קיום אמצעי מיגון' },
   { key: 'towing', field: 'towingExpiry', he: 'גרירה · שמשות · פנסים ומראות',
     renew: 'חידוש הכיסוי לגרירה, שמשות, פנסים ומראות' },
+  { key: 'security', field: 'securityExpiry', he: 'אישור קיום אמצעי מיגון',
+    renew: 'חידוש אישור קיום אמצעי מיגון' },
   { key: 'ramp', field: 'rampExpiry', he: 'תסקיר רמפה',
     renew: 'ביצוע תסקיר רמפה מחודש' },
 ];

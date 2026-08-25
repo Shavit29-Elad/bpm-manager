@@ -6798,8 +6798,8 @@ const VEH_SLOTS = [
   { k: 'license', he: 'רישיון רכב', date: 'licenseExpiry' },
   { k: 'cto', he: 'ביטוח חובה', date: 'ctoExpiry' },
   { k: 'comp', he: 'ביטוח מקיף', date: 'compExpiry' },
-  { k: 'security', he: 'אישור קיום אמצעי מיגון', date: 'securityExpiry' },
   { k: 'towing', he: 'גרירה · שמשות · פנסים ומראות', date: 'towingExpiry' },
+  { k: 'security', he: 'אישור קיום אמצעי מיגון', date: 'securityExpiry' },
   { k: 'ramp', he: 'תסקיר רמפה', date: 'rampExpiry' },
 ];
 // כל שורות המסמכים של רכב — הקבועות + הנוספות שהמשתמש הגדיר
@@ -6857,7 +6857,7 @@ async function renderVehicles(c) {
       ${canEdit ? `<button class="btn primary" onclick="openVehicleEdit()">➕ הוסף רכב</button>` : ''}
     </div>
     ${banner}
-    <div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px">${cards}</div>
+    <div class="cards veh-cards">${cards}</div>
   </div>`;
 }
 
@@ -6877,10 +6877,10 @@ function vehCard(v) {
           <span style="cursor:pointer;text-decoration:underline" onclick="previewDoc('/api/files/${f.id}')">👁${fs.length > 1 ? ' ' + (i + 1) : ''}</span>
           <a href="/api/files/${f.id}?download=1" style="text-decoration:none">⬇</a></span>`).join(' ')
       : `<span class="muted" style="font-size:11px">אין קובץ</span>`) + renewBtn;
-    return `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line);flex-wrap:wrap">
-      <span style="font-size:12.5px;font-weight:600;min-width:78px">${escapeHtml(s.he)}</span>
-      ${vehExpiryTag(s.expiry)}
-      <span style="display:flex;gap:5px;flex-wrap:wrap">${acts}</span>
+    return `<div class="veh-row">
+      <span class="veh-row-label">${escapeHtml(s.he)}</span>
+      <span class="veh-row-date">${vehExpiryTag(s.expiry)}</span>
+      <span class="veh-row-acts">${acts}</span>
     </div>`;
   }).join('');
   return `<div class="panel" style="margin:0;border-inline-start:4px solid ${edge}">

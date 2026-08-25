@@ -237,6 +237,19 @@ tbody tr:last-child td{border-bottom:none}
 .biz-file-name{font-size:13px;font-weight:600;margin-inline-end:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px}
 @media (max-width:760px){.biz-grid,.biz-mgrs{grid-template-columns:1fr}.biz-row{flex-direction:column;align-items:stretch}.biz-row-label{flex-basis:auto}}
 
+/* כרטיסי רכב — רחבים מספיק שכל שורת מסמך תיכנס לשורה אחת. בפלאפון עמודה אחת,
+   ובלי סגנון מוטבע: הוא היה גובר על ההתאמה לפלאפון ויוצר גלישה אופקית. */
+.veh-cards{grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:14px}
+
+/* שורת מסמך בכרטיס רכב: תווית · תוקף · פעולות, כל אחד בעמודה קבועה.
+   בפריסת flex התווית הארוכה ("גרירה · שמשות · פנסים ומראות") דחפה את הפעולות
+   לשורה נפרדת. רשת שומרת על היישור בין כל השורות בכרטיס. */
+.veh-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;
+  padding:8px 0;border-top:1px solid var(--line)}
+.veh-row-label{font-size:12.5px;font-weight:600;min-width:0}
+.veh-row-date{justify-self:end;white-space:nowrap}
+.veh-row-acts{display:flex;gap:5px;align-items:center;justify-self:end}
+
 /* אזור גרירת קובץ — רכבי חברה */
 .veh-drop{margin-top:8px;border:1.5px dashed var(--line);border-radius:10px;padding:14px 10px;text-align:center;
   font-size:12.5px;color:var(--muted);cursor:pointer;transition:border-color .12s,background .12s}
@@ -311,6 +324,15 @@ tbody tr:last-child td{border-bottom:none}
   .btn,button{min-height:42px}
   input[type=checkbox],input[type=radio]{width:20px;height:20px;flex:0 0 auto}
   td .btn,td button{margin-block:2px}
+
+  /* כרטיס רכב בפלאפון — התוקף והפעולות יורדים מתחת לתווית, כדי שכלום לא יידחס */
+  .veh-cards{grid-template-columns:1fr}
+  /* בפלאפון התווית תופסת שורה, והתוקף והפעולות יושבים יחד בשורה שמתחתיה —
+     שתי שורות במקום שלוש, בלי לדחוס את התווית הארוכה. */
+  .veh-row{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px}
+  .veh-row-label{grid-column:1 / -1}
+  .veh-row-date{justify-self:start}
+  .veh-row-acts{justify-self:end}
 
   /* יומן — שבוע נפרס כרשימה יומית ברוחב מלא; 7 עמודות על 390px נותנות 50px ליום.
      תצוגת חודש שומרת על צורת הלוח ונגללת אופקית, כי הרשת עצמה היא המידע. */
