@@ -596,9 +596,27 @@ check('רכבי חברה — בידוד חברות, הרשאת קבצים וחי
   const iUp = srv.indexOf("add('POST', /^\\/api\\/vehicles\\/([^/]+)\\/file$/");
   if (iUp < 0) throw new Error('ראוט ההעלאה לא נמצא');
   const upRoute = srv.slice(iUp, srv.indexOf('\n});', iUp));
-  if (!/v\.files\[slot\] = slotFiles\(v, slot\)\.concat/.test(upRoute))
-    throw new Error('העלאה מחליפה במקום להוסיף — אי אפשר כמה מסמכים לקטגוריה');
-  if (/deleteFile\(old/.test(upRoute)) throw new Error('העלאה מוחקת מסמך קיים באותה קטגוריה');
+  if (!/isExtraSlot\(slot\)/.test(upRoute))
+    throw new Error('ההעלאה לא מבחינה בין קטגוריה קבועה למסמך נוסף');
+  if (!/for \(const f of replaced\)/.test(upRoute))
+    throw new Error('מסמך שהוחלף בקטגוריה קבועה לא נמחק');
+
+  // הכלל עצמו: קבוע מחליף, נוסף מצטרף
+  const pick = new Function('isExtraSlot', 'prevFiles', 'rec',
+    'return { keep: (isExtraSlot(\'S\') ? prevFiles : []).concat([rec]), replaced: isExtraSlot(\'S\') ? [] : prevFiles };');
+  const prev = [{ id: 'old' }];
+  const fixed = pick(() => false, prev, { id: 'new' });
+  if (fixed.keep.length !== 1 || fixed.keep[0].id !== 'new') throw new Error('קטגוריה קבועה לא מחליפה');
+  if (fixed.replaced.length !== 1) throw new Error('המסמך הקודם בקטגוריה קבועה לא סומן למחיקה');
+  const extra = pick(() => true, prev, { id: 'new' });
+  if (extra.keep.length !== 2) throw new Error('מסמך נוסף לא מצטרף לקיימים');
+  if (extra.replaced.length) throw new Error('מסמך נוסף מוחק את הקודם');
+  if (!/isExtraSlot = \(slot\) => String\(slot\)\.startsWith\('extra:'\)/.test(srv))
+    throw new Error('זיהוי "מסמך נוסף" לא לפי הקידומת');
+  // גם החידוש מציית לאותו כלל
+  const iRen = srv.indexOf("add('POST', /^\\/api\\/vehicles\\/([^/]+)\\/renew$/");
+  if (!/isExtraSlot\(slot\)/.test(srv.slice(iRen, srv.indexOf('\n});', iRen))))
+    throw new Error('החידוש לא מבחין בין קטגוריה קבועה למסמך נוסף');
   // קריאה חייבת לסבול גם את המבנה הישן (קובץ יחיד), אחרת רכבים קיימים מאבדים מסמכים
   const sf = new Function(srv.match(/const slotFiles = \(v, slot\) =>[^\n]*/)[0] + '; return slotFiles;')();
   if (sf({ files: { license: { id: 'a' } } }, 'license').length !== 1) throw new Error('מבנה ישן (קובץ יחיד) לא נקרא');

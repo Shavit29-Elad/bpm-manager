@@ -6805,6 +6805,7 @@ const VEH_SLOTS = [
 // כל שורות המסמכים של רכב — הקבועות + הנוספות שהמשתמש הגדיר
 // קבצים של קטגוריה — תומך גם ברכבים שנשמרו כשהיה קובץ יחיד
 const vehFiles = (v, slot) => { const f = ((v && v.files) || {})[slot]; return Array.isArray(f) ? f : (f ? [f] : []); };
+const vehIsExtra = (slot) => String(slot).startsWith('extra:');
 const vehRows = (v) => VEH_SLOTS.map(s => ({ k: s.k, he: s.he, expiry: v[s.date], fixed: true }))
   .concat(((v && v.extras) || []).map(x => ({ k: 'extra:' + x.id, he: x.title, expiry: x.expiry, fixed: false, extraId: x.id })));
 const VEH_KIND_HE = { truck: 'משאית', private: 'פרטי' };
@@ -6872,16 +6873,20 @@ function vehCard(v) {
     const renewBtn = (n !== null && n <= 45)
       ? `<button class="btn success" style="padding:2px 9px;font-size:11px" onclick="openVehRenew('${v.id}','${s.k}')">✅ טופל</button>`
       : '';
-    const acts = (fs.length
-      ? fs.map((f, i) => `<span class="tag" style="font-size:10px;padding:1px 6px" title="${escAttr(f.filename || 'מסמך')}">
-          <span style="cursor:pointer;text-decoration:underline" onclick="previewDoc('/api/files/${f.id}')">👁${fs.length > 1 ? ' ' + (i + 1) : ''}</span>
-          <a href="/api/files/${f.id}?download=1" style="text-decoration:none">⬇</a></span>`).join(' ')
-      : `<span class="muted" style="font-size:11px">אין קובץ</span>`) + renewBtn;
+    const fileBtns = (f) => `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('/api/files/${f.id}')">👁</button>
+      <a class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none" href="/api/files/${f.id}?download=1">⬇</a>`;
+    const acts = (fs.length ? fileBtns(fs[0]) : `<span class="muted" style="font-size:11px">אין קובץ</span>`) + renewBtn;
+    // מסמך נוסף יכול לשאת כמה קבצים — כל אחד בשורה משלו, תחת אותה קטגוריה
+    const more = fs.slice(1).map(f => `<div class="veh-row veh-row-sub">
+        <span class="veh-row-label muted" style="font-weight:400">↳ ${escapeHtml((f.filename || 'מסמך').slice(0, 40))}</span>
+        <span class="veh-row-date"></span>
+        <span class="veh-row-acts">${fileBtns(f)}</span>
+      </div>`).join('');
     return `<div class="veh-row">
-      <span class="veh-row-label">${escapeHtml(s.he)}</span>
+      <span class="veh-row-label">${escapeHtml(s.he)}${fs.length > 1 ? ` <span class="muted" style="font-weight:400;font-size:11px">· ${fs.length} מסמכים</span>` : ''}</span>
       <span class="veh-row-date">${vehExpiryTag(s.expiry)}</span>
       <span class="veh-row-acts">${acts}</span>
-    </div>`;
+    </div>${more}`;
   }).join('');
   return `<div class="panel" style="margin:0;border-inline-start:4px solid ${edge}">
     <div class="row-between" style="align-items:flex-start;gap:8px">
@@ -6979,7 +6984,7 @@ window.openVehicleEdit = (id) => {
         ondragleave="this.classList.remove('over')"
         ondrop="vehDrop(event,'${s.k}')"
         onclick="document.getElementById('vehFile_${s.k}').click()">
-        <span id="vehDropTxt_${s.k}">גרור קובץ לכאן, או לחץ לבחירה${fs.length ? ' — יתווסף לקיימים' : ''}</span>
+        <span id="vehDropTxt_${s.k}">גרור קובץ לכאן, או לחץ לבחירה${fs.length ? (vehIsExtra(s.k) ? ' — יתווסף לקיימים' : ' — יחליף את הקיים') : ''}</span>
       </div>
       <input type="file" id="vehFile_${s.k}" accept=".pdf,.png,.jpg,.jpeg,image/*,application/pdf" style="display:none" onchange="vehFilePick(this,'${s.k}')" />
       ${fs.map(f => `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center">
@@ -7026,7 +7031,9 @@ async function vehTakeFile(file, slot) {
   if (!file) return;
   if (file.size > 10 * 1024 * 1024) { if (txt) txt.textContent = '⚠ הקובץ גדול מ-10MB'; return; }
   const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.readAsDataURL(file); });
-  _vehPending[slot] = (_vehPending[slot] || []).concat([{ fileBase64: b64, filename: file.name, mime: file.type || 'application/octet-stream' }]);
+  const rec = { fileBase64: b64, filename: file.name, mime: file.type || 'application/octet-stream' };
+  // קטגוריה קבועה מחזיקה מסמך אחד — בחירה חוזרת מחליפה את הבחירה הקודמת
+  _vehPending[slot] = vehIsExtra(slot) ? (_vehPending[slot] || []).concat([rec]) : [rec];
   const n = _vehPending[slot].length;
   if (txt) txt.textContent = n === 1 ? `📎 ${file.name} — יישמר בלחיצה על "שמור"` : `📎 ${n} קבצים נבחרו — יישמרו בלחיצה על "שמור"`;
 }

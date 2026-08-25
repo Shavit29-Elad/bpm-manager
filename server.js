@@ -3790,6 +3790,9 @@ const VEHICLE_SLOT_FIELD = Object.fromEntries(VEH_SLOT_DEFS.map(s => [s.key, s.f
 // קבצים של קטגוריה. עד עכשיו נשמר קובץ יחיד; עכשיו מערך. קורא את שני המבנים
 // כדי שרכבים שכבר הוזנו לא יאבדו את המסמך שלהם.
 const slotFiles = (v, slot) => { const f = ((v && v.files) || {})[slot]; return Array.isArray(f) ? f : (f ? [f] : []); };
+// כמה מסמכים לאותה קטגוריה מותרים רק ב"מסמכים נוספים". בקטגוריה קבועה
+// (רישיון, ביטוח, תסקיר) יש מסמך אחד תקף, ומסמך חדש מחליף אותו.
+const isExtraSlot = (slot) => String(slot).startsWith('extra:');
 const allVehicleFiles = (v) => Object.keys((v && v.files) || {}).flatMap(k => slotFiles(v, k));
 const extraId = (slot) => (String(slot).startsWith('extra:') ? String(slot).slice(6) : null);
 const findExtra = (v, slot) => { const x = extraId(slot); return x ? (v.extras || []).find(e => e.id === x) : null; };
@@ -3850,10 +3853,14 @@ add('POST', /^\/api\/vehicles\/([^/]+)\/file$/, async (req, res, params, q, body
     filename: b.filename || (slotLabel(v, slot) + '.pdf'), mime: b.mime || 'application/octet-stream', data: b.fileBase64 });
   v.files = v.files || {};
   const rec = { id: saved.id, filename: b.filename || null, mime: b.mime || null, at: new Date().toISOString() };
-  // מוסיפים ולא מחליפים — לקטגוריה אחת יכולים להיות כמה מסמכים
-  v.files[slot] = slotFiles(v, slot).concat([rec]).slice(-12);
+  const prevFiles = slotFiles(v, slot);
+  // מסמך נוסף — מצטרף לקיימים. קטגוריה קבועה — מחליף, והישן נמחק כדי שלא
+  // יישאר קובץ שאין אליו הפניה ושלא יהיה ספק איזה מסמך תקף.
+  const replaced = isExtraSlot(slot) ? [] : prevFiles;
+  v.files[slot] = (isExtraSlot(slot) ? prevFiles : []).concat([rec]).slice(-12);
   save(db);
-  json(res, { ok: true, file: rec, files: v.files[slot] });
+  for (const f of replaced) { if (f.id && f.id !== saved.id) { try { await deleteFile(f.id); } catch { } } }
+  json(res, { ok: true, file: rec, files: v.files[slot], replaced: replaced.length });
 });
 
 add('DELETE', /^\/api\/vehicles\/([^/]+)\/file\/([^/]+)$/, async (req, res, params, q) => {
@@ -5025,8 +5032,10 @@ add('POST', /^\/api\/vehicles\/([^/]+)\/renew$/, async (req, res, params, q, bod
       filename: b.filename || (slotLabel(v, slot) + '.pdf'), mime: b.mime || 'application/octet-stream', data: b.fileBase64 });
     v.files = v.files || {};
     file = { id: saved.id, filename: b.filename || null, mime: b.mime || null, at: new Date().toISOString() };
-    // המסמך המחודש נוסף לצד הקודם — הישן הוא הראיה למה שהיה בתוקף עד היום
-    v.files[slot] = slotFiles(v, slot).concat([file]).slice(-12);
+    const prevFiles = slotFiles(v, slot);
+    const replaced = isExtraSlot(slot) ? [] : prevFiles;
+    v.files[slot] = (isExtraSlot(slot) ? prevFiles : []).concat([file]).slice(-12);
+    for (const f of replaced) { if (f.id && f.id !== saved.id) { try { await deleteFile(f.id); } catch { } } }
   }
   if (ex) ex.expiry = next; else v[field] = next;
   v.renewals = (v.renewals || []).concat([{ slot, from: prev, to: next, at: new Date().toISOString(),
