@@ -613,6 +613,30 @@ check('רכבי חברה — בידוד חברות, הרשאת קבצים וחי
   if (extra.replaced.length) throw new Error('מסמך נוסף מוחק את הקודם');
   if (!/isExtraSlot = \(slot\) => String\(slot\)\.startsWith\('extra:'\)/.test(srv))
     throw new Error('זיהוי "מסמך נוסף" לא לפי הקידומת');
+
+  // יישור רכבים שנשמרו לפני הכלל — אחרת קטגוריה קבועה נשארת עם שני מסמכים
+  const norm = new Function(
+    srv.match(/const slotFiles = \(v, slot\) =>[^\n]*/)[0] + '\n'
+    + srv.match(/const isExtraSlot = \(slot\) =>[^\n]*/)[0] + '\n'
+    + srv.match(/function normalizeFixedSlots\(v\) \{[\s\S]*?\n\}/)[0] + '; return normalizeFixedSlots;')();
+  const cases = [
+    ['שומר את האחרון לפי חותמת', { license: [{ id: 'a', at: '2026-01-01' }, { id: 'b', at: '2026-05-01' }] }, { license: ['b'] }, 1],
+    ['גם כשהסדר במערך הפוך', { license: [{ id: 'b', at: '2026-05-01' }, { id: 'a', at: '2026-01-01' }] }, { license: ['b'] }, 1],
+    ['בלי חותמות — לפי סדר ההעלאה', { license: [{ id: 'a' }, { id: 'b' }] }, { license: ['b'] }, 1],
+    ['מסמך נוסף נשאר צובר', { 'extra:x': [{ id: 'a' }, { id: 'b' }] }, { 'extra:x': ['a', 'b'] }, 0],
+    ['מבנה ישן (קובץ יחיד)', { license: { id: 'a' } }, { license: ['a'] }, 0],
+  ];
+  for (const [name, files, want, nDropped] of cases) {
+    const v = { files: JSON.parse(JSON.stringify(files)) };
+    const dropped = norm(v);
+    const got = Object.fromEntries(Object.entries(v.files).map(([k, x]) => [k, (Array.isArray(x) ? x : [x]).map(y => y.id)]));
+    if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`${name}: ${JSON.stringify(got)}`);
+    if (dropped.length !== nDropped) throw new Error(`${name}: ${dropped.length} נמחקו במקום ${nDropped}`);
+  }
+  // הניקוי חייב לרוץ בטעינת הרשימה, אחרת רכבים קיימים לא מתיישרים לעולם
+  const iList = srv.indexOf("add('GET', /^\\/api\\/vehicles$/");
+  if (!/normalizeFixedSlots\(v\)/.test(srv.slice(iList, srv.indexOf('\n});', iList))))
+    throw new Error('הניקוי לא רץ בטעינת רשימת הרכבים');
   // גם החידוש מציית לאותו כלל
   const iRen = srv.indexOf("add('POST', /^\\/api\\/vehicles\\/([^/]+)\\/renew$/");
   if (!/isExtraSlot\(slot\)/.test(srv.slice(iRen, srv.indexOf('\n});', iRen))))

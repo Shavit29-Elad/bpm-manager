@@ -3799,6 +3799,23 @@ const findExtra = (v, slot) => { const x = extraId(slot); return x ? (v.extras |
 const validSlot = (v, slot) => VEHICLE_SLOTS.includes(slot) || Boolean(findExtra(v, slot));
 const slotLabel = (v, slot) => VEHICLE_SLOT_HE[slot] || ((findExtra(v, slot) || {}).title) || 'מסמך';
 
+// יישור רכבים שנשמרו לפני שהוגדר הכלל: בקטגוריה קבועה יש מסמך אחד תקף.
+// שומרים את האחרון שהועלה (לפי חותמת הזמן, ואם אין — לפי סדר ההעלאה) ומוחקים
+// את השאר, אחרת נשארים קבצים שאין אליהם הפניה ולא ברור איזה מסמך בתוקף.
+function normalizeFixedSlots(v) {
+  const dropped = [];
+  for (const key of Object.keys((v && v.files) || {})) {
+    if (isExtraSlot(key)) continue;             // מסמך נוסף — צבירה מכוונת
+    const list = slotFiles(v, key);
+    if (list.length <= 1) { if (!Array.isArray(v.files[key])) v.files[key] = list; continue; }
+    const sorted = list.slice().sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+    const keep = sorted[sorted.length - 1];
+    dropped.push(...sorted.slice(0, -1));
+    v.files[key] = [keep];
+  }
+  return dropped;
+}
+
 const cleanVehicle = (b, prev = {}) => {
   const out = {
     kind: b.kind === 'truck' ? 'truck' : 'private',
@@ -3814,9 +3831,17 @@ const cleanVehicle = (b, prev = {}) => {
   return out;
 };
 
-add('GET', /^\/api\/vehicles$/, (req, res, _p, q) => {
+add('GET', /^\/api\/vehicles$/, async (req, res, _p, q) => {
   const db = load(), cid = reqCompany(q);
   const list = (db.vehicles || []).filter(v => ownedBy(v, cid));
+  // יישור חד-פעמי של רכבים שנשמרו לפני הכלל. רץ פעם אחת לכל רכב ואז שקט.
+  const dropped = [];
+  for (const v of list) dropped.push(...normalizeFixedSlots(v));
+  if (dropped.length) {
+    save(db);
+    console.log(`[vehicles] ${cid}: נוקו ${dropped.length} מסמכים עודפים מקטגוריות קבועות`);
+    for (const f of dropped) { if (f && f.id) { try { await deleteFile(f.id); } catch { } } }
+  }
   list.sort((a, b) => String(a.plate || '').localeCompare(String(b.plate || ''), 'he'));
   json(res, list);
 });
