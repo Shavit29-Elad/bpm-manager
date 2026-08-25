@@ -172,6 +172,16 @@ add('GET', /^\/api\/events$/, async (req, res, _p, q) => {
   // שנגזרה ממנו, כדי שהיא תוצג לצד הקבלה שלה ושהסטטוס ייקבע לפיה. ההשלמה היא
   // לתצוגה בלבד — linkedDocs אינו נשלח בחזרה בשמירת אירוע, ולכן שום נתון לא משתנה.
   const gi = giEnabled(cid) && greenInvoice.haveCredentials();
+  // רשימת מסמכי ההכנסה של החברה, נטענת פעם אחת ומגיעה מהמטמון של חשבונית ירוקה.
+  // ממנה נמצא מסמך המשך של חשבון עסקה בלי קריאה נפרדת לכל אירוע.
+  let income = [];
+  if (gi && events.some(e => (e.linkedDocs || []).some(d => Number(d && d.type) === 300))) {
+    const dates = events.map(e => String(e.date || '').slice(0, 10)).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    if (dates.length) {
+      const from = shiftISODays(dates[0], -30), to = shiftISODays(dates[dates.length - 1], 120);
+      try { const r = await greenInvoice.incomeForRange(from, to); income = (r && r.docs) || []; } catch { income = []; }
+    }
+  }
   const work = load();
   const chainBefore = JSON.stringify(work.docChain || {});
   let chainBudget = 5;
@@ -185,7 +195,10 @@ add('GET', /^\/api\/events$/, async (req, res, _p, q) => {
       if (p.id && !/^(exp_|pay_)/.test(String(p.id))) {
         const hit = chainCached(work, cid, p.id);
         let derived = hit ? hit.doc : null;
-        if (!hit && chainBudget > 0) { chainBudget--; derived = await resolveConvertedInvoice(work, cid, p); }
+        if (!hit && chainBudget > 0) {
+          chainBudget--;
+          derived = await resolveConvertedInvoice(work, cid, { ...p, clientName: p.clientName || e.clientName }, income);
+        }
         if (derived) {
           docs = docs.map(d => String(d.id) === String(p.id) ? { ...d, converted: true } : d)
             .concat([{ ...derived, derived: true }]);
@@ -3232,29 +3245,40 @@ function chainCached(db, cid, docId) {
   if (hit.doc) return hit;
   return (Date.now() - new Date(hit.at || 0).getTime()) < CHAIN_RETRY_MS ? hit : null;
 }
-async function resolveConvertedInvoice(db, cid, proforma, incomeByNumber) {
+async function resolveConvertedInvoice(db, cid, proforma, income) {
   db.docChain = db.docChain || {};
   const key = `${cid}|${proforma.id}`;
-  let doc = null;
+  const pid = String(proforma.id);
+  const pack = (d) => d && ({ id: String(d.id), number: d.number != null ? String(d.number) : null,
+    type: Number(d.type), date: d.date || d.documentDate || null,
+    amount: d.amount != null ? Number(d.amount) : null,
+    url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null) });
+  const remember = (doc) => { db.docChain[key] = { doc: doc || null, at: new Date().toISOString() }; return doc || null; };
+  const list = Array.isArray(income) ? income : [];
+  const pointsAtSource = (ids) => (ids || []).some(x => String(x) === pid);
   try {
-    const raw = await greenInvoice.getDocument(proforma.id);
-    const ids = Array.isArray(raw && raw.linkedDocumentIds) ? raw.linkedDocumentIds : [];
-    for (const id of ids) {
-      if (String(id) === String(proforma.id)) continue;
-      // קודם מהרשימה שכבר נטענה — חוסך קריאה שנייה לכל מסמך
-      const fromList = incomeByNumber && incomeByNumber.byId.get(String(id));
-      const d = fromList || await greenInvoice.getDocument(id).catch(() => null);
-      if (!d) continue;
-      const ty = Number(d.type);
-      if (![305, 320].includes(ty)) continue;
-      const url = (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null);
-      doc = { id: String(d.id), number: d.number != null ? String(d.number) : null, type: ty,
-        date: d.date || d.documentDate || null, amount: d.amount != null ? Number(d.amount) : null, url };
-      break;
+    // 1) מהרשימה שכבר נטענה — בלי אף קריאה נוספת
+    const direct = list.find(d => [305, 320].includes(Number(d.type)) && pointsAtSource(d.linkedDocumentIds));
+    if (direct) return remember(pack(direct));
+    // 2) ה-API לא תמיד מחזיר את הקישור ברשימה. מצמצמים לפי לקוח וסכום, ומאמתים
+    //    מול הקישור עצמו — צמצום הוא ניחוש, האימות הוא ודאות.
+    const amt = Number(proforma.amount) || 0;
+    const cands = list.filter(d => [305, 320].includes(Number(d.type))
+      && sameClientName(d.clientName, proforma.clientName)
+      && (!amt || Math.abs((Number(d.amount) || 0) - amt) <= Math.max(3, amt * 0.004)));
+    for (const c of cands.slice(0, 4)) {
+      const raw = await greenInvoice.getDocument(c.id).catch(() => null);
+      if (raw && pointsAtSource(raw.linkedDocumentIds)) return remember(pack({ ...c, ...raw, url: c.url }));
+    }
+    // 3) גיבוי: ייתכן שהקישור דו־כיווני ומופיע דווקא על חשבון העסקה
+    const src = await greenInvoice.getDocument(pid).catch(() => null);
+    for (const id of ((src && src.linkedDocumentIds) || [])) {
+      if (String(id) === pid) continue;
+      const d = list.find(x => String(x.id) === String(id)) || await greenInvoice.getDocument(id).catch(() => null);
+      if (d && [305, 320].includes(Number(d.type))) return remember(pack(d));
     }
   } catch { return null; }   // תקלת רשת — לא מרעילים את המטמון
-  db.docChain[key] = { doc, at: new Date().toISOString() };
-  return doc;
+  return remember(null);
 }
 
 // זיווג חשבונית ↔ קבלה בתוך שורת בנק אחת.

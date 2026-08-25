@@ -307,9 +307,22 @@ check('לשונית האירועים מקבלת את סטטוס התשלום מ�
   // רק המקרה שבו האירוע תקוע על חשבון עסקה — לא שולפים לכל אירוע
   if (!/stuckOnProforma/.test(srv)) throw new Error('אין הגבלה למקרה של חשבון עסקה בלבד');
   if (!/chainBudget/.test(srv)) throw new Error('אין תקציב שליפות');
-  const chain = srv.match(/async function resolveConvertedInvoice[\s\S]*?\n\}/)[0];
-  if (!/\[305, 320\]\.includes\(ty\)/.test(chain)) throw new Error('מס-קבלה לא מזוהה כתוצאת המרה');
+  const chain = srv.match(/async function resolveConvertedInvoice[\s\S]*?\n\}\n/)[0];
+  if (!/\[305, 320\]\.includes\(Number\(d\.type\)\)/.test(chain)) throw new Error('מס-קבלה לא מזוהה כתוצאת המרה');
   if (!/catch \{ return null; \}/.test(chain)) throw new Error('תקלת רשת עלולה לשבור את טעינת האירועים');
+  // הקישור נשמר על המסמך הנגזר ומצביע למקור (ראה linkedDocumentSet ביצירת מסמך המשך).
+  // חיפוש בכיוון ההפוך — מה מקושר לחשבון העסקה — לא מוצא כלום.
+  if (!/pointsAtSource/.test(chain)) throw new Error('החיפוש בכיוון ההפוך — לא ימצא מסמך המשך');
+  const iDirect = chain.indexOf('const direct = list.find');
+  const iConfirm = chain.indexOf('pointsAtSource(raw.linkedDocumentIds)');
+  if (iDirect < 0 || iConfirm < 0) throw new Error('חסר אחד ממסלולי האיתור');
+  if (iDirect > iConfirm) throw new Error('המסלול היקר רץ לפני הזול');
+  // צמצום לפי לקוח/סכום הוא ניחוש — האימות מול הקישור הוא מה שמכריע
+  const confirmBlock = chain.slice(chain.indexOf('const cands ='), chain.indexOf('// 3)'));
+  if (!/pointsAtSource\(raw\.linkedDocumentIds\)/.test(confirmBlock))
+    throw new Error('מסמך נבחר לפי לקוח וסכום בלי אימות הקישור');
+  if (!/linkedDocumentIds: Array\.isArray\(d\.linkedDocumentIds\)/.test(fs.readFileSync('greenInvoice.js', 'utf8')))
+    throw new Error('רשימת המסמכים לא נושאת את הקישור');
   if (!/buildBankPaidMap\(db, cid\)/.test(srv)) throw new Error('הראוט לא משתמש במפת הבנק');
   if (/clientPaid: eventClientPaid\(e, bankPaid, openNums\)\s*\}\)\);/.test(srv))
     throw new Error('דורס את clientPaid — שדה בוליאני קיים על אירוע שמור');

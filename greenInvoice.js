@@ -317,6 +317,12 @@ function mapDoc(d) {
     amountExVat: amount - vat,
     vat,
     clientName: d.client?.name || d.clientName || d.client_name || '—',
+    // הקישור לשרשרת נשמר על המסמך הנגזר ומצביע למקור — כך אפשר למצוא מסמך המשך
+    // בלי קריאה נפרדת לכל מסמך. אם ה-API לא מחזיר את השדה ברשימה, נשאר מערך ריק.
+    linkedDocumentIds: Array.isArray(d.linkedDocumentIds) ? d.linkedDocumentIds.map(String) : [],
+    // הקישור לשרשרת נשמר על המסמך הנגזר ומצביע למקור — כך אפשר למצוא מסמך המשך
+    // בלי קריאה נפרדת לכל מסמך. אם ה-API לא מחזיר את השדה ברשימה, נשאר מערך ריק.
+    linkedDocumentIds: Array.isArray(d.linkedDocumentIds) ? d.linkedDocumentIds.map(String) : [],
     url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null),
     amountDue: d.amountDue,
   };
