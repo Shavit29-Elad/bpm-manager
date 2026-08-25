@@ -2536,6 +2536,12 @@ const isOverdueUnbilled = (e) => {
 //   'none'   — לא נדרשת חשבונית (סומן ידנית).
 function evPayState(e) {
   if (isNoInvoiceEv(e)) return 'none';
+  // הסטטוס מהשרת גובר כשהוא מעיד על תשלום: הוא רואה התאמת בנק ומסמך שנסגר
+  // בחשבונית ירוקה — סימנים שסוגי המסמכים המקושרים לאירוע לבדם לא חושפים.
+  // רק מקדם לירוק, לעולם לא מוריד: אם המסמכים כאן כבר מעידים על תשלום, זה נשאר.
+  const cp = e.clientPayStatus;
+  if (cp && cp.status === 'paid') return 'green';
+  if (cp && cp.status === 'noinvoice') return 'none';
   const types = new Set(activeLinkedDocs(e).map(d => Number(d.type)));
   if (e.invoiceType) types.add(Number(e.invoiceType)); // תאימות לאחור (אירועים שסומנו לפני שמירת linkedDocs)
   if (types.has(320) || (types.has(305) && types.has(400))) return 'green';

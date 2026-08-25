@@ -275,6 +275,34 @@ check('מחיקת הוצאת ספק — ברירת המחדל לא נוגעת ב
 });
 
 const bm = await import('./bankMatch.js');
+check('לשונית האירועים מקבלת את סטטוס התשלום מהשרת', () => {
+  // השרת מחשב אותו עם אותה פונקציה שמשרתת את "קבלנים לתשלום" — לא חישוב נפרד
+  if (!/clientPayStatus: eventClientPaid\(e, bankPaid, openNums\)/.test(srv))
+    throw new Error('הראוט לא מצרף clientPayStatus');
+  if (!/buildBankPaidMap\(db, cid\)/.test(srv)) throw new Error('הראוט לא משתמש במפת הבנק');
+  if (/clientPaid: eventClientPaid\(e, bankPaid, openNums\)\s*\}\)\);/.test(srv))
+    throw new Error('דורס את clientPaid — שדה בוליאני קיים על אירוע שמור');
+
+  const src = app.match(/function evPayState\(e\) \{[\s\S]*?\n\}/)[0];
+  const f = new Function('isNoInvoiceEv', 'activeLinkedDocs',
+    src + '; return evPayState;')(e => !!e.noInvoice, e => e.linkedDocs || []);
+  const doc = (t, n) => ({ type: t, number: n });
+  const cases = [
+    ['שולם בבנק — מס בלבד', { linkedDocs: [doc(305, '1')], clientPayStatus: { status: 'paid', via: 'bank' } }, 'green'],
+    ['נסגר בחשבונית ירוקה', { linkedDocs: [doc(305, '1')], clientPayStatus: { status: 'paid', via: 'closed' } }, 'green'],
+    ['באמת ממתין', { linkedDocs: [doc(305, '1')], clientPayStatus: { status: 'charged' } }, 'yellow'],
+    ['בלי סטטוס מהשרת — התנהגות קודמת', { linkedDocs: [doc(305, '1')] }, 'yellow'],
+    ['מס-קבלה נשאר ירוק גם אם השרת אומר charged', { linkedDocs: [doc(320, '1')], clientPayStatus: { status: 'charged' } }, 'green'],
+    ['אין מסמך', { linkedDocs: [] }, 'red'],
+    ['לא נדרשת חשבונית', { noInvoice: true, linkedDocs: [] }, 'none'],
+  ];
+  for (const [name, ev, want] of cases) {
+    const got = f(ev);
+    if (got !== want) throw new Error(`${name}: ${got} במקום ${want}`);
+  }
+  return true;
+});
+
 check('חשבון עסקה לא מוצע לשיוך בבנק', () => {
   const exps = [
     { id: 'a', number: '64535', type: 305, supplierName: 'ט. ברגר', amountIncVat: 2360, date: '2026-08-20' },

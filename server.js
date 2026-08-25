@@ -151,10 +151,25 @@ add('GET', /^\/api\/companies$/, (req, res) => {
 });
 
 // GET /api/events?companyId=
-add('GET', /^\/api\/events$/, (req, res, _p, q) => {
+add('GET', /^\/api\/events$/, async (req, res, _p, q) => {
   const db = load();
-  const events = companyEvents(db, q.companyId || giCompanyId());
-  json(res, events.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+  const cid = q.companyId || giCompanyId();
+  const events = companyEvents(db, cid);
+  // סטטוס התשלום מהלקוח מחושב כאן ולא בפרונט. לשונית האירועים הסתמכה רק על סוגי
+  // המסמכים המקושרים לאירוע, ולכן אירוע שכבר שולם — בהתאמת בנק, או בקבלה שהופקה
+  // ישירות בחשבונית ירוקה וסגרה את החשבונית — נשאר "ממתין לתשלום" לנצח.
+  // אותה פונקציה בדיוק משרתת את מסך "קבלנים לתשלום", כך שאין שני מקורות אמת.
+  // שדה נפרד מ-clientPaid: זה כבר קיים על אירוע שמור כדגל בוליאני, ואסור לדרוס אותו.
+  const bankPaid = buildBankPaidMap(db, cid);
+  let openNums = null;
+  try {
+    if (giEnabled(cid) && greenInvoice.haveCredentials()) {
+      const open = await greenInvoice.openDocuments();
+      openNums = new Set((open || []).map(d => String(d.number)));
+    }
+  } catch { openNums = null; }
+  const out = events.map(e => ({ ...e, clientPayStatus: eventClientPaid(e, bankPaid, openNums) }));
+  json(res, out.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
 });
 
 // POST /api/events/ingest
