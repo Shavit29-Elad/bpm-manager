@@ -275,6 +275,32 @@ check('מחיקת הוצאת ספק — ברירת המחדל לא נוגעת ב
 });
 
 const bm = await import('./bankMatch.js');
+check('איתור קבלה אוטומטי — מטמון, תקציב ותור שמתנקז', () => {
+  const src = srv.match(/const PAY_DOC_RETRY_MS[\s\S]*?\nfunction payDocCached[\s\S]*?\n\}/)[0];
+  const cachedFn = new Function(src + '; return payDocCached;')();
+  const now = Date.now();
+  const db = { payDocCache: {
+    'co_bpm|hit':  { doc: { number: '777' }, at: new Date(now).toISOString() },
+    'co_bpm|miss': { doc: null, at: new Date(now).toISOString() },
+    'co_bpm|old':  { doc: null, at: new Date(now - 8 * 24 * 3600 * 1000).toISOString() },
+  } };
+  if ((cachedFn(db, 'co_bpm', 'hit') || {}).doc?.number !== '777') throw new Error('תוצאה חיובית לא נשלפת מהמטמון');
+  const miss = cachedFn(db, 'co_bpm', 'miss');
+  if (!miss || miss.doc !== null) throw new Error('תוצאה שלילית טרייה לא נשמרת — ייבדק שוב בכל טעינה');
+  if (cachedFn(db, 'co_bpm', 'old') !== null) throw new Error('תוצאה שלילית ישנה לא נבדקת מחדש');
+  if (cachedFn(db, 'co_bpm', 'unknown') !== null) throw new Error('מסמך לא מוכר סווג כשמור');
+  if (cachedFn(db, 'co_moshe', 'hit') !== null) throw new Error('המטמון דולף בין חברות');
+
+  // התקציב נשרף רק על שליפה אמיתית — אחרת התשובות השמורות אוכלות אותו בכל טעינה
+  // והאירועים שטרם נבדקו לא מגיעים לתורם לעולם.
+  if (!/if \(!payDocCached\(work, cid, inv\.id\)\) \{ if \(budget <= 0\) continue; budget--; \}/.test(srv))
+    throw new Error('התקציב נשרף גם על תשובות שמורות — התור לא יתנקז');
+  if (/if \(budget <= 0\) break;/.test(srv.match(/for \(const e of out\) \{[\s\S]*?\n    \}/)[0]))
+    throw new Error('יציאה מוקדמת מהלולאה — קבלות שמורות בהמשך הרשימה לא יוצגו');
+  if (!/catch \{ return null; \}/.test(srv)) throw new Error('תקלת רשת עלולה לשבור את טעינת האירועים');
+  return true;
+});
+
 check('הקבלה מוצגת לצד חשבונית המס, ותאריך התשלום אחיד', () => {
   const f = new Function(app.match(/const payDateFmt = \(d\) => \{[\s\S]*?\n\};/)[0] + '; return payDateFmt;')();
   for (const [inp, want] of [['2026-07-21', '21/07/2026'], ['05/08/2026', '05/08/2026'], ['', ''], [null, '']])

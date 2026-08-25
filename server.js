@@ -169,6 +169,29 @@ add('GET', /^\/api\/events$/, async (req, res, _p, q) => {
     }
   } catch { openNums = null; }
   const out = events.map(e => ({ ...e, clientPayStatus: eventClientPaid(e, bankPaid, openNums) }));
+  // השלמת מסמך התשלום לאירועים ששולמו ולא ידוע איזה מסמך סגר אותם. מוגבל בתקציב
+  // לכל בקשה — טעינה ראשונה של מסך גדול מתפרסת על כמה רינדורים ולא מציפה את ה-API.
+  // כישלון כאן לא שובר כלום: הסטטוס נשאר "שולם", רק בלי תג הקבלה.
+  if (giEnabled(cid) && greenInvoice.haveCredentials()) {
+    let budget = 8, changed = false;
+    const before = JSON.stringify(load().payDocCache || {});
+    const work = load();
+    for (const e of out) {
+      const cp = e.clientPayStatus;
+      if (!cp || cp.status !== 'paid' || cp.payDoc) continue;
+      const docs = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
+      if (docs.some(d => [320, 400].includes(Number(d.type)))) continue;   // הקבלה כבר על האירוע
+      const inv = docs.find(d => [305, 300].includes(Number(d.type)) && !d.credited && !d.credit && !d.converted);
+      if (!inv || !inv.id || String(inv.id).startsWith('exp_')) continue;
+      // תקציב נשרף רק על שליפה אמיתית. אחרת התשובות השמורות היו אוכלות אותו בכל
+      // טעינה, והאירועים שטרם נבדקו לא היו מגיעים לתורם לעולם.
+      if (!payDocCached(work, cid, inv.id)) { if (budget <= 0) continue; budget--; }
+      const pd = await resolvePayDoc(work, cid, inv.id);
+      if (pd) { cp.payDoc = pd; if (!cp.date) cp.date = pd.date || null; }
+    }
+    changed = JSON.stringify(work.payDocCache || {}) !== before;
+    if (changed) { const db2 = load(); db2.payDocCache = work.payDocCache; save(db2); }
+  }
   json(res, out.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
 });
 
@@ -3199,6 +3222,44 @@ function buildBankPaidMap(db, companyId) {
     for (const inv of (t.matchedInvoices || [])) { put(inv, t.date, inv); put(inv && inv.sourceInvoice, t.date, inv); }
   }
   return m;
+}
+
+// איתור הקבלה של חשבונית שנסגרה בחשבונית ירוקה.
+// המקרה: הקבלה הופקה ישירות בחשבונית ירוקה, ולכן אינה ב-linkedDocs של האירוע וגם
+// אין התאמת בנק — יודעים שהחשבונית נסגרה (כלומר שולמה), אבל לא איזה מסמך סגר אותה.
+// הפתרון הוא שרשרת המסמכים של חשבונית ירוקה (linkedDocumentIds), אבל זו קריאת API
+// לכל חשבונית — ובטעינת מסך עם מאה אירועים זה מאות קריאות, בכל רינדור מחדש.
+// לכן: מטמון מתמיד ב-db (התוצאה אינה משתנה — קבלה שהופקה לא מתחלפת), ותקציב
+// לכל בקשה, כך שטעינה ראשונה מתפרסת על כמה רינדורים במקום להציף את ה-API.
+// גם תוצאה שלילית נשמרת, אחרת חשבונית בלי קבלה הייתה נבדקת שוב ושוב לנצח.
+const PAY_DOC_RETRY_MS = 7 * 24 * 60 * 60 * 1000;   // חשבונית שלא נמצאה לה קבלה — ניסיון חוזר בעוד שבוע
+// האם התשובה כבר במטמון (חיובית או שלילית-וטרייה) — כדי לא לבזבז תקציב על מה שידוע.
+function payDocCached(db, cid, invoiceId) {
+  const hit = (db.payDocCache || {})[`${cid}|${invoiceId}`];
+  if (!hit) return null;
+  if (hit.doc) return { doc: hit.doc };
+  return (Date.now() - new Date(hit.at || 0).getTime()) < PAY_DOC_RETRY_MS ? { doc: null } : null;
+}
+async function resolvePayDoc(db, cid, invoiceId) {
+  const key = `${cid}|${invoiceId}`;
+  db.payDocCache = db.payDocCache || {};
+  const cachedHit = payDocCached(db, cid, invoiceId);
+  if (cachedHit) return cachedHit.doc;
+  let doc = null;
+  try {
+    const raw = await greenInvoice.getDocument(invoiceId);
+    const ids = Array.isArray(raw && raw.linkedDocumentIds) ? raw.linkedDocumentIds : [];
+    for (const id of ids) {
+      if (String(id) === String(invoiceId)) continue;
+      let d = null; try { d = await greenInvoice.getDocument(id); } catch { continue; }
+      if (!d || ![320, 400].includes(Number(d.type))) continue;
+      const url = (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null);
+      doc = payDocOf({ id: d.id, number: d.number, type: d.type, date: d.documentDate || d.date, amount: d.amount, url });
+      break;
+    }
+  } catch { return null; }   // תקלת רשת — לא נכשלים ולא מרעילים את המטמון
+  db.payDocCache[key] = { doc, at: new Date().toISOString() };
+  return doc;
 }
 
 // מסמך התשלום כפי שהפרונט צריך אותו לתג "צפייה" — בלי לגרור את כל שורת הבנק.
