@@ -3189,6 +3189,46 @@ function sameClientName(a, b) {
   return !!na && !!nb && (na === nb || na.includes(nb) || nb.includes(na));
 }
 
+// זיווג חשבונית ↔ קבלה בתוך שורת בנק אחת.
+// העברה אחת מכסה לא פעם כמה חשבוניות של כמה אירועים — למשל שלוש חשבוניות של
+// אותו לקוח עם שלוש קבלות. כולן מאותו שם, ולכן שם הלקוח לא מבחין ביניהן; הסכום כן.
+// כל קבלה משויכת לכל היותר לחשבונית אחת, והזיווג נעשה מהקרוב ביותר בסכום ובתאריך.
+// זיווג מעורפל שלא ניתן להכריע — נשאר ריק. קבלה שגויה על אירוע גרועה מהיעדר קבלה.
+function pairInvoiceReceipts(entries) {
+  const out = new Map();
+  const list = (entries || []).filter(x => x && x.kind !== 'expense');
+  const rcpts = list.filter(x => [400, 320].includes(Number(x.type)));
+  const invs = list.filter(x => [300, 305].includes(Number(x.type)));
+  // מסמך שהוא עצמו קבלה, או שהקבלה כבר מוצמדת לו בשמירה — נקבע מיד
+  const taken = new Set();
+  for (const e of list) {
+    if (e.receipt) { out.set(e, { ...e.receipt, type: Number(e.receipt.type) || 400 }); continue; }
+    if ([400, 320].includes(Number(e.type))) out.set(e, e);
+  }
+  const free = () => rcpts.filter(r => !taken.has(r));
+  const amt = (x) => Math.abs(Number(x && (x.amount ?? x.amountIncVat)) || 0);
+  const days = (a, b) => {
+    const pa = Date.parse(String(a || '')), pb = Date.parse(String(b || ''));
+    return (isNaN(pa) || isNaN(pb)) ? 9e9 : Math.abs(pa - pb) / 86400000;
+  };
+  for (const inv of invs) {
+    if (out.has(inv)) continue;
+    const avail = free();
+    if (!avail.length) continue;
+    if (avail.length === 1 && invs.length === 1) { out.set(inv, avail[0]); taken.add(avail[0]); continue; }
+    const target = amt(inv);
+    const tol = Math.max(3, target * 0.004);
+    const byAmt = target > 0 ? avail.filter(r => Math.abs(amt(r) - target) <= tol) : [];
+    if (!byAmt.length) continue;                       // אין התאמת סכום — לא מנחשים
+    byAmt.sort((a, b) => days(inv.date, a.date) - days(inv.date, b.date));
+    // שתי קבלות זהות בסכום ובמרחק זמן — לא ניתן להכריע
+    if (byAmt.length > 1 && days(inv.date, byAmt[0].date) === days(inv.date, byAmt[1].date)
+        && String(byAmt[0].date || '') !== String(byAmt[1].date || '')) continue;
+    out.set(inv, byAmt[0]); taken.add(byAmt[0]);
+  }
+  return out;
+}
+
 function buildBankPaidMap(db, companyId) {
   const m = new Map();
   // הערך הוא { date, doc }: תאריך התנועה, ו-doc = המסמך שהתנועה שויכה אליו בפועל.
@@ -3209,17 +3249,9 @@ function buildBankPaidMap(db, companyId) {
     //      מסך הבנק מזווג ביניהן רק בזמן התצוגה, ולכן אין שום סימן שמור על החשבונית.
     //   3. השיוך עצמו נעשה לקבלה → הרשומה היא הקבלה.
     const entries = t.matchedInvoices || [];
-    const rowRcpts = entries.filter(x => x && x.kind !== 'expense' && [400, 320].includes(Number(x.type)));
-    const rcptFor = (inv) => {
-      if (inv && inv.receipt) return { ...inv.receipt, type: Number(inv.receipt.type) || 400 };
-      if (inv && [400, 320].includes(Number(inv.type))) return inv;
-      if (rowRcpts.length === 1) return rowRcpts[0];
-      // כמה קבלות על אותה שורה — מזווגים לפי שם הלקוח, ולא מנחשים
-      const byName = rowRcpts.filter(r => sameClientName(r.clientName, inv && inv.clientName));
-      return byName.length === 1 ? byName[0] : null;
-    };
+    const pairs = pairInvoiceReceipts(entries);
     for (const inv of entries) {
-      const payer = rcptFor(inv) || inv;
+      const payer = pairs.get(inv) || inv;
       put(inv, t.date, payer);
       put(inv && inv.sourceInvoice, t.date, payer);
     }
@@ -3285,8 +3317,12 @@ function eventClientPaid(e, bankPaid, openNums) {
   //   2. רק 300/305 — אלה הסוגים היחידים ש-openDocuments סורק בכלל.
   //   3. רק בתוך חלון 24 החודשים שהוא סורק, ורק מסמך פעיל: מסמך שזוכה או שהומר
   //      נסגר בחשבונית ירוקה בלי ששולם, ואסור להסיק ממנו תשלום.
+  // רק חשבונית מס (305). חשבון עסקה (300) נסגר בחשבונית ירוקה כשהוא מומר לחשבונית
+  // מס — לא כשמשלמים עליו. להסיק ממנו תשלום זה לסמן "שולם" על אירוע שרק חויב,
+  // ובלי שום מסמך תשלום להראות. אירוע שנשאר על חשבון עסקה צריך לקבל את חשבונית
+  // המס שנגזרה ממנו, ועד אז נכון שיוצג כממתין.
   if (openNums instanceof Set) {
-    const closed = docs.some(d => [300, 305].includes(Number(d.type))
+    const closed = docs.some(d => Number(d.type) === 305
       && !d.credited && !d.credit && !d.converted
       && d.number != null && String(d.number).trim() !== ''
       && withinOpenDocsWindow(d.date || e.date || e.dateRaw)

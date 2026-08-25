@@ -354,8 +354,10 @@ check('התאמת ספק לפי שם לא נופלת על שם מוכל באמצ
 check('תשלום שהותאם דרך קבלה מזוהה גם על חשבונית המס', () => {
   const src = srv.match(/function buildBankPaidMap\(db, companyId\) \{[\s\S]*?\n\}/);
   const nameFn = srv.match(/function sameClientName\(a, b\) \{[\s\S]*?\n\}/);
-  if (!src || !nameFn) throw new Error('buildBankPaidMap לא נמצאה');
-  const build = new Function('ownedBy', nameFn[0] + '\n' + src[0] + '; return buildBankPaidMap;')((t, c) => !c || t.companyId === c);
+  const pairFn = srv.match(/function pairInvoiceReceipts\(entries\) \{[\s\S]*?\n\}/);
+  if (!src || !nameFn || !pairFn) throw new Error('buildBankPaidMap לא נמצאה');
+  const build = new Function('ownedBy',
+    nameFn[0] + '\n' + pairFn[0] + '\n' + src[0] + '; return buildBankPaidMap;')((t, c) => !c || t.companyId === c);
   // תנועה מותאמת לקבלה 6002; חשבונית המס 6001 קוננה תחתיה והוסרה מהרשימה הראשית
   const tx = { companyId: 'co_bpm', direction: 'credit', matchStatus: 'approved', date: '08/07/2026',
     matchedInvoices: [{ id: 'r1', number: '6002', type: 400, sourceInvoice: { id: 'i1', number: '6001', type: 305 } }] };
@@ -382,6 +384,53 @@ check('תשלום שהותאם דרך קבלה מזוהה גם על חשבוני
     const got = (map.get('num:50424') || {}).doc;
     if (!got || String(got.number) !== want) throw new Error(`${name}: ${got ? got.number : 'אין'} במקום ${want}`);
   }
+  // תשלום מרוכז: שורה אחת עם שלוש חשבוניות ושלוש קבלות, כולן מאותו לקוח.
+  // שם הלקוח אינו מבחין ביניהן — הסכום כן, וכל קבלה משויכת לחשבונית אחת בלבד.
+  const C = 'היוצרים - סיטי הפקות';
+  const bulk = build({ bankTx: [{ companyId: 'co_bpm', direction: 'credit', date: '18/08/2026', matchStatus: 'approved',
+    matchedInvoices: [
+      { id: 'a', number: '50421', type: 305, clientName: C, amount: 2360, date: '2026-08-02' },
+      { id: 'b', number: '50433', type: 305, clientName: C, amount: 4720, date: '2026-08-05' },
+      { id: 'c', number: '50434', type: 305, clientName: C, amount: 3540, date: '2026-08-07' },
+      { id: 'r1', number: '80376', type: 400, clientName: C, amount: 2360, date: '2026-08-15' },
+      { id: 'r2', number: '80377', type: 400, clientName: C, amount: 4720, date: '2026-08-15' },
+      { id: 'r3', number: '80378', type: 400, clientName: C, amount: 3540, date: '2026-08-16' }] }] }, 'co_bpm');
+  for (const [inv, want] of [['50421', '80376'], ['50433', '80377'], ['50434', '80378']]) {
+    const got = (bulk.get('num:' + inv) || {}).doc;
+    if (!got || String(got.number) !== want) throw new Error(`תשלום מרוכז: ${inv} → ${got ? got.number : 'אין'} במקום ${want}`);
+  }
+  // התאריך מטעה והסכום מכריע: הקבלה הקרובה בזמן לחשבונית א' היא של חשבונית ב'
+  const cross = build({ bankTx: [{ companyId: 'co_bpm', direction: 'credit', date: '18/08/2026', matchStatus: 'approved',
+    matchedInvoices: [
+      { id: 'a', number: 'INV-A', type: 305, clientName: C, amount: 2360, date: '2026-08-02' },
+      { id: 'b', number: 'INV-B', type: 305, clientName: C, amount: 4720, date: '2026-08-05' },
+      { id: 'r1', number: 'RCP-B', type: 400, clientName: C, amount: 4720, date: '2026-08-03' },
+      { id: 'r2', number: 'RCP-A', type: 400, clientName: C, amount: 2360, date: '2026-08-20' }] }] }, 'co_bpm');
+  for (const [inv, want] of [['INV-A', 'RCP-A'], ['INV-B', 'RCP-B']]) {
+    const got = (cross.get('num:' + inv) || {}).doc;
+    if (!got || String(got.number) !== want)
+      throw new Error(`זיווג לפי תאריך במקום סכום: ${inv} → ${got ? got.number : 'אין'} במקום ${want}`);
+  }
+
+  // שתי חשבוניות בסכום זהה ובאותו יום — לא ניתן להכריע, ואסור לשייך קבלה שרירותית
+  const tie = build({ bankTx: [{ companyId: 'co_bpm', direction: 'credit', date: '18/08/2026', matchStatus: 'approved',
+    matchedInvoices: [
+      { id: 'a', number: 'A1', type: 305, clientName: C, amount: 1000, date: '2026-08-02' },
+      { id: 'b', number: 'A2', type: 305, clientName: C, amount: 1000, date: '2026-08-02' },
+      { id: 'r1', number: 'R1', type: 400, clientName: C, amount: 1000, date: '2026-08-10' },
+      { id: 'r2', number: 'R2', type: 400, clientName: C, amount: 1000, date: '2026-08-12' }] }] }, 'co_bpm');
+  const a1 = (tie.get('num:A1') || {}).doc, a2 = (tie.get('num:A2') || {}).doc;
+  if (a1 && a2 && String(a1.number) === String(a2.number)) throw new Error('אותה קבלה שויכה לשתי חשבוניות');
+
+  // חשבון עסקה שנסגר בחשבונית ירוקה נסגר בהמרה, לא בתשלום
+  const ecp2 = new Function(
+    srv.match(/function payDocOf\(d\) \{[\s\S]*?\n\}/)[0]
+    + srv.match(/const OPEN_DOCS_MONTHS[\s\S]*?\n\}\n/)[0]
+    + srv.match(/function ddmmyyyyToISO[^\n]*\n/)[0]
+    + srv.match(/function eventClientPaid\(e, bankPaid, openNums\) \{[\s\S]*?\n\}\n/)[0] + '; return eventClientPaid;')();
+  const prof = ecp2({ linkedDocs: [{ type: 300, number: '40446', date: '2026-08-01' }] }, new Map(), new Set(['9']));
+  if (prof.status === 'paid') throw new Error('חשבון עסקה שהומר סומן כשולם');
+
   // חשבונית לבדה — אין קבלה, ואסור להמציא אחת
   const alone = build({ bankTx: [{ companyId: 'co_bpm', direction: 'credit', date: '16/08/2026', matchStatus: 'approved',
     matchedInvoices: [{ id: 'i', number: '50424', type: 305, amount: 5900 }] }] }, 'co_bpm');
