@@ -275,6 +275,17 @@ check('מחיקת הוצאת ספק — ברירת המחדל לא נוגעת ב
 });
 
 const bm = await import('./bankMatch.js');
+check('הקבלה מוצגת לצד חשבונית המס, ותאריך התשלום אחיד', () => {
+  const f = new Function(app.match(/const payDateFmt = \(d\) => \{[\s\S]*?\n\};/)[0] + '; return payDateFmt;')();
+  for (const [inp, want] of [['2026-07-21', '21/07/2026'], ['05/08/2026', '05/08/2026'], ['', ''], [null, '']])
+    if (f(inp) !== want) throw new Error(`${inp} → ${f(inp)} במקום ${want}`);
+  if (!/\.join\(''\) \+ payTag/.test(app)) throw new Error('תג מסמך התשלום לא מצורף לשורה');
+  if (!/!docs\.some\(d => String\(d\.id\) === String\(pd\.id\)\)/.test(app))
+    throw new Error('הקבלה עלולה להופיע פעמיים כשהיא כבר מקושרת לאירוע');
+  if (!/שולם ✓\$\{paidOn\}/.test(app)) throw new Error('תאריך התשלום לא מוצג');
+  return true;
+});
+
 check('לשונית האירועים מקבלת את סטטוס התשלום מהשרת', () => {
   // השרת מחשב אותו עם אותה פונקציה שמשרתת את "קבלנים לתשלום" — לא חישוב נפרד
   if (!/clientPayStatus: eventClientPaid\(e, bankPaid, openNums\)/.test(srv))
@@ -346,9 +357,11 @@ check('תשלום שהותאם דרך קבלה מזוהה גם על חשבוני
   const tx = { companyId: 'co_bpm', direction: 'credit', matchStatus: 'approved', date: '08/07/2026',
     matchedInvoices: [{ id: 'r1', number: '6002', type: 400, sourceInvoice: { id: 'i1', number: '6001', type: 305 } }] };
   const m = build({ bankTx: [tx] }, 'co_bpm');
-  if (m.get('num:6001') !== '08/07/2026') throw new Error('חשבונית המס המקוננת לא נמצאה במפה');
-  if (m.get('num:6002') !== '08/07/2026') throw new Error('הקבלה עצמה לא נמצאה');
-  if (m.get('id:i1') !== '08/07/2026') throw new Error('חשבונית המס לא נמצאה לפי מזהה');
+  if ((m.get('num:6001') || {}).date !== '08/07/2026') throw new Error('חשבונית המס המקוננת לא נמצאה במפה');
+  if ((m.get('num:6002') || {}).date !== '08/07/2026') throw new Error('הקבלה עצמה לא נמצאה');
+  if ((m.get('id:i1') || {}).date !== '08/07/2026') throw new Error('חשבונית המס לא נמצאה לפי מזהה');
+  // המפה נושאת גם את המסמך שהתנועה שויכה אליו — כדי להציג את הקבלה על האירוע
+  if ((m.get('num:6001') || {}).doc?.number !== '6002') throw new Error('מסמך התשלום לא נשמר במפה');
   for (const [name, bad] of [
     ['שורה לא מאושרת', { ...tx, matchStatus: 'unmatched' }],
     ['תנועת חובה', { ...tx, direction: 'debit' }],
@@ -356,19 +369,22 @@ check('תשלום שהותאם דרך קבלה מזוהה גם על חשבוני
   ]) if (build({ bankTx: [bad] }, 'co_bpm').size) throw new Error(name + ' נספרה בטעות');
   // האירוע מחזיק את חשבונית המס — ועכשיו נחשב שולם
   const ecp = new Function(
-    srv.match(/const OPEN_DOCS_MONTHS[\s\S]*?\n\}\n/)[0]
+    srv.match(/function payDocOf\(d\) \{[\s\S]*?\n\}\n/)[0]
+    + srv.match(/const OPEN_DOCS_MONTHS[\s\S]*?\n\}\n/)[0]
     + srv.match(/function ddmmyyyyToISO[^\n]*\n/)[0]
     + srv.match(/function eventClientPaid\(e, bankPaid, openNums\) \{[\s\S]*?\n\}\n/)[0]
     + '; return eventClientPaid;')();
   const r = ecp({ linkedDocs: [{ type: 305, number: '6001', date: '2026-07-08' }] }, m, new Set(['6001']));
   if (r.status !== 'paid' || r.via !== 'bank') throw new Error(`האירוע יצא ${r.status}/${r.via} במקום paid/bank`);
   if (r.date !== '08/07/2026') throw new Error('תאריך התנועה לא הועבר');
+  if (!r.payDoc || r.payDoc.number !== '6002') throw new Error('הקבלה לא מוצמדת לאירוע');
   if (!/each\(inv && inv\.sourceInvoice\)/.test(app)) throw new Error('סינון ההצעות לא כולל חשבונית מקור מקוננת');
   return true;
 });
 
 check('חשבונית שנסגרה בחשבונית ירוקה נחשבת שולמה', () => {
-  const src = srv.match(/const OPEN_DOCS_MONTHS[\s\S]*?\n\}\n/)[0]
+  const src = srv.match(/function payDocOf\(d\) \{[\s\S]*?\n\}\n/)[0]
+            + srv.match(/const OPEN_DOCS_MONTHS[\s\S]*?\n\}\n/)[0]
             + srv.match(/function ddmmyyyyToISO[^\n]*\n/)[0]
             + srv.match(/function eventClientPaid\(e, bankPaid, openNums\) \{[\s\S]*?\n\}\n/)[0];
   const f = new Function(src + '; return eventClientPaid;')();
@@ -388,9 +404,14 @@ check('חשבונית שנסגרה בחשבונית ירוקה נחשבת שול
     if (got !== want) throw new Error(`${name}: ${got} במקום ${want}`);
   }
   // תאריך התשלום: מהתאמת בנק או מתאריך הקבלה. סגירה בחשבונית ירוקה — בלי תאריך.
-  const bank = new Map([['num:5001', '10/08/2026']]);
+  const bank = new Map([['num:5001', { date: '10/08/2026', doc: { id: 'r5', number: '5002', type: 400, date: '2026-08-10' } }]]);
   const withBank = f({ linkedDocs: [{ type: 305, number: '5001', date: '2026-07-30' }] }, bank, new Set(['5001']));
   if (withBank.date !== '10/08/2026') throw new Error('תאריך מהתאמת בנק אבד');
+  if (!withBank.payDoc || withBank.payDoc.number !== '5002') throw new Error('הקבלה מהתאמת הבנק לא מוחזרת');
+  // הבנק שויך לחשבונית המס עצמה — אין קבלה נפרדת, ואסור להמציא אחת
+  const selfBank = new Map([['num:5001', { date: '11/08/2026', doc: { id: 'x', number: '5001', type: 305 } }]]);
+  const noRcpt = f({ linkedDocs: [{ type: 305, number: '5001', date: '2026-07-30' }] }, selfBank, new Set(['5001']));
+  if (noRcpt.payDoc) throw new Error('הוצגה קבלה שלא קיימת');
   const withRcpt = f({ linkedDocs: [{ type: 400, number: '6002', date: '2026-07-12' }] }, none, new Set());
   if (withRcpt.date !== '2026-07-12') throw new Error('תאריך הקבלה לא מוחזר');
   const closedNoDate = f({ linkedDocs: [doc()] }, none, new Set(['9999']));

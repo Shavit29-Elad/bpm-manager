@@ -3184,17 +3184,29 @@ add('GET', /^\/api\/contractors\/payables$/, async (req, res, _p, q) => {
 // הסריקה הזו אירוע ששולם דרך קבלה נראה כאילו לא שולם.
 function buildBankPaidMap(db, companyId) {
   const m = new Map();
-  const put = (inv, date) => {
+  // הערך הוא { date, doc }: תאריך התנועה, ו-doc = המסמך שהתנועה שויכה אליו בפועל.
+  // כשהשיוך נעשה לקבלה, doc הוא הקבלה — וכך אפשר להציג אותה לצד חשבונית המס
+  // של האירוע, ולראות מתי שולם ולא רק שהתשלום התקבל.
+  const put = (inv, date, doc) => {
     if (!inv) return;
-    if (inv.number != null && !m.has('num:' + inv.number)) m.set('num:' + inv.number, date || null);
-    if (inv.id != null && !m.has('id:' + inv.id)) m.set('id:' + inv.id, date || null);
+    const val = { date: date || null, doc: doc || null };
+    if (inv.number != null && !m.has('num:' + inv.number)) m.set('num:' + inv.number, val);
+    if (inv.id != null && !m.has('id:' + inv.id)) m.set('id:' + inv.id, val);
   };
   for (const t of (db.bankTx || [])) {
     if (companyId && !ownedBy(t, companyId)) continue;
     if (t.direction !== 'credit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
-    for (const inv of (t.matchedInvoices || [])) { put(inv, t.date); put(inv && inv.sourceInvoice, t.date); }
+    for (const inv of (t.matchedInvoices || [])) { put(inv, t.date, inv); put(inv && inv.sourceInvoice, t.date, inv); }
   }
   return m;
+}
+
+// מסמך התשלום כפי שהפרונט צריך אותו לתג "צפייה" — בלי לגרור את כל שורת הבנק.
+function payDocOf(d) {
+  if (!d) return null;
+  return { id: d.id != null ? String(d.id) : null, number: d.number != null ? String(d.number) : null,
+    type: Number(d.type) || null, date: d.date || null, url: d.url || null,
+    amount: d.amount != null ? Number(d.amount) : null };
 }
 
 // חלון הסריקה של openDocuments (24 חודשים). מסמך מחוץ לחלון אינו מופיע ברשימת
@@ -3227,7 +3239,13 @@ function eventClientPaid(e, bankPaid, openNums) {
     const num = d.number != null ? String(d.number) : null;
     const id = d.id != null ? String(d.id) : null;
     const key = (num && bankPaid.has('num:' + num)) ? 'num:' + num : (id && bankPaid.has('id:' + id)) ? 'id:' + id : null;
-    if (key) return { status: 'paid', via: 'bank', date: bankPaid.get(key) || null };
+    if (!key) continue;
+    const hit = bankPaid.get(key) || {};
+    // מסמך התשלום מוצג רק כשהוא באמת מסמך אחר — קבלה/מס-קבלה שאינה כבר על האירוע.
+    // אם הבנק שויך לחשבונית המס עצמה, אין קבלה נפרדת להציג; התאריך לבדו מספיק.
+    const pd = hit.doc;
+    const isRcpt = pd && [320, 400].includes(Number(pd.type)) && !docs.some(x => String(x.id) === String(pd.id));
+    return { status: 'paid', via: 'bank', date: hit.date || null, payDoc: isRcpt ? payDocOf(pd) : null };
   }
   // מס-קבלה (320) / קבלה (400) → שולם (ירוק). תאריך המסמך הוא תאריך התשלום.
   const rcpt = docs.find(d => [320, 400].includes(Number(d.type)));

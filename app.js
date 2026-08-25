@@ -2336,6 +2336,15 @@ async function renderCombined(c) {
 }
 
 // תאריך בפורמט DD/MM/YY (למשל 09/07/26)
+// תאריך תשלום. המקורות שונים — תנועת בנק שמורה כ-dd/mm/yyyy ומסמך כ-ISO —
+// ומוצגים אחרת ב-ddmy. כאן מאוחדים לשנה מלאה, כי זה תאריך שמסתכלים עליו.
+const payDateFmt = (d) => {
+  const t = String(d || '');
+  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  const he = t.match(/^(\d{2}\/\d{2}\/\d{4})/);
+  return he ? he[1] : (t || '');
+};
 const ddmy = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : (iso || '—'); };
 // ---- תצוגת יומן: שבועית (ברירת מחדל) או חודשית, עם מתג ----
 const DAYS_FULL = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
@@ -2559,11 +2568,23 @@ function invoiceCell(e) {
   if (isBilledEv(e) || docs.length) {
     // תג קומפקטי בשורה אחת (תווית קצרה + מספר + 👁) — כדי שלא ייתפס 2 שורות
     const tagCss = 'font-size:10px;padding:1px 7px;line-height:1.5;white-space:nowrap;cursor:pointer;text-decoration:underline';
+    // מסמך התשלום שאינו מקושר לאירוע — קבלה שהתגלתה דרך התאמת הבנק. מוצג לצד
+    // חשבונית המס כדי שאפשר יהיה לפתוח אותה ולראות מתי ועל מה שולם.
+    const pd = (e.clientPayStatus || {}).payDoc;
+    const payTag = pd && !docs.some(d => String(d.id) === String(pd.id))
+      ? `<span class="tag" style="${tagCss};background:#e7f7ee;color:#0a7d33" title="מסמך התשלום — נמצא דרך התאמת הבנק. לחץ לצפייה" onclick="previewLinkedDoc('${pd.id}',this,'${e.id}')">${SHORT_BILL[Number(pd.type)] || 'קבלה'}${pd.number ? ' #' + pd.number : ''} 👁</span>`
+      : '';
     const tags = docs.length
-      ? docs.map(d => `<span class="tag invoiced" style="${tagCss}" title="צפייה / הורדה / מסמך המשך" onclick="previewLinkedDoc('${d.id}',this,'${e.id}')">${SHORT_BILL[Number(d.type)] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join('')
+      ? docs.map(d => `<span class="tag invoiced" style="${tagCss}" title="צפייה / הורדה / מסמך המשך" onclick="previewLinkedDoc('${d.id}',this,'${e.id}')">${SHORT_BILL[Number(d.type)] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join('') + payTag
       : `<span class="tag invoiced" style="font-size:10px;padding:1px 7px;line-height:1.5;white-space:nowrap${e.invoiceId ? ';cursor:pointer;text-decoration:underline' : ''}" ${e.invoiceId ? `title="צפייה / הורדה / מסמך המשך" onclick="previewLinkedDoc('${e.invoiceId}',this,'${e.id}')"` : ''}>${SHORT_BILL[Number(e.invoiceType)] || 'חשבונית'}${e.invoiceNumber ? ' #' + e.invoiceNumber : ''}${e.invoiceId ? ' 👁' : ''}</span>`;
+    // "מתי שולם": תאריך התנועה בבנק, או תאריך הקבלה/מס-קבלה
+    const cps = e.clientPayStatus || {};
+    const paidOn = cps.status === 'paid' && cps.date ? ' · ' + payDateFmt(cps.date) : '';
+    const paidVia = cps.via === 'bank' ? 'זוהה תשלום בבנק'
+      : cps.via === 'closed' ? 'החשבונית נסגרה בחשבונית ירוקה — הופקה עליה קבלה'
+      : cps.via === 'greeninvoice' ? 'הופקה מס-קבלה/קבלה' : '';
     const status = ps === 'green'
-      ? `<div style="font-size:10px;color:var(--accent2);font-weight:700;white-space:nowrap">שולם ✓</div>`
+      ? `<div style="font-size:10px;color:var(--accent2);font-weight:700;white-space:nowrap"${paidVia ? ` title="${paidVia}"` : ''}>שולם ✓${paidOn}</div>`
       : ps === 'yellow'
         ? `<div style="font-size:10px;color:#b45309;font-weight:600;white-space:nowrap">ממתין לתשלום</div>`
         : `<div style="font-size:10px;color:var(--danger);font-weight:600;white-space:nowrap">חסר חיוב</div>`;
@@ -4426,7 +4447,7 @@ function clientPaidBadge(cp) {
   cp = cp || { status: 'unknown' };
   // ירוק — מס-קבלה/קבלה (320/400) או תשלום שזוהה בבנק
   if (cp.status === 'paid') {
-    const d = cp.date ? ' · ' + ddmy(cp.date) : '';
+    const d = cp.date ? ' · ' + payDateFmt(cp.date) : '';
     const src = cp.via === 'bank' ? 'זוהה תשלום בבנק'
       : cp.via === 'closed' ? 'החשבונית נסגרה בחשבונית ירוקה — הופקה עליה קבלה. תאריך התשלום אינו ידוע כאן: הקבלה לא הופקה דרך המערכת ואין התאמה בבנק'
       : 'הופקה מס-קבלה/קבלה';
