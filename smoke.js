@@ -12,6 +12,8 @@ import { execSync } from 'child_process';
 
 const app = fs.readFileSync('app.js', 'utf8');
 const srv = fs.readFileSync('server.js', 'utf8');
+// בדיקות אסינכרוניות נאספות כאן ומאומתות בסוף, אחרי כל הבדיקות הסינכרוניות
+const pendingAsync = [];
 const html = fs.readFileSync('index.html', 'utf8');
 const css = fs.readFileSync('styles.css', 'utf8');
 
@@ -633,6 +635,35 @@ check('רכבי חברה — בידוד חברות, הרשאת קבצים וחי
     if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`${name}: ${JSON.stringify(got)}`);
     if (dropped.length !== nDropped) throw new Error(`${name}: ${dropped.length} נמחקו במקום ${nDropped}`);
   }
+  // הפרדה בין רכבי חברה לרכבים אישיים — תצוגה בלבד, אותה התנהגות
+  const clean = new Function('VEH_SLOT_DEFS', srv.match(/const cleanVehicle = \(b, prev = \{\}\) => \{[\s\S]*?\n\};/)[0] + '; return cleanVehicle;')([]);
+  if (clean({ plate: '1' }).scope !== 'company') throw new Error('רכב חדש לא משויך כברירת מחדל לרכבי החברה');
+  if (clean({ plate: '1', scope: 'personal' }).scope !== 'personal') throw new Error('שיוך לרכב אישי לא נשמר');
+  if (clean({ plate: '1', scope: 'nonsense' }).scope !== 'company') throw new Error('שיוך לא מוכר לא נופל לברירת מחדל');
+  // עריכה שלא נוגעת בשיוך חייבת לשמר אותו, אחרת רכב אישי קופץ למקטע החברה
+  if (clean({ plate: '1' }, { scope: 'personal' }).scope !== 'personal') throw new Error('עריכה איפסה את השיוך');
+  if (!/v\.scope === 'personal' \? 'personal' : 'company'/.test(app)) throw new Error('המסך לא מפריד בין המקטעים');
+  if (!/רכב אישי/.test(fs.readFileSync('vehicleAlerts.js', 'utf8'))) throw new Error('המייל לא מבחין ברכב אישי');
+
+  // חיווי סטטוס הרכבים בראש המסך — אותם ספים כמו ההתראות במייל
+  const pillFn = new Function('api', 'vehWorst',
+    app.match(/async function vehiclePill\(\) \{[\s\S]*?\n\}/)[0] + '; return vehiclePill;');
+  const run = async (vehicles, worstOf) => pillFn(async () => vehicles, worstOf)();
+  const days = { ok: 200, soon: 12, bad: -3 };
+  const check1 = async () => {
+    const empty = await run([], () => null);
+    if (!/אין רכבים/.test(empty)) throw new Error('חיווי ריק שגוי');
+    const good = await run([{}], () => days.ok);
+    if (!/תקין/.test(good) || !/pill ok/.test(good)) throw new Error('חיווי "תקין" שגוי');
+    const warn = await run([{}], () => days.soon);
+    if (!/pill warn/.test(warn) || !/פג בתוך 30 יום/.test(warn)) throw new Error('חיווי "מתקרב" שגוי');
+    const bad = await run([{ x: 1 }, { x: 2 }], (v) => (v.x === 1 ? days.bad : days.soon));
+    if (!/pill bad/.test(bad) || !/פג תוקף/.test(bad) || !/מתקרב/.test(bad)) throw new Error('חיווי "פג תוקף" שגוי');
+  };
+  pendingAsync.push(check1());
+  if (!/gotoVehicles/.test(app)) throw new Error('אי אפשר לעבור ללשונית מהחיווי');
+  if (/pill\('חשבונית ירוקה'/.test(app)) throw new Error('חיווי חשבונית ירוקה עדיין תופס את המקום');
+
   // הניקוי חייב לרוץ בטעינת הרשימה, אחרת רכבים קיימים לא מתיישרים לעולם
   const iList = srv.indexOf("add('GET', /^\\/api\\/vehicles$/");
   if (!/normalizeFixedSlots\(v\)/.test(srv.slice(iList, srv.indexOf('\n});', iList))))
@@ -787,5 +818,6 @@ check('גיבוי — מדיניות שמירה מותירה ~33 מתוך 400', 
 check('גיבוי — לעולם לא מוחק את האחרון', () =>
   bk.planRetention([{ id: 'x', createdTime: '2020-01-01T00:00:00Z' }], new Date()).remove.length === 0);
 
+for (const pr of pendingAsync) { try { await pr; } catch (e) { fail++; pass--; console.log('  ✗ חיווי סטטוס הרכבים\n      ' + e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

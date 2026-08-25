@@ -353,11 +353,26 @@ async function renderStatus() {
   const el = $('#statusPills'); if (!el) return;
   // כל החברות (כולל אופק) — חשבונית ירוקה + יומן, מצב חיבור אמיתי מהשרת לפי החברה הנבחרת (בידוד מלא, מפתחות נפרדים)
   const h = await api('/api/health?companyId=' + encodeURIComponent(co || ''));
-  const pills = [pill('חשבונית ירוקה', h.greenInvoiceConnected), pill('יומן גוגל', h.calendarConnected)];
+  const pills = [await vehiclePill(), pill('יומן גוגל', h.calendarConnected)];
   el.innerHTML = pills.join('');
 }
 const pill = (label, ok, text) =>
   `<span class="pill ${ok ? 'ok' : 'off'}">${label}: ${ok ? 'מחובר' : (text || 'לא מחובר')}</span>`;
+
+// חיווי תוקף מסמכי הרכבים בראש המסך — לפי אותם ספים של ההתראות במייל:
+// מסמך שפג · מסמך שפג בתוך 30 יום · הכל תקין.
+async function vehiclePill() {
+  let list = [];
+  try { list = await api('/api/vehicles'); } catch { return ''; }
+  if (!Array.isArray(list) || !list.length) return `<span class="pill off" style="cursor:pointer" onclick="gotoVehicles()">סטטוס רכבים: אין רכבים</span>`;
+  let expired = 0, soon = 0;
+  for (const v of list) { const n = vehWorst(v); if (n === null) continue; if (n < 0) expired++; else if (n <= 30) soon++; }
+  const cls = expired ? 'bad' : soon ? 'warn' : 'ok';
+  const txt = expired ? `${expired} פג תוקף${soon ? ` · ${soon} מתקרב` : ''}`
+    : soon ? `${soon} פג בתוך 30 יום` : 'תקין';
+  return `<span class="pill ${cls}" style="cursor:pointer" title="לחץ למעבר לרכבי החברה" onclick="gotoVehicles()">סטטוס רכבים: ${txt}</span>`;
+}
+window.gotoVehicles = () => { const t = document.querySelector('.tab[data-tab="vehicles"]'); if (t) t.click(); };
 
 function render() {
   const c = $('#content');
@@ -6849,17 +6864,20 @@ async function renderVehicles(c) {
   const banner = expired || soon
     ? `<div class="warn-banner" style="margin-bottom:12px">${expired ? `🔴 ${nVeh(expired)} עם מסמך שפג תוקפו` : ''}${expired && soon ? ' · ' : ''}${soon ? `🟡 ${nVeh(soon)} עם מסמך שפג בתוך 30 יום` : ''}</div>`
     : '';
-  const cards = _vehicles.length
-    ? _vehicles.map(vehCard).join('')
-    : `<div class="empty">עדיין לא הוספת רכבים.</div>`;
-  c.innerHTML = `<div class="panel">
-    <div class="row-between" style="margin-bottom:12px">
-      <h2>🚚 רכבי חברה${_vehicles.length ? ` <span class="muted" style="font-size:14px;font-weight:400">· ${_vehicles.length}</span>` : ''}</h2>
-      ${canEdit ? `<button class="btn primary" onclick="openVehicleEdit()">➕ הוסף רכב</button>` : ''}
-    </div>
-    ${banner}
-    <div class="cards veh-cards">${cards}</div>
-  </div>`;
+  // שני מקטעים נפרדים בתצוגה, אותה התנהגות לחלוטין
+  const section = (scope, title, icon, emptyTxt) => {
+    const list = _vehicles.filter(v => (v.scope === 'personal' ? 'personal' : 'company') === scope);
+    return `<div class="panel">
+      <div class="row-between" style="margin-bottom:12px">
+        <h2>${icon} ${title}${list.length ? ` <span class="muted" style="font-size:14px;font-weight:400">· ${list.length}</span>` : ''}</h2>
+        ${canEdit ? `<button class="btn primary" onclick="openVehicleEdit(null,'${scope}')">➕ הוסף רכב</button>` : ''}
+      </div>
+      ${scope === 'company' ? banner : ''}
+      ${list.length ? `<div class="cards veh-cards">${list.map(vehCard).join('')}</div>` : `<div class="empty">${emptyTxt}</div>`}
+    </div>`;
+  };
+  c.innerHTML = section('company', 'רכבי חברה', '🚚', 'עדיין לא הוספת רכבי חברה.')
+    + section('personal', 'רכבים אישיים — בעלי החברה', '🚗', 'עדיין לא הוספת רכבים אישיים.');
 }
 
 function vehCard(v) {
@@ -6892,7 +6910,7 @@ function vehCard(v) {
     <div class="row-between" style="align-items:flex-start;gap:8px">
       <div>
         <div style="font-size:17px;font-weight:800;letter-spacing:.5px">${escapeHtml(v.plate || '—')}</div>
-        <div class="muted" style="font-size:12.5px;margin-top:2px">${VEH_KIND_HE[v.kind] || 'פרטי'}${v.maker ? ' · ' + escapeHtml(v.maker) : ''}</div>
+        <div class="muted" style="font-size:12.5px;margin-top:2px">${v.scope === 'personal' ? '🚗 אישי · ' : ''}${VEH_KIND_HE[v.kind] || 'פרטי'}${v.maker ? ' · ' + escapeHtml(v.maker) : ''}</div>
         ${v.ownerName ? `<div class="muted" style="font-size:12.5px">על שם: ${escapeHtml(v.ownerName)}</div>` : ''}
       </div>
       ${canEdit ? `<div style="display:flex;gap:5px;flex-wrap:wrap">
@@ -6961,7 +6979,7 @@ window.saveVehRenew = async (vid, slot, btn) => {
   renderVehicles($('#content'));
 };
 
-window.openVehicleEdit = (id) => {
+window.openVehicleEdit = (id, defScope) => {
   const v = id ? (_vehicles || []).find(x => x.id === id) : null;
   _vehPending = {};
   let m = document.getElementById('vehModal');
@@ -6998,6 +7016,11 @@ window.openVehicleEdit = (id) => {
   m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw);max-height:92vh;max-height:92dvh;overflow:auto">
     <h3 style="margin:0 0 10px">${v ? 'עריכת רכב' : 'רכב חדש'}</h3>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <label style="font-size:12.5px">שיוך
+        <select id="vehScope" style="width:100%;padding:8px">
+          <option value="company" ${(v ? v.scope !== 'personal' : defScope !== 'personal') ? 'selected' : ''}>רכב חברה</option>
+          <option value="personal" ${(v ? v.scope === 'personal' : defScope === 'personal') ? 'selected' : ''}>רכב אישי — בעלי החברה</option>
+        </select></label>
       <label style="font-size:12.5px">סוג רכב
         <select id="vehKind" style="width:100%;padding:8px">
           <option value="private" ${(!v || v.kind !== 'truck') ? 'selected' : ''}>פרטי</option>
@@ -7051,7 +7074,7 @@ window.saveVehicle = async (id, btn) => {
   const body = {
     id: id || undefined,
     kind: gv('vehKind'), plate: gv('vehPlate').trim(), maker: gv('vehMaker').trim(),
-    ownerName: gv('vehOwner').trim(), notes: gv('vehNotes').trim(), financing: gv('vehFinancing').trim(),
+    ownerName: gv('vehOwner').trim(), notes: gv('vehNotes').trim(), financing: gv('vehFinancing').trim(), scope: gv('vehScope'),
   };
   for (const s of VEH_SLOTS) body[s.date] = gv(`vehdate_${s.k}`) || null;
   if (!body.plate) { if (st) st.innerHTML = '<span style="color:var(--danger)">חסר מספר רכב</span>'; return; }

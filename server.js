@@ -3824,6 +3824,9 @@ const cleanVehicle = (b, prev = {}) => {
     ownerName: String(b.ownerName == null ? prev.ownerName || '' : b.ownerName).trim(),
     notes: String(b.notes == null ? prev.notes || '' : b.notes).trim(),
     financing: String(b.financing == null ? prev.financing || '' : b.financing).trim(),
+    // 'company' = רכבי החברה · 'personal' = רכבים אישיים של הבעלים.
+    // אותה התנהגות בדיוק — רק הפרדה בתצוגה.
+    scope: (b.scope !== undefined ? b.scope : prev.scope) === 'personal' ? 'personal' : 'company',
   };
   for (const s of VEH_SLOT_DEFS) {
     out[s.field] = b[s.field] !== undefined ? (b[s.field] || null) : (prev[s.field] || null);

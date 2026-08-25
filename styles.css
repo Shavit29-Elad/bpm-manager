@@ -113,6 +113,9 @@ select:hover,input:hover{border-color:#c5cbe2}
 .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.9}
 .pill.ok{color:var(--accent2);border-color:rgba(14,164,114,.35);background:rgba(14,164,114,.09)}
 .pill.off{color:var(--muted)}
+/* חיווי תוקף מסמכי רכב — אותם שלושה מצבים כמו בכרטיסים ובהתראות */
+.pill.warn{color:#a15c00;border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.1)}
+.pill.bad{color:var(--danger);border-color:rgba(225,29,72,.4);background:rgba(225,29,72,.09);font-weight:700}
 
 /* ===== טאבים ===== */
 .tabs{display:flex;gap:6px;padding:18px 26px 0;flex-wrap:wrap}

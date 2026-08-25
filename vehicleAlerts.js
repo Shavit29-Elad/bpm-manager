@@ -57,6 +57,7 @@ export function dueAlerts(vehicles, now = new Date()) {
       const sent = (v.alertsSent || {});
       if (sent[sentKey(s.key, expiry, threshold)]) continue;
       out.push({ vehicleId: v.id, plate: v.plate || '—', kind: v.kind || 'private',
+        scope: v.scope === 'personal' ? 'personal' : 'company',
         maker: v.maker || '', ownerName: v.ownerName || '',
         slot: s.key, slotHe: s.he, renewHe: s.renew, expiry: String(expiry).slice(0, 10),
         daysLeft: left, threshold, key: sentKey(s.key, expiry, threshold) });
@@ -84,7 +85,8 @@ export function alertHtml(companyName, items) {
   const row = (it) => {
     const color = it.daysLeft <= 1 ? '#b42318' : it.daysLeft <= 14 ? '#a15c00' : '#0a7d33';
     const bg = it.daysLeft <= 1 ? '#fde8e8' : it.daysLeft <= 14 ? '#fff4e5' : '#e7f7ee';
-    const sub = [KIND_HE[it.kind], it.maker, it.ownerName && `על שם ${it.ownerName}`].filter(Boolean).join(' · ');
+    const sub = [it.scope === 'personal' ? 'רכב אישי' : KIND_HE[it.kind], it.maker,
+      it.ownerName && `על שם ${it.ownerName}`].filter(Boolean).join(' · ');
     return `<tr><td style="padding:0 0 14px">
       <table width="100%" cellpadding="0" cellspacing="0" style="background:${bg};border-radius:10px">
         <tr><td style="padding:14px 16px;font-family:Arial,sans-serif;direction:rtl;text-align:right">
@@ -115,7 +117,7 @@ export function alertHtml(companyName, items) {
 export function alertText(companyName, items) {
   const lines = [`תוקף מסמכי רכב — ${companyName || ''}`, ''];
   for (const it of items) {
-    lines.push(`${it.slotHe} · ${it.plate} (${KIND_HE[it.kind] || ''}${it.maker ? ' ' + it.maker : ''})`);
+    lines.push(`${it.slotHe} · ${it.plate} (${it.scope === 'personal' ? 'רכב אישי' : (KIND_HE[it.kind] || '')}${it.maker ? ' ' + it.maker : ''})`);
     lines.push(`  פג ב-${he(it.expiry)} — ${it.daysLeft <= 1 ? 'מחר' : `נותרו ${it.daysLeft} ימים`}. נדרש: ${it.renewHe}.`);
     lines.push('');
   }
