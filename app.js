@@ -6793,11 +6793,18 @@ window.scanMailNow = async () => {
 // ================= רכבי חברה =================
 // לכל רכב שלושה מסמכים — רישיון, ביטוח חובה, ביטוח מקיף — ולכל אחד תוקף וקובץ.
 // התוקף הוא העיקר: הוא נצבע לפי הקרבה לפקיעה, כדי שרכב שרישיונו עומד לפוג יקפוץ לעין.
+// חייב להישאר זהה ל-VEHICLE_SLOTS ב-vehicleAlerts.js (נבדק ב-smoke)
 const VEH_SLOTS = [
   { k: 'license', he: 'רישיון רכב', date: 'licenseExpiry' },
   { k: 'cto', he: 'ביטוח חובה', date: 'ctoExpiry' },
   { k: 'comp', he: 'ביטוח מקיף', date: 'compExpiry' },
+  { k: 'security', he: 'אישור קיום אמצעי מיגון', date: 'securityExpiry' },
+  { k: 'towing', he: 'גרירה · שמשות · פנסים ומראות', date: 'towingExpiry' },
+  { k: 'ramp', he: 'תסקיר רמפה', date: 'rampExpiry' },
 ];
+// כל שורות המסמכים של רכב — הקבועות + הנוספות שהמשתמש הגדיר
+const vehRows = (v) => VEH_SLOTS.map(s => ({ k: s.k, he: s.he, expiry: v[s.date], fixed: true }))
+  .concat(((v && v.extras) || []).map(x => ({ k: 'extra:' + x.id, he: x.title, expiry: x.expiry, fixed: false, extraId: x.id })));
 const VEH_KIND_HE = { truck: 'משאית', private: 'פרטי' };
 let _vehicles = [];
 let _vehPending = {};   // קבצים שנבחרו בחלונית וטרם נשמרו (רכב חדש עדיין אין לו מזהה)
@@ -6820,8 +6827,8 @@ function vehExpiryTag(iso) {
 // המצב הדחוף ביותר מבין שלושת המסמכים — לסימון הכרטיס כולו
 function vehWorst(v) {
   let worst = null;
-  for (const s of VEH_SLOTS) {
-    const n = vehDaysLeft(v[s.date]);
+  for (const r of vehRows(v)) {
+    const n = vehDaysLeft(r.expiry);
     if (n === null) continue;
     if (worst === null || n < worst) worst = n;
   }
@@ -6856,9 +6863,9 @@ function vehCard(v) {
   const canEdit = (state.user || {}).role === 'admin';
   const worst = vehWorst(v);
   const edge = worst === null ? 'var(--line)' : worst < 0 ? 'var(--danger)' : worst <= 30 ? '#f59e0b' : 'var(--accent2)';
-  const rows = VEH_SLOTS.map(s => {
+  const rows = vehRows(v).map(s => {
     const f = (v.files || {})[s.k];
-    const n = vehDaysLeft(v[s.date]);
+    const n = vehDaysLeft(s.expiry);
     // "טופל" מוצע רק כשיש על מה — מסמך שפג או שקרוב לפקיעה
     const renewBtn = (n !== null && n <= 45)
       ? `<button class="btn success" style="padding:2px 9px;font-size:11px" onclick="openVehRenew('${v.id}','${s.k}')">✅ טופל</button>`
@@ -6868,8 +6875,8 @@ function vehCard(v) {
          <a class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none" href="/api/files/${f.id}?download=1">⬇ הורדה</a>`
       : `<span class="muted" style="font-size:11px">אין קובץ</span>`) + renewBtn;
     return `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line);flex-wrap:wrap">
-      <span style="font-size:12.5px;font-weight:600;min-width:78px">${s.he}</span>
-      ${vehExpiryTag(v[s.date])}
+      <span style="font-size:12.5px;font-weight:600;min-width:78px">${escapeHtml(s.he)}</span>
+      ${vehExpiryTag(s.expiry)}
       <span style="display:flex;gap:5px;flex-wrap:wrap">${acts}</span>
     </div>`;
   }).join('');
@@ -6894,7 +6901,7 @@ function vehCard(v) {
 // בלי שדבר השתנה בפועל, ואז רישיון פג נשאר פג בלי שאיש יידע.
 window.openVehRenew = (vid, slot) => {
   const v = (_vehicles || []).find(x => x.id === vid);
-  const s = VEH_SLOTS.find(x => x.k === slot);
+  const s = vehRows(v).find(x => x.k === slot);
   if (!v || !s) return;
   _vehPending = {};
   let m = document.getElementById('vehRenewModal');
@@ -6902,8 +6909,8 @@ window.openVehRenew = (vid, slot) => {
   m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   m.innerHTML = `<div class="modal-card" style="width:min(460px,95vw)">
-    <h3 style="margin:0 0 4px">✅ טופל — ${s.he}</h3>
-    <div class="muted" style="font-size:12.5px;margin-bottom:12px">${escapeHtml(v.plate || '')}${v.maker ? ' · ' + escapeHtml(v.maker) : ''} · תוקף נוכחי: ${v[s.date] ? payDateFmt(v[s.date]) : '—'}</div>
+    <h3 style="margin:0 0 4px">✅ טופל — ${escapeHtml(s.he)}</h3>
+    <div class="muted" style="font-size:12.5px;margin-bottom:12px">${escapeHtml(v.plate || '')}${v.maker ? ' · ' + escapeHtml(v.maker) : ''} · תוקף נוכחי: ${s.expiry ? payDateFmt(s.expiry) : '—'}</div>
     <label style="font-size:12.5px;display:block">תוקף חדש
       <input type="date" id="vehRenewDate" style="width:100%;padding:9px" /></label>
     <div style="border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:10px">
@@ -6917,7 +6924,7 @@ window.openVehRenew = (vid, slot) => {
       </div>
       <input type="file" id="vehFile_${slot}" accept=".pdf,.png,.jpg,.jpeg,image/*,application/pdf" style="display:none" onchange="vehFilePick(this,'${slot}')" />
     </div>
-    <div class="muted" style="font-size:12px;margin-top:8px">ההתראות על ${s.he} ייפסקו ויתחילו מחדש לפי התוקף החדש.</div>
+    <div class="muted" style="font-size:12px;margin-top:8px">ההתראות על ${escapeHtml(s.he)} ייפסקו ויתחילו מחדש לפי התוקף החדש.</div>
     <div id="vehRenewStatus" style="min-height:20px;margin-top:8px;font-size:12.5px"></div>
     <div class="modal-actions">
       <button class="btn success" onclick="saveVehRenew('${vid}','${slot}',this)">שמור חידוש</button>
@@ -6953,12 +6960,15 @@ window.openVehicleEdit = (id) => {
   m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const g = (k) => escapeHtml(String((v && v[k]) || ''));
-  const zones = VEH_SLOTS.map(s => {
+  const zones = vehRows(v || {}).map(s => {
     const f = v && (v.files || {})[s.k];
     return `<div style="border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px">
       <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap">
-        <b style="font-size:13px">${s.he}</b>
-        <input type="date" id="veh_${s.k}_date" value="${(v && v[s.date]) || ''}" style="padding:6px 8px" />
+        <b style="font-size:13px">${escapeHtml(s.he)}</b>
+        <span style="display:flex;gap:6px;align-items:center">
+          <input type="date" id="vehdate_${s.k}" value="${s.expiry || ''}" style="padding:6px 8px" />
+          ${s.fixed ? '' : `<button class="btn ghost" style="padding:2px 8px;font-size:11px;color:var(--danger)" onclick="vehRemoveExtra('${v.id}','${s.extraId}')" title="הסרת המסמך הנוסף">✕</button>`}
+        </span>
       </div>
       <div id="vehDrop_${s.k}" class="veh-drop"
         ondragover="event.preventDefault();this.classList.add('over')"
@@ -6993,6 +7003,8 @@ window.openVehicleEdit = (id) => {
     <label style="font-size:12.5px;display:block;margin-top:10px">הערות
       <input id="vehNotes" value="${g('notes')}" style="width:100%;padding:8px" /></label>
     ${zones}
+    ${v ? `<button class="btn ghost" style="margin-top:10px;width:100%" onclick="vehAddExtra('${v.id}')">➕ הוספת מסמך נוסף</button>`
+        : `<div class="muted" style="font-size:12px;margin-top:10px">מסמכים נוספים אפשר להוסיף אחרי שמירת הרכב.</div>`}
     <div id="vehStatus" style="min-height:20px;margin-top:10px;font-size:12.5px"></div>
     <div class="modal-actions">
       <button class="btn primary" onclick="saveVehicle('${v ? v.id : ''}',this)">💾 שמור</button>
@@ -7025,10 +7037,8 @@ window.saveVehicle = async (id, btn) => {
     id: id || undefined,
     kind: gv('vehKind'), plate: gv('vehPlate').trim(), maker: gv('vehMaker').trim(),
     ownerName: gv('vehOwner').trim(), notes: gv('vehNotes').trim(),
-    licenseExpiry: gv('veh_license_date') || null,
-    ctoExpiry: gv('veh_cto_date') || null,
-    compExpiry: gv('veh_comp_date') || null,
   };
+  for (const s of VEH_SLOTS) body[s.date] = gv(`vehdate_${s.k}`) || null;
   if (!body.plate) { if (st) st.innerHTML = '<span style="color:var(--danger)">חסר מספר רכב</span>'; return; }
   if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
   const r = await fetch('/api/vehicles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -7039,6 +7049,13 @@ window.saveVehicle = async (id, btn) => {
     return;
   }
   const vid = r.vehicle.id;
+  // תוקף של מסמכים נוספים נשמר בנפרד — הוא חי על הרשומה שלהם ולא על הרכב
+  for (const x of ((r.vehicle.extras) || [])) {
+    const val = gv(`vehdate_extra:${x.id}`) || null;
+    if (String(val || '') === String(x.expiry || '')) continue;
+    await fetch(`/api/vehicles/${vid}/extra`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ extraId: x.id, title: x.title, expiry: val }) }).catch(() => {});
+  }
   const slots = Object.keys(_vehPending);
   for (let i = 0; i < slots.length; i++) {
     if (st) st.innerHTML = `<span class="muted">מעלה מסמכים… ${i + 1}/${slots.length}</span>`;
@@ -7055,6 +7072,26 @@ window.saveVehicle = async (id, btn) => {
   document.getElementById('vehModal').classList.add('hidden');
   clearApiCache();
   renderVehicles($('#content'));
+};
+
+window.vehAddExtra = async (vid) => {
+  const title = prompt('שם המסמך הנוסף (למשל: אישור מכון תקנים)');
+  if (!title || !title.trim()) return;
+  const r = await fetch(`/api/vehicles/${vid}/extra`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: title.trim() }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || !r.ok) { alert('שגיאה: ' + ((r && r.error) || '')); return; }
+  clearApiCache();
+  await renderVehicles($('#content'));
+  openVehicleEdit(vid);
+};
+
+window.vehRemoveExtra = async (vid, extraId) => {
+  if (!confirm('להסיר את המסמך הנוסף? הקובץ שלו יימחק.')) return;
+  const r = await fetch(`/api/vehicles/${vid}/extra/${extraId}`, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || !r.ok) { alert('שגיאה: ' + ((r && r.error) || '')); return; }
+  clearApiCache();
+  await renderVehicles($('#content'));
+  openVehicleEdit(vid);
 };
 
 window.vehRemoveFile = async (id, slot) => {

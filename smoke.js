@@ -602,6 +602,7 @@ check('רכבי חברה — בידוד חברות, הרשאת קבצים וחי
   if (f(iso(10)) !== 10) throw new Error('ספירת ימים שגויה');
   if (f('') !== null || f(null) !== null) throw new Error('תאריך חסר לא מטופל');
   const worst = new Function(app.match(/const VEH_SLOTS = \[[\s\S]*?\n\];/)[0]
+    + app.match(/const vehRows = \(v\) =>[\s\S]*?;\n/)[0]
     + app.match(/function vehDaysLeft\(iso\) \{[\s\S]*?\n\}/)[0]
     + app.match(/function vehWorst\(v\) \{[\s\S]*?\n\}/)[0] + '; return vehWorst;')();
   if (worst({ licenseExpiry: iso(200), ctoExpiry: iso(-3), compExpiry: iso(50) }) !== -3)
@@ -665,6 +666,33 @@ check('התראות תוקף רכב — שלושה ספים, בלי כפילות
   // ספירת ימים לפי חצות
   if (va.daysUntil(at(1), now) !== 1) throw new Error('ספירת ימים שגויה');
   if (va.daysUntil('', now) !== null) throw new Error('תאריך ריק לא מטופל');
+  return true;
+});
+
+check('סוגי מסמכי הרכב מסונכרנים בין ההתראות לממשק', () => {
+  // אותה משמעת כמו הלשוניות: סוג מסמך שנוסף במקום אחד בלבד מייצר שדה שלא מתריע,
+  // או התראה על שדה שאי אפשר למלא במסך.
+  const backend = va.VEHICLE_SLOTS.map(x => x.key);
+  const feKeys = [...app.match(/const VEH_SLOTS = \[[\s\S]*?\n\];/)[0].matchAll(/k: '([^']+)'/g)].map(m => m[1]);
+  const feFields = [...app.match(/const VEH_SLOTS = \[[\s\S]*?\n\];/)[0].matchAll(/date: '([^']+)'/g)].map(m => m[1]);
+  if (backend.join(',') !== feKeys.join(','))
+    throw new Error(`מפתחות לא תואמים — שרת: ${backend.join(',')} · ממשק: ${feKeys.join(',')}`);
+  if (va.VEHICLE_SLOTS.map(x => x.field).join(',') !== feFields.join(','))
+    throw new Error('שמות שדות התוקף לא תואמים בין השרת לממשק');
+  if (backend.length < 6) throw new Error(`רק ${backend.length} סוגי מסמכים`);
+  for (const s of va.VEHICLE_SLOTS) if (!s.he || !s.renew) throw new Error(`לסוג ${s.key} חסר תיאור או פעולת חידוש`);
+  // השרת נגזר מהמודול ולא מחזיק רשימה משלו
+  if (!/VEHICLE_SLOTS = VEH_SLOT_DEFS\.map/.test(srv)) throw new Error('השרת מחזיק רשימת סוגים נפרדת');
+
+  // מסמך נוסף שהמשתמש הגדיר — נכנס להתראות רק כשיש לו תוקף
+  const now = new Date('2026-08-25T09:00:00Z');
+  const at = (d) => { const x = new Date(now); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
+  const withExtras = { id: 'v', plate: 'X', alertsSent: {},
+    extras: [{ id: 'x1', title: 'אישור מכון תקנים', expiry: at(5) }, { id: 'x2', title: 'בלי תוקף' }] };
+  const d = va.dueAlerts([withExtras], now);
+  if (d.length !== 1) throw new Error(`מסמך נוסף: ${d.length} תזכורות במקום 1`);
+  if (d[0].slotHe !== 'אישור מכון תקנים') throw new Error('כותרת המסמך הנוסף לא מגיעה למייל');
+  if (!d[0].key.startsWith('extra:x1:')) throw new Error('מפתח השליחה של מסמך נוסף שגוי');
   return true;
 });
 

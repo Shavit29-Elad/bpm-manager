@@ -4,6 +4,7 @@
 // מניעת כפילות: מפתח השליחה כולל את תאריך התוקף עצמו
 // (`license:2027-03-15:30`). לכן חידוש מסמך מייצר מפתחות חדשים ומתחיל מחזור
 // תזכורות נקי — בלי שום קוד איפוס, ובלי סיכון שתזכורת ישנה תחסום חדשה.
+// מקור האמת היחיד לסוגי המסמכים. השרת מייבא מכאן, והפרונט מסונכרן מולו בבדיקה.
 export const VEHICLE_SLOTS = [
   { key: 'license', field: 'licenseExpiry', he: 'רישיון רכב',
     renew: 'חידוש רישיון במשרד הרישוי (טסט שנתי)' },
@@ -11,6 +12,12 @@ export const VEHICLE_SLOTS = [
     renew: 'חידוש פוליסת ביטוח חובה' },
   { key: 'comp', field: 'compExpiry', he: 'ביטוח מקיף',
     renew: 'חידוש פוליסת ביטוח מקיף' },
+  { key: 'security', field: 'securityExpiry', he: 'אישור קיום אמצעי מיגון',
+    renew: 'חידוש אישור קיום אמצעי מיגון' },
+  { key: 'towing', field: 'towingExpiry', he: 'גרירה · שמשות · פנסים ומראות',
+    renew: 'חידוש הכיסוי לגרירה, שמשות, פנסים ומראות' },
+  { key: 'ramp', field: 'rampExpiry', he: 'תסקיר רמפה',
+    renew: 'ביצוע תסקיר רמפה מחודש' },
 ];
 export const THRESHOLDS = [30, 14, 1];
 
@@ -34,8 +41,13 @@ export const sentKey = (slot, expiry, threshold) => `${slot}:${String(expiry).sl
 export function dueAlerts(vehicles, now = new Date()) {
   const out = [];
   for (const v of (vehicles || [])) {
-    for (const s of VEHICLE_SLOTS) {
-      const expiry = v[s.field];
+    const slots = VEHICLE_SLOTS.map(s => ({ ...s, expiry: v[s.field] }))
+      // מסמכים נוספים שהמשתמש הוסיף. מתריעים רק כשהוזן להם תוקף.
+      .concat((v.extras || []).filter(x => x && x.title).map(x => ({
+        key: 'extra:' + x.id, field: null, he: String(x.title),
+        renew: `חידוש ${x.title}`, expiry: x.expiry })));
+    for (const s of slots) {
+      const expiry = s.expiry;
       if (!isIso(expiry)) continue;
       const left = daysUntil(expiry, now);
       if (left === null || left < 0) continue;            // כבר פג — אין יותר מה להתריע מראש

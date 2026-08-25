@@ -21,7 +21,7 @@ import { statusMasked, loadEnvIntoProcess } from './settings.js';
 import { chatConfigured, extractEvents, interpretBonuses, extractInvoiceFields, extractIncomeDocFields, classifyExpenseAttachment, aiUsage } from './chat.js';
 import { buildBackup, backupFileName, runBackupMail, planRetention } from './backup.js';
 import { buildReport, reportHtml, monthClosed, daysSince, DEFAULT_OVERDUE_DAYS } from './dailyReport.js';
-import { dueAlerts, alertSubject, alertHtml, alertText, THRESHOLDS as VEH_THRESHOLDS } from './vehicleAlerts.js';
+import { dueAlerts, alertSubject, alertHtml, alertText, THRESHOLDS as VEH_THRESHOLDS, VEHICLE_SLOTS as VEH_SLOT_DEFS } from './vehicleAlerts.js';
 import mailer from './mailer.js';
 import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
@@ -3782,18 +3782,29 @@ function mayReadFile(req, fileRec, fileId) {
 // ---- רכבי חברה ----
 // מסמך לכל רכב: רישיון, ביטוח חובה, ביטוח מקיף. לכל אחד תוקף וקובץ.
 // קבצים מתויגים veh:<id> כדי ש-fileCompanyId יאכוף הרשאה לפי החברה של הרכב.
-const VEHICLE_SLOTS = ['license', 'cto', 'comp'];
-const VEHICLE_SLOT_HE = { license: 'רישיון רכב', cto: 'ביטוח חובה', comp: 'ביטוח מקיף' };
-const cleanVehicle = (b, prev = {}) => ({
-  kind: b.kind === 'truck' ? 'truck' : 'private',
-  plate: String(b.plate == null ? prev.plate || '' : b.plate).trim(),
-  maker: String(b.maker == null ? prev.maker || '' : b.maker).trim(),
-  ownerName: String(b.ownerName == null ? prev.ownerName || '' : b.ownerName).trim(),
-  licenseExpiry: b.licenseExpiry !== undefined ? (b.licenseExpiry || null) : (prev.licenseExpiry || null),
-  ctoExpiry: b.ctoExpiry !== undefined ? (b.ctoExpiry || null) : (prev.ctoExpiry || null),
-  compExpiry: b.compExpiry !== undefined ? (b.compExpiry || null) : (prev.compExpiry || null),
-  notes: String(b.notes == null ? prev.notes || '' : b.notes).trim(),
-});
+// נגזר ממקור האמת ב-vehicleAlerts.js — כדי שסוג מסמך חדש לא יידרש בשני מקומות
+const VEHICLE_SLOTS = VEH_SLOT_DEFS.map(s => s.key);
+const VEHICLE_SLOT_HE = Object.fromEntries(VEH_SLOT_DEFS.map(s => [s.key, s.he]));
+const VEHICLE_SLOT_FIELD = Object.fromEntries(VEH_SLOT_DEFS.map(s => [s.key, s.field]));
+// מסמך נוסף שהמשתמש הגדיר — המפתח הוא extra:<id>
+const extraId = (slot) => (String(slot).startsWith('extra:') ? String(slot).slice(6) : null);
+const findExtra = (v, slot) => { const x = extraId(slot); return x ? (v.extras || []).find(e => e.id === x) : null; };
+const validSlot = (v, slot) => VEHICLE_SLOTS.includes(slot) || Boolean(findExtra(v, slot));
+const slotLabel = (v, slot) => VEHICLE_SLOT_HE[slot] || ((findExtra(v, slot) || {}).title) || 'מסמך';
+
+const cleanVehicle = (b, prev = {}) => {
+  const out = {
+    kind: b.kind === 'truck' ? 'truck' : 'private',
+    plate: String(b.plate == null ? prev.plate || '' : b.plate).trim(),
+    maker: String(b.maker == null ? prev.maker || '' : b.maker).trim(),
+    ownerName: String(b.ownerName == null ? prev.ownerName || '' : b.ownerName).trim(),
+    notes: String(b.notes == null ? prev.notes || '' : b.notes).trim(),
+  };
+  for (const s of VEH_SLOT_DEFS) {
+    out[s.field] = b[s.field] !== undefined ? (b[s.field] || null) : (prev[s.field] || null);
+  }
+  return out;
+};
 
 add('GET', /^\/api\/vehicles$/, (req, res, _p, q) => {
   const db = load(), cid = reqCompany(q);
@@ -3828,10 +3839,10 @@ add('POST', /^\/api\/vehicles\/([^/]+)\/file$/, async (req, res, params, q, body
   if (!v) return json(res, { error: 'הרכב לא נמצא' }, 404);
   if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
   const slot = String(b.slot || '');
-  if (!VEHICLE_SLOTS.includes(slot)) return json(res, { error: 'שדה מסמך לא מוכר' }, 400);
+  if (!validSlot(v, slot)) return json(res, { error: 'שדה מסמך לא מוכר' }, 400);
   if (!b.fileBase64) return json(res, { error: 'חסר קובץ' }, 400);
   const saved = await saveFile({ employeeId: 'veh:' + v.id, kind: 'vehicle-' + slot,
-    filename: b.filename || (VEHICLE_SLOT_HE[slot] + '.pdf'), mime: b.mime || 'application/octet-stream', data: b.fileBase64 });
+    filename: b.filename || (slotLabel(v, slot) + '.pdf'), mime: b.mime || 'application/octet-stream', data: b.fileBase64 });
   v.files = v.files || {};
   const old = v.files[slot];
   v.files[slot] = { id: saved.id, filename: b.filename || null, mime: b.mime || null, at: new Date().toISOString() };
@@ -4945,6 +4956,38 @@ add('POST', /^\/api\/vehicle-alerts\/run-now$/, async (req, res, _p, q, body) =>
   json(res, { ok: true, per: await runVehicleAlerts('manual', cid) });
 });
 
+// ---- מסמכים נוספים לרכב ----
+// כל מה שלא נכנס לסוגים הקבועים. עם תוקף — נכנס גם למחזור ההתראות.
+add('POST', /^\/api\/vehicles\/([^/]+)\/extra$/, (req, res, params, q, body) => {
+  const db = load(), cid = reqCompany(q, body), b = body || {};
+  const v = (db.vehicles || []).find(x => x.id === params[0]);
+  if (!v) return json(res, { error: 'הרכב לא נמצא' }, 404);
+  if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
+  const title = String(b.title || '').trim();
+  if (!title) return json(res, { error: 'חסרה כותרת למסמך' }, 400);
+  v.extras = v.extras || [];
+  let ex = b.extraId ? v.extras.find(x => x.id === b.extraId) : null;
+  if (b.extraId && !ex) return json(res, { error: 'המסמך לא נמצא' }, 404);
+  if (ex) { ex.title = title; if (b.expiry !== undefined) ex.expiry = b.expiry || null; }
+  else { ex = { id: id('vex'), title, expiry: b.expiry || null }; v.extras.push(ex); }
+  save(db);
+  json(res, { ok: true, extra: ex });
+});
+
+add('DELETE', /^\/api\/vehicles\/([^/]+)\/extra\/([^/]+)$/, async (req, res, params, q) => {
+  const db = load(), cid = reqCompany(q);
+  const v = (db.vehicles || []).find(x => x.id === params[0]);
+  if (!v) return json(res, { error: 'הרכב לא נמצא' }, 404);
+  if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
+  const slot = 'extra:' + params[1];
+  v.extras = (v.extras || []).filter(x => x.id !== params[1]);
+  const f = (v.files || {})[slot];
+  if (f) delete v.files[slot];
+  save(db);
+  if (f && f.id) { try { await deleteFile(f.id); } catch { } }
+  json(res, { ok: true });
+});
+
 // POST /api/vehicles/:id/renew — "טופל": חידוש מסמך.
 // דורש תוקף חדש. סימון "טופל" בלי מסמך חדש רק משתיק התראה בלי שדבר השתנה
 // בפועל, ולכן אינו אפשרי כאן. התוקף החדש מייצר מפתחות תזכורת חדשים מעצמו.
@@ -4954,31 +4997,32 @@ add('POST', /^\/api\/vehicles\/([^/]+)\/renew$/, async (req, res, params, q, bod
   if (!v) return json(res, { error: 'הרכב לא נמצא' }, 404);
   if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
   const slot = String(b.slot || '');
-  if (!VEHICLE_SLOTS.includes(slot)) return json(res, { error: 'שדה מסמך לא מוכר' }, 400);
-  const field = { license: 'licenseExpiry', cto: 'ctoExpiry', comp: 'compExpiry' }[slot];
+  if (!validSlot(v, slot)) return json(res, { error: 'שדה מסמך לא מוכר' }, 400);
+  const ex = findExtra(v, slot);
+  const field = ex ? null : VEHICLE_SLOT_FIELD[slot];
   const next = String(b.expiry || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(next)) return json(res, { error: 'חסר תאריך תוקף חדש' }, 400);
   const today = new Date().toISOString().slice(0, 10);
   if (next <= today) return json(res, { error: 'התוקף החדש חייב להיות בעתיד' }, 400);
-  const prev = v[field] || null;
+  const prev = (ex ? ex.expiry : v[field]) || null;
   if (prev && next <= String(prev).slice(0, 10)) {
     return json(res, { error: `התוקף החדש (${next.split('-').reverse().join('/')}) אינו מאוחר מהקיים (${String(prev).slice(0, 10).split('-').reverse().join('/')})` }, 400);
   }
   let file = null;
   if (b.fileBase64) {
     const saved = await saveFile({ employeeId: 'veh:' + v.id, kind: 'vehicle-' + slot,
-      filename: b.filename || (VEHICLE_SLOT_HE[slot] + '.pdf'), mime: b.mime || 'application/octet-stream', data: b.fileBase64 });
+      filename: b.filename || (slotLabel(v, slot) + '.pdf'), mime: b.mime || 'application/octet-stream', data: b.fileBase64 });
     v.files = v.files || {};
     const old = v.files[slot];
     v.files[slot] = { id: saved.id, filename: b.filename || null, mime: b.mime || null, at: new Date().toISOString() };
     file = v.files[slot];
     if (old && old.id && old.id !== saved.id) { try { await deleteFile(old.id); } catch { } }
   }
-  v[field] = next;
+  if (ex) ex.expiry = next; else v[field] = next;
   v.renewals = (v.renewals || []).concat([{ slot, from: prev, to: next, at: new Date().toISOString(),
     by: (req.user && req.user.username) || null, withFile: Boolean(file) }]).slice(-30);
   save(db);
-  console.log(`[veh-renew] ${cid}: ${v.plate} · ${VEHICLE_SLOT_HE[slot]} · ${prev || '—'} → ${next}`);
+  console.log(`[veh-renew] ${cid}: ${v.plate} · ${slotLabel(v, slot)} · ${prev || '—'} → ${next}`);
   json(res, { ok: true, vehicle: v, file });
 });
 
