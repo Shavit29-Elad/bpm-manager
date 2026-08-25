@@ -3787,6 +3787,10 @@ const VEHICLE_SLOTS = VEH_SLOT_DEFS.map(s => s.key);
 const VEHICLE_SLOT_HE = Object.fromEntries(VEH_SLOT_DEFS.map(s => [s.key, s.he]));
 const VEHICLE_SLOT_FIELD = Object.fromEntries(VEH_SLOT_DEFS.map(s => [s.key, s.field]));
 // מסמך נוסף שהמשתמש הגדיר — המפתח הוא extra:<id>
+// קבצים של קטגוריה. עד עכשיו נשמר קובץ יחיד; עכשיו מערך. קורא את שני המבנים
+// כדי שרכבים שכבר הוזנו לא יאבדו את המסמך שלהם.
+const slotFiles = (v, slot) => { const f = ((v && v.files) || {})[slot]; return Array.isArray(f) ? f : (f ? [f] : []); };
+const allVehicleFiles = (v) => Object.keys((v && v.files) || {}).flatMap(k => slotFiles(v, k));
 const extraId = (slot) => (String(slot).startsWith('extra:') ? String(slot).slice(6) : null);
 const findExtra = (v, slot) => { const x = extraId(slot); return x ? (v.extras || []).find(e => e.id === x) : null; };
 const validSlot = (v, slot) => VEHICLE_SLOTS.includes(slot) || Boolean(findExtra(v, slot));
@@ -3799,6 +3803,7 @@ const cleanVehicle = (b, prev = {}) => {
     maker: String(b.maker == null ? prev.maker || '' : b.maker).trim(),
     ownerName: String(b.ownerName == null ? prev.ownerName || '' : b.ownerName).trim(),
     notes: String(b.notes == null ? prev.notes || '' : b.notes).trim(),
+    financing: String(b.financing == null ? prev.financing || '' : b.financing).trim(),
   };
   for (const s of VEH_SLOT_DEFS) {
     out[s.field] = b[s.field] !== undefined ? (b[s.field] || null) : (prev[s.field] || null);
@@ -3844,12 +3849,11 @@ add('POST', /^\/api\/vehicles\/([^/]+)\/file$/, async (req, res, params, q, body
   const saved = await saveFile({ employeeId: 'veh:' + v.id, kind: 'vehicle-' + slot,
     filename: b.filename || (slotLabel(v, slot) + '.pdf'), mime: b.mime || 'application/octet-stream', data: b.fileBase64 });
   v.files = v.files || {};
-  const old = v.files[slot];
-  v.files[slot] = { id: saved.id, filename: b.filename || null, mime: b.mime || null, at: new Date().toISOString() };
+  const rec = { id: saved.id, filename: b.filename || null, mime: b.mime || null, at: new Date().toISOString() };
+  // מוסיפים ולא מחליפים — לקטגוריה אחת יכולים להיות כמה מסמכים
+  v.files[slot] = slotFiles(v, slot).concat([rec]).slice(-12);
   save(db);
-  // מסמך שהוחלף — מוחקים את הקודם, אחרת האחסון מתמלא בקבצים שאין אליהם הפניה
-  if (old && old.id && old.id !== saved.id) { try { await deleteFile(old.id); } catch { } }
-  json(res, { ok: true, file: v.files[slot] });
+  json(res, { ok: true, file: rec, files: v.files[slot] });
 });
 
 add('DELETE', /^\/api\/vehicles\/([^/]+)\/file\/([^/]+)$/, async (req, res, params, q) => {
@@ -3858,9 +3862,16 @@ add('DELETE', /^\/api\/vehicles\/([^/]+)\/file\/([^/]+)$/, async (req, res, para
   if (!v) return json(res, { error: 'הרכב לא נמצא' }, 404);
   if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
   const slot = params[1];
-  const f = (v.files || {})[slot];
-  if (f) { delete v.files[slot]; save(db); try { await deleteFile(f.id); } catch { } }
-  json(res, { ok: true });
+  const only = q && q.fileId ? String(q.fileId) : null;
+  const list = slotFiles(v, slot);
+  const gone = only ? list.filter(f => String(f.id) === only) : list;
+  const keep = only ? list.filter(f => String(f.id) !== only) : [];
+  if (!gone.length) return json(res, { ok: true, files: keep });
+  v.files = v.files || {};
+  if (keep.length) v.files[slot] = keep; else delete v.files[slot];
+  save(db);
+  for (const f of gone) { try { await deleteFile(f.id); } catch { } }
+  json(res, { ok: true, files: keep });
 });
 
 add('DELETE', /^\/api\/vehicles\/([^/]+)$/, async (req, res, params, q) => {
@@ -3870,7 +3881,7 @@ add('DELETE', /^\/api\/vehicles\/([^/]+)$/, async (req, res, params, q) => {
   if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
   db.vehicles = db.vehicles.filter(x => x.id !== v.id);
   save(db);
-  for (const f of Object.values(v.files || {})) { try { await deleteFile(f.id); } catch { } }
+  for (const f of allVehicleFiles(v)) { try { await deleteFile(f.id); } catch { } }
   json(res, { ok: true });
 });
 
@@ -4981,10 +4992,10 @@ add('DELETE', /^\/api\/vehicles\/([^/]+)\/extra\/([^/]+)$/, async (req, res, par
   if (!ownedBy(v, cid)) return wrongCompany(res, 'הרכב');
   const slot = 'extra:' + params[1];
   v.extras = (v.extras || []).filter(x => x.id !== params[1]);
-  const f = (v.files || {})[slot];
-  if (f) delete v.files[slot];
+  const gone = slotFiles(v, slot);
+  if (v.files) delete v.files[slot];
   save(db);
-  if (f && f.id) { try { await deleteFile(f.id); } catch { } }
+  for (const f of gone) { try { await deleteFile(f.id); } catch { } }
   json(res, { ok: true });
 });
 
@@ -5013,10 +5024,9 @@ add('POST', /^\/api\/vehicles\/([^/]+)\/renew$/, async (req, res, params, q, bod
     const saved = await saveFile({ employeeId: 'veh:' + v.id, kind: 'vehicle-' + slot,
       filename: b.filename || (slotLabel(v, slot) + '.pdf'), mime: b.mime || 'application/octet-stream', data: b.fileBase64 });
     v.files = v.files || {};
-    const old = v.files[slot];
-    v.files[slot] = { id: saved.id, filename: b.filename || null, mime: b.mime || null, at: new Date().toISOString() };
-    file = v.files[slot];
-    if (old && old.id && old.id !== saved.id) { try { await deleteFile(old.id); } catch { } }
+    file = { id: saved.id, filename: b.filename || null, mime: b.mime || null, at: new Date().toISOString() };
+    // המסמך המחודש נוסף לצד הקודם — הישן הוא הראיה למה שהיה בתוקף עד היום
+    v.files[slot] = slotFiles(v, slot).concat([file]).slice(-12);
   }
   if (ex) ex.expiry = next; else v[field] = next;
   v.renewals = (v.renewals || []).concat([{ slot, from: prev, to: next, at: new Date().toISOString(),

@@ -592,8 +592,24 @@ check('רכבי חברה — בידוד חברות, הרשאת קבצים וחי
   // קובץ של רכב חייב להיפתר לחברה של הרכב, אחרת /api/files/:id יגיש אותו לכל אחד
   if (!/owner\.match\(\/\^veh:\(\.\+\)\$\/\)/.test(srv)) throw new Error('fileCompanyId לא מזהה קובץ של רכב');
   if (!/employeeId: 'veh:' \+ v\.id/.test(srv)) throw new Error('קובץ רכב לא מתויג בחברה');
-  // מסמך שהוחלף — הקודם נמחק, אחרת האחסון מתמלא בקבצים יתומים
-  if (!/if \(old && old\.id && old\.id !== saved\.id\)/.test(srv)) throw new Error('קובץ שהוחלף לא נמחק');
+  // כמה מסמכים לאותה קטגוריה: העלאה מוסיפה ולא מוחקת את הקודם
+  const iUp = srv.indexOf("add('POST', /^\\/api\\/vehicles\\/([^/]+)\\/file$/");
+  if (iUp < 0) throw new Error('ראוט ההעלאה לא נמצא');
+  const upRoute = srv.slice(iUp, srv.indexOf('\n});', iUp));
+  if (!/v\.files\[slot\] = slotFiles\(v, slot\)\.concat/.test(upRoute))
+    throw new Error('העלאה מחליפה במקום להוסיף — אי אפשר כמה מסמכים לקטגוריה');
+  if (/deleteFile\(old/.test(upRoute)) throw new Error('העלאה מוחקת מסמך קיים באותה קטגוריה');
+  // קריאה חייבת לסבול גם את המבנה הישן (קובץ יחיד), אחרת רכבים קיימים מאבדים מסמכים
+  const sf = new Function(srv.match(/const slotFiles = \(v, slot\) =>[^\n]*/)[0] + '; return slotFiles;')();
+  if (sf({ files: { license: { id: 'a' } } }, 'license').length !== 1) throw new Error('מבנה ישן (קובץ יחיד) לא נקרא');
+  if (sf({ files: { license: [{ id: 'a' }, { id: 'b' }] } }, 'license').length !== 2) throw new Error('מבנה חדש לא נקרא');
+  if (sf({}, 'license').length !== 0) throw new Error('רכב בלי קבצים מחזיר משהו');
+  const af = new Function(srv.match(/const slotFiles = \(v, slot\) =>[^\n]*/)[0] + '\n'
+    + srv.match(/const allVehicleFiles = \(v\) =>[^\n]*/)[0] + '; return allVehicleFiles;')();
+  if (af({ files: { license: [{ id: 'a' }, { id: 'b' }], cto: { id: 'c' } } }).length !== 3)
+    throw new Error('מחיקת רכב לא תאסוף את כל הקבצים');
+  // הסרת קובץ בודד לפי מזהה
+  if (!/q\.fileId/.test(srv)) throw new Error('אי אפשר להסיר קובץ בודד מתוך קטגוריה');
 
   // חיווי התוקף
   const f = new Function(app.match(/function vehDaysLeft\(iso\) \{[\s\S]*?\n\}/)[0] + '; return vehDaysLeft;')();

@@ -6803,6 +6803,8 @@ const VEH_SLOTS = [
   { k: 'ramp', he: 'תסקיר רמפה', date: 'rampExpiry' },
 ];
 // כל שורות המסמכים של רכב — הקבועות + הנוספות שהמשתמש הגדיר
+// קבצים של קטגוריה — תומך גם ברכבים שנשמרו כשהיה קובץ יחיד
+const vehFiles = (v, slot) => { const f = ((v && v.files) || {})[slot]; return Array.isArray(f) ? f : (f ? [f] : []); };
 const vehRows = (v) => VEH_SLOTS.map(s => ({ k: s.k, he: s.he, expiry: v[s.date], fixed: true }))
   .concat(((v && v.extras) || []).map(x => ({ k: 'extra:' + x.id, he: x.title, expiry: x.expiry, fixed: false, extraId: x.id })));
 const VEH_KIND_HE = { truck: 'משאית', private: 'פרטי' };
@@ -6864,15 +6866,16 @@ function vehCard(v) {
   const worst = vehWorst(v);
   const edge = worst === null ? 'var(--line)' : worst < 0 ? 'var(--danger)' : worst <= 30 ? '#f59e0b' : 'var(--accent2)';
   const rows = vehRows(v).map(s => {
-    const f = (v.files || {})[s.k];
+    const fs = vehFiles(v, s.k);
     const n = vehDaysLeft(s.expiry);
     // "טופל" מוצע רק כשיש על מה — מסמך שפג או שקרוב לפקיעה
     const renewBtn = (n !== null && n <= 45)
       ? `<button class="btn success" style="padding:2px 9px;font-size:11px" onclick="openVehRenew('${v.id}','${s.k}')">✅ טופל</button>`
       : '';
-    const acts = (f
-      ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('/api/files/${f.id}')">👁 צפייה</button>
-         <a class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none" href="/api/files/${f.id}?download=1">⬇ הורדה</a>`
+    const acts = (fs.length
+      ? fs.map((f, i) => `<span class="tag" style="font-size:10px;padding:1px 6px" title="${escAttr(f.filename || 'מסמך')}">
+          <span style="cursor:pointer;text-decoration:underline" onclick="previewDoc('/api/files/${f.id}')">👁${fs.length > 1 ? ' ' + (i + 1) : ''}</span>
+          <a href="/api/files/${f.id}?download=1" style="text-decoration:none">⬇</a></span>`).join(' ')
       : `<span class="muted" style="font-size:11px">אין קובץ</span>`) + renewBtn;
     return `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line);flex-wrap:wrap">
       <span style="font-size:12.5px;font-weight:600;min-width:78px">${escapeHtml(s.he)}</span>
@@ -6893,6 +6896,7 @@ function vehCard(v) {
       </div>` : ''}
     </div>
     ${v.notes ? `<div class="muted" style="font-size:12px;margin-top:6px">${escapeHtml(v.notes)}</div>` : ''}
+    ${v.financing ? `<div class="muted" style="font-size:12px;margin-top:4px">💰 מימון: ${escapeHtml(v.financing)}</div>` : ''}
     <div style="margin-top:8px">${rows}</div>
   </div>`;
 }
@@ -6938,7 +6942,7 @@ window.saveVehRenew = async (vid, slot, btn) => {
   const expiry = (document.getElementById('vehRenewDate') || {}).value || '';
   if (!expiry) { if (st) st.innerHTML = '<span style="color:var(--danger)">חובה להזין תוקף חדש</span>'; return; }
   if (btn) { btn.disabled = true; btn.textContent = 'שומר…'; }
-  const body = { slot, expiry, ...(_vehPending[slot] || {}) };
+  const body = { slot, expiry, ...((_vehPending[slot] || [])[0] || {}) };
   const r = await fetch(`/api/vehicles/${vid}/renew`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (!r || !r.ok) {
@@ -6961,7 +6965,7 @@ window.openVehicleEdit = (id) => {
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const g = (k) => escapeHtml(String((v && v[k]) || ''));
   const zones = vehRows(v || {}).map(s => {
-    const f = v && (v.files || {})[s.k];
+    const fs = v ? vehFiles(v, s.k) : [];
     return `<div style="border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px">
       <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap">
         <b style="font-size:13px">${escapeHtml(s.he)}</b>
@@ -6975,14 +6979,15 @@ window.openVehicleEdit = (id) => {
         ondragleave="this.classList.remove('over')"
         ondrop="vehDrop(event,'${s.k}')"
         onclick="document.getElementById('vehFile_${s.k}').click()">
-        <span id="vehDropTxt_${s.k}">${f ? `📄 ${escapeHtml(f.filename || 'קובץ קיים')} — לחץ או גרור להחלפה` : 'גרור קובץ לכאן, או לחץ לבחירה'}</span>
+        <span id="vehDropTxt_${s.k}">גרור קובץ לכאן, או לחץ לבחירה${fs.length ? ' — יתווסף לקיימים' : ''}</span>
       </div>
       <input type="file" id="vehFile_${s.k}" accept=".pdf,.png,.jpg,.jpeg,image/*,application/pdf" style="display:none" onchange="vehFilePick(this,'${s.k}')" />
-      ${f ? `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-        <button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('/api/files/${f.id}')">👁 צפייה</button>
-        <a class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none" href="/api/files/${f.id}?download=1">⬇ הורדה</a>
-        <button class="btn ghost" style="padding:2px 9px;font-size:11px;color:var(--danger)" onclick="vehRemoveFile('${v.id}','${s.k}')">הסר קובץ</button>
-      </div>` : ''}
+      ${fs.map(f => `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center">
+        <span style="flex:1;min-width:110px;font-size:12px" title="${escAttr(f.filename || '')}">📄 ${escapeHtml((f.filename || 'מסמך').slice(0, 34))}</span>
+        <button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="previewDoc('/api/files/${f.id}')">👁</button>
+        <a class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none" href="/api/files/${f.id}?download=1">⬇</a>
+        <button class="btn ghost" style="padding:2px 9px;font-size:11px;color:var(--danger)" onclick="vehRemoveFile('${v.id}','${s.k}','${f.id}')">הסר</button>
+      </div>`).join('')}
     </div>`;
   }).join('');
   m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw);max-height:92vh;max-height:92dvh;overflow:auto">
@@ -7002,6 +7007,8 @@ window.openVehicleEdit = (id) => {
     </div>
     <label style="font-size:12.5px;display:block;margin-top:10px">הערות
       <input id="vehNotes" value="${g('notes')}" style="width:100%;padding:8px" /></label>
+    <label style="font-size:12.5px;display:block;margin-top:10px">מימון הרכב
+      <input id="vehFinancing" value="${g('financing')}" placeholder="מאיפה נלקח המימון — למשל ליסינג מימוני, הלוואה בנקאית, הון עצמי" style="width:100%;padding:8px" /></label>
     ${zones}
     ${v ? `<button class="btn ghost" style="margin-top:10px;width:100%" onclick="vehAddExtra('${v.id}')">➕ הוספת מסמך נוסף</button>`
         : `<div class="muted" style="font-size:12px;margin-top:10px">מסמכים נוספים אפשר להוסיף אחרי שמירת הרכב.</div>`}
@@ -7019,8 +7026,9 @@ async function vehTakeFile(file, slot) {
   if (!file) return;
   if (file.size > 10 * 1024 * 1024) { if (txt) txt.textContent = '⚠ הקובץ גדול מ-10MB'; return; }
   const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.readAsDataURL(file); });
-  _vehPending[slot] = { fileBase64: b64, filename: file.name, mime: file.type || 'application/octet-stream' };
-  if (txt) txt.textContent = `📎 ${file.name} — יישמר בלחיצה על "שמור"`;
+  _vehPending[slot] = (_vehPending[slot] || []).concat([{ fileBase64: b64, filename: file.name, mime: file.type || 'application/octet-stream' }]);
+  const n = _vehPending[slot].length;
+  if (txt) txt.textContent = n === 1 ? `📎 ${file.name} — יישמר בלחיצה על "שמור"` : `📎 ${n} קבצים נבחרו — יישמרו בלחיצה על "שמור"`;
 }
 window.vehFilePick = (input, slot) => { vehTakeFile(input.files && input.files[0], slot); };
 window.vehDrop = (ev, slot) => {
@@ -7036,7 +7044,7 @@ window.saveVehicle = async (id, btn) => {
   const body = {
     id: id || undefined,
     kind: gv('vehKind'), plate: gv('vehPlate').trim(), maker: gv('vehMaker').trim(),
-    ownerName: gv('vehOwner').trim(), notes: gv('vehNotes').trim(),
+    ownerName: gv('vehOwner').trim(), notes: gv('vehNotes').trim(), financing: gv('vehFinancing').trim(),
   };
   for (const s of VEH_SLOTS) body[s.date] = gv(`vehdate_${s.k}`) || null;
   if (!body.plate) { if (st) st.innerHTML = '<span style="color:var(--danger)">חסר מספר רכב</span>'; return; }
@@ -7056,14 +7064,15 @@ window.saveVehicle = async (id, btn) => {
     await fetch(`/api/vehicles/${vid}/extra`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ extraId: x.id, title: x.title, expiry: val }) }).catch(() => {});
   }
-  const slots = Object.keys(_vehPending);
-  for (let i = 0; i < slots.length; i++) {
-    if (st) st.innerHTML = `<span class="muted">מעלה מסמכים… ${i + 1}/${slots.length}</span>`;
+  const jobs = Object.entries(_vehPending).flatMap(([slot, arr]) => (arr || []).map(f => ({ slot, f })));
+  for (let i = 0; i < jobs.length; i++) {
+    if (st) st.innerHTML = `<span class="muted">מעלה מסמכים… ${i + 1}/${jobs.length}</span>`;
     const up = await fetch(`/api/vehicles/${vid}/file`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slot: slots[i], ..._vehPending[slots[i]] }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+      body: JSON.stringify({ slot: jobs[i].slot, ...jobs[i].f }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (!up || !up.ok) {
       if (btn) { btn.disabled = false; btn.textContent = '💾 שמור'; }
-      if (st) st.innerHTML = `<span style="color:var(--danger)">הרכב נשמר, אך העלאת "${VEH_SLOTS.find(s => s.k === slots[i]).he}" נכשלה: ${escapeHtml(String(up && up.error || ''))}</span>`;
+      const label = (vehRows(r.vehicle).find(s => s.k === jobs[i].slot) || {}).he || 'מסמך';
+      if (st) st.innerHTML = `<span style="color:var(--danger)">הרכב נשמר, אך העלאת "${escapeHtml(label)}" נכשלה: ${escapeHtml(String(up && up.error || ''))}</span>`;
       _vehicles = []; renderVehicles($('#content'));
       return;
     }
@@ -7094,9 +7103,10 @@ window.vehRemoveExtra = async (vid, extraId) => {
   openVehicleEdit(vid);
 };
 
-window.vehRemoveFile = async (id, slot) => {
+window.vehRemoveFile = async (id, slot, fileId) => {
   if (!confirm('להסיר את הקובץ?')) return;
-  const r = await fetch(`/api/vehicles/${id}/file/${slot}`, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const qs = fileId ? `?fileId=${encodeURIComponent(fileId)}` : '';
+  const r = await fetch(`/api/vehicles/${id}/file/${encodeURIComponent(slot)}${qs}`, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (!r || !r.ok) { alert('שגיאה: ' + ((r && r.error) || '')); return; }
   clearApiCache();
   await renderVehicles($('#content'));
