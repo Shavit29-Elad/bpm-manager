@@ -717,8 +717,19 @@ check('העברת רשומות מקומיות לחשבונית ירוקה — מ
     throw new Error('רשומה שכבר הועברה תיווצר שוב');
   if (!/errorCode"\\s\*:\\s\*1010/.test(mig)) throw new Error('כפילות לא מטופלת כ"כבר קיימת"');
   // שליחה חוזרת לרו"ח רק בבקשה מפורשת ורק למה שנכשל — אחרת עותקים כפולים
-  if (!/b\.emailMissing === true && !wasForwarded/.test(mig))
+  // שליחה חוזרת רק כשידוע בוודאות שהשליחה נכשלה. היעדר רישום אינו "לא נשלח":
+  // במסלול הרגיל הטיוטה נמחקת ו-draftId מתאפס, ואז אין רישום כלל.
+  if (!/b\.emailMissing === true && wasForwarded\(db, p\) === false/.test(mig))
     throw new Error('המיגרציה עלולה לשלוח מיילים כפולים לרו"ח');
+  const wf = new Function(srv.match(/const wasForwarded = \(db, p\) => \{[\s\S]*?\n\};/)[0] + '; return wasForwarded;')();
+  if (wf({}, { id: 'x' }) !== null) throw new Error('רשומה בלי טיוטה סווגה כ"לא נשלחה"');
+  if (wf({ approvedDrafts: {} }, { id: 'x', draftId: 'd' }) !== null) throw new Error('טיוטה שנמחקה סווגה כ"לא נשלחה"');
+  if (wf({ approvedDrafts: { d: { forwarded: false } } }, { id: 'x', draftId: 'd' }) !== false) throw new Error('כשל שליחה אמיתי לא מזוהה');
+  if (wf({ approvedDrafts: { d: { forwarded: true } } }, { id: 'x', draftId: 'd' }) !== true) throw new Error('שליחה מוצלחת לא מזוהה');
+  // סיווג — לא נופלים על "הראשון ברשימה"
+  if (/cls\[0\]/.test(mig)) throw new Error('המיגרציה בוחרת סיווג שרירותי');
+  if (!/b\.fallbackClassificationId/.test(mig)) throw new Error('אין סיווג ברירת מחדל שנבחר במפורש');
+  if (!/אין סיווג — יש לבחור סיווג ברירת מחדל/.test(mig)) throw new Error('מסמך בלי סיווג יועבר בכל זאת');
   // ההעברה לא מוחקת שום דבר
   const destructive = mig.match(/db\w*\.\w+ = [^;]*\.filter\(|delete db|deleteFile\(/g) || [];
   if (destructive.length) throw new Error('ההעברה מכילה פעולת מחיקה: ' + destructive.join(','));

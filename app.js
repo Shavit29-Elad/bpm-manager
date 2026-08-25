@@ -7242,6 +7242,14 @@ async function renderBusiness(c) {
         <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <b style="font-size:13.5px">🔄 העברת הוצאות שנשמרו מקומית לחשבונית ירוקה</b>
+        <div class="muted" style="font-size:12px;margin:3px 0 8px">הוצאות שנקלטו כשהחברה לא נוצרה בחשבונית ירוקה נשמרו כרשומה מקומית בלבד. כאן אפשר להעביר אותן לשם — יצירת מסמכים אמיתיים, כולל צירוף הקובץ השמור.</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn ghost" onclick="loadMigrateReport(this)">בדוק מה ממתין</button>
+        </div>
+        <div id="migReport" style="margin-top:8px;font-size:13px"></div>
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
         <b style="font-size:13.5px">🔍 השוואת הוצאות מול חשבונית ירוקה</b>
         <div class="muted" style="font-size:12px;margin:3px 0 8px">בדיקה בלבד — לא משנה כלום. מראה אילו הוצאות קיימות בחשבונית ירוקה ולא במערכת, ולהפך.</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -7514,6 +7522,69 @@ window.backupRunNow = async (btn) => {
     : `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || r.skipped || 'נכשל'))}</span>`;
 };
 // השוואת הרשימה המקומית מול חשבונית ירוקה — לכל שלוש החברות ברצף
+// דוח יבש: מה ממתין להעברה לחשבונית ירוקה. לא נוגע בכלום.
+window.loadMigrateReport = async (btn) => {
+  const box = document.getElementById('migReport'); if (!box) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'בודק…'; }
+  const r = await api('/api/local-expenses/report').catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) { btn.disabled = false; btn.textContent = 'בדוק מה ממתין'; }
+  if (!r || r.error) { box.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  if (!r.total) { box.innerHTML = `<span style="color:var(--accent2)">✓ אין הוצאות שממתינות להעברה — הכול כבר בחשבונית ירוקה.</span>`; return; }
+  const TYPE_HE = { 305: 'חשבונית מס', 320: 'מס-קבלה', 400: 'קבלה', 330: 'זיכוי' };
+  const types = Object.entries(r.byType || {}).map(([t, n]) => `${TYPE_HE[t] || t}: ${n}`).join(' · ');
+  const blocked = (r.blocked || []).length
+    ? `<div class="warn-banner" style="margin:8px 0">${r.blocked.map(escapeHtml).join('<br>')}</div>` : '';
+  // סיווג: מסמך בלי סיווג ספק יקבל את מה שייבחר כאן. בלי בחירה — לא מועבר.
+  const clsSel = r.needFallback
+    ? `<div style="margin-top:8px">
+        <div style="font-size:12.5px;margin-bottom:3px">${r.needFallback} מסמכים אין לספק שלהם סיווג הוצאה. באיזה סיווג לרשום אותם?</div>
+        <select id="migFallbackClass" style="padding:7px;min-width:220px">
+          <option value="">— בחר סיווג —</option>
+          ${(r.classificationList || []).map(c => `<option value="${escAttr(c.id)}">${escapeHtml(c.name)}</option>`).join('')}
+        </select></div>`
+    : '';
+  box.innerHTML = `${blocked}
+    <div style="border:1px solid var(--line);border-radius:12px;padding:12px">
+      <div><b>${r.total}</b> הוצאות ממתינות · סה"כ <b>${money(r.sum)}</b></div>
+      <div class="muted" style="font-size:12.5px;margin-top:3px">${types}</div>
+      <div class="muted" style="font-size:12.5px">${r.withFile} מתוכן עם קובץ מצורף · ${r.suppliers.matched} ספקים כבר קיימים${r.suppliers.toCreate ? ` · ${r.suppliers.toCreate} ייווצרו` : ''}</div>
+      <div class="muted" style="font-size:12.5px">${r.withSupplierClass} יקבלו את סיווג ההוצאה של הספק</div>
+      ${clsSel}
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn primary" ${r.connected && !(r.blocked || []).length ? '' : 'disabled'} onclick="runMigrate(this)">העבר לחשבונית ירוקה</button>
+        <span class="muted" style="font-size:12px">רץ באצוות · אפשר לעצור ולהמשיך בכל שלב</span>
+      </div>
+      <div id="migProgress" style="margin-top:8px;font-size:12.5px"></div>
+    </div>`;
+};
+
+let _migStop = false;
+window.runMigrate = async (btn) => {
+  const r0 = document.getElementById('migProgress');
+  const fb = (document.getElementById('migFallbackClass') || {}).value || '';
+  const need = document.getElementById('migFallbackClass');
+  if (need && !fb) { r0.innerHTML = '<span style="color:var(--danger)">יש לבחור סיווג הוצאה למסמכים שאין לספק שלהם סיווג.</span>'; return; }
+  if (!confirm('להעביר את ההוצאות לחשבונית ירוקה?\n\nייווצרו שם מסמכי הוצאה אמיתיים, כולל צירוף הקבצים.\nלא יישלחו מיילים — המסמכים כבר הועברו לרו"ח בקליטה.\n\nהפעולה אינה ניתנת לביטול מהמערכת.')) return;
+  _migStop = false;
+  btn.disabled = true; btn.textContent = 'מעביר…';
+  let done = 0, failed = [];
+  for (let round = 0; round < 40 && !_migStop; round++) {
+    const r = await fetch('/api/local-expenses/migrate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true, limit: 15, fallbackClassificationId: fb || undefined }) })
+      .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (!r || !r.ok) { r0.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || 'ההעברה נכשלה'))}</span>`; break; }
+    done += r.migrated;
+    failed.push(...(r.results || []).filter(x => x.error || x.skipped));
+    r0.innerHTML = `<span class="muted">הועברו ${done} · נותרו ${r.remaining}…</span>`;
+    if (!r.remaining || !r.processed) break;
+  }
+  btn.disabled = false; btn.textContent = 'העבר לחשבונית ירוקה';
+  const problems = failed.length
+    ? `<div style="margin-top:6px;color:var(--danger)">${failed.length} לא הועברו:<br>${failed.slice(0, 8).map(x => escapeHtml(`${x.label}: ${x.error || x.skipped}`)).join('<br>')}</div>` : '';
+  r0.innerHTML = `<span style="color:var(--accent2)">✓ הועברו ${done} הוצאות לחשבונית ירוקה.</span>${problems}`;
+  clearApiCache();
+};
+
 window.runPayCompare = async (btn) => {
   const box = document.getElementById('bizCompare'); if (!box) return;
   btn.disabled = true; box.style.display = 'block'; box.textContent = 'מריץ…';

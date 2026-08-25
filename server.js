@@ -3788,10 +3788,15 @@ function mayReadFile(req, fileRec, fileId) {
 //   · ההעברה עצמה דורשת confirm מפורש ורצה באצוות,
 //   · אינה שולחת מיילים — ההעברה לרו"ח כבר נעשתה בקליטה המקורית,
 //   · מדלגת על רשומה שכבר הועברה, ומטפלת בכפילות (1010) כ"כבר קיימת".
-// האם ההוצאה הועברה במייל לרו"ח בקליטה. נשמר על הטיוטה שאושרה.
+// האם ההוצאה הועברה במייל לרו"ח בקליטה. הסימון נשמר על הטיוטה שאושרה — אבל
+// במסלול הרגיל הטיוטה נמחקת ו-draftId מתאפס, ואז אין לנו רישום כלל.
+// מחזיר true / false / null(לא ידוע), כדי שלא נסיק "לא נשלח" מהיעדר רישום
+// ונציף את הרו"ח ב-111 עותקים של מסמכים שכבר קיבל.
 const wasForwarded = (db, p) => {
-  const rec = p && p.draftId ? (db.approvedDrafts || {})[p.draftId] : null;
-  return Boolean(rec && rec.forwarded);
+  if (!p || !p.draftId) return null;
+  const rec = (db.approvedDrafts || {})[p.draftId];
+  if (!rec) return null;
+  return Boolean(rec.forwarded);
 };
 const localMigratable = (db, cid) => (db.supplierPayables || []).filter(p =>
   ownedBy(p, cid) && !p.giExpenseId
@@ -3804,12 +3809,13 @@ add('GET', /^\/api\/local-expenses\/report$/, async (req, res, _p, q) => {
   const db = load(), cid = reqCompany(q);
   const list = localMigratable(db, cid);
   const connected = giEnabled(cid) && greenInvoice.haveCredentials();
-  const out = { companyId: cid, connected, total: list.length,
+  const out = { companyId: cid, connected, total: list.length, classificationList: [], withSupplierClass: 0, needFallback: 0,
     withFile: list.filter(p => p.localFileId).length,
     sum: Math.round(list.reduce((a, p) => a + (Number(p.amount) || 0), 0)),
     // המייל לרו"ח נשלח בקליטה המקורית. כאן סופרים כמה מהן השליחה נכשלה בהן,
     // כי רק אותן יש טעם לשלוח שוב — שליחה גורפת תייצר עותקים כפולים אצל הרו"ח.
-    notForwarded: list.filter(p => !wasForwarded(db, p)).length,
+    forwardFailed: list.filter(p => wasForwarded(db, p) === false).length,
+    forwardUnknown: list.filter(p => wasForwarded(db, p) === null).length,
     byType: {}, suppliers: { matched: 0, toCreate: 0, names: [] }, classifications: 0, blocked: [] };
   for (const p of list) out.byType[p.documentType || '?'] = (out.byType[p.documentType || '?'] || 0) + 1;
   if (!connected) { out.blocked.push('חשבונית ירוקה אינה מחוברת לחברה זו — יש להזין מפתחות'); return json(res, out); }
@@ -3825,6 +3831,13 @@ add('GET', /^\/api\/local-expenses\/report$/, async (req, res, _p, q) => {
     seen.add(n);
     if (byName.has(n)) out.suppliers.matched++;
     else { out.suppliers.toCreate++; out.suppliers.names.push(p.supplierName); }
+  }
+  out.classificationList = cls.map(c => ({ id: c.id, name: c.name || c.title || c.id }));
+  // כמה מהמסמכים יקבלו את הסיווג של הספק, וכמה יזדקקו לברירת מחדל שתיבחר במפורש.
+  // נפילה שקטה על "הסיווג הראשון ברשימה" הייתה מתייגת מסמכים בקטגוריה שרירותית.
+  for (const p of list) {
+    const sup = byName.get(migNormName(p.supplierName));
+    if (sup && sup.accountingClassificationId) out.withSupplierClass++; else out.needFallback++;
   }
   if (!cls.length) out.blocked.push('אין סיווגי הוצאה בחשבונית ירוקה — נדרשים ליצירת הוצאה');
   json(res, out);
@@ -3854,7 +3867,9 @@ add('POST', /^\/api\/local-expenses\/migrate$/, async (req, res, _p, q, body) =>
         if (sup && sup.id) byName.set(migNormName(p.supplierName), sup);
       }
       if (!sup || !sup.id) { results.push({ id: p.id, label, skipped: 'אין ספק' }); continue; }
-      const classId = sup.accountingClassificationId || (cls[0] && cls[0].id) || null;
+      // סיווג הספק אם מוגדר; אחרת רק מה שנבחר במפורש. בלי ניחוש.
+      const classId = sup.accountingClassificationId || b.fallbackClassificationId || null;
+      if (!classId) { results.push({ id: p.id, label, skipped: 'אין סיווג — יש לבחור סיווג ברירת מחדל' }); continue; }
       const amount = Math.abs(Number(p.amount) || 0);
       const net = Math.abs(Number(p.amountExcludeVat) || 0) || +(amount / 1.18).toFixed(2);
       const expBody = {
@@ -3884,7 +3899,7 @@ add('POST', /^\/api\/local-expenses\/migrate$/, async (req, res, _p, q, body) =>
       }
       // שליחה חוזרת לרו"ח — רק להוצאות שהשליחה בהן נכשלה בקליטה, ורק בבקשה מפורשת
       let mailed = null;
-      if (b.emailMissing === true && !wasForwarded(db, p) && p.localFileId) {
+      if (b.emailMissing === true && wasForwarded(db, p) === false && p.localFileId) {
         try {
           const acct = (bizProfile(db, cid).accountantEmail || '').trim();
           const creds = companyMailCreds(db, cid);
