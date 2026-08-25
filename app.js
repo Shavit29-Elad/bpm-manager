@@ -2571,8 +2571,11 @@ function invoiceCell(e) {
     // מסמך התשלום שאינו מקושר לאירוע — קבלה שהתגלתה דרך התאמת הבנק. מוצג לצד
     // חשבונית המס כדי שאפשר יהיה לפתוח אותה ולראות מתי ועל מה שולם.
     const pd = (e.clientPayStatus || {}).payDoc;
-    const payTag = pd && !docs.some(d => String(d.id) === String(pd.id))
-      ? `<span class="tag" style="${tagCss};background:#e7f7ee;color:#0a7d33" title="מסמך התשלום — נמצא דרך התאמת הבנק. לחץ לצפייה" onclick="previewLinkedDoc('${pd.id}',this,'${e.id}')">${SHORT_BILL[Number(pd.type)] || 'קבלה'}${pd.number ? ' #' + pd.number : ''} 👁</span>`
+    // הקבלה שמורה על שורת הבנק לפעמים עם מזהה ולפעמים עם קישור בלבד — שני המסלולים נתמכים
+    const pdOpen = pd && pd.id ? `previewLinkedDoc('${pd.id}',this,'${e.id}')`
+      : pd && pd.url ? `previewDoc('${String(pd.url).replace(/'/g, '%27')}')` : '';
+    const payTag = pd && pdOpen && !docs.some(d => String(d.id) === String(pd.id) || (pd.number && String(d.number) === String(pd.number)))
+      ? `<span class="tag" style="${tagCss};background:#e7f7ee;color:#0a7d33" title="מסמך התשלום — מקושר לחשבונית בהתאמת הבנק. לחץ לצפייה" onclick="${pdOpen}">${SHORT_BILL[Number(pd.type)] || 'קבלה'}${pd.number ? ' #' + pd.number : ''} 👁</span>`
       : '';
     const tags = docs.length
       ? docs.map(d => `<span class="tag invoiced" style="${tagCss}" title="צפייה / הורדה / מסמך המשך" onclick="previewLinkedDoc('${d.id}',this,'${e.id}')">${SHORT_BILL[Number(d.type)] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join('') + payTag
