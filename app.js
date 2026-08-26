@@ -7549,6 +7549,10 @@ window.loadMigrateReport = async (btn) => {
       <div class="muted" style="font-size:12.5px;margin-top:3px">${types}</div>
       <div class="muted" style="font-size:12.5px">${r.withFile} מתוכן עם קובץ מצורף · ${r.suppliers.matched} ספקים כבר קיימים${r.suppliers.toCreate ? ` · ${r.suppliers.toCreate} ייווצרו` : ''}</div>
       <div class="muted" style="font-size:12.5px">${r.withSupplierClass} יקבלו את סיווג ההוצאה של הספק</div>
+      ${(r.localIncome && r.localIncome.count) ? `<div style="margin-top:8px;padding:8px 10px;border-inline-start:3px solid var(--accent);background:var(--panel2);border-radius:8px;font-size:12.5px">
+        בנוסף שמורים כאן <b>${r.localIncome.count}</b> מסמכי הכנסה (${money(r.localIncome.sum)}) — <b>הם אינם מועברים.</b>
+        <div class="muted" style="font-size:12px;margin-top:2px">${escapeHtml(r.localIncome.note)}</div>
+      </div>` : ''}
       ${clsSel}
       <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="btn primary" ${r.connected && !(r.blocked || []).length ? '' : 'disabled'} onclick="runMigrate(this)">העבר לחשבונית ירוקה</button>

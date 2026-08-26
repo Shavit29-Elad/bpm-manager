@@ -3833,6 +3833,17 @@ add('GET', /^\/api\/local-expenses\/report$/, async (req, res, _p, q) => {
     else { out.suppliers.toCreate++; out.suppliers.names.push(p.supplierName); }
   }
   out.classificationList = cls.map(c => ({ id: c.id, name: c.name || c.title || c.id }));
+  // מסמכי הכנסה ששמורים מקומית (חשבוניות שהופקו במקום אחר והועלו כקבצים).
+  // מדווחים אותם כדי שהתמונה תהיה מלאה — אבל הם אינם חלק מההעברה, ובכוונה:
+  // יצירת מסמך הכנסה בחשבונית ירוקה היא הפקת חשבונית חדשה עם מספר חדש, כלומר
+  // דיווח כפול של אותה הכנסה לרשויות. הוצאה אפשר לרשום; הכנסה שכבר הופקה — לא.
+  const localIncome = (db.oldInvoices || []).filter(r => ownedBy(r, cid));
+  out.localIncome = {
+    count: localIncome.length,
+    sum: Math.round(localIncome.reduce((a, r) =>
+      a + (r.linkedDocs || []).reduce((x, d) => x + (Number(d.amount) || 0), 0), 0)),
+    note: 'מסמכי הכנסה שהועלו כקבצים. אינם מועברים — הפקה מחדש בחשבונית ירוקה תדווח את אותה הכנסה פעמיים.',
+  };
   // כמה מהמסמכים יקבלו את הסיווג של הספק, וכמה יזדקקו לברירת מחדל שתיבחר במפורש.
   // נפילה שקטה על "הסיווג הראשון ברשימה" הייתה מתייגת מסמכים בקטגוריה שרירותית.
   for (const p of list) {

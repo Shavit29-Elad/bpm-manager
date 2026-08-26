@@ -730,6 +730,10 @@ check('העברת רשומות מקומיות לחשבונית ירוקה — מ
   if (/cls\[0\]/.test(mig)) throw new Error('המיגרציה בוחרת סיווג שרירותי');
   if (!/b\.fallbackClassificationId/.test(mig)) throw new Error('אין סיווג ברירת מחדל שנבחר במפורש');
   if (!/אין סיווג — יש לבחור סיווג ברירת מחדל/.test(mig)) throw new Error('מסמך בלי סיווג יועבר בכל זאת');
+  // מסמכי הכנסה מדווחים אבל לעולם לא מועברים — הפקה מחדש = דיווח כפול לרשויות
+  const rep = srv.slice(iRep, srv.indexOf('\n});', iRep));
+  if (!/localIncome/.test(rep)) throw new Error('מסמכי הכנסה מקומיים לא מדווחים בדוח');
+  if (/oldInvoices/.test(mig)) throw new Error('ההעברה נוגעת במסמכי הכנסה — סכנת דיווח כפול');
   // ההעברה לא מוחקת שום דבר
   const destructive = mig.match(/db\w*\.\w+ = [^;]*\.filter\(|delete db|deleteFile\(/g) || [];
   if (destructive.length) throw new Error('ההעברה מכילה פעולת מחיקה: ' + destructive.join(','));
