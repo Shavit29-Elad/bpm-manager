@@ -3837,6 +3837,15 @@ add('GET', /^\/api\/local-expenses\/report$/, async (req, res, _p, q) => {
   // מדווחים אותם כדי שהתמונה תהיה מלאה — אבל הם אינם חלק מההעברה, ובכוונה:
   // יצירת מסמך הכנסה בחשבונית ירוקה היא הפקת חשבונית חדשה עם מספר חדש, כלומר
   // דיווח כפול של אותה הכנסה לרשויות. הוצאה אפשר לרשום; הכנסה שכבר הופקה — לא.
+  // ההעברה לרו"ח היא תנאי שקט: בלי כתובת או בלי חשבון מייל, ההוצאה תיווצר
+  // בחשבונית ירוקה אבל לא תגיע אליו — ואף אחד לא ישים לב עד סוף החודש.
+  const _mcreds = companyMailCreds(db, cid);
+  out.accountant = {
+    email: (bizProfile(db, cid).accountantEmail || '').trim() || null,
+    mailConfigured: mailer.companyMailConfigured(_mcreds) || mailer.mailerConfigured(),
+  };
+  if (!out.accountant.email) out.blocked.push('לא הוגדרה כתובת רו"ח בפרטי העסק — הוצאות ייווצרו בחשבונית ירוקה אך לא יועברו במייל');
+  else if (!out.accountant.mailConfigured) out.blocked.push('אין חשבון מייל מוגדר לחברה — לא ניתן להעביר הוצאות לרו"ח');
   const localIncome = (db.oldInvoices || []).filter(r => ownedBy(r, cid));
   out.localIncome = {
     count: localIncome.length,

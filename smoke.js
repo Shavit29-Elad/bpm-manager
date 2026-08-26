@@ -733,6 +733,10 @@ check('העברת רשומות מקומיות לחשבונית ירוקה — מ
   // מסמכי הכנסה מדווחים אבל לעולם לא מועברים — הפקה מחדש = דיווח כפול לרשויות
   const rep = srv.slice(iRep, srv.indexOf('\n});', iRep));
   if (!/localIncome/.test(rep)) throw new Error('מסמכי הכנסה מקומיים לא מדווחים בדוח');
+  // ההעברה לרו"ח נשארת גם במסלול חשבונית ירוקה — ותנאיה מדווחים
+  if (!/accountantEmail/.test(rep)) throw new Error('הדוח לא בודק שההעברה לרו"ח מוגדרת');
+  const giPath = srv.slice(srv.indexOf('// העברת קובץ ההוצאה אוטומטית לכתובת רו"ח'));
+  if (!/mailer\.sendMailFrom/.test(giPath.slice(0, 1200))) throw new Error('מסלול חשבונית ירוקה לא מעביר לרו"ח');
   if (/oldInvoices/.test(mig)) throw new Error('ההעברה נוגעת במסמכי הכנסה — סכנת דיווח כפול');
   // ההעברה לא מוחקת שום דבר
   const destructive = mig.match(/db\w*\.\w+ = [^;]*\.filter\(|delete db|deleteFile\(/g) || [];
