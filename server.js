@@ -3794,6 +3794,78 @@ function mayReadFile(req, fileRec, fileId) {
   return Boolean(owner) && allowed.includes(owner);
 }
 
+// ---- הצעות מחיר שחויבו ונשארו פתוחות ----
+// עד שהפקת חשבונית התחילה לקשר את ההצעה כמסמך מקור, כל הצעה שחויבה נשארה
+// פתוחה בחשבונית ירוקה. קישור בדיעבד אינו אפשרי (linkedDocumentIds נקבע
+// ביצירה בלבד), אבל אפשר לסגור אותן — וזו התוצאה המעשית שחסרה.
+// נסגרת רק הצעה שעל אותו אירוע כבר יש חשבונית אמיתית, כלומר החיוב בוצע.
+function staleQuotes(db, cid) {
+  const out = [];
+  for (const ev of (db.events || [])) {
+    if (!ownedBy(ev, cid)) continue;
+    const docs = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+    const quote = docs.find(d => Number(d.type) === 10 && d.id && !d.uploaded && !d.converted);
+    if (!quote) continue;
+    const invoice = docs.find(d => [300, 305, 320].includes(Number(d.type)) && !d.credited && !d.credit && !d.converted);
+    if (!invoice) continue;                       // עדיין לא חויב — ההצעה צריכה להישאר פתוחה
+    out.push({ eventId: ev.id, date: ev.date || ev.dateRaw || null, artist: ev.artist || '',
+      clientName: ev.clientName || '', quoteId: String(quote.id), quoteNumber: quote.number || null,
+      invoiceNumber: invoice.number || null, invoiceType: Number(invoice.type) });
+  }
+  return out;
+}
+
+add('GET', /^\/api\/stale-quotes$/, async (req, res, _p, q) => {
+  const db = load(), cid = reqCompany(q);
+  const list = staleQuotes(db, cid);
+  const out = { total: list.length, items: list.slice(0, 200), stillOpen: null };
+  // כמה מהן באמת עדיין פתוחות בחשבונית ירוקה — ההצעה עשויה להיסגר גם ידנית שם
+  if (list.length && giEnabled(cid) && greenInvoice.haveCredentials()) {
+    try {
+      const open = await greenInvoice.openQuotes();
+      const openIds = new Set((open || []).map(d => String(d.id)));
+      out.stillOpen = list.filter(x => openIds.has(x.quoteId)).length;
+      for (const it of out.items) it.openInGi = openIds.has(it.quoteId);
+    } catch (e) { out.error = e.message; }
+  }
+  json(res, out);
+});
+
+// POST /api/stale-quotes/close — סוגר את ההצעות. דורש אישור מפורש.
+add('POST', /^\/api\/stale-quotes\/close$/, async (req, res, _p, q, body) => {
+  const b = body || {}, cid = reqCompany(q, b);
+  if (b.confirm !== true) return json(res, { error: 'נדרש אישור מפורש (confirm)' }, 400);
+  if (!(giEnabled(cid) && greenInvoice.haveCredentials())) return json(res, { error: 'חשבונית ירוקה אינה מחוברת לחברה זו' }, 400);
+  const limit = Math.min(Math.max(Number(b.limit) || 20, 1), 100);
+  const batch = staleQuotes(load(), cid).slice(0, limit);
+  const results = [];
+  for (const it of batch) {
+    try {
+      await greenInvoice.closeDocument(it.quoteId);
+      const db = load();
+      const ev = (db.events || []).find(e => e.id === it.eventId);
+      if (ev) {
+        for (const d of (ev.linkedDocs || [])) if (String(d.id) === it.quoteId) d.converted = true;
+        save(db);
+      }
+      results.push({ quoteNumber: it.quoteNumber, ok: true });
+    } catch (e) {
+      // ההצעה כבר סגורה בחשבונית ירוקה — מסמנים אצלנו ולא מדווחים ככישלון
+      const gone = /:\s*(400|404|409)\b/.test(e.message || '');
+      if (gone) {
+        const db = load();
+        const ev = (db.events || []).find(e2 => e2.id === it.eventId);
+        if (ev) { for (const d of (ev.linkedDocs || [])) if (String(d.id) === it.quoteId) d.converted = true; save(db); }
+        results.push({ quoteNumber: it.quoteNumber, alreadyClosed: true });
+      } else results.push({ quoteNumber: it.quoteNumber, error: e.message });
+    }
+  }
+  const remaining = staleQuotes(load(), cid).length;
+  const ok = results.filter(r => r.ok || r.alreadyClosed).length;
+  console.log(`[stale-quotes] ${cid}: נסגרו ${ok}/${results.length} · נותרו ${remaining}`);
+  json(res, { ok: true, processed: results.length, closed: ok, remaining, results });
+});
+
 // ---- העברת רשומות מקומיות לחשבונית ירוקה ----
 // חברה שלא הייתה מחוברת ל-GI שמרה הוצאות כרשומה מקומית בלבד. אחרי חיבור,
 // אלה צריכות לעבור לשם. זו יצירת מסמכים חשבונאיים אמיתיים, ולכן:

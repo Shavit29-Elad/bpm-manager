@@ -760,6 +760,24 @@ check('העברת רשומות מקומיות לחשבונית ירוקה — מ
   return true;
 });
 
+check('סגירת הצעות מחיר שחויבו — רק כשיש חשבונית, ורק באישור', () => {
+  const src = srv.match(/function staleQuotes\(db, cid\) \{[\s\S]*?\n\}/);
+  if (!src) throw new Error('staleQuotes לא נמצאה');
+  const f = new Function('ownedBy', src[0] + '; return staleQuotes;')(() => true);
+  const ev = (docs) => ({ events: [{ id: 'e', companyId: 'c', linkedDocs: docs }] });
+  const Q = { id: 'q', type: 10, number: '580' };
+  if (f(ev([Q, { id: 'i', type: 305, number: '900' }]), 'c').length !== 1) throw new Error('הצעה שחויבה לא זוהתה');
+  if (f(ev([Q]), 'c').length) throw new Error('הצעה שטרם חויבה נסגרת — לא תוכל להפיק ממנה חשבונית');
+  if (f(ev([{ ...Q, converted: true }, { id: 'i', type: 305 }]), 'c').length) throw new Error('הצעה שכבר הומרה נספרה שוב');
+  if (f(ev([{ ...Q, uploaded: true }, { id: 'i', type: 305 }]), 'c').length) throw new Error('הצעה שהועלתה כקובץ נשלחת לסגירה בחשבונית ירוקה');
+  if (f(ev([Q, { id: 'i', type: 305, credited: true }]), 'c').length) throw new Error('חשבונית שזוכתה נחשבת חיוב פעיל');
+  const i = srv.indexOf("add('POST', /^\\/api\\/stale-quotes\\/close$/");
+  const close = srv.slice(i, srv.indexOf('\n});', i));
+  if (!/b\.confirm !== true/.test(close)) throw new Error('סגירה בלי אישור מפורש');
+  if (!/ownedBy/.test(src[0])) throw new Error('הסגירה עוברת על אירועים של חברות אחרות');
+  return true;
+});
+
 check('הפקת חשבונית מאירועים מקשרת את הצעת המחיר', () => {
   const i = srv.indexOf("add('POST', /^\\/api\\/invoicing\\/generate$/");
   if (i < 0) throw new Error('ראוט ההפקה לא נמצא');

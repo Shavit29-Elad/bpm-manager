@@ -7242,6 +7242,14 @@ async function renderBusiness(c) {
         <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <b style="font-size:13.5px">📄 הצעות מחיר שחויבו ונשארו פתוחות</b>
+        <div class="muted" style="font-size:12px;margin:3px 0 8px">עד לאחרונה, הפקת חשבונית מאירוע לא קישרה אליה את הצעת המחיר — וההצעה נשארה פתוחה בחשבונית ירוקה. כאן אפשר לסגור את מה שנצבר. נסגרות רק הצעות שעל האירוע שלהן כבר יש חשבונית.</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn ghost" onclick="loadStaleQuotes(this)">בדוק כמה נשארו פתוחות</button>
+        </div>
+        <div id="staleQuotes" style="margin-top:8px;font-size:13px"></div>
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
         <b style="font-size:13.5px">🔄 העברת הוצאות שנשמרו מקומית לחשבונית ירוקה</b>
         <div class="muted" style="font-size:12px;margin:3px 0 8px">הוצאות שנקלטו כשהחברה לא נוצרה בחשבונית ירוקה נשמרו כרשומה מקומית בלבד. כאן אפשר להעביר אותן לשם — יצירת מסמכים אמיתיים, כולל צירוף הקובץ השמור.</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -7522,6 +7530,50 @@ window.backupRunNow = async (btn) => {
     : `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || r.skipped || 'נכשל'))}</span>`;
 };
 // השוואת הרשימה המקומית מול חשבונית ירוקה — לכל שלוש החברות ברצף
+window.loadStaleQuotes = async (btn) => {
+  const box = document.getElementById('staleQuotes'); if (!box) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'בודק…'; }
+  const r = await api('/api/stale-quotes').catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) { btn.disabled = false; btn.textContent = 'בדוק כמה נשארו פתוחות'; }
+  if (!r || r.error) { box.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  if (!r.total) { box.innerHTML = `<span style="color:var(--accent2)">✓ אין הצעות מחיר שחויבו ונשארו פתוחות.</span>`; return; }
+  const rows = (r.items || []).slice(0, 12).map(it =>
+    `<div style="font-size:12.5px;padding:3px 0;border-top:1px solid var(--line)">
+      הצעה #${escapeHtml(String(it.quoteNumber || '—'))} · ${escapeHtml(it.clientName || '')}${it.artist ? ' · ' + escapeHtml(it.artist) : ''}
+      <span class="muted">← חויבה ב-${escapeHtml(String(it.invoiceNumber || ''))}</span>
+      ${it.openInGi === false ? '<span class="muted"> · כבר סגורה</span>' : ''}
+    </div>`).join('');
+  box.innerHTML = `<div style="border:1px solid var(--line);border-radius:12px;padding:12px">
+    <div><b>${r.total}</b> הצעות מחיר חויבו${r.stillOpen != null ? ` · <b>${r.stillOpen}</b> עדיין פתוחות בחשבונית ירוקה` : ''}</div>
+    ${rows}${r.total > 12 ? `<div class="muted" style="font-size:12px;padding-top:4px">…ועוד ${r.total - 12}</div>` : ''}
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn primary" onclick="runCloseStaleQuotes(this)">סגור אותן בחשבונית ירוקה</button>
+      <span class="muted" style="font-size:12px">רץ באצוות</span>
+    </div>
+    <div id="staleProgress" style="margin-top:8px;font-size:12.5px"></div>
+  </div>`;
+};
+
+window.runCloseStaleQuotes = async (btn) => {
+  const out = document.getElementById('staleProgress');
+  if (!confirm('לסגור בחשבונית ירוקה את הצעות המחיר שכבר חויבו?\n\nהצעה סגורה אינה מאפשרת יותר מסמכי המשך ממנה.\nנסגרות רק הצעות שעל האירוע שלהן כבר קיימת חשבונית.')) return;
+  btn.disabled = true; btn.textContent = 'סוגר…';
+  let done = 0; const problems = [];
+  for (let round = 0; round < 40; round++) {
+    const r = await fetch('/api/stale-quotes/close', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true, limit: 15 }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (!r || !r.ok) { out.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || 'הסגירה נכשלה'))}</span>`; break; }
+    done += r.closed;
+    problems.push(...(r.results || []).filter(x => x.error));
+    out.innerHTML = `<span class="muted">נסגרו ${done} · נותרו ${r.remaining}…</span>`;
+    if (!r.remaining || !r.processed) break;
+  }
+  btn.disabled = false; btn.textContent = 'סגור אותן בחשבונית ירוקה';
+  const bad = problems.length ? `<div style="margin-top:6px;color:var(--danger)">${problems.length} נכשלו: ${problems.slice(0, 5).map(x => escapeHtml(`#${x.quoteNumber}: ${x.error}`)).join(' · ')}</div>` : '';
+  out.innerHTML = `<span style="color:var(--accent2)">✓ נסגרו ${done} הצעות מחיר.</span>${bad}`;
+  clearApiCache();
+};
+
 // דוח יבש: מה ממתין להעברה לחשבונית ירוקה. לא נוגע בכלום.
 window.loadMigrateReport = async (btn) => {
   const box = document.getElementById('migReport'); if (!box) return;
