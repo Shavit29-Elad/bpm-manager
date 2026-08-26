@@ -711,8 +711,19 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
   }
   try {
     const client = body.clientId ? { id: body.clientId } : { name: body.clientName || 'לקוח' };
+    // הצעות מחיר שמקושרות לאירועים שמחויבים כאן — המסמך נוצר כמסמך המשך שלהן.
+    // בלי זה ההצעה נשארת פתוחה בחשבונית ירוקה לנצח, שרשרת המסמכים נקטעת,
+    // ואי אפשר להגיע ממנה לחשבונית שנגזרה ממנה.
+    const quoteIds = [];
+    for (const ev of evs) {
+      for (const d of (ev.linkedDocs || [])) {
+        if (Number(d.type) !== 10 || !d.id || d.uploaded || d.converted) continue;
+        if (!quoteIds.includes(String(d.id))) quoteIds.push(String(d.id));
+      }
+    }
     const doc = await createDocFwd({
       type, client, items,
+      ...(quoteIds.length ? { linkedDocumentIds: quoteIds } : {}),
       description: body.description || subjectForEvents(evs),
       remarks: body.remarks || null,
       date: body.date || undefined,   // תאריך המסמך שהמשתמש בחר (ברירת מחדל: היום)
@@ -724,6 +735,8 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
       const e = db.events.find(x => x.id === ev.id);
       if (e) {
         e.invoiceStatus = 'invoiced'; e.invoiceId = doc.id; e.invoiceNumber = doc.number; e.invoiceType = type;
+        // ההצעה שהומרה יורדת מהמסמכים הפעילים של האירוע — היא כבר לא החיוב הפעיל
+        for (const d of (e.linkedDocs || [])) if (Number(d.type) === 10 && quoteIds.includes(String(d.id))) d.converted = true;
         // חשוב: להוסיף את המסמך שהופק ל-linkedDocs של האירוע — אחרת עמודת החיוב מציגה רק את המסמכים הקיימים (למשל הצעת המחיר)
         // ולא את חשבונית העסקה/המס שזה עתה הופקה. כך המסמך החדש מוצג ומאפשר צפייה/מסמך המשך ישירות מהאירוע.
         const ld = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];

@@ -760,6 +760,27 @@ check('העברת רשומות מקומיות לחשבונית ירוקה — מ
   return true;
 });
 
+check('הפקת חשבונית מאירועים מקשרת את הצעת המחיר', () => {
+  const i = srv.indexOf("add('POST', /^\\/api\\/invoicing\\/generate$/");
+  if (i < 0) throw new Error('ראוט ההפקה לא נמצא');
+  const gen = srv.slice(i, srv.indexOf('\n});', i));
+  if (!/linkedDocumentIds: quoteIds/.test(gen))
+    throw new Error('החשבונית נוצרת בלי קישור להצעת המחיר — ההצעה תישאר פתוחה בחשבונית ירוקה');
+  // רק הצעות פעילות: הצעה שכבר הומרה או שהועלתה כקובץ אינה מסמך מקור בחשבונית ירוקה
+  if (!/Number\(d\.type\) !== 10 \|\| !d\.id \|\| d\.uploaded \|\| d\.converted/.test(gen))
+    throw new Error('הצעה שהומרה או שהועלתה כקובץ נשלחת כמסמך מקור');
+  if (!/d\.converted = true/.test(gen)) throw new Error('ההצעה לא מסומנת כהומרה על האירוע');
+  // הבחירה נגזרת מהאירועים שמחויבים, לא מהתצוגה המקדימה
+  const pick = new Function('evs', gen.match(/const quoteIds = \[\];[\s\S]*?\n    \}/)[0] + '; return quoteIds;');
+  const q = (docs) => pick([{ linkedDocs: docs }]);
+  if (q([{ id: 'a', type: 10 }]).length !== 1) throw new Error('הצעה פעילה לא נאספת');
+  if (q([{ id: 'a', type: 10, converted: true }]).length) throw new Error('הצעה שהומרה נאספה');
+  if (q([{ id: 'a', type: 10, uploaded: true }]).length) throw new Error('הצעה שהועלתה כקובץ נאספה');
+  if (q([{ id: 'a', type: 305 }]).length) throw new Error('חשבונית מס נאספה כהצעה');
+  if (q([{ id: 'a', type: 10 }, { id: 'a', type: 10 }]).length !== 1) throw new Error('אותה הצעה נאספה פעמיים');
+  return true;
+});
+
 const va = await import('./vehicleAlerts.js');
 check('התראות תוקף רכב — שלושה ספים, בלי כפילות, ומתאפסות בחידוש', () => {
   const now = new Date('2026-08-25T09:00:00Z');
