@@ -6202,13 +6202,16 @@ async function flattenPdfToImage(file) {
   const out = document.createElement('canvas'); out.width = maxW || 1; out.height = totalH || 1;
   const ctx = out.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, out.width, out.height);
   let y = 0; for (const c of pages) { ctx.drawImage(c, 0, y); y += c.height; }
-  return await new Promise(res => out.toBlob(res, 'image/png'));
+  // JPEG ולא PNG: יעד ההעברה של ההוצאות (פייפרלס) מקבל JPG/PDF בלבד ודוחה PNG.
+  // ההמרה בשרת מכסה גם קבצים שמגיעים ממקורות אחרים, אבל אין סיבה לייצר
+  // כאן פורמט שאנחנו יודעים שיידחה.
+  return await new Promise(res => out.toBlob(res, 'image/jpeg', 0.92));
 }
 // מעלה Blob (תמונה) כהוצאה לחשבונית ירוקה — כמו handleExpenseFiles אבל לקובץ בודד שכבר בזיכרון
 async function uploadBlobExpense(blob, name) {
   if (!blob) return false;
   const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = rej; fr.readAsDataURL(blob); });
-  const r = await fetch('/api/expenses/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileBase64: b64, fileName: name || 'flattened.png', mime: 'image/png' }) }).then(x => x.json()).catch(() => ({ error: 'net' }));
+  const r = await fetch('/api/expenses/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileBase64: b64, fileName: name || 'flattened.jpg', mime: 'image/jpeg' }) }).then(x => x.json()).catch(() => ({ error: 'net' }));
   return !!(r && r.ok);
 }
 // רישום הוצאה של קבלן ישירות בחשבונית ירוקה

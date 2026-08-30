@@ -8,6 +8,7 @@
 // מעלה את השרת ודופקת ב-endpoints, ומאמתת כללי-עקביות שקל לשבור בשקט.
 
 import fs from 'fs';
+import zlibMod from 'node:zlib';
 import { execSync } from 'child_process';
 
 const app = fs.readFileSync('app.js', 'utf8');
@@ -796,6 +797,61 @@ check('הפקת חשבונית מאירועים מקשרת את הצעת המח�
   if (q([{ id: 'a', type: 10, uploaded: true }]).length) throw new Error('הצעה שהועלתה כקובץ נאספה');
   if (q([{ id: 'a', type: 305 }]).length) throw new Error('חשבונית מס נאספה כהצעה');
   if (q([{ id: 'a', type: 10 }, { id: 'a', type: 10 }]).length !== 1) throw new Error('אותה הצעה נאספה פעמיים');
+  return true;
+});
+
+const pp = await import('./pngPdf.js');
+check('מסמך שנשלח לרואה החשבון תמיד בפורמט קביל', () => {
+  // פייפרלס מקבל PDF/JPG בלבד. PNG נדחה שם, אצלנו נרשם כשליחה מוצלחת,
+  // והמסמך פשוט לא מגיע — כשל שקט שמתגלה רק בסוף החודש.
+  const zlib = zlibMod;
+  const tbl = (() => { const t = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  const crc = (b) => { let c = 0xFFFFFFFF; for (const x of b) c = tbl[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type, 'ascii'), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td));
+    return Buffer.concat([len, td, c]); };
+  const png = (w, h, colorType, ch, filter) => {
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = colorType;
+    const rows = []; for (let y = 0; y < h; y++) { const r = Buffer.alloc(w * ch + 1); r[0] = filter;
+      for (let i = 0; i < w * ch; i++) r[i + 1] = (y * 7 + i * 13) % 256; rows.push(r); }
+    return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(Buffer.concat(rows))), chunk('IEND', Buffer.alloc(0))]);
+  };
+  // כל סוגי הצבע וכל חמשת סוגי הסינון של PNG
+  for (const [name, ct, chn] of [['RGB', 2, 3], ['RGBA', 6, 4], ['אפור', 0, 1], ['אפור+שקיפות', 4, 2]])
+    for (let f = 0; f <= 4; f++) {
+      const pdf = pp.pngToPdf(png(24, 18, ct, chn, f));
+      if (pdf.subarray(0, 5).toString('latin1') !== '%PDF-') throw new Error(`${name}/סינון ${f}: לא הופק PDF`);
+      if (!pdf.subarray(-8).toString('latin1').includes('%%EOF')) throw new Error(`${name}/סינון ${f}: PDF קטוע`);
+    }
+  // השער: מה עובר כמות שהוא, מה מומר, ומה נחסם
+  const pdfOk = pp.toAcceptable(Buffer.from('x'), 'application/pdf');
+  if (pdfOk.converted || pdfOk.ext !== 'pdf') throw new Error('PDF הומר שלא לצורך');
+  const jpgOk = pp.toAcceptable(Buffer.from('x'), 'image/jpeg');
+  if (jpgOk.converted || jpgOk.ext !== 'jpg') throw new Error('JPG הומר שלא לצורך');
+  const conv = pp.toAcceptable(png(10, 10, 2, 3, 0), 'image/png');
+  if (!conv.converted || conv.ext !== 'pdf') throw new Error('PNG לא הומר');
+  let blocked = false;
+  try { pp.toAcceptable(Buffer.from('x'), 'image/gif'); } catch { blocked = true; }
+  if (!blocked) throw new Error('פורמט לא נתמך נשלח בכל זאת');
+
+  // כל שליחה של הוצאה לרואה החשבון עוברת דרך השער. שליחת מסמך ללקוח ומסמכי
+  // הכנסה אינן במסלול הזה — האחרונים נשלפים מחשבונית ירוקה וכבר PDF.
+  let expenseSends = 0, expenseGated = 0;
+  for (let i = srv.indexOf('subject: `הוצאה'); i >= 0; i = srv.indexOf('subject: `הוצאה', i + 1)) {
+    const win = srv.slice(Math.max(0, i - 500), i + 700);   // ההמרה קורית לפני קריאת השליחה
+    if (!/attachments: \[/.test(win)) continue;
+    expenseSends++;
+    if (/toMailableDoc\(/.test(win)) expenseGated++;
+  }
+  if (!expenseSends) throw new Error('לא נמצאו מסלולי שליחת הוצאה');
+  if (expenseGated < expenseSends)
+    throw new Error(`${expenseSends} מסלולי שליחת הוצאה, רק ${expenseGated} עוברים המרה`);
+  // ואף מסלול לא מצרף את הקובץ הגולמי במקום המומר
+  if (/content: fileBuf, contentType: fileCt/.test(srv)) throw new Error('קובץ גולמי מצורף בלי המרה');
+  // והמקור לא מייצר PNG מלכתחילה
+  if (/toBlob\(res, 'image\/png'\)/.test(app)) throw new Error('השיטוח עדיין מייצר PNG');
+  if (/mime: 'image\/png'/.test(app)) throw new Error('עדיין מועלה קובץ כ-PNG');
   return true;
 });
 

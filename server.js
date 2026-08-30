@@ -22,6 +22,7 @@ import { chatConfigured, extractEvents, interpretBonuses, extractInvoiceFields, 
 import { buildBackup, backupFileName, runBackupMail, planRetention } from './backup.js';
 import { buildReport, reportHtml, monthClosed, daysSince, DEFAULT_OVERDUE_DAYS } from './dailyReport.js';
 import { dueAlerts, alertSubject, alertHtml, alertText, THRESHOLDS as VEH_THRESHOLDS, VEHICLE_SLOTS as VEH_SLOT_DEFS } from './vehicleAlerts.js';
+import { toAcceptable as toMailableDoc } from './pngPdf.js';
 import mailer from './mailer.js';
 import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
@@ -1399,11 +1400,14 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
         else if (!mailer.companyMailConfigured(_mcreds) && !mailer.mailerConfigured()) forwardError = 'לא הוגדר חשבון מייל לחברה';
         else {
           const safeNum = String(number).replace(/[^\w.-]/g, '_');
+          // יעד ההעברה מקבל PDF/JPG בלבד. פורמט אחר נדחה שם בשקט — אצלנו זה
+          // נרשם כשליחה מוצלחת והמסמך פשוט לא מגיע. לכן ממירים לפני השליחה.
+          const doc = toMailableDoc(fileBuf, fileCt);
           await mailer.sendMailFrom(_mcreds, {
             to: _acctEmail,
             subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
             text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nספק: ${body.supplierName || draft.supplierName || ''}\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
-            attachments: [{ filename: `expense-${safeNum}.${fileExt}`, content: fileBuf, contentType: fileCt }],
+            attachments: [{ filename: `expense-${safeNum}.${doc.ext}`, content: doc.buf, contentType: doc.contentType }],
           });
           forwarded = true;
         }
@@ -1472,11 +1476,13 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       const fwd = _acctEmail;   // כתובת רו"ח של החברה הפעילה (ריק = לא מעבירים)
       const _mcreds = companyMailCreds(load(), q.companyId || giCompanyId());   // חשבון המייל של החברה (אם הוגדר) — כדי שיישלח מהתיבה שלה
       if ((mailer.companyMailConfigured(_mcreds) || mailer.mailerConfigured()) && fwd && fileBuf) {
+        // ראה ההערה במסלול המקומי: PDF/JPG בלבד, אחרת נדחה בשקט אצל המקבל
+        const doc = toMailableDoc(fileBuf, fileCt);
         await mailer.sendMailFrom(_mcreds, {
           to: fwd,
           subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
           text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
-          attachments: [{ filename: `expense-${safeNum}.${fileExt}`, content: fileBuf, contentType: fileCt }],
+          attachments: [{ filename: `expense-${safeNum}.${doc.ext}`, content: doc.buf, contentType: doc.contentType }],
         });
         forwarded = true;
       } else if (mailer.mailerConfigured() && fwd && !fileBuf) { forwardError = 'הורדת הקובץ נכשלה'; }
@@ -4013,8 +4019,9 @@ add('POST', /^\/api\/local-expenses\/migrate$/, async (req, res, _p, q, body) =>
             await mailer.sendMailFrom(creds, {
               to: acct, subject: `הוצאה #${p.number || ''}`,
               text: `מצורפת חשבונית הוצאה.\nספק: ${p.supplierName || ''}\nמספר מסמך: ${p.number || ''}\nתאריך: ${p.date || ''}\nסכום כולל מע"מ: ${Math.abs(Number(p.amount) || 0)}`,
-              attachments: [{ filename: `expense-${String(p.number || 'doc').replace(/[^\w.-]/g, '_')}.pdf`,
-                content: Buffer.from(f.data, 'base64'), contentType: f.mime || 'application/pdf' }],
+              attachments: [(() => { const doc = toMailableDoc(Buffer.from(f.data, 'base64'), f.mime || 'application/pdf');
+                return { filename: `expense-${String(p.number || 'doc').replace(/[^\w.-]/g, '_')}.${doc.ext}`,
+                  content: doc.buf, contentType: doc.contentType }; })()],
             });
             mailed = true;
           } else mailed = false;
