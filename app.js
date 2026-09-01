@@ -1105,7 +1105,7 @@ function openInvClientHtml(cl) {
     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</span>
     <span style="font-weight:600;white-space:nowrap">${d.amountDue != null || d.amount != null ? money(d.amountDue != null ? d.amountDue : d.amount) : '<span class="muted">—</span>'}</span>
     ${d.paidNoReceipt ? `<span class="tag" style="background:#fef3c7;color:#92400e;white-space:nowrap" title="התקבל תשלום בבנק${d.paidDate ? ' בתאריך ' + fmtDate(d.paidDate) : ''} אך עדיין לא הופקה קבלה">💰 התקבל תשלום${d.paidDate ? ' · ' + fmtDate(d.paidDate) : ''} · חסרה קבלה</span><button class="btn primary" style="padding:2px 10px;font-size:12px;white-space:nowrap" onclick="event.stopPropagation();issuePaidReceipt('${d.id}','${escAttr(String(d.paidDate || ''))}','${escAttr(String(d.paidTxId || ''))}',${d.paidAmount != null ? Number(d.paidAmount) : 0})" title="הפקת קבלה בתאריך שבו התקבל הכסף בבנק">🧾 הפק קבלה</button>` : ''}
-    ${d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>
+    ${d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}',{docId:'${escAttr(String(d.id||''))}'})">תצוגה 👁</button>
     <a href="${docDlUrl(d)}" download class="btn ghost" style="padding:2px 9px;font-size:12px;text-decoration:none;white-space:nowrap" title="שמירת המסמך כקובץ PDF במחשב">הורדה ↓</a>` : ''}
     ${d.uploaded
       ? `${FOLLOWUP_FOR[Number(d.type)]?.length ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;white-space:nowrap" onclick="openDerive('${d.id}','${escAttr(String(d.number || ''))}',${Number(d.type)},'followup')" title="הפקת מסמך המשך בחשבונית ירוקה">מסמך המשך ↪</button>` : ''}
@@ -4398,7 +4398,7 @@ window.saveNewClientForEvent = async (btn) => {
   setTimeout(() => { document.getElementById('addClientEvModal').classList.add('hidden'); }, 800);
 };
 function quoteRow(d) {
-  const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : '';
+  const pv = d.url ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}',{docId:'${escAttr(String(d.id||''))}'})">תצוגה 👁</button>` : '';
   const follow = `<button class="btn primary" style="padding:2px 9px;font-size:12px" onclick="openDerive('${d.id}','${escAttr(String(d.number))}',10,'followup','quotes')">הפק מסמך המשך</button>`;
   const dup = `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="openDuplicateQuote('${d.id}')">שכפול ⧉</button>`;
   const close = `<button class="btn ghost" style="padding:2px 9px;font-size:12px" onclick="quoteClose('${d.id}','${d.number}')">סגור הצעה</button>`;
@@ -8431,7 +8431,7 @@ function linkSelHtml() {
   return _linkSel.map((d, i) => `<div style="padding:3px 0">
     <div style="display:flex;gap:8px;align-items:center;font-size:13px">
       <span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${money(d.amount)}</span>
-      ${d.url ? `<button class="btn ghost" style="padding:1px 8px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}')">תצוגה 👁</button>` : ''}
+      ${d.url ? `<button class="btn ghost" style="padding:1px 8px;font-size:12px" onclick="previewDoc('${String(d.url).replace(/'/g, '%27')}',{docId:'${escAttr(String(d.id||''))}'})">תצוגה 👁</button>` : ''}
       <button class="btn ghost" style="padding:1px 8px;font-size:12px" onclick="linkRemove(${i})">הסר ×</button></div>
     ${d.receipt ? `<div class="muted" style="font-size:11.5px;margin-top:1px">🧾 קבלה #${d.receipt.number} · ${money(d.receipt.amount)}${d.receipt.url ? ` <button class="btn ghost" style="padding:0 6px;font-size:11px" onclick="previewDoc('${String(d.receipt.url).replace(/'/g, '%27')}')">👁</button>` : ''} <a onclick="linkDetachRec(${i})" style="cursor:pointer;color:var(--danger)">הסר קבלה ×</a></div>` : (Number(d.type) === 320 ? '<div class="muted" style="font-size:11.5px;margin-top:1px">🧾 קבלה כלולה בחשבונית</div>' : '')}
   </div>`).join('');
