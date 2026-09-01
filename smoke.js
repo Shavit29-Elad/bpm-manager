@@ -855,6 +855,24 @@ check('מסמך שנשלח לרואה החשבון תמיד בפורמט קבי�
   return true;
 });
 
+check('זיכוי חלקי לא מוציא אירוע מחויב חזרה לרשימת ההפקה', () => {
+  // בחירת אירוע במסך הזיכוי קובעת מה ייכתב בתיאור. החזרת האירוע ל"ממתין לחיוב"
+  // היא החלטה נפרדת — אחרת זיכוי חלקי מחזיר לרשימת ההפקה אירוע שחשבוניתו בתוקף.
+  if (!/const revertEventIds = window\._creditRevert \? selIds : \[\]/.test(app))
+    throw new Error('בחירת אירוע לתיאור הזיכוי מחזירה אותו ל"ממתין לחיוב"');
+  if (!/creditRevertChk/.test(app)) throw new Error('אין סימון מפורש להחזרת אירועים');
+  // השרת: זיכוי חלקי-לפי-סכום אינו משנה סטטוס אירועים מעצמו
+  const i = srv.indexOf("add('POST', /^\\/api\\/documents\\/([^/]+)\\/credit$/");
+  const cr = srv.slice(i, srv.indexOf('\n});', i));
+  if (!/} else if \(!isPartial && !\(body && body\.revertEvents === false\)\)/.test(cr))
+    throw new Error('זיכוי חלקי מחזיר אירועים מעצמו');
+  // שחזור: שיוך מחדש של החשבונית מנקה את סימון "זוכה"
+  if (!/if \(cur\) \{ if \(cur\.credited\) delete cur\.credited; continue; \}/.test(srv))
+    throw new Error('אין דרך להחזיר אירוע שסומן כמזוכה בטעות');
+  if (/delete cur\.converted/.test(srv)) throw new Error('שיוך מחדש מבטל המרה — המרה אינה הפיכה');
+  return true;
+});
+
 const va = await import('./vehicleAlerts.js');
 check('התראות תוקף רכב — שלושה ספים, בלי כפילות, ומתאפסות בחידוש', () => {
   const now = new Date('2026-08-25T09:00:00Z');

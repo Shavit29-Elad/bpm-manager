@@ -882,7 +882,14 @@ add('POST', /^\/api\/invoicing\/link$/, (req, res, _p, _q, body) => {
     if (!e || !ownedBy(e, _cid)) continue;   // בידוד
     // צירוף המסמכים החדשים לקיימים (בלי כפילויות) — מאפשר לשייך עוד מסמכים בהמשך
     const merged = Array.isArray(e.linkedDocs) ? e.linkedDocs.slice() : [];
-    for (const d of docs) if (!merged.some(x => String(x.id) === String(d.id))) merged.push(d);
+    for (const d of docs) {
+      const cur = merged.find(x => String(x.id) === String(d.id));
+      // מסמך שכבר מקושר: שיוך מחדש הוא אמירה מפורשת "החשבונית הזו בתוקף לאירוע",
+      // ולכן מנקה סימון "זוכה". בלעדיו אירוע שסומן בטעות בזיכוי חלקי נתקע ב"ממתין
+      // לחיוב" בלי שום דרך להחזיר אותו. 'converted' לא מנוקה — המרה אינה הפיכה.
+      if (cur) { if (cur.credited) delete cur.credited; continue; }
+      merged.push(d);
+    }
     e.linkedDocs = merged.slice(0, 6);
     // הצעת מחיר (10) אינה חיוב: קושרת מסמך אך אינה מסמנת "חויב"/"שולם".
     // רק חשבונית אמיתית (עסקה 300 / מס 305 / מס-קבלה 320 / קבלה 400) מחייבת את האירוע.

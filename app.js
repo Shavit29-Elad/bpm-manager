@@ -1847,7 +1847,7 @@ window.openCreditModal = (id, number, srcType, grossAmount) => {
     </div>
   </div>`;
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
-  window._creditEvents = []; window._creditSelIds = new Set();
+  window._creditEvents = []; window._creditSelIds = new Set(); window._creditRevert = false;
   creditRecalc();
   // טעינת האירועים המקושרים למסמך — לבחירת זיכוי חלקי לפי אירוע
   const box = document.getElementById('creditEventsBox');
@@ -1869,12 +1869,18 @@ window.creditRenderEvents = () => {
   const evs = window._creditEvents || [];
   if (evs.length < 2) { box.innerHTML = ''; return; } // אירוע יחיד/ללא — בחירה לפי אירוע לא רלוונטית
   const sel = window._creditSelIds || new Set();
-  box.innerHTML = `<div style="font-size:13px;font-weight:600;margin-bottom:4px">זיכוי לפי אירוע <span class="muted" style="font-weight:400">(סמן אירוע לזיכוי — יחזור ל״ממתין לחיוב״)</span></div>`
+  box.innerHTML = `<div style="font-size:13px;font-weight:600;margin-bottom:4px">זיכוי לפי אירוע <span class="muted" style="font-weight:400">(סימון אירוע קובע מה ייכתב בתיאור הזיכוי)</span></div>`
     + evs.map(ev => `<label style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer">
         <input type="checkbox" ${sel.has(String(ev.id)) ? 'checked' : ''} onchange="creditToggleEvent('${ev.id}')">
         <span>${ddmy(ev.date)} · ${escapeHtml(ev.artist || '')}${ev.location ? ' · ' + escapeHtml(ev.location) : ''}</span>
         <span style="margin-inline-start:auto;color:var(--muted)">${money(ev.net)}</span>
-      </label>`).join('');
+      </label>`).join('')
+    // בחירת אירוע קובעת מה ייכתב בזיכוי. האם האירוע גם חוזר ל"ממתין לחיוב" זו
+    // שאלה נפרדת: בזיכוי חלקי-לפי-סכום החשבונית עדיין בתוקף והאירוע נשאר מחויב.
+    + `<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line);cursor:pointer">
+        <input type="checkbox" id="creditRevertChk" ${window._creditRevert ? 'checked' : ''} onchange="window._creditRevert = this.checked">
+        <span>החזר את האירועים שנבחרו ל״ממתין לחיוב״ <span class="muted">— סמן רק אם החשבונית מבוטלת עבורם</span></span>
+      </label>`;
 };
 window.creditToggleEvent = (eid) => {
   const sel = window._creditSelIds || (window._creditSelIds = new Set());
@@ -1888,6 +1894,15 @@ window.creditToggleEvent = (eid) => {
 };
 // חישוב חי במודל הזיכוי: מלא מול חלקי + מע"מ + יתרה שתישאר לתשלום
 window.creditRecalc = () => {
+  // ברירת מחדל להחזרת אירועים: זיכוי מלא מבטל את החשבונית ולכן מחזיר; זיכוי
+  // חלקי-לפי-סכום משאיר אותה בתוקף. המשתמש יכול לשנות בכל מקרה.
+  setTimeout(() => {
+    const chk = document.getElementById('creditRevertChk');
+    if (!chk || chk.dataset.touched) return;
+    const full = !document.getElementById('creditAmount') || !(document.getElementById('creditAmount').value || '').trim();
+    if (chk.checked !== full) { chk.checked = full; window._creditRevert = full; }
+    chk.onclick = () => { chk.dataset.touched = '1'; };
+  }, 0);
   const note = document.getElementById('creditAmtNote'); if (!note) return;
   const raw = document.getElementById('creditAmount')?.value;
   const net = (raw === '' || raw == null) ? null : Number(raw);
@@ -1932,7 +1947,10 @@ window.doCredit = async (id, srcType) => {
   const creditNet = (amtRaw === '' || amtRaw == null) ? null : Number(amtRaw);
   if (creditNet != null && !(creditNet > 0)) { const st0 = document.getElementById('creditStatus'); if (st0) st0.innerHTML = '<span style="color:var(--danger)">סכום זיכוי לא תקין.</span>'; return; }
   const partial = creditNet != null;
-  const revertEventIds = Array.from(window._creditSelIds || []);
+  // האירועים שנבחרו נכנסים לתיאור הזיכוי תמיד. החזרתם ל"ממתין לחיוב" רק בסימון
+  // מפורש — אחרת זיכוי חלקי היה מוציא אירוע מחויב בחזרה לרשימת ההפקה.
+  const selIds = Array.from(window._creditSelIds || []);
+  const revertEventIds = window._creditRevert ? selIds : [];
   const evNote = revertEventIds.length ? `\n${revertEventIds.length} אירוע יוחזר ל״ממתין לחיוב״.` : '';
   if (!confirm(partial
     ? `להפיק זיכוי חלקי על ${money(creditNet)} + מע"מ?\nהמסמך המקורי יישאר פתוח ליתרה.${evNote}\nהפעולה יוצרת מסמך אמיתי בחשבונית ירוקה.`
