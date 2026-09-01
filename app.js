@@ -7266,6 +7266,25 @@ async function renderBusiness(c) {
         <span id="bizMailTestMsg" class="muted" style="font-size:13px"></span>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <b style="font-size:13.5px">📬 יומן שליחות — מה נשלח ומתי</b>
+        <div class="muted" style="font-size:12px;margin:3px 0 8px">כל מייל שהמערכת שלחה, כולל כישלונות: מסמכים ללקוחות, הוצאות לרואה החשבון, דוחות והתראות.</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="mailLogQ" placeholder="חיפוש לפי נמען / נושא / מספר מסמך" style="padding:7px 10px;min-width:240px" onkeydown="if(event.key==='Enter')loadMailLog()">
+          <select id="mailLogKind" style="padding:7px" onchange="loadMailLog()">
+            <option value="">כל הסוגים</option>
+            <option value="document-client">מסמך ללקוח</option>
+            <option value="expense-accountant">הוצאה לרואה חשבון</option>
+            <option value="income-accountant">מסמך הכנסה לרואה חשבון</option>
+            <option value="client-payment-status">בדיקת סטטוס תשלום</option>
+            <option value="daily-report">סיכום יומי</option>
+            <option value="vehicle-alerts">התראות רכב</option>
+            <option value="backup">גיבוי</option>
+          </select>
+          <button class="btn ghost" onclick="loadMailLog(this)">הצג</button>
+        </div>
+        <div id="mailLogBox" style="margin-top:8px;font-size:13px"></div>
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
         <b style="font-size:13.5px">📄 הצעות מחיר שחויבו ונשארו פתוחות</b>
         <div class="muted" style="font-size:12px;margin:3px 0 8px">עד לאחרונה, הפקת חשבונית מאירוע לא קישרה אליה את הצעת המחיר — וההצעה נשארה פתוחה בחשבונית ירוקה. כאן אפשר לסגור את מה שנצבר. נסגרות רק הצעות שעל האירוע שלהן כבר יש חשבונית.</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -7554,6 +7573,35 @@ window.backupRunNow = async (btn) => {
     : `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || r.skipped || 'נכשל'))}</span>`;
 };
 // השוואת הרשימה המקומית מול חשבונית ירוקה — לכל שלוש החברות ברצף
+const MAIL_KIND_HE = { 'document-client': 'מסמך ללקוח', 'expense-accountant': 'הוצאה לרו"ח',
+  'income-accountant': 'מסמך הכנסה לרו"ח', 'client-payment-status': 'סטטוס תשלום',
+  'daily-report': 'סיכום יומי', 'vehicle-alerts': 'התראות רכב', 'backup': 'גיבוי', test: 'בדיקת מייל', other: 'אחר' };
+window.loadMailLog = async (btn) => {
+  const box = document.getElementById('mailLogBox'); if (!box) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'טוען…'; }
+  const q = (document.getElementById('mailLogQ') || {}).value || '';
+  const kind = (document.getElementById('mailLogKind') || {}).value || '';
+  const r = await api(`/api/mail-log?limit=200${kind ? '&kind=' + encodeURIComponent(kind) : ''}${q ? '&q=' + encodeURIComponent(q) : ''}`).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) { btn.disabled = false; btn.textContent = 'הצג'; }
+  if (!r || r.error) { box.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  if (!r.total) { box.innerHTML = '<div class="empty">אין שליחות שתואמות.</div>'; return; }
+  const when = (iso) => { const d = new Date(iso); return isNaN(d) ? '' :
+    `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
+  const rows = r.items.map(m => `<tr${m.ok ? '' : ' style="background:rgba(225,29,72,.07)"'}>
+      <td style="white-space:nowrap">${when(m.at)}</td>
+      <td style="white-space:nowrap">${escapeHtml(MAIL_KIND_HE[m.kind] || m.kind || '')}</td>
+      <td>${escapeHtml((m.to || []).join(', '))}</td>
+      <td>${escapeHtml(m.subject || '')}${(m.attachments || []).length ? `<div class="muted" style="font-size:11px">📎 ${escapeHtml(m.attachments.join(', '))}</div>` : ''}</td>
+      <td style="white-space:nowrap">${m.ok ? '<span style="color:var(--accent2)">✓ נשלח</span>'
+        : `<span style="color:var(--danger)" title="${escAttr(m.error || '')}">✗ נכשל</span>`}</td>
+    </tr>`).join('');
+  box.innerHTML = `${r.failed ? `<div class="warn-banner" style="margin-bottom:8px">🔴 ${r.failed} שליחות נכשלו — רחף על "נכשל" לפירוט</div>` : ''}
+    <div style="overflow-x:auto"><table class="cardify" style="width:100%;font-size:12.5px">
+      <thead><tr><th>מתי</th><th>סוג</th><th>אל</th><th>נושא</th><th>סטטוס</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="muted" style="font-size:12px;margin-top:4px">מוצגות ${r.items.length} מתוך ${r.total}</div>`;
+};
+
 window.loadStaleQuotes = async (btn) => {
   const box = document.getElementById('staleQuotes'); if (!box) return;
   if (btn) { btn.disabled = true; btn.textContent = 'בודק…'; }

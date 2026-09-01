@@ -737,7 +737,7 @@ check('העברת רשומות מקומיות לחשבונית ירוקה — מ
   // ההעברה לרו"ח נשארת גם במסלול חשבונית ירוקה — ותנאיה מדווחים
   if (!/accountantEmail/.test(rep)) throw new Error('הדוח לא בודק שההעברה לרו"ח מוגדרת');
   const giPath = srv.slice(srv.indexOf('// העברת קובץ ההוצאה אוטומטית לכתובת רו"ח'));
-  if (!/mailer\.sendMailFrom/.test(giPath.slice(0, 1200))) throw new Error('מסלול חשבונית ירוקה לא מעביר לרו"ח');
+  if (!/sendMailLogged\(/.test(giPath.slice(0, 1200))) throw new Error('מסלול חשבונית ירוקה לא מעביר לרו"ח');
   if (/oldInvoices/.test(mig)) throw new Error('ההעברה נוגעת במסמכי הכנסה — סכנת דיווח כפול');
   // ההעברה לא מוחקת שום דבר
   const destructive = mig.match(/db\w*\.\w+ = [^;]*\.filter\(|delete db|deleteFile\(/g) || [];
@@ -899,6 +899,31 @@ check('הסימון "שלח ללקוח במייל" עובד בכל מסלולי 
   return true;
 });
 
+check('כל שליחת מייל נרשמת ביומן', () => {
+  // הצורך אמיתי: היו שני מקרים שמסמך לא הגיע ליעדו ואיש לא ידע. יומן הוא הדרך
+  // היחידה לוודא בדיעבד — ולכן אסור שיהיה מסלול שליחה שמתחמק ממנו.
+  // ל-mailer.js שתי פונקציות שליחה. שתיהן חייבות לעבור דרך העוטף — הבדיקה
+  // הראשונה כיסתה רק אחת מהן, ואחת מהקריאות באמת עקפה את היומן.
+  const direct = [...srv.matchAll(/mailer\.(sendMailFrom|sendMail)\(/g)].length;
+  if (direct !== 2) throw new Error(`${direct} קריאות ישירות לשליחה — רק העוטף רשאי (שתיים, בתוכו)`);
+  const wrapBody = srv.match(/async function sendMailLogged[\s\S]*?\n\}/)[0];
+  if ((wrapBody.match(/mailer\.(sendMailFrom|sendMail)\(/g) || []).length !== 2)
+    throw new Error('קריאה ישירה לשליחה מחוץ לעוטף');
+  const wrapped = [...srv.matchAll(/sendMailLogged\(/g)].length;
+  if (wrapped < 13) throw new Error(`רק ${wrapped} שליחות עוברות דרך היומן`);
+  // לכל שליחה סיווג — בלי זה היומן הוא רשימת נושאים בלי הקשר
+  const noMeta = [...srv.matchAll(/sendMailLogged\((\w+), \{(?! __meta)/g)].length;
+  if (noMeta) throw new Error(`${noMeta} שליחות בלי סיווג`);
+  // גם כישלון נרשם — אחרת היומן מראה רק הצלחות ומטעה
+  const wrap = srv.match(/async function sendMailLogged[\s\S]*?\n\}/)[0];
+  if (!/finally/.test(wrap)) throw new Error('כישלון שליחה לא נרשם');
+  if (!/catch \{ \/\* תיעוד לא יפיל שליחה \*\/ \}/.test(wrap)) throw new Error('תקלה בתיעוד עלולה להפיל שליחה');
+  if (!/ok, error/.test(wrap)) throw new Error('היומן לא שומר את תוצאת השליחה');
+  // והמסך קורא אותו
+  if (!/loadMailLog/.test(app)) throw new Error('אין מסך ליומן');
+  return true;
+});
+
 const va = await import('./vehicleAlerts.js');
 check('התראות תוקף רכב — שלושה ספים, בלי כפילות, ומתאפסות בחידוש', () => {
   const now = new Date('2026-08-25T09:00:00Z');
@@ -995,7 +1020,7 @@ check('חידוש מסמך רכב מחייב תוקף חדש ומאוחר יות
   if (!/v\.renewals = /.test(r)) throw new Error('החידוש לא נרשם בהיסטוריה');
   // הסימון "נשלח" נעשה רק אחרי שליחה מוצלחת — אחרת כישלון רשת בולע תזכורת
   const run = srv.match(/async function runVehicleAlerts[\s\S]*?\n\}/)[0];
-  const iSend = run.indexOf('sendMailFrom'), iMark = run.indexOf('v.alertsSent[it.key]');
+  const iSend = run.indexOf('sendMailLogged'), iMark = run.indexOf('v.alertsSent[it.key]');
   if (iSend < 0 || iMark < 0 || iSend > iMark) throw new Error('תזכורת מסומנת כנשלחה לפני השליחה');
   if (!/ownedBy\(v, cid\)/.test(run)) throw new Error('ההתראות עוברות על רכבים של חברות אחרות');
   return true;

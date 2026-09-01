@@ -1413,7 +1413,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
           // יעד ההעברה מקבל PDF/JPG בלבד. פורמט אחר נדחה שם בשקט — אצלנו זה
           // נרשם כשליחה מוצלחת והמסמך פשוט לא מגיע. לכן ממירים לפני השליחה.
           const doc = toMailableDoc(fileBuf, fileCt);
-          await mailer.sendMailFrom(_mcreds, {
+          await sendMailLogged(_mcreds, { __meta: { kind: 'expense-accountant', companyId: _activeCid, ref: number },
             to: _acctEmail,
             subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
             text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nספק: ${body.supplierName || draft.supplierName || ''}\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
@@ -1488,7 +1488,7 @@ add('POST', /^\/api\/expense-drafts\/([^/]+)\/approve$/, async (req, res, params
       if ((mailer.companyMailConfigured(_mcreds) || mailer.mailerConfigured()) && fwd && fileBuf) {
         // ראה ההערה במסלול המקומי: PDF/JPG בלבד, אחרת נדחה בשקט אצל המקבל
         const doc = toMailableDoc(fileBuf, fileCt);
-        await mailer.sendMailFrom(_mcreds, {
+        await sendMailLogged(_mcreds, { __meta: { kind: 'expense-accountant', companyId: q.companyId || giCompanyId(), ref: number },
           to: fwd,
           subject: `הוצאה #${number}${alloc ? ` · מס' הקצאה ${alloc}` : ''}`,
           text: `מצורפת חשבונית הוצאה שנקלטה במערכת.\nמספר מסמך: ${number}\nתאריך: ${date}\nסכום כולל מע"מ: ${amount}\nתיאור: ${baseDesc}`,
@@ -2136,7 +2136,7 @@ add('GET', /^\/api\/mail\/test$/, async (req, res, params, q) => {
   if (!v.ok) return json(res, { ok: false, stage: 'verify', error: v.error }, 502);
   const to = (q && q.to) ? String(q.to) : (process.env.SMTP_FROM || process.env.SMTP_USER);
   try {
-    const info = await mailer.sendMail({
+    const info = await sendMailLogged(null, { __meta: { kind: 'test', companyId: null, ref: null },
       to,
       subject: 'בדיקת חיבור מייל — מערכת BPM',
       text: 'זהו מייל בדיקה אוטומטי שנשלח כדי לוודא שחיבור ה-SMTP של מערכת BPM עובד. אם קיבלת אותו — הכל תקין.',
@@ -2742,7 +2742,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
       const _ucid = _cid || giCompanyId();
       const body = mailBodyFor(_db, _ucid, { clientName: '', num: '', docType: 'מסמך' });
       const subj = mailSubjectFor(_db, _ucid, { clientName: '', num: '', docType: 'מסמך' });
-      await mailer.sendMailFrom(creds, { to: emailsIn, subject: subj, text: body, html: htmlBodyWithSig(_db, _ucid, body), attachments: [{ filename: f.filename || 'document.pdf', content }] });
+      await sendMailLogged(creds, { __meta: { kind: 'document-client', companyId: _ucid, ref: f.filename || null }, to: emailsIn, subject: subj, text: body, html: htmlBodyWithSig(_db, _ucid, body), attachments: [{ filename: f.filename || 'document.pdf', content }] });
       return json(res, { ok: true, sentTo: emailsIn, uploaded: true });
     }
   } catch {}
@@ -2769,7 +2769,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
     const pdfAttach = async () => { const pdf = await greenInvoice.getDocumentPdf(params[0]); return [{ filename: `document-${String(num || params[0]).replace(/[^\w.-]/g, '_')}.pdf`, content: Buffer.from(pdf.base64, 'base64') }]; };
     // אם לחברה יש חשבון מייל משלה (Gmail) — שולחים ממנו ישירות (המייל יוצא מהתיבה של החברה), עם ה-PDF מצורף
     if (mailer.companyMailConfigured(creds)) {
-      await mailer.sendMailFrom(creds, { to: emails, subject, text, html: htmlBody, attachments: await pdfAttach() });
+      await sendMailLogged(creds, { __meta: { kind: 'client-payment-status', companyId: _mcid, ref: null }, to: emails, subject, text, html: htmlBody, attachments: await pdfAttach() });
       return json(res, { ok: true, sentTo: emails, viaCompanyMail: true });
     }
     // אחרת: ניסיון שליחה ישירה דרך חשבונית ירוקה; אם נכשל — חשבון SMTP כללי (עם שם החברה)
@@ -2778,7 +2778,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
       return json(res, { ok: true, sentTo: emails, result: r });
     } catch (giErr) {
       if (!mailer.mailerConfigured()) return json(res, { error: `שליחה דרך חשבונית ירוקה נכשלה (${giErr.message}) — ולחברה זו אין חשבון מייל מוגדר. הגדר חשבון מייל בפרטי העסק.` }, 502);
-      await mailer.sendMailFrom(creds, { to: emails, subject, text, html: htmlBody, attachments: await pdfAttach() });
+      await sendMailLogged(creds, { __meta: { kind: 'client-payment-status', companyId: _mcid, ref: null }, to: emails, subject, text, html: htmlBody, attachments: await pdfAttach() });
       return json(res, { ok: true, sentTo: emails, viaSmtp: true });
     }
   } catch (e) { json(res, { error: e.message }, 500); }
@@ -2843,7 +2843,7 @@ add('POST', /^\/api\/payment-status\/send$/, async (req, res, _p, q, body) => {
   // אותו עוטף HTML כמו בכל שאר המיילים היוצאים — RTL + חתימת החברה מפרטי העסק
   const html = htmlBodyWithSig(db, cid, text);
   try {
-    await mailer.sendMailFrom(creds, { to: emails, subject, text, html, attachments });
+    await sendMailLogged(creds, { __meta: { kind: 'test', companyId: cid, ref: null }, to: emails, subject, text, html, attachments });
     json(res, { ok: true, sentTo: emails, attached: attachments.length, failed });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
@@ -2894,7 +2894,7 @@ add('POST', /^\/api\/payroll\/send-report$/, async (req, res, _p, q, body) => {
   const totalBytes = attachments.reduce((s, a) => s + a.content.length, 0);
   if (totalBytes > 23 * 1024 * 1024) return json(res, { error: `הקבצים כבדים מדי לשליחה במייל (${Math.round(totalBytes / 1048576)}MB, המגבלה ~25MB). נסה לשלוח פחות עובדים בבת אחת או פנה אליי.` }, 413);
   try {
-    await mailer.sendMailFrom(creds, { to, subject, text, html, attachments });
+    await sendMailLogged(creds, { __meta: { kind: 'test', companyId: cid, ref: null }, to, subject, text, html, attachments });
     json(res, { ok: true, to, count: attachments.length, subject });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
@@ -2915,7 +2915,7 @@ add('POST', /^\/api\/email\/test-signature$/, async (req, res, _p, q, body) => {
   const text = `היי מה נשמע?\nזהו מייל דוגמה לבדיקת החתימה והיישור לימין (RTL).`;
   const html = htmlBodyWithSig(db, cid, text);
   try {
-    await mailer.sendMailFrom(creds, { to, subject, text, html });
+    await sendMailLogged(creds, { __meta: { kind: 'expense-accountant', companyId: cid, ref: p.number || null }, to, subject, text, html });
     json(res, { ok: true, to, company: companyName, from: creds.user || '(default)', hasSignature: !!emailSigHtml(db, cid) });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
@@ -3810,6 +3810,50 @@ function mayReadFile(req, fileRec, fileId) {
   return Boolean(owner) && allowed.includes(owner);
 }
 
+// ---- יומן שליחות ----
+// כל מייל שהמערכת שולחת נרשם כאן, כולל כישלונות. הצורך אמיתי: היו שני מקרים
+// שבהם מסמך לא הגיע ליעדו ואיש לא ידע — פעם אחת כי הפורמט נדחה אצל המקבל,
+// ופעם אחת כי דגל "שלח במייל" לא נקרא כלל. יומן הוא הדרך היחידה לוודא בדיעבד.
+// כל שליחה עוברת דרך sendMailLogged, כדי שלא ייווצר מסלול שמתחמק מהתיעוד.
+const MAIL_LOG_MAX = 3000;
+async function sendMailLogged(creds, opts) {
+  const { __meta: meta = {}, ...mailOpts } = opts || {};
+  // creds === null → שליחה מהחשבון הגלובלי (mailer.sendMail). שני מסלולי השליחה
+  // של mailer.js עוברים כאן, אחרת אחד מהם היה נעדר מהיומן.
+  const send = creds ? (o2) => mailer.sendMailFrom(creds, o2) : (o2) => mailer.sendMail(o2);
+  const at = new Date().toISOString();
+  const to = [].concat(mailOpts.to || []).flat().filter(Boolean).map(String);
+  const atts = (mailOpts.attachments || []).map(a => a && a.filename).filter(Boolean);
+  let ok = false, error = null;
+  try { const r = await send(mailOpts); ok = true; return r; }
+  catch (e) { error = e && e.message ? e.message : String(e); throw e; }
+  finally {
+    try {
+      const db = load();
+      db.mailLog = db.mailLog || [];
+      db.mailLog.unshift({ id: id('ml'), at, companyId: meta.companyId || null, kind: meta.kind || 'other',
+        subject: String(mailOpts.subject || '').slice(0, 200), to, attachments: atts,
+        ref: meta.ref || null, ok, error });
+      if (db.mailLog.length > MAIL_LOG_MAX) db.mailLog.length = MAIL_LOG_MAX;
+      save(db);
+    } catch { /* תיעוד לא יפיל שליחה */ }
+  }
+}
+
+// GET /api/mail-log?companyId=&limit=&kind= — יומן השליחות
+add('GET', /^\/api\/mail-log$/, (req, res, _p, q) => {
+  const db = load(), cid = reqCompany(q);
+  const limit = Math.min(Math.max(Number(q.limit) || 100, 1), 500);
+  let list = (db.mailLog || []).filter(m => !m.companyId || m.companyId === cid);
+  if (q.kind) list = list.filter(m => m.kind === q.kind);
+  if (q.q) { const t = String(q.q).toLowerCase();
+    list = list.filter(m => (m.subject || '').toLowerCase().includes(t)
+      || (m.to || []).some(x => String(x).toLowerCase().includes(t))
+      || String(m.ref || '').toLowerCase().includes(t)); }
+  const failed = list.filter(m => !m.ok).length;
+  json(res, { total: list.length, failed, items: list.slice(0, limit) });
+});
+
 // ---- הצעות מחיר שחויבו ונשארו פתוחות ----
 // עד שהפקת חשבונית התחילה לקשר את ההצעה כמסמך מקור, כל הצעה שחויבה נשארה
 // פתוחה בחשבונית ירוקה. קישור בדיעבד אינו אפשרי (linkedDocumentIds נקבע
@@ -4026,7 +4070,7 @@ add('POST', /^\/api\/local-expenses\/migrate$/, async (req, res, _p, q, body) =>
           const creds = companyMailCreds(db, cid);
           const f = await getFile(p.localFileId);
           if (acct && f && f.data && mailer.companyMailConfigured(creds)) {
-            await mailer.sendMailFrom(creds, {
+            await sendMailLogged(creds, { __meta: { kind: 'daily-report', companyId: cid, ref: null },
               to: acct, subject: `הוצאה #${p.number || ''}`,
               text: `מצורפת חשבונית הוצאה.\nספק: ${p.supplierName || ''}\nמספר מסמך: ${p.number || ''}\nתאריך: ${p.date || ''}\nסכום כולל מע"מ: ${Math.abs(Number(p.amount) || 0)}`,
               attachments: [(() => { const doc = toMailableDoc(Buffer.from(f.data, 'base64'), f.mime || 'application/pdf');
@@ -5203,7 +5247,7 @@ async function runDailyReport(trigger = 'scheduled', onlyCid = null) {
       const data = await greenInvoice.withCompany(cid, () => gatherReportData(cid));
       const rep = buildReport(data);
       if (!rep) { per[cid] = { skipped: 'אין מה לדווח' }; continue; }
-      await mailer.sendMailFrom(creds, {
+      await sendMailLogged(creds, { __meta: { kind: 'vehicle-alerts', companyId: cid, ref: null },
         to: [creds.user], subject: rep.subject, text: rep.text, html: reportHtml(rep.report),
       });
       per[cid] = { ok: true, to: creds.user, overdue: data.overdueInvoices.length, uninvoiced: data.uninvoicedEvents.length };
@@ -5230,7 +5274,7 @@ async function runVehicleAlerts(trigger = 'scheduled', onlyCid = null) {
     const creds = companyMailCreds(db, cid);
     if (!mailer.companyMailConfigured(creds)) { per[cid] = { skipped: 'אין חשבון מייל', pending: items.length }; continue; }
     try {
-      await mailer.sendMailFrom(creds, {
+      await sendMailLogged(creds, { __meta: { kind: 'backup', companyId: null, ref: null },
         to: [creds.user], subject: alertSubject(items),
         text: alertText(c.name || cid, items), html: alertHtml(c.name || cid, items),
       });
@@ -6595,7 +6639,7 @@ async function forwardOfekIncomeDoc(doc, type) {
     const buf = Buffer.from(await fr.arrayBuffer());
     const name = _OFEK_DOC_NAME[t] || 'מסמך';
     const num = String(doc.number || doc.id || '').replace(/[^\w.-]/g, '_');
-    await mailer.sendMailFrom(creds, {
+    await sendMailLogged(creds, { __meta: { kind: 'income-accountant', companyId: cid, ref: doc.number || null },
       to: acct,
       subject: `${name} #${doc.number || ''} — מסמך הכנסה (אופק)`,
       text: `מצורף מסמך הכנסה שהופק במערכת (אופק).\nסוג: ${name}\nמספר: ${doc.number || ''}`,
