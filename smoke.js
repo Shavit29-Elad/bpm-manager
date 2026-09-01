@@ -960,6 +960,23 @@ check('שורת האירוע ותא מסמכי החיוב נבנים בלי שג
   return true;
 });
 
+check('חלונית שנפתחת מתוך תצוגת מסמך מופיעה מעליה', () => {
+  // חלונית התצוגה מוגדרת z-index 200. חלונית שנפתחת מתוכה ונשארת בברירת המחדל
+  // (50) נפתחת מאחוריה — נראית כאילו לא קרה כלום.
+  const preview = app.match(/window\.previewDoc = async[\s\S]*?zIndex = '(\d+)'/);
+  if (!preview) throw new Error('לא נמצא z-index לחלונית התצוגה');
+  const base = Number(preview[1]);
+  for (const id of ['docSendHistModal', 'docLinks', 'sendDocModal']) {
+    const i = app.indexOf(`m.id = '${id}'`);
+    if (i < 0) throw new Error(`${id} לא נמצאה`);
+    const win = app.slice(i, i + 400);
+    const z = win.match(/zIndex = '(\d+)'/);
+    if (!z) throw new Error(`${id}: אין z-index — תיפתח מאחורי חלונית התצוגה`);
+    if (Number(z[1]) <= base) throw new Error(`${id}: z-index ${z[1]} אינו מעל ${base}`);
+  }
+  return true;
+});
+
 const va = await import('./vehicleAlerts.js');
 check('התראות תוקף רכב — שלושה ספים, בלי כפילות, ומתאפסות בחידוש', () => {
   const now = new Date('2026-08-25T09:00:00Z');

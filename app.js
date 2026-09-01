@@ -481,6 +481,7 @@ let _previewBlobUrl = null;
 window.openDocSendHistory = async (docId) => {
   let m = document.getElementById('docSendHistModal');
   if (!m) { m = document.createElement('div'); m.id = 'docSendHistModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.style.zIndex = '300'; // מעל חלונית התצוגה המקדימה (z-index 200) — נפתחת מתוכה
   m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw)"><div class="empty">טוען היסטוריית שליחה…</div></div>`;
