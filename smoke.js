@@ -873,6 +873,32 @@ check('זיכוי חלקי לא מוציא אירוע מחויב חזרה לרש
   return true;
 });
 
+check('הסימון "שלח ללקוח במייל" עובד בכל מסלולי ההפקה', () => {
+  // הסימון קיים במסך אחד ומשרת כמה מסלולי הפקה. באחד מהם הוא פשוט לא נקרא,
+  // ולכן לא עשה כלום — סימון שאינו עושה דבר גרוע מהיעדר סימון.
+  const routes = [
+    ['quotes', 'הצעת מחיר'],
+    ['documents', 'מסמך הכנסה חדש'],
+    ['invoicing', 'חשבונית מאירועים'],
+  ];
+  const heads = [...srv.matchAll(/add\('POST', \/\^[^\n]*?\/(create|generate)\$\//g)];
+  for (const [key, name] of routes) {
+    const h = heads.find(m => m[0].includes(key));
+    if (!h) throw new Error(`ראוט ${name} לא נמצא`);
+    const i = h.index;
+    const body = srv.slice(i, srv.indexOf('\n});', i));
+    if (!/body\.sendEmail/.test(body)) throw new Error(`${name}: הדגל לא נקרא בשרת`);
+    if (!/body\.email/.test(body)) throw new Error(`${name}: הכתובת לא נקראת בשרת`);
+  }
+  // והפרונט שולח אותו בכל שלושת המקומות
+  const sends = (app.match(/sendEmail: (!!e\.sendEmail|p\.sendEmail)/g) || []).length;
+  if (sends < 3) throw new Error(`הפרונט שולח את הדגל ב-${sends} מסלולים מתוך 3`);
+  // ואם סומן בלי כתובת — נעצר לפני ההפקה ולא נכשל בשקט
+  if ((app.match(/סמנת "שלח במייל" — יש להזין כתובת מייל/g) || []).length < 2)
+    throw new Error('אין בדיקה של כתובת חסרה בכל המסלולים');
+  return true;
+});
+
 const va = await import('./vehicleAlerts.js');
 check('התראות תוקף רכב — שלושה ספים, בלי כפילות, ומתאפסות בחידוש', () => {
   const now = new Date('2026-08-25T09:00:00Z');

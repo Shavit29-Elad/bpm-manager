@@ -1179,6 +1179,9 @@ add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
     if (body.date) opts.date = String(body.date).slice(0, 10);
     if (body.discount && Number(body.discount.amount) > 0) opts.discount = body.discount; // הנחה (סכום/אחוז) — כבר מומרת ל-net
     if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
+    // שליחה ללקוח במייל — כמו בהצעת מחיר ובמסמך המשך. הראוט הזה פשוט לא קרא את
+    // הדגל, ולכן הסימון במסך לא עשה דבר בכל מסמכי ההכנסה שנוצרים מאפס.
+    if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
         const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };

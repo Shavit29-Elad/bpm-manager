@@ -4243,7 +4243,10 @@ window.createNewQuote = async (btn) => {
     if (!confirm(`ליצור ${docName} על סך ${money(total)} עבור ${e.clientName || 'הלקוח'}?\nהמסמך ייווצר בחשבונית ירוקה ולא ניתן למחיקה (רק לזכות).`)) return;
     if (btn) btn.disabled = true; if (st) st.innerHTML = `<span class="muted">יוצר ${docName}…</span>`;
     const needsPay = [320, 400, 405].includes(Number(e.type)); // רק מס-קבלה/קבלה דורשים תקבול; עסקה(300)/מס(305) בלי תשלום
-    const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, skipDateValidation: !!e.skipSeq };
+    if (e.sendEmail && !(e.email || '').trim()) { alert('סמנת "שלח במייל" — יש להזין כתובת מייל.'); if (btn) btn.disabled = false; return; }
+    const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, skipDateValidation: !!e.skipSeq,
+      // הסימון "שלח ללקוח במייל" נקרא מהמסך אבל לא נשלח — ולכן לא עשה כלום
+      sendEmail: !!e.sendEmail, email: (e.email || '').trim() };
     if (needsPay) body.payment = [{ type: 4, price: +total.toFixed(2), date: e.date }];
     const r = await fetch('/api/documents/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (btn) btn.disabled = false;
