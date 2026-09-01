@@ -327,7 +327,10 @@ tbody tr:last-child td{border-bottom:none}
      עם padding זעיר (עד 2px), ו-min-height גובר עליהם בלי לגעת בדסקטופ.
      חשוב במיוחד בשיוך תנועות בנק: הקשה שגויה שם משייכת כסף לתנועה הלא נכונה. */
   .btn,button{min-height:42px}
-  input[type=checkbox],input[type=radio]{width:20px;height:20px;flex:0 0 auto}
+  /* שדות קלט ובוררים: padding מוטבע (למשל 6px 8px) גובר על כלל ה-padding כאן
+     ומחזיר אותם ל-27-35px. min-height אינו מושפע ממנו, ולכן הוא מה שאוכף בפועל. */
+  input:not([type=checkbox]):not([type=radio]):not([type=file]),select,textarea{min-height:42px;box-sizing:border-box}
+  input[type=checkbox],input[type=radio]{width:20px;height:20px;flex:0 0 auto;min-height:0}
   td .btn,td button{margin-block:2px}
 
   /* כרטיס רכב בפלאפון — התוקף והפעולות יורדים מתחת לתווית, כדי שכלום לא יידחס */

@@ -977,6 +977,29 @@ check('חלונית שנפתחת מתוך תצוגת מסמך מופיעה מע�
   return true;
 });
 
+check('טבלה רחבה מוצגת ככרטיסים בפלאפון', () => {
+  // טבלה שרוחבה המינימלי גדול ממסך פלאפון נגללת אופקית, וכפתורי הפעולה שבקצה
+  // השורה יוצאים מהמסך — אי אפשר ללחוץ עליהם בלי לגלול את הטבלה הצידה.
+  const missing = [];
+  for (const m of app.matchAll(/<table([^>]*)>/g)) {
+    const attrs = m[1];
+    const mw = /min-width:\s*\$\{[^}]*\}|min-width:\s*(\d+)px/.exec(attrs);
+    const w = mw && mw[1] ? Number(mw[1]) : (mw ? 999 : 0);   // ביטוי מחושב — מניחים רחב
+    // no-cardify = פריסת דוח להדפסה (colspan ושורת סיכום) — כרטיסים היו הורסים אותה
+    if (w >= 500 && !/class="[^"]*\bcardify\b/.test(attrs) && !/no-cardify/.test(attrs))
+      missing.push(`min-width ${w || 'מחושב'}`);
+  }
+  if (missing.length) throw new Error(`${missing.length} טבלאות רחבות בלי כרטיסים: ${missing.join(', ')}`);
+  // הכפתור הצף חייב להתחמק מתוכן — אחרת כפתור שנופל תחתיו אינו לחיץ כלל
+  if (!/fab-away/.test(app) || !/fab-lift/.test(app)) throw new Error('הכפתור הצף אינו מתחמק מתוכן');
+  if (!/avoidOverlap/.test(app)) throw new Error('אין בדיקת חפיפה לכפתור הצף');
+  const css = fs.readFileSync('styles.css', 'utf8');
+  // שדות קלט: padding מוטבע גובר, ולכן min-height הוא מה שאוכף גובל מגע
+  if (!/input:not\(\[type=checkbox\]\):not\(\[type=radio\]\):not\(\[type=file\]\),select,textarea\{min-height:42px/.test(css))
+    throw new Error('אין גובה מינימלי לשדות קלט בפלאפון');
+  return true;
+});
+
 const va = await import('./vehicleAlerts.js');
 check('התראות תוקף רכב — שלושה ספים, בלי כפילות, ומתאפסות בחידוש', () => {
   const now = new Date('2026-08-25T09:00:00Z');

@@ -373,10 +373,47 @@ async function vehiclePill() {
     : soon ? `${soon} פג בתוך 30 יום` : 'תקין';
   return `<span class="pill ${cls}" style="cursor:pointer" title="לחץ למעבר לרכבי החברה" onclick="gotoVehicles()">סטטוס רכבים: ${txt}</span>`;
 }
+// הסתרת הכפתור הצף בגלילה למטה. בלעדיה כפתור שנופל תחתיו אינו ניתן ללחיצה
+// כלל — הלחיצה מגיעה לכפתור הצף. גלילה למעלה, או עצירה, מחזירה אותו.
+(() => {
+  let last = 0, timer = null;
+  const fab = () => document.getElementById('fabNew');
+  const show = () => { const f = fab(); if (f) f.classList.remove('fab-away'); };
+  window.addEventListener('scroll', () => {
+    if (!window.matchMedia('(max-width:640px)').matches) return show();
+    const y = window.scrollY || 0;
+    const f = fab(); if (!f) return;
+    if (y > last + 6 && y > 120) f.classList.add('fab-away');   // למטה — מפנה מקום
+    else if (y < last - 6) show();                               // למעלה — חוזר
+    last = y;
+    clearTimeout(timer);
+    timer = setTimeout(() => { show(); avoidOverlap(); }, 900);   // עצירת גלילה — חוזר מעצמו
+  }, { passive: true });
+  // הימנעות אקטיבית: אם הכפתור מכסה כפתור אחר, הוא מתרומם. גלילה לבדה לא מספיקה —
+  // בראש העמוד אין לאן לגלול, והכפתור שמתחת נשאר בלתי לחיץ.
+  window.avoidOverlap = () => {
+    const f = document.getElementById('fabNew');
+    if (!f || !window.matchMedia('(max-width:640px)').matches || f.classList.contains('fab-away')) return;
+    f.classList.remove('fab-lift');
+    const hits = () => {
+      const r = f.getBoundingClientRect();
+      for (const e of document.querySelectorAll('main button, main a.btn, main select, main input')) {
+        if (!e.offsetParent) continue;
+        const b = e.getBoundingClientRect();
+        if (b.bottom < 0 || b.top > window.innerHeight) continue;
+        if (b.left < r.right + 6 && b.right > r.left - 6 && b.top < r.bottom + 6 && b.bottom > r.top - 6) return true;
+      }
+      return false;
+    };
+    if (hits()) { f.classList.add('fab-lift'); if (hits()) f.classList.remove('fab-lift'); }  // הרמה אחת בלבד
+  };
+  window.addEventListener('resize', () => avoidOverlap(), { passive: true });
+})();
 window.gotoVehicles = () => { const t = document.querySelector('.tab[data-tab="vehicles"]'); if (t) t.click(); };
 
 function render() {
   const c = $('#content');
+  setTimeout(() => { try { window.avoidOverlap && window.avoidOverlap(); } catch { } }, 350);
   ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes,      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, vehicles: renderVehicles, business: renderBusiness }[state.tab])(c);
 }
 
@@ -3212,12 +3249,12 @@ function invClientCard(g, eventsOverride, hiddenCount) {
   const rows = openEvents.map(ev => {
     const tags = (ev.linkedDocs || []).map(d => `<span class="tag invoiced" style="font-size:10.5px;cursor:pointer;text-decoration:underline" title="צפייה / הורדה" onclick="previewLinkedDoc('${d.id}',this)">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''} 👁</span>`).join(' ');
     return `<tr>
-      <td style="text-align:center"><input type="checkbox" class="invchk" data-c="${safe}" value="${ev.id}" ${ev.billed ? '' : 'checked'}/></td>
-      <td>${ddmy(ev.date)}</td>
-      <td>${escapeHtml(ev.artist || '')}</td>
-      <td>${escapeHtml(ev.location || '')}</td>
-      <td style="white-space:nowrap">${money(ev.total)}</td>
-      <td>${tags || (ev.billed ? '<span class="tag pending" style="font-size:10.5px">חויב</span>' : '<span class="muted" style="font-size:11px">—</span>')}
+      <td data-label="בחר" style="text-align:center"><input type="checkbox" class="invchk" data-c="${safe}" value="${ev.id}" ${ev.billed ? '' : 'checked'}/></td>
+      <td data-label="תאריך">${ddmy(ev.date)}</td>
+      <td data-label="אמן">${escapeHtml(ev.artist || '')}</td>
+      <td data-label="מיקום">${escapeHtml(ev.location || '')}</td>
+      <td data-label="סכום" style="white-space:nowrap">${money(ev.total)}</td>
+      <td data-label="מסמכים">${tags || (ev.billed ? '<span class="tag pending" style="font-size:10.5px">חויב</span>' : '<span class="muted" style="font-size:11px">—</span>')}
         <button class="btn ghost" style="padding:2px 8px;font-size:11px;white-space:nowrap;margin-inline-start:4px" onclick="linkOneEvent('${ev.id}','${cEnc}','${g.clientId || ''}')">🔗 שייך</button></td>
     </tr>`;
   }).join('');
@@ -3229,7 +3266,7 @@ function invClientCard(g, eventsOverride, hiddenCount) {
     </div>
     <div id="${bodyId}" class="${(collapsed && !_invSearch) ? 'hidden' : ''}">
       ${hiddenCount ? `<div style="padding:7px 14px;font-size:12px;color:var(--warn);background:var(--panel2);border-bottom:1px solid var(--line)">⚠ ${hiddenCount} אירועים נוספים של לקוח זה מוסתרים ע"י החיפוש — ההפקה תחול רק על המוצגים.</div>` : ''}
-      <table style="margin:0"><thead><tr><th style="width:56px">בחר</th><th>תאריך</th><th>אמן</th><th>מיקום</th><th>סכום</th><th>מסמכים</th></tr></thead>
+      <table class="cardify" style="margin:0"><thead><tr><th style="width:56px">בחר</th><th>תאריך</th><th>אמן</th><th>מיקום</th><th>סכום</th><th>מסמכים</th></tr></thead>
         <tbody>${rows}</tbody></table>
       <div style="padding:10px 14px;display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
         <button class="btn ghost" onclick="openLinkExisting('${safe}','${cEnc}','${g.clientId || ''}')">🔗 שייך למסמכים קיימים</button>
@@ -3748,17 +3785,17 @@ function bulkRenderList() {
   if (!_bulkFiles.length) { box.innerHTML = '<div class="empty" style="padding:14px">אין קבצים עדיין — לחץ "בחר קבצים".</div>'; return; }
   const typeOpts = (sel) => [[300, 'חשבון עסקה'], [305, 'חשבונית מס'], [320, 'חשבונית מס-קבלה'], [400, 'קבלה']].map(([v, l]) => `<option value="${v}" ${String(sel) === String(v) ? 'selected' : ''}>${l}</option>`).join('');
   const stTag = (s) => s === 'ai' ? '🤖 קורא…' : s === 'up' ? '⬆ מעלה…' : s === 'done' ? '<span style="color:var(--accent2)">✓ הועלה</span>' : s === 'dup' ? '<span style="color:var(--warn)">כבר קיים</span>' : s === 'err' ? '<span style="color:var(--danger)">שגיאה</span>' : s === 'queued' ? 'ממתין' : '';
-  box.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;min-width:860px;font-size:12.5px;border-collapse:collapse">
+  box.innerHTML = `<div style="overflow-x:auto"><table class="cardify" style="width:100%;min-width:860px;font-size:12.5px;border-collapse:collapse">
     <thead><tr style="text-align:right;color:var(--muted)"><th style="padding:4px">קובץ</th><th>סוג</th><th>מספר</th><th>תאריך</th><th>סכום ₪</th><th>לקוח</th><th>תיאור</th><th>סטטוס</th><th></th></tr></thead>
     <tbody>${_bulkFiles.map(row => `<tr style="border-top:1px solid var(--line)">
-      <td style="padding:4px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escAttr(row.name)}">📄 ${escapeHtml(row.name)}</td>
-      <td><select onchange="bulkEdit('${row.id}','type',this.value)" style="padding:4px">${typeOpts(row.type)}</select></td>
-      <td><input value="${escAttr(String(row.number))}" oninput="bulkEdit('${row.id}','number',this.value)" style="width:78px;padding:4px"></td>
-      <td><input type="date" value="${escAttr(row.date)}" oninput="bulkEdit('${row.id}','date',this.value)" style="padding:4px"></td>
-      <td><input type="number" value="${escAttr(String(row.amount))}" oninput="bulkEdit('${row.id}','amount',this.value)" style="width:90px;padding:4px" dir="ltr"></td>
-      <td><input list="bulkClients" value="${escAttr(row.clientName)}" oninput="bulkEdit('${row.id}','clientName',this.value)" style="width:130px;padding:4px" placeholder="שם לקוח"></td>
-      <td><input value="${escAttr(row.desc)}" oninput="bulkEdit('${row.id}','desc',this.value)" style="width:110px;padding:4px" placeholder="לא חובה"></td>
-      <td style="white-space:nowrap;font-size:11px">${stTag(row.status)}</td>
+      <td data-label="קובץ" style="padding:4px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escAttr(row.name)}">📄 ${escapeHtml(row.name)}</td>
+      <td data-label="סוג"><select onchange="bulkEdit('${row.id}','type',this.value)" style="padding:4px">${typeOpts(row.type)}</select></td>
+      <td data-label="מספר"><input value="${escAttr(String(row.number))}" oninput="bulkEdit('${row.id}','number',this.value)" style="width:78px;padding:4px"></td>
+      <td data-label="תאריך"><input type="date" value="${escAttr(row.date)}" oninput="bulkEdit('${row.id}','date',this.value)" style="padding:4px"></td>
+      <td data-label="סכום ₪"><input type="number" value="${escAttr(String(row.amount))}" oninput="bulkEdit('${row.id}','amount',this.value)" style="width:90px;padding:4px" dir="ltr"></td>
+      <td data-label="לקוח"><input list="bulkClients" value="${escAttr(row.clientName)}" oninput="bulkEdit('${row.id}','clientName',this.value)" style="width:130px;padding:4px" placeholder="שם לקוח"></td>
+      <td data-label="תיאור"><input value="${escAttr(row.desc)}" oninput="bulkEdit('${row.id}','desc',this.value)" style="width:110px;padding:4px" placeholder="לא חובה"></td>
+      <td data-label="סטטוס" style="white-space:nowrap;font-size:11px">${stTag(row.status)}</td>
       <td><button class="btn ghost" style="padding:2px 7px" onclick="bulkRemove('${row.id}')">✕</button></td>
     </tr>`).join('')}</tbody></table></div>`;
 }
@@ -5877,7 +5914,7 @@ function renderSupplierDetail() {
   const yearSel = `<select onchange="setSupYear(this.value)" style="padding:6px 10px"><option value="all" ${_supYear === 'all' ? 'selected' : ''}>כל השנים</option>${years.map(y => `<option value="${y}" ${_supYear === y ? 'selected' : ''}>${y}</option>`).join('')}</select>`;
   detail.innerHTML = `<div class="row-between"><h2 style="font-size:17px">${escapeHtml(_supName)}</h2>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${(state.user && state.user.role === 'admin') ? `<button class="btn ghost" style="padding:5px 11px;font-size:12.5px" onclick="openContactEdit('supplier','${_supId}')">✏️ עריכת ספק</button>` : ''}<button class="btn primary" style="padding:5px 12px;font-size:13px" onclick="openExpenseForm()">+ רשום הוצאה</button><span class="muted" style="font-size:13px">שנה:</span>${yearSel}<span class="muted">${docs.length} מסמכים · ${money(total)}</span></div></div>
-    ${docs.length ? `<div style="overflow-x:auto;margin-top:10px"><table style="min-width:520px"><thead><tr><th>תאריך</th><th>מספר</th><th>קטגוריה</th><th>סכום</th><th></th></tr></thead>
+    ${docs.length ? `<div style="overflow-x:auto;margin-top:10px"><table class="cardify" style="min-width:520px"><thead><tr><th>תאריך</th><th>מספר</th><th>קטגוריה</th><th>סכום</th><th></th></tr></thead>
       <tbody>${docs.map(supDocRow).join('')}</tbody></table></div>`
       : `<div class="empty">לא נמצאו מסמכי הוצאה לקבלן זה בחשבונית ירוקה.</div>`}`;
 }
@@ -5888,8 +5925,8 @@ function supDocRow(d) {
     <a class="btn ghost" style="padding:2px 8px;font-size:12px" href="${d.url}" download target="_blank" rel="noopener">הורדה ↓</a>` : '';
   const editBtn = (d.id && isAdmin) ? `<button class="btn ghost" style="padding:2px 8px;font-size:12px" onclick="openExpenseEdit('${d.id}')">✏️ עריכה</button>` : '';
   const acts = (viewDl || editBtn) ? `<div style="display:flex;gap:6px;flex-wrap:wrap">${viewDl}${editBtn}</div>` : '<span class="muted">—</span>';
-  return `<tr><td style="white-space:nowrap">${fmtDate(d.date)}</td><td>${escapeHtml(String(d.number || '—'))}</td>
-    <td>${escapeHtml(desc)}</td><td style="white-space:nowrap">${money(d.amount)}</td><td>${acts}</td></tr>`;
+  return `<tr><td data-label="תאריך" style="white-space:nowrap">${fmtDate(d.date)}</td><td data-label="מספר">${escapeHtml(String(d.number || '—'))}</td>
+    <td data-label="קטגוריה">${escapeHtml(desc)}</td><td data-label="סכום" style="white-space:nowrap">${money(d.amount)}</td><td data-label="פעולות">${acts}</td></tr>`;
 }
 // עריכת תיאור חשבונית ספק — מעדכן בחשבונית ירוקה ובהתאמות הבנק
 window.editExpenseNote = async (id) => {
@@ -6425,7 +6462,7 @@ function renderJobsReport() {
   const head = `<div style="font-size:16px;font-weight:800;margin-bottom:2px">${escapeHtml(_report.empName)}</div>
     <div style="color:#6b7488;font-size:13px;margin-bottom:12px">דוח עבודות חודשי · ${monthLabelFromKey(_report.month)} · ${label}</div>`;
   if (!rows.length) { el.innerHTML = head + `<div class="empty">אין עבודות לחודש זה.</div>`; return; }
-  el.innerHTML = head + `<div style="overflow-x:auto"><table style="width:100%;min-width:960px;border-collapse:collapse;background:#fff;table-layout:fixed">
+  el.innerHTML = head + `<div style="overflow-x:auto"><table class="no-cardify" style="width:100%;min-width:960px;border-collapse:collapse;background:#fff;table-layout:fixed">
       <thead><tr>${th('#', '30px')}${th('אמן', '19%')}${th('תאריך', '78px')}${th('מיקום', '22%')}${th('תשלום', '68px')}${th('בונוס', '62px')}${th('אוכל', '60px')}${showTravel ? th('נסיעות', '66px') : ''}${th('הערות', '15%')}</tr></thead>
       <tbody>
         ${rows.map((r, i) => {
@@ -6688,16 +6725,16 @@ window.sendEmployeeReports = async (btn) => {
 function empRow(e) {
   const val = (f) => (e[f] == null ? '' : String(e[f])).replace(/"/g, '&quot;');
   return `<tr>
-    <td><div style="display:flex;gap:4px;align-items:center"><input value="${val('name')}" placeholder="שם פרטי" onchange="saveEmp('${e.id}',{name:this.value})" style="width:105px"/><button class="btn ghost" style="padding:4px 7px;font-size:13px" title="ראה עבודות לחודש" onclick="empJobs('${e.id}','${encodeURIComponent(e.name || '')}')">📋</button></div></td>
-    <td><input value="${val('lastName')}" placeholder="שם משפחה" onchange="saveEmp('${e.id}',{lastName:this.value})" style="width:110px"/></td>
-    <td><input type="number" value="${e.baseRate ?? ''}" placeholder="₪ ליום" onchange="saveEmp('${e.id}',{baseRate:this.value===''?null:+this.value})" style="width:95px"/></td>
-    <td><input type="number" value="${e.bonus ?? ''}" placeholder="₪ בונוס" title="בונוס קבוע — יוחל אוטומטית כשמזוהה 'בונוס'/'תוספת' בתיאור" onchange="saveEmp('${e.id}',{bonus:this.value===''?null:+this.value})" style="width:95px"/></td>
-    <td><select onchange="saveEmp('${e.id}',{salaryType:this.value})" style="width:88px"><option value="gross"${(e.salaryType || 'gross') === 'gross' ? ' selected' : ''}>ברוטו</option><option value="net"${e.salaryType === 'net' ? ' selected' : ''}>נטו</option></select></td>
-    ${state.company === 'co_ofek' ? '' : `<td><input type="number" value="${e.travel ?? ''}" placeholder="₪" onchange="saveEmp('${e.id}',{travel:this.value===''?null:+this.value})" style="width:85px"/></td>`}
-    <td><input value="${val('idNumber')}" placeholder="מספר זהות" onchange="saveEmp('${e.id}',{idNumber:this.value})" style="width:120px" dir="ltr"/></td>
-    <td><input type="email" value="${val('email')}" placeholder="מייל" onchange="saveEmp('${e.id}',{email:this.value})" style="width:150px" dir="ltr"/></td>
-    <td>${driveFolderCell(e)}</td>
-    <td><button class="btn ghost" style="padding:4px 11px;color:var(--danger)" onclick="delEmp('${e.id}')">מחק</button></td></tr>`;
+    <td data-label="שם פרטי"><div style="display:flex;gap:4px;align-items:center"><input value="${val('name')}" placeholder="שם פרטי" onchange="saveEmp('${e.id}',{name:this.value})" style="width:105px"/><button class="btn ghost" style="padding:4px 7px;font-size:13px" title="ראה עבודות לחודש" onclick="empJobs('${e.id}','${encodeURIComponent(e.name || '')}')">📋</button></div></td>
+    <td data-label="שם משפחה"><input value="${val('lastName')}" placeholder="שם משפחה" onchange="saveEmp('${e.id}',{lastName:this.value})" style="width:110px"/></td>
+    <td data-label="שכר בסיס"><input type="number" value="${e.baseRate ?? ''}" placeholder="₪ ליום" onchange="saveEmp('${e.id}',{baseRate:this.value===''?null:+this.value})" style="width:95px"/></td>
+    <td data-label="בונוס קבוע"><input type="number" value="${e.bonus ?? ''}" placeholder="₪ בונוס" title="בונוס קבוע — יוחל אוטומטית כשמזוהה 'בונוס'/'תוספת' בתיאור" onchange="saveEmp('${e.id}',{bonus:this.value===''?null:+this.value})" style="width:95px"/></td>
+    <td data-label="סוג שכר"><select onchange="saveEmp('${e.id}',{salaryType:this.value})" style="width:88px"><option value="gross"${(e.salaryType || 'gross') === 'gross' ? ' selected' : ''}>ברוטו</option><option value="net"${e.salaryType === 'net' ? ' selected' : ''}>נטו</option></select></td>
+    ${state.company === 'co_ofek' ? '' : `<td data-label="החזר נסיעות"><input type="number" value="${e.travel ?? ''}" placeholder="₪" onchange="saveEmp('${e.id}',{travel:this.value===''?null:+this.value})" style="width:85px"/></td>`}
+    <td data-label="מס ת"ז"><input value="${val('idNumber')}" placeholder="מספר זהות" onchange="saveEmp('${e.id}',{idNumber:this.value})" style="width:120px" dir="ltr"/></td>
+    <td data-label="מייל"><input type="email" value="${val('email')}" placeholder="מייל" onchange="saveEmp('${e.id}',{email:this.value})" style="width:150px" dir="ltr"/></td>
+    <td data-label="תיקיית דרייב">${driveFolderCell(e)}</td>
+    <td data-label="פעולה"><button class="btn ghost" style="padding:4px 11px;color:var(--danger)" onclick="delEmp('${e.id}')">מחק</button></td></tr>`;
 }
 // קישור לתיקיית גוגל דרייב של העובד (ת"ז, אישור ניהול חשבון, טופס 101, רישיון וכו')
 function driveFolderCell(e) {
@@ -6746,8 +6783,8 @@ async function renderPayroll(c) {
         <button class="btn primary" onclick="sendEmployeeReports(this)">📧 שלח פירוט עבודות לרו״ח</button>
         <span class="muted" style="font-size:11.5px;align-self:center">PDF נפרד לכל עובד לחודש ${monthLabelFromKey(month)} · הכתובת נקבעת ב"פרטי העסק"</span>
       </div>` : ''}
-      ${list.length ? `<div style="overflow-x:auto"><table style="min-width:680px"><thead><tr><th>עובד</th><th>שכר בסיס</th><th>משמרות</th><th>בסיס מצטבר</th><th>בונוס</th><th>סה"כ לתשלום</th></tr></thead>
-        <tbody>${list.map(e => `<tr><td><a onclick="empJobsByName('${encodeURIComponent(e.name)}')" style="cursor:pointer;color:var(--accent);font-weight:600">${escapeHtml(fullNameOf(e.name))}</a></td><td>${e.baseRate ? money(e.baseRate) : '<span class="muted">—</span>'}</td><td>${e.shifts.length}</td><td>${money(e.base)}</td><td>${money(e.bonus)}</td><td><b>${money(e.total)}</b></td></tr>`).join('')}
+      ${list.length ? `<div style="overflow-x:auto"><table class="cardify" style="min-width:680px"><thead><tr><th>עובד</th><th>שכר בסיס</th><th>משמרות</th><th>בסיס מצטבר</th><th>בונוס</th><th>סה"כ לתשלום</th></tr></thead>
+        <tbody>${list.map(e => `<tr><td data-label="עובד"><a onclick="empJobsByName('${encodeURIComponent(e.name)}')" style="cursor:pointer;color:var(--accent);font-weight:600">${escapeHtml(fullNameOf(e.name))}</a></td><td data-label="שכר בסיס">${e.baseRate ? money(e.baseRate) : '<span class="muted">—</span>'}</td><td data-label="משמרות">${e.shifts.length}</td><td data-label="בסיס מצטבר">${money(e.base)}</td><td data-label="בונוס">${money(e.bonus)}</td><td data-label="סה&quot;כ לתשלום"><b>${money(e.total)}</b></td></tr>`).join('')}
         <tr style="border-top:2px solid var(--line)"><td colspan="3"><b>סה"כ</b></td><td><b>${money(tot('base'))}</b></td><td><b>${money(tot('bonus'))}</b></td><td><b style="color:var(--accent)">${money(tot('total'))}</b></td></tr>
         </tbody></table></div>` : `<div class="empty">אין נתוני שכר לחודש זה. שייך עובדים לאירועים והגדר שכר בסיס למטה.</div>`}
     </div>
@@ -6759,7 +6796,7 @@ async function renderPayroll(c) {
           <button class="btn primary" onclick="addEmployeeRow()">+ עובד</button>
         </div>
       </div>
-      <div style="overflow-x:auto"><table style="min-width:820px"><thead><tr>
+      <div style="overflow-x:auto"><table class="cardify" style="min-width:820px"><thead><tr>
         <th>שם פרטי</th><th>שם משפחה</th><th>שכר בסיס</th><th>בונוס קבוע</th><th>סוג שכר</th>${state.company === 'co_ofek' ? '' : '<th>החזר נסיעות</th>'}<th>מס ת"ז</th><th>מייל</th><th>תיקיית דרייב</th><th></th></tr></thead>
         <tbody>${emps.length ? emps.map(empRow).join('') : `<tr><td colspan="${state.company === 'co_ofek' ? 9 : 10}"><div class="empty">אין עובדים עדיין. לחץ "ייבא מהאירועים" או "+ עובד".</div></td></tr>`}</tbody></table></div>
     </div>`;

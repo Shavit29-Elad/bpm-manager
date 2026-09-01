@@ -20,7 +20,13 @@
     /* בפלאפון הסרגל העליון נערם לארבע שורות (~190px). כפתור צף ב-top:62px עם z-index
        גבוה מהסרגל היה יושב על בורר החברה וחוסם אותו. התחתית גם נוחה יותר לאגודל. */
     @media (max-width:640px) {
-      #fabNew { top: auto; bottom: 18px; left: 14px; flex-direction: column-reverse; }
+      #fabNew { top: auto; bottom: 18px; left: 14px; flex-direction: column-reverse;
+        transition: transform .18s ease, opacity .18s ease; }
+      /* הכפתור הצף מסתיר תוכן שנופל תחתיו — ולחיצה על אותו מקום מגיעה אליו ולא
+         לכפתור שמתחת. גלילה למטה מסלקת אותו, גלילה למעלה מחזירה. */
+      #fabNew.fab-away { transform: translateY(120%); opacity: 0; pointer-events: none; }
+      /* כשהכפתור מכסה כפתור אחר — הוא מתרומם מעליו במקום לחסום אותו */
+      #fabNew.fab-lift { bottom: 96px; }
     }
   </style>
 </head>
