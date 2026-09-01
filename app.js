@@ -477,6 +477,37 @@ function fmtDate(s) { if (!s) return '—'; const m = String(s).slice(0, 10).mat
 
 // תצוגה מקדימה של מסמך (PDF) בחלון קופץ — מושכים את הקובץ כ-blob ומציגים בתוך המסך (בלי הורדה)
 let _previewBlobUrl = null;
+// היסטוריית השליחה של מסמך מסוים — מתי נשלח, לאיזו כתובת, והאם הצליח.
+window.openDocSendHistory = async (docId) => {
+  let m = document.getElementById('docSendHistModal');
+  if (!m) { m = document.createElement('div'); m.id = 'docSendHistModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw)"><div class="empty">טוען היסטוריית שליחה…</div></div>`;
+  const r = await api(`/api/mail-log?docId=${encodeURIComponent(docId)}&limit=100`).catch(() => ({ error: 'שגיאת רשת' }));
+  const close = `<div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('docSendHistModal').classList.add('hidden')">סגור</button></div>`;
+  if (!r || r.error) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">${escapeHtml(String((r && r.error) || ''))}</div>${close}</div>`; return; }
+  if (!r.total) {
+    m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)">
+      <h3 style="margin:0 0 8px">📬 היסטוריית שליחה</h3>
+      <div class="empty">המסמך הזה עדיין לא נשלח מהמערכת.</div>
+      <div class="muted" style="font-size:12px">היומן נאסף מ-02/09/2026 — שליחות קודמות אינן מופיעות בו.</div>${close}</div>`;
+    return;
+  }
+  const when = (iso) => { const d = new Date(iso); return isNaN(d) ? '' :
+    `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()} בשעה ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
+  const rows = r.items.map(x => `<div style="padding:8px 0;border-top:1px solid var(--line)">
+      <div style="font-size:13px">${x.ok ? '<span style="color:var(--accent2);font-weight:700">✓ נשלח</span>' : '<span style="color:var(--danger);font-weight:700">✗ נכשל</span>'}
+        <span class="muted"> · ${when(x.at)}</span>${x.via === 'greeninvoice' ? '<span class="muted"> · דרך חשבונית ירוקה</span>' : ''}</div>
+      <div style="font-size:12.5px;margin-top:2px">אל: ${escapeHtml((x.to || []).join(', '))}</div>
+      ${x.error ? `<div style="font-size:12px;color:var(--danger);margin-top:2px">${escapeHtml(x.error)}</div>` : ''}
+    </div>`).join('');
+  m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw);max-height:88vh;max-height:88dvh;overflow:auto">
+    <h3 style="margin:0 0 4px">📬 היסטוריית שליחה</h3>
+    <div class="muted" style="font-size:12.5px;margin-bottom:6px">${r.total} שליחות${r.failed ? ` · <span style="color:var(--danger)">${r.failed} נכשלו</span>` : ''}</div>
+    ${rows}${close}</div>`;
+};
+
 window.previewDoc = async (url, opts = {}) => {
   if (!url) return;
   let m = document.getElementById('docPreview');
@@ -490,11 +521,12 @@ window.previewDoc = async (url, opts = {}) => {
   // מזהה המסמך (אם ידוע) — מאפשר כפתור "מסמכים מקושרים" שמציג את כל שרשרת המסמכים (הצעת מחיר→עסקה→מס→קבלה + זיכויים)
   const _docId = opts.docId || (String(url).match(/\/api\/documents\/([^/]+)\/(?:url|file)/) || [])[1] || null;
   const linkBtn = _docId ? `<button class="btn ghost" style="padding:6px 13px" onclick="openDocLinks('${escAttr(String(_docId))}')">🔗 מסמכים מקושרים</button>` : '';
+  const histBtn = _docId ? `<button class="btn ghost" style="padding:6px 13px" onclick="openDocSendHistory('${escAttr(String(_docId))}')">📬 היסטוריית שליחה</button>` : '';
   const shell = (inner) => `<div class="modal-card" style="width:min(920px,95vw);height:90vh;height:90dvh;padding:0;display:flex;flex-direction:column;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">
       <b>תצוגה מקדימה של המסמך</b>
       <div style="display:flex;gap:8px;align-items:center">
-        ${linkBtn}
+        ${linkBtn}${histBtn}
         ${extra}
         <a href="${url}" target="_blank" class="btn ghost" style="padding:6px 13px;text-decoration:none">הורדה ↓</a>
         ${delBtn}

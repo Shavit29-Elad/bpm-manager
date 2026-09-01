@@ -2742,7 +2742,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
       const _ucid = _cid || giCompanyId();
       const body = mailBodyFor(_db, _ucid, { clientName: '', num: '', docType: 'מסמך' });
       const subj = mailSubjectFor(_db, _ucid, { clientName: '', num: '', docType: 'מסמך' });
-      await sendMailLogged(creds, { __meta: { kind: 'document-client', companyId: _ucid, ref: f.filename || null }, to: emailsIn, subject: subj, text: body, html: htmlBodyWithSig(_db, _ucid, body), attachments: [{ filename: f.filename || 'document.pdf', content }] });
+      await sendMailLogged(creds, { __meta: { kind: 'document-client', companyId: _ucid, docId: params[0], ref: f.filename || null }, to: emailsIn, subject: subj, text: body, html: htmlBodyWithSig(_db, _ucid, body), attachments: [{ filename: f.filename || 'document.pdf', content }] });
       return json(res, { ok: true, sentTo: emailsIn, uploaded: true });
     }
   } catch {}
@@ -2769,16 +2769,20 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
     const pdfAttach = async () => { const pdf = await greenInvoice.getDocumentPdf(params[0]); return [{ filename: `document-${String(num || params[0]).replace(/[^\w.-]/g, '_')}.pdf`, content: Buffer.from(pdf.base64, 'base64') }]; };
     // אם לחברה יש חשבון מייל משלה (Gmail) — שולחים ממנו ישירות (המייל יוצא מהתיבה של החברה), עם ה-PDF מצורף
     if (mailer.companyMailConfigured(creds)) {
-      await sendMailLogged(creds, { __meta: { kind: 'client-payment-status', companyId: _mcid, ref: null }, to: emails, subject, text, html: htmlBody, attachments: await pdfAttach() });
+      await sendMailLogged(creds, { __meta: { kind: 'document-client', companyId: _mcid, docId: params[0], ref: num || null }, to: emails, subject, text, html: htmlBody, attachments: await pdfAttach() });
       return json(res, { ok: true, sentTo: emails, viaCompanyMail: true });
     }
     // אחרת: ניסיון שליחה ישירה דרך חשבונית ירוקה; אם נכשל — חשבון SMTP כללי (עם שם החברה)
     try {
       const r = await greenInvoice.sendDocument(params[0], emails);
+      // שליחה זו יוצאת מחשבונית ירוקה ולא דרך המיילר שלנו — נרשמת ידנית,
+      // אחרת מסמך שנשלח בדרך הזו נעדר מהיסטוריית השליחה של המסמך.
+      logMailEntry({ companyId: _mcid, kind: 'document-client', docId: params[0], ref: num || null,
+        subject, to: emails, attachments: [], ok: true, via: 'greeninvoice' });
       return json(res, { ok: true, sentTo: emails, result: r });
     } catch (giErr) {
       if (!mailer.mailerConfigured()) return json(res, { error: `שליחה דרך חשבונית ירוקה נכשלה (${giErr.message}) — ולחברה זו אין חשבון מייל מוגדר. הגדר חשבון מייל בפרטי העסק.` }, 502);
-      await sendMailLogged(creds, { __meta: { kind: 'client-payment-status', companyId: _mcid, ref: null }, to: emails, subject, text, html: htmlBody, attachments: await pdfAttach() });
+      await sendMailLogged(creds, { __meta: { kind: 'document-client', companyId: _mcid, docId: params[0], ref: num || null }, to: emails, subject, text, html: htmlBody, attachments: await pdfAttach() });
       return json(res, { ok: true, sentTo: emails, viaSmtp: true });
     }
   } catch (e) { json(res, { error: e.message }, 500); }
@@ -3816,6 +3820,21 @@ function mayReadFile(req, fileRec, fileId) {
 // ופעם אחת כי דגל "שלח במייל" לא נקרא כלל. יומן הוא הדרך היחידה לוודא בדיעבד.
 // כל שליחה עוברת דרך sendMailLogged, כדי שלא ייווצר מסלול שמתחמק מהתיעוד.
 const MAIL_LOG_MAX = 3000;
+// רישום ישיר ליומן, לשליחה שאינה עוברת דרך המיילר שלנו (למשל שליחה מחשבונית ירוקה).
+function logMailEntry({ companyId, kind, docId, ref, subject, to, attachments, ok, error, via }) {
+  try {
+    const db = load();
+    db.mailLog = db.mailLog || [];
+    db.mailLog.unshift({ id: id('ml'), at: new Date().toISOString(), companyId: companyId || null,
+      kind: kind || 'other', subject: String(subject || '').slice(0, 200),
+      to: [].concat(to || []).flat().filter(Boolean).map(String),
+      attachments: attachments || [], docId: docId != null ? String(docId) : null,
+      ref: ref || null, ok: !!ok, error: error || null, via: via || null });
+    if (db.mailLog.length > MAIL_LOG_MAX) db.mailLog.length = MAIL_LOG_MAX;
+    save(db);
+  } catch { /* תיעוד לא יפיל שליחה */ }
+}
+
 async function sendMailLogged(creds, opts) {
   const { __meta: meta = {}, ...mailOpts } = opts || {};
   // creds === null → שליחה מהחשבון הגלובלי (mailer.sendMail). שני מסלולי השליחה
@@ -3833,6 +3852,7 @@ async function sendMailLogged(creds, opts) {
       db.mailLog = db.mailLog || [];
       db.mailLog.unshift({ id: id('ml'), at, companyId: meta.companyId || null, kind: meta.kind || 'other',
         subject: String(mailOpts.subject || '').slice(0, 200), to, attachments: atts,
+        docId: meta.docId != null ? String(meta.docId) : null,   // לשליפת היסטוריית שליחה של מסמך מסוים
         ref: meta.ref || null, ok, error });
       if (db.mailLog.length > MAIL_LOG_MAX) db.mailLog.length = MAIL_LOG_MAX;
       save(db);
@@ -3845,6 +3865,7 @@ add('GET', /^\/api\/mail-log$/, (req, res, _p, q) => {
   const db = load(), cid = reqCompany(q);
   const limit = Math.min(Math.max(Number(q.limit) || 100, 1), 500);
   let list = (db.mailLog || []).filter(m => !m.companyId || m.companyId === cid);
+  if (q.docId) list = list.filter(m => String(m.docId || '') === String(q.docId));
   if (q.kind) list = list.filter(m => m.kind === q.kind);
   if (q.q) { const t = String(q.q).toLowerCase();
     list = list.filter(m => (m.subject || '').toLowerCase().includes(t)

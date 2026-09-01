@@ -924,6 +924,42 @@ check('כל שליחת מייל נרשמת ביומן', () => {
   return true;
 });
 
+check('שורת האירוע ותא מסמכי החיוב נבנים בלי שגיאת ריצה', () => {
+  // הבדיקה הקיימת מאתרת משתנה שלא הוכרז ברמת המודול, אבל לא משתנה שמוכרז
+  // בפונקציה אחת ומשמש באחרת. החלפת טקסט גלובלית הזליגה בדיוק כך משתנה
+  // מחלונית התצוגה לתוך שורת האירוע — והיה שובר את כל הלשונית.
+  const grab = (sig) => { const i = app.indexOf(sig); if (i < 0) throw new Error(`${sig} לא נמצאה`);
+    let d = 0, j = app.indexOf('{', i);
+    for (let k = j; k < app.length; k++) { if (app[k] === '{') d++; else if (app[k] === '}') { d--; if (!d) return app.slice(i, k + 1); } }
+    throw new Error('לא נסגרה'); };
+  const stubs = `
+    const escapeHtml=(x)=>String(x==null?'':x), escAttr=escapeHtml, money=(n)=>'₪'+(n||0), ddmy=(d)=>String(d||'');
+    const SHORT_BILL={10:'הצעה',300:'עסקה',305:'מס',320:'מס-קבלה',400:'קבלה',330:'זיכוי'};
+    const FOLLOWUP_FOR={10:[[305,'מס']],300:[[305,'מס']],305:[[400,'קבלה']]};
+    const EV_PAY_BG={red:'',yellow:'',green:'',none:''}, VAT_RATE=0.18;
+    const state={user:{role:'admin'},company:'co_bpm'};
+    const activeLinkedDocs=(e)=>(e.linkedDocs||[]).filter(d=>!d.credited&&!d.converted);
+    const isNoInvoiceEv=(e)=>!!e.noInvoice, isBilledEv=(e)=>e.invoiceStatus==='invoiced';
+    const isOverdueUnbilled=()=>false, evGross=(e)=>Number(e.price)||0;
+    const followupDocForEvent=()=>null, creditableDocForEvent=()=>null;
+    const evPayState=(e)=>'yellow', clientPaidBadge=()=>'', payDateFmt=(d)=>String(d||'');
+  `;
+  const fn = new Function('ev', stubs + '\n'
+    + grab('function invoiceCell(e) {') + '\n'
+    + grab('function rowEvent(e) {') + '\n'
+    + 'return rowEvent(ev);');
+  const ev = { id: 'e1', date: '2026-07-01', artist: 'אמן', location: 'ת"א', clientName: 'לקוח',
+    price: 5000, confirmed: true, invoiceStatus: 'invoiced', employees: ['א'], contractors: ['ב'],
+    linkedDocs: [{ id: 'd1', type: 305, number: '900' }] };
+  const html = fn(ev);
+  if (!/<tr/.test(html)) throw new Error('לא הופקה שורה');
+  if (!/900/.test(html)) throw new Error('מספר המסמך לא מוצג');
+  // גם אירוע בלי מסמכים ובלי אישור
+  const html2 = fn({ id: 'e2', date: '2026-07-02', linkedDocs: [] });
+  if (!/<tr/.test(html2)) throw new Error('אירוע בלי מסמכים נכשל');
+  return true;
+});
+
 const va = await import('./vehicleAlerts.js');
 check('התראות תוקף רכב — שלושה ספים, בלי כפילות, ומתאפסות בחידוש', () => {
   const now = new Date('2026-08-25T09:00:00Z');
