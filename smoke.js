@@ -1000,6 +1000,27 @@ check('טבלה רחבה מוצגת ככרטיסים בפלאפון', () => {
   return true;
 });
 
+const invMod = await import('./invoicing.js');
+check('רשימת ההפקה — זיכוי מלא מחזיר, זיכוי חלקי לא', () => {
+  const base = { id: 'e', clientName: 'לקוח', price: 26000, invoiceStatus: 'pending', invoiceId: null, invoiceType: null };
+  const inv = { id: 'i', type: 305, number: '50425' };
+  const inList = (docs) => !invMod.eventsByClient([{ ...base, linkedDocs: docs }])[0].events[0].issued;
+  const cases = [
+    ['בלי מסמכים', [], true],
+    ['חשבונית פעילה', [inv], false],
+    ['זיכוי מלא', [{ ...inv, credited: true }, { id: 'c', type: 330, credit: true, amount: 26000 }], true],
+    ['זיכוי חלקי', [{ ...inv, credited: true }, { id: 'c', type: 330, credit: true, amount: 5000 }], false],
+    ['זיכוי מלא ואז חשבונית חדשה', [{ ...inv, credited: true }, { id: 'c', type: 330, credit: true, amount: 26000 }, { id: 'i2', type: 305, number: '50999' }], false],
+    ['שני זיכויים חלקיים שמסתכמים למלא', [{ ...inv, credited: true }, { id: 'c1', type: 330, credit: true, amount: 20000 }, { id: 'c2', type: 330, credit: true, amount: 6000 }], true],
+    ['סכום זיכוי לא ידוע — נחשב מלא', [{ ...inv, credited: true }, { id: 'c', type: 330, credit: true, amount: null }], true],
+  ];
+  for (const [name, docs, want] of cases) {
+    const got = inList(docs);
+    if (got !== want) throw new Error(`${name}: ${got ? 'ברשימה' : 'לא ברשימה'} — ציפייה ${want ? 'ברשימה' : 'לא ברשימה'}`);
+  }
+  return true;
+});
+
 const va = await import('./vehicleAlerts.js');
 check('התראות תוקף רכב — שלושה ספים, בלי כפילות, ומתאפסות בחידוש', () => {
   const now = new Date('2026-08-25T09:00:00Z');

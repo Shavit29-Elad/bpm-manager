@@ -3254,7 +3254,7 @@ function invClientCard(g, eventsOverride, hiddenCount) {
       <td data-label="אמן">${escapeHtml(ev.artist || '')}</td>
       <td data-label="מיקום">${escapeHtml(ev.location || '')}</td>
       <td data-label="סכום" style="white-space:nowrap">${money(ev.total)}</td>
-      <td data-label="מסמכים">${restoreBtn(ev)}${tags || (ev.billed ? '<span class="tag pending" style="font-size:10.5px">חויב</span>' : '<span class="muted" style="font-size:11px">—</span>')}
+      <td data-label="מסמכים">${tags || (ev.billed ? '<span class="tag pending" style="font-size:10.5px">חויב</span>' : '<span class="muted" style="font-size:11px">—</span>')}
         <button class="btn ghost" style="padding:2px 8px;font-size:11px;white-space:nowrap;margin-inline-start:4px" onclick="linkOneEvent('${ev.id}','${cEnc}','${g.clientId || ''}')">🔗 שייך</button></td>
     </tr>`;
   }).join('');
@@ -3845,31 +3845,6 @@ async function _invPreviewForIds(ids, client, clientId) {
     quote: (pv.linkedQuote && pv.linkedQuote.url) ? pv.linkedQuote : null };
   showInvoicePreviewModal();
 }
-// אירוע שחשבוניתו סומנה כמזוכה חוזר לרשימת ההפקה — נכון בזיכוי מלא, שגוי
-// בזיכוי חלקי שבו החשבונית עדיין בתוקף. שיוך מחדש מנקה את הסימון ומחזיר את
-// האירוע למצבו. הכפתור מוצג רק כשיש חשבונית מזוכה, כלומר יש מה להחזיר.
-const creditedInvoiceOf = (ev) => (ev.linkedDocs || [])
-  .find(d => d && d.credited && [300, 305, 320, 400].includes(Number(d.type)));
-const restoreBtn = (ev) => {
-  const inv = creditedInvoiceOf(ev);
-  if (!inv) return '';
-  return `<button class="btn ghost" style="padding:2px 9px;font-size:11px;color:var(--accent-strong)"
-    title="החשבונית סומנה כמזוכה ולכן האירוע חזר לרשימת ההפקה. אם הזיכוי היה חלקי והחשבונית עדיין בתוקף — לחץ להחזרתה."
-    onclick="restoreCreditedInvoice('${ev.id}','${escAttr(String(inv.id))}',this)">↩ החזר חשבונית ${escapeHtml(String(inv.number || ''))}</button> `;
-};
-window.restoreCreditedInvoice = async (eventId, docId, btn) => {
-  if (!confirm('להחזיר את החשבונית לתוקף עבור האירוע?\n\nהאירוע ירד מרשימת ההפקה ויוצג שוב כמחויב.\nעשה זאת רק אם הזיכוי היה חלקי והחשבונית עדיין בתוקף.')) return;
-  if (btn) { btn.disabled = true; btn.textContent = 'מחזיר…'; }
-  const ev = (_invClients.flatMap(g => g.events || []) || []).find(x => x.id === eventId);
-  const doc = (ev && (ev.linkedDocs || []).find(d => String(d.id) === String(docId))) || { id: docId };
-  const r = await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ eventIds: [eventId], docs: [{ id: doc.id, number: doc.number || null, type: doc.type || 305 }] }) })
-    .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (!r || r.error) { if (btn) { btn.disabled = false; btn.textContent = '↩ החזר חשבונית'; } alert('שגיאה: ' + ((r && r.error) || '')); return; }
-  clearApiCache();
-  renderCombined($('#content'));
-};
-
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {
   const ids = [...document.querySelectorAll(`.invchk[data-c="${safe}"]:checked`)].map(x => x.value);
   return _invPreviewForIds(ids, decodeURIComponent(clientEnc || ''), clientId);

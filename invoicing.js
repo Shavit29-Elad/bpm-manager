@@ -77,8 +77,16 @@ export function eventsByClient(events) {
     const t = eventTotal(ev);
     const billed = isBilled(ev);
     const linkedDocs = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
-    // מסמכים פעילים בלבד — מסמך שזוכה/הומר (credited/credit/converted) אינו נחשב עוד כחיוב פעיל, כך שהאירוע חוזר להפקה.
-    const activeDocs = linkedDocs.filter(d => !d.credited && !d.credit && !d.converted);
+    // זיכוי מלא מבטל את החשבונית והאירוע חוזר להפקה. זיכוי חלקי אינו מבטל אותה —
+    // היא בתוקף על היתרה, והאירוע נשאר מחויב. הסימון credited לבדו אינו מבחין
+    // בין השניים, ולכן משווים את סכום הזיכויים לסכום האירוע.
+    // סכום זיכוי שאינו ידוע — נחשב מלא, כדי לא להסתיר אירוע שחשבוניתו באמת בוטלה.
+    const creditDocs = linkedDocs.filter(d => d && (d.credit || Number(d.type) === 330));
+    const creditedSum = creditDocs.reduce((sum, d) => sum + Math.abs(num(d.amount)), 0);
+    const anyUnknown = creditDocs.some(d => d.amount == null || !num(d.amount));
+    const fullyCredited = !creditDocs.length || anyUnknown || creditedSum >= t - Math.max(3, t * 0.01);
+    // מסמך שהומר — תמיד יורד. מסמך שזוכה — יורד רק כשהזיכוי מלא.
+    const activeDocs = linkedDocs.filter(d => !d.credit && !d.converted && (!d.credited || !fullyCredited));
     // "שולם/הושלם" רק כשיש מסמך מסוג קבלה או מס-קבלה (320/400) — עסקה/מס בלבד = חויב אך פתוח
     const paid = activeDocs.some(d => [320, 400].includes(Number(d.type))) || [320, 400].includes(Number(ev.invoiceType));
     // "הופק" — הופקה/שויכה חשבונית כלשהי: עסקה(300)/מס(305)/מס-קבלה(320)/קבלה(400). הצעת מחיר(10) אינה נחשבת. מסמך שזוכה — אינו נחשב.
