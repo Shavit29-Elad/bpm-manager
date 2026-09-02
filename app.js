@@ -1625,6 +1625,7 @@ function renderDeriveEditor() {
       <div id="derSendEmailWrap" style="margin-top:8px;${autoSendPref() ? '' : 'display:none'}">
         <label style="font-size:12.5px;display:block;margin-bottom:3px;color:var(--muted)">כתובת מייל לשליחה (מוגדרת ללקוח — ניתן לשנות)</label>
         <input id="derSendEmail" dir="ltr" value="${escAttr(e.sendEmail || '')}" placeholder="name@example.com" style="width:100%;padding:6px 8px" oninput="if(_derEdit)_derEdit.sendEmail=this.value">
+        <input id="derSendEmail2" dir="ltr" value="" placeholder="כתובת נוספת — אופציונלי (מייל אחד לשתיהן)" style="width:100%;padding:6px 8px;margin-top:6px" />
       </div>
     </div>
     <div id="derEditStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
@@ -1713,7 +1714,11 @@ window.derConfirm = async () => {
   const r = e.uploadedSource
     ? await fetch(usUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: usBody }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }))
     : await fetch(`/api/documents/${e.id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: e.type, linked: e.linked, items: apiItems, discount: apiDiscount, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+        body: JSON.stringify({ type: e.type, linked: e.linked, items: apiItems, discount: apiDiscount, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate,
+          // הסימון בחלונית קרא רק להצגת חלונית מוכנות — לא לשליחה. עכשיו הוא שולח.
+          sendEmail: !!(document.getElementById('derAutoSend') || {}).checked,
+          email: ((document.getElementById('derSendEmail') || {}).value || '').trim(),
+          email2: ((document.getElementById('derSendEmail2') || {}).value || '').trim() }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
     // מסמך המשך שנוצר ממסמך שהועלה — השרת כבר קישר וסימן את הישן כ"הומר"; נעדכן את עורך האירוע אם פתוח
     if (e.uploadedSource && _evEditing && _evEditing.id === e.uploadedSource.eventId && r.doc) {
@@ -4150,7 +4155,7 @@ window.openNewQuote = async () => {
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
   // טעינה רעננה של רשימת הלקוחות המלאה (כדי שלקוחות חדשים יופיעו וניתן יהיה לחפש את כולם)
   try { const cl = await api('/api/clients'); if (Array.isArray(cl) && cl.length) _evClients = cl; } catch { if (!_evClients) _evClients = []; }
-  _nq = { clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
+  _nq = { clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', email2: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
   renderNewQuote();
 };
 // מסמך חדש מכל מקום באתר (כפתור ה-+ הצף) — הצעת מחיר(10) / חשבונית עסקה(300) / חשבונית מס(305) / חשבונית מס-קבלה(320)
@@ -4159,7 +4164,7 @@ window.openNewDoc = async (type) => {
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
   try { const cl = await api('/api/clients'); if (Array.isArray(cl) && cl.length) _evClients = cl; } catch { if (!_evClients) _evClients = []; }
-  _nq = { type: Number(type) || 10, clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
+  _nq = { type: Number(type) || 10, clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', email2: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
   renderNewQuote();
 };
 window.toggleFabMenu = () => { const mn = document.getElementById('fabMenu'); if (mn) mn.classList.toggle('hidden'); };
@@ -4192,6 +4197,7 @@ function nqSync() {
   const s = m.querySelector('.nq-subject'); if (s) e.subject = s.value;
   const r = m.querySelector('.nq-remarks'); if (r) e.remarks = r.value;
   const em = m.querySelector('.nq-email'); if (em) e.email = em.value;
+  const em2 = m.querySelector('.nq-email2'); if (em2) e.email2 = em2.value;
   const se = m.querySelector('.nq-sendemail'); if (se) e.sendEmail = se.checked;
   const sk = m.querySelector('.nq-skipseq'); if (sk) e.skipSeq = sk.checked;
   m.querySelectorAll('.nq-item').forEach((row, i) => { if (!e.items[i]) return; e.items[i].description = row.querySelector('.nq-desc')?.value ?? e.items[i].description; e.items[i].quantity = row.querySelector('.nq-qty')?.value ?? e.items[i].quantity; e.items[i].price = row.querySelector('.nq-price')?.value ?? e.items[i].price; });
@@ -4281,6 +4287,7 @@ function renderNewQuote() {
     <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית (לא חובה) <input class="nq-remarks" value="${escAttr(e.remarks)}" style="width:100%;padding:6px 8px;margin-top:3px"></label>
     <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:10px"><input type="checkbox" class="nq-sendemail" ${e.sendEmail ? 'checked' : ''}> שלח את ההצעה ללקוח במייל</label>
     <input class="nq-email" type="email" dir="ltr" value="${escAttr(email)}" placeholder="mail@example.com" style="width:100%;padding:6px 8px;margin-top:6px">
+    <input class="nq-email2" type="email" dir="ltr" value="${escAttr(e.email2 || '')}" placeholder="כתובת נוספת — אופציונלי (יישלח מייל אחד לשתיהן)" style="width:100%;padding:6px 8px;margin-top:6px">
     <div id="nqStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('newQuoteModal').classList.add('hidden')">ביטול</button>
@@ -4316,7 +4323,7 @@ window.createNewQuote = async (btn) => {
     if (e.sendEmail && !(e.email || '').trim()) { alert('סמנת "שלח במייל" — יש להזין כתובת מייל.'); if (btn) btn.disabled = false; return; }
     const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, skipDateValidation: !!e.skipSeq,
       // הסימון "שלח ללקוח במייל" נקרא מהמסך אבל לא נשלח — ולכן לא עשה כלום
-      sendEmail: !!e.sendEmail, email: (e.email || '').trim() };
+      sendEmail: !!e.sendEmail, email: (e.email || '').trim(), email2: (e.email2 || '').trim() };
     if (needsPay) body.payment = [{ type: 4, price: +total.toFixed(2), date: e.date }];
     const r = await fetch('/api/documents/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (btn) btn.disabled = false;
@@ -4337,7 +4344,7 @@ window.createNewQuote = async (btn) => {
   if (e.sendEmail && !e.email.trim()) { alert('סמנת "שלח במייל" — יש להזין כתובת מייל.'); return; }
   if (e.sendEmail && !confirm(`ליצור את הצעת המחיר ולשלוח אותה במייל ל-${e.email.trim()}?`)) return;
   if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">יוצר הצעת מחיר…</span>';
-  const body = { clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim(), skipDateValidation: !!e.skipSeq };
+  const body = { clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim(), email2: (e.email2 || '').trim(), skipDateValidation: !!e.skipSeq };
   const r = await fetch('/api/quotes/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
   if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''}</span>`; document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); showDocReadyPopup(r.doc, 'הצעת מחיר'); }
@@ -8830,7 +8837,7 @@ window.incNewDoc = async (txId, type, X) => {
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
   const exVat = +((Number(X) || 0) / (1 + VAT_RATE)).toFixed(2);
-  _nq = { type: Number(type), bankTxId: txId, clientId: '', clientName: '', date: txIsoDate(txId) || todayIso(), subject: '', remarks: '', email: '', sendEmail: false, items: [{ description: 'הכנסה', quantity: 1, price: exVat }] };
+  _nq = { type: Number(type), bankTxId: txId, clientId: '', clientName: '', date: txIsoDate(txId) || todayIso(), subject: '', remarks: '', email: '', email2: '', sendEmail: false, items: [{ description: 'הכנסה', quantity: 1, price: exVat }] };
   renderNewQuote();
 };
 window.openBankImport = () => {

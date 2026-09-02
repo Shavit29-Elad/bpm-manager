@@ -1021,6 +1021,27 @@ check('רשימת ההפקה — זיכוי מלא מחזיר, זיכוי חלק
   return true;
 });
 
+check('שליחת מסמך ללקוח עוברת רק דרכנו, מייל אחד לשתי כתובות', () => {
+  // חשבונית ירוקה לא תשלח ללקוח כלום: העברת כתובות אליה מוציאה מייל שאיננו
+  // רואים, שלא נרשם ביומן, ושכישלון בו אינו מדווח.
+  if (/opts\.sendEmail = true/.test(srv)) throw new Error('מסלול שעדיין מעביר כתובות לחשבונית ירוקה');
+  if (/sendEmail: Boolean\(body\.sendEmail\)/.test(srv)) throw new Error('מסלול שעדיין מעביר כתובות לחשבונית ירוקה');
+  const senders = (srv.match(/mailDocToClient\(/g) || []).length;
+  if (senders < 6) throw new Error(`רק ${senders - 1} מסלולי הפקה שולחים מצדנו`);
+  // מייל אחד לשתי הכתובות, לא שניים
+  const fn = srv.match(/async function mailDocToClient[\s\S]*?\n\}/)[0];
+  if (!/\[\.\.\.new Set\(\[\]\.concat\(emails \|\| \[\]\)/.test(fn))
+    throw new Error('הכתובות אינן מאוחדות לנמענים של מייל אחד');
+  if ((fn.match(/sendMailLogged\(/g) || []).length !== 1)
+    throw new Error('נשלח יותר ממייל אחד');
+  if (!/kind: 'document-client', companyId: cid, docId: doc\.id/.test(fn))
+    throw new Error('השליחה אינה נרשמת על המסמך ולכן לא תופיע בהיסטוריה');
+  // והמסך מציע כתובת שנייה
+  if (!/nq-email2/.test(app)) throw new Error('אין שדה כתובת שנייה בחלונית המסמך');
+  if (!/email2: \(e\.email2 \|\| ''\)\.trim\(\)/.test(app)) throw new Error('הכתובת השנייה לא נשלחת');
+  return true;
+});
+
 const va = await import('./vehicleAlerts.js');
 check('התראות תוקף רכב — שלושה ספים, בלי כפילות, ומתאפסות בחידוש', () => {
   const now = new Date('2026-08-25T09:00:00Z');

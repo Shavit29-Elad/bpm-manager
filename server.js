@@ -729,7 +729,7 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
       remarks: body.remarks || null,
       date: body.date || undefined,   // תאריך המסמך שהמשתמש בחר (ברירת מחדל: היום)
       skipDateValidation: Boolean(body.skipDateValidation), // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
-      sendEmail: Boolean(body.sendEmail), email: body.email || null,
+
       discount: (body.discount && Number(body.discount.amount) > 0) ? body.discount : undefined, // הנחה (סכום/אחוז) — כבר מומרת ל-net ע"י הצד לקוח
     });
     for (const ev of evs) {
@@ -746,7 +746,10 @@ add('POST', /^\/api\/invoicing\/generate$/, async (req, res, _p, _q, body) => {
       }
     }
     save(db);
-    json(res, { ok: true, doc });
+    let mail = null;
+    if (body.sendEmail) mail = await mailDocToClient(_cid, doc, [body.email, body.email2],
+      { type, clientName: body.clientName || '' });
+    json(res, { ok: true, doc, mail });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -1155,9 +1158,13 @@ add('POST', /^\/api\/quotes\/create$/, async (req, res, _p, _q, body) => {
     if (body.date) opts.date = String(body.date).slice(0, 10);
     if (body.discount && Number(body.discount.amount) > 0) opts.discount = body.discount; // הנחה (סכום/אחוז) — כבר מומרת ל-net
     if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
-    if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
+    // השליחה נעשית מצדנו אחרי היצירה — ראה mailDocToClient. לא מעבירים כתובות
+    // לחשבונית ירוקה, כדי שלא יישלחו שני עותקים ללקוח.
     const doc = await createDocFwd(opts);
-    json(res, { ok: true, doc });
+    let mail = null;
+    if (body.sendEmail) mail = await mailDocToClient(_q.companyId || giCompanyId(), doc,
+      [body.email, body.email2], { type: 10, clientName: body.clientName || '' });
+    json(res, { ok: true, doc, mail });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -1179,9 +1186,7 @@ add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
     if (body.date) opts.date = String(body.date).slice(0, 10);
     if (body.discount && Number(body.discount.amount) > 0) opts.discount = body.discount; // הנחה (סכום/אחוז) — כבר מומרת ל-net
     if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
-    // שליחה ללקוח במייל — כמו בהצעת מחיר ובמסמך המשך. הראוט הזה פשוט לא קרא את
-    // הדגל, ולכן הסימון במסך לא עשה דבר בכל מסמכי ההכנסה שנוצרים מאפס.
-    if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
+    // השליחה נעשית מצדנו אחרי היצירה (mailDocToClient) ולא דרך חשבונית ירוקה.
     if (Array.isArray(body.payment) && body.payment.length) {
       opts.payment = body.payment.map(p => {
         const row = { date: (p.date || opts.date || '').slice(0, 10) || undefined, type: Number(p.type), price: Number(p.price) || 0, currency: 'ILS' };
@@ -1191,7 +1196,10 @@ add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
       }).filter(p => Math.abs(p.price) > 0);
     }
     const doc = await createDocFwd(opts);
-    json(res, { ok: true, doc });
+    let mail = null;
+    if (body.sendEmail) mail = await mailDocToClient(_q.companyId || giCompanyId(), doc,
+      [body.email, body.email2], { type, clientName: body.clientName || '' });
+    json(res, { ok: true, doc, mail });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 
@@ -2992,7 +3000,10 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
       opts.remarks = cur.includes(ref) ? cur : (cur ? `${ref}\n\n${cur}` : ref);
     }
     const doc = await createDocFwd(opts);
-    json(res, { ok: true, doc });
+    // שליחה ללקוח מצדנו, אם התבקשה בחלונית. חשבונית ירוקה אינה שולחת.
+    let mail = null;
+    if (body.sendEmail) mail = await mailDocToClient(reqCompany(_q, body), doc, [body.email, body.email2], { type, clientName: (src && src.client && src.client.name) || '' });
+    json(res, { ok: true, mail, doc });
   } catch (e) {
     const msg = String(e.message || '');
     if (/2405|עתידי|מוקדם/i.test(msg)) {
@@ -3104,7 +3115,7 @@ add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) =>
       }).filter(p => Math.abs(p.price) > 0);
     }
     if (type === 320 && !(opts.payment && opts.payment.length)) return json(res, { error: 'חשבונית מס-קבלה מחייבת פירוט תקבול (סכום ואמצעי תשלום).' }, 400);
-    if (body.sendEmail && body.email) { opts.sendEmail = true; opts.email = String(body.email).trim(); }
+    // השליחה מצדנו בלבד (mailDocToClient) — חשבונית ירוקה אינה שולחת ללקוח.
     const doc = await createDocFwd(opts);
     // סימון אירועים מקושרים למקורות שנסגרו — עדכון למסמך המסכם החדש
     try {
@@ -3145,7 +3156,9 @@ add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) =>
       }
       if (touched) save(db);
     } catch { /* לא חוסם את הצלחת ההפקה */ }
-    json(res, { ok: true, doc });
+    let mail = null;
+    if (body.sendEmail) mail = await mailDocToClient(reqCompany(_q, body), doc, [body.email, body.email2], { type, clientName: (srcDocs[0] && srcDocs[0].clientName) || '' });
+    json(res, { ok: true, mail, doc });
   } catch (e) {
     const msg = String(e.message || '');
     if (/2405|עתידי|מוקדם/i.test(msg)) {
@@ -3812,6 +3825,33 @@ function mayReadFile(req, fileRec, fileId) {
   const allowed = Array.isArray(u.companies) ? u.companies : [];
   const owner = fileCompanyId(load(), fileRec, fileId);
   return Boolean(owner) && allowed.includes(owner);
+}
+
+// שליחת מסמך שנוצר ללקוח, מתיבת הדואר של החברה.
+// עד עכשיו העברנו את הכתובת לחשבונית ירוקה והיא ששלחה. התוצאה: אין לנו שום
+// ידיעה אם נשלח, כישלון אצלם אינו מדווח, וההיסטוריה נראית ריקה. שליחה מצדנו
+// עוברת דרך היומן, נכשלת בקול, ויוצאת מהתיבה של החברה כמו כל מסמך אחר.
+async function mailDocToClient(cid, doc, emails, opts = {}) {
+  const list = [...new Set([].concat(emails || []).map(x => String(x || '').trim()).filter(Boolean))];
+  if (!list.length) return { sent: false, error: 'אין כתובת מייל' };
+  const db = load();
+  const creds = companyMailCreds(db, cid);
+  if (!mailer.companyMailConfigured(creds) && !mailer.mailerConfigured()) return { sent: false, error: 'לא הוגדר חשבון מייל לחברה' };
+  const num = doc && (doc.number != null ? doc.number : doc.docNumber);
+  const typeHe = DOC_NAMES_HE[Number(opts.type != null ? opts.type : (doc && doc.type))] || 'מסמך';
+  const clientName = opts.clientName || '';
+  const subject = mailSubjectFor(db, cid, { clientName, num, docType: typeHe });
+  const text = mailBodyFor(db, cid, { clientName, num, docType: typeHe });
+  let attachments = [];
+  try {
+    const pdf = await greenInvoice.getDocumentPdf(doc.id);
+    attachments = [{ filename: `document-${String(num || doc.id).replace(/[^\w.-]/g, '_')}.pdf`, content: Buffer.from(pdf.base64, 'base64') }];
+  } catch (e) { return { sent: false, error: 'הורדת המסמך נכשלה: ' + e.message }; }
+  try {
+    await sendMailLogged(creds, { __meta: { kind: 'document-client', companyId: cid, docId: doc.id, ref: num || null },
+      to: list, subject, text, html: htmlBodyWithSig(db, cid, text), attachments });
+    return { sent: true, to: list };
+  } catch (e) { return { sent: false, error: e.message }; }
 }
 
 // ---- יומן שליחות ----
