@@ -5643,6 +5643,60 @@ add('GET', /^\/api\/dashboard$/, async (req, res, _p, q) => {
   json(res, out);
 });
 
+// GET /api/home-figures?year= — שני המספרים של דף הבית: הכנסות עסק והוצאות עסק.
+//
+// הכנסות: הסכום הישן ("הכנסה השנה") היה סכימה גולמית של 305+320 בלבד. הוא לא
+// הפחית זיכויים ולא הוציא מסמכים מבוטלים, ולכן הציג יותר ממה שהעסק באמת הכניס.
+// כאן: חשבוניות מס + מס-קבלה, פחות חשבוניות זיכוי, בלי מסמכים שבוטלו (status 4).
+// מוחזר גם לפני מע"מ וגם כולל, כי זו השאלה הראשונה בהשוואה מול חשבונית ירוקה.
+//
+// הוצאות: לפי התאמות הבנק — תנועות חובה ששויכו (manual/approved), אותה הגדרה
+// בדיוק שבה משתמש סיכום העסק, כדי ששני המסכים לא יראו מספרים שונים.
+add('GET', /^\/api\/home-figures$/, async (req, res, _p, q) => {
+  const cid = reqCompany(q);
+  const year = String(q.year || new Date().getFullYear());
+  const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const out = { year, income: null, expenses: null, errors: {} };
+
+  if (giEnabled(cid) && greenInvoice.haveCredentials()) {
+    try {
+      const r = await greenInvoice.incomeForRange(`${year}-01-01`, `${year}-12-31`, [305, 320, 330]);
+      const all = r.docs || [];
+      const cancelled = all.filter(d => Number(d.status) === 4);
+      const live = all.filter(d => Number(d.status) !== 4);
+      const inv = live.filter(d => [305, 320].includes(Number(d.type)));
+      const crd = live.filter(d => Number(d.type) === 330);
+      const sum = (arr, k) => r2(arr.reduce((a, d) => a + Math.abs(Number(d[k]) || 0), 0));
+      const byType = [305, 320, 330].map(t => {
+        const g = live.filter(d => Number(d.type) === t);
+        return { type: t, name: DOC_NAMES_HE[t], count: g.length, incVat: sum(g, 'amountIncVat'), exVat: sum(g, 'amountExVat') };
+      }).filter(x => x.count);
+      out.income = {
+        invoicesIncVat: sum(inv, 'amountIncVat'), invoicesExVat: sum(inv, 'amountExVat'), invoiceCount: inv.length,
+        creditsIncVat: sum(crd, 'amountIncVat'), creditsExVat: sum(crd, 'amountExVat'), creditCount: crd.length,
+        cancelledCount: cancelled.length, cancelledIncVat: sum(cancelled, 'amountIncVat'),
+        netIncVat: r2(sum(inv, 'amountIncVat') - sum(crd, 'amountIncVat')),
+        netExVat: r2(sum(inv, 'amountExVat') - sum(crd, 'amountExVat')),
+        byType,
+      };
+    } catch (e) { out.errors.income = e.message; }
+  } else out.errors.greenInvoice = 'חשבונית ירוקה לא מחוברת';
+
+  const db = load();
+  let matched = 0, matchedCount = 0, open = 0, openCount = 0;
+  for (const t of (db.bankTx || [])) {
+    if (!ownedBy(t, cid)) continue;
+    if (t.direction !== 'debit') continue;
+    const m = String(t.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!m || m[3] !== year) continue;
+    const v = Math.abs(Number(t.absAmount) || 0);
+    if (t.matchStatus === 'manual' || t.matchStatus === 'approved') { matched += v; matchedCount++; }
+    else if (t.matchStatus !== 'ignored') { open += v; openCount++; }
+  }
+  out.expenses = { matched: r2(matched), matchedCount, unmatched: r2(open), unmatchedCount: openCount };
+  json(res, out);
+});
+
 // GET /api/clients — רשימת לקוחות (fresh=1 מרענן מחשבונית ירוקה)
 add('GET', /^\/api\/clients$/, async (req, res, _p, q) => {
   if (q.fresh) greenInvoice.clearDataCache();

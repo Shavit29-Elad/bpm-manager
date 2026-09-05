@@ -435,9 +435,9 @@ const DOC_TYPE_OPTIONS = [
   { v: '305', label: 'חשבונית מס' },
   { v: '320', label: 'חשבונית מס-קבלה' },
   { v: '400', label: 'קבלה' },
-  { v: '300', label: 'הצעת מחיר' },
+  { v: '300', label: 'חשבון עסקה' },
   { v: '330', label: 'חשבונית זיכוי' },
-  { v: '10', label: 'חשבון עסקה' },
+  { v: '10', label: 'הצעת מחיר' },
   { v: '305,320,300,400,330,10', label: 'כל המסמכים' },
 ];
 function initPeriod() {
@@ -851,21 +851,82 @@ window.waSendForDoc = async (docId) => {
   setTimeout(() => { _t.style.display = 'none'; }, 6000);
 };
 
+// הנתונים האחרונים של דף הבית — משמשים את חלוניות הפירוט בלי לפנות שוב לשרת
+let _homeFig = null;
+
+function _figModal(id, html) {
+  let m = document.getElementById(id);
+  if (!m) { m = document.createElement('div'); m.id = id; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  m.innerHTML = html + `<div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('${id}').classList.add('hidden')">סגור</button></div></div>`;
+}
+
+// "איך הגענו למספר" — הפירוט המלא של הכנסות העסק, שורה שורה.
+window.openIncomeBreakdown = () => {
+  const f = _homeFig && _homeFig.income;
+  if (!f) return _figModal('incBreakModal', `<div class="modal-card" style="width:min(560px,95vw)"><h3 style="margin:0 0 8px">הכנסות עסק</h3><div class="empty">הנתונים לא נטענו.</div>`);
+  const row = (lbl, ex, inc, note) => `<tr><td>${lbl}${note ? `<div class="muted" style="font-size:11.5px">${note}</div>` : ''}</td>
+    <td style="text-align:left;white-space:nowrap">${money(ex)}</td><td style="text-align:left;white-space:nowrap">${money(inc)}</td></tr>`;
+  _figModal('incBreakModal', `<div class="modal-card" style="width:min(640px,95vw)">
+    <h3 style="margin:0 0 4px">הכנסות עסק — ${_homeFig.year}</h3>
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px">כל הסכומים מחשבונית ירוקה, לפי תאריך המסמך.</div>
+    <table class="tbl no-cardify" style="width:100%">
+      <thead><tr><th>מרכיב</th><th style="text-align:left">לפני מע"מ</th><th style="text-align:left">כולל מע"מ</th></tr></thead>
+      <tbody>
+        ${row(`חשבוניות מס + מס-קבלה <b>(${f.invoiceCount})</b>`, f.invoicesExVat, f.invoicesIncVat)}
+        ${f.creditCount ? row(`בניכוי חשבוניות זיכוי <b>(${f.creditCount})</b>`, -f.creditsExVat, -f.creditsIncVat, 'זיכוי מקטין את ההכנסה בפועל') : ''}
+        ${f.cancelledCount ? row(`<span class="muted">לא נכללו: מסמכים מבוטלים (${f.cancelledCount})</span>`, 0, 0, `${money(f.cancelledIncVat)} שבוטלו בחשבונית ירוקה`) : ''}
+      </tbody>
+      <tfoot><tr style="font-weight:700;border-top:2px solid var(--line)">
+        <td>הכנסות עסק</td><td style="text-align:left">${money(f.netExVat)}</td><td style="text-align:left">${money(f.netIncVat)}</td>
+      </tr></tfoot>
+    </table>
+    <div class="muted" style="font-size:12.5px;margin-top:10px;line-height:1.6">
+      <b>מה לא נספר:</b> הצעות מחיר וחשבונות עסקה — אלה התחייבויות ולא הכנסה.
+      קבלות (סוג 400) גם לא, כי הן תקבול על חשבונית שכבר נספרה, וספירה שלהן הייתה מכפילה את הסכום.
+      מסמך שבוטל בחשבונית ירוקה יורד לגמרי.
+    </div>`);
+};
+
+window.openExpenseBreakdown = () => {
+  const f = _homeFig && _homeFig.expenses;
+  if (!f) return _figModal('expBreakModal', `<div class="modal-card" style="width:min(560px,95vw)"><h3 style="margin:0 0 8px">הוצאות עסק</h3><div class="empty">הנתונים לא נטענו.</div>`);
+  _figModal('expBreakModal', `<div class="modal-card" style="width:min(600px,95vw)">
+    <h3 style="margin:0 0 4px">הוצאות עסק — ${_homeFig.year}</h3>
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px">לפי תנועות החובה בבנק ששויכו למסמך או אושרו ידנית.</div>
+    <table class="tbl no-cardify" style="width:100%">
+      <tbody>
+        <tr><td>תנועות חובה ששויכו <b>(${f.matchedCount})</b></td><td style="text-align:left;font-weight:700">${money(f.matched)}</td></tr>
+        ${f.unmatchedCount ? `<tr><td class="muted">ממתינות לשיוך <b>(${f.unmatchedCount})</b><div class="muted" style="font-size:11.5px">לא נספרו — שייך אותן בלשונית הבנק כדי שייכנסו</div></td>
+          <td style="text-align:left;color:var(--warn)">${money(f.unmatched)}</td></tr>` : ''}
+      </tbody>
+    </table>
+    ${f.unmatchedCount ? `<div class="warn-banner" style="margin-top:10px;font-size:12.5px">יש ${f.unmatchedCount} תנועות חובה שעדיין לא שויכו. עד שתשייך אותן, ההוצאות בפועל גבוהות מהמספר שמוצג.</div>` : ''}
+    <div class="muted" style="font-size:12.5px;margin-top:10px;line-height:1.6">
+      זו אותה הגדרה בדיוק שבה משתמש סיכום העסק, כדי ששני המסכים לא יראו מספרים שונים.
+      תנועות שסומנו "התעלם" אינן נספרות.
+    </div>`);
+};
+
 async function renderHome(c) {
   const _g = rgen(c);
   initPeriod();
   const curYear = new Date().getFullYear();
   c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מחשבונית ירוקה…</div></div>`;
   // סיכום עליון = סקירה שנתית קבועה (השנה הנוכחית); חלק המסמכים = לפי הבוררים שלמטה (ברירת מחדל: החודש הנוכחי)
-  const [sum, d] = await Promise.all([
+  const [sum, d, fig] = await Promise.all([
     api(`/api/dashboard?companyId=${state.company}&from=${curYear}-01&to=${curYear}-12&types=305,320`),
     api(`/api/dashboard?companyId=${state.company}&${periodQuery()}`),
+    api(`/api/home-figures?companyId=${state.company}&year=${curYear}`),
   ]);
+  _homeFig = fig || null;
   const label = periodLabel();
   const err = d.errors || sum.errors || {};
   const kpi = (lbl, val, sub, color, id) => `<div class="card"${id ? ` id="${id}"` : ''}><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
   const otherErrs = Object.keys(err).filter(k => k !== 'greenInvoice').map(k => err[k]);
   const docs = d.docs || [];
+  const _inc = (fig && fig.income) || null, _exp = (fig && fig.expenses) || null;
   if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   c.innerHTML = `
     <div class="panel">
@@ -874,8 +935,10 @@ async function renderHome(c) {
       </div>
       ${err.greenInvoice ? `<div class="warn-banner">חשבונית ירוקה לא מחוברת — חבר אותה בלשונית 🔌 חיבורים כדי לראות נתונים.</div>` : ''}
       <div class="cards" style="margin-top:14px">
-        ${kpi('הכנסה השנה', money(sum.income), sum.monthDocs != null ? `${sum.monthDocs} מסמכים` : '', 'var(--accent2)')}
-        ${kpi('צפי מע"מ (18%)', money(sum.vat), 'מתוך ההכנסה', 'var(--warn)')}
+        ${kpi('הכנסות עסק', _inc ? money(_inc.netExVat) : '…',
+            _inc ? `${_inc.invoiceCount} חשבוניות · כולל מע"מ ${money(_inc.netIncVat)}` : '', 'var(--accent2)', 'kpiIncome')}
+        ${kpi('הוצאות עסק', _exp ? money(_exp.matched) : '…',
+            _exp ? `${_exp.matchedCount} תנועות ששויכו בבנק` : '', 'var(--danger)', 'kpiExpense')}
         ${kpi('חיובים פתוחים', sum.openInvoices != null ? sum.openInvoices : '…', 'חשבון עסקה + חשבונית מס', 'var(--danger)', 'kpiOpenCount')}
         ${kpi('סכום מסמכים פתוחים', sum.openInvoicesSum != null ? money(sum.openInvoicesSum) : '…', 'סה"כ עסקה + מס פתוחים', 'var(--warn)', 'kpiOpenSum')}
       </div>
@@ -883,6 +946,10 @@ async function renderHome(c) {
     </div>
     ${state.company === 'co_moshe' ? '<div class="panel" id="grpSummaryWrap"><div class="empty">טוען סיכום מוזיקה / דיגיטל…</div></div>' : ''}
     <div class="panel" id="openInvWrap"><div class="empty">טוען חשבוניות פתוחות…</div></div>`;
+  for (const [id, fn] of [['kpiIncome', 'openIncomeBreakdown'], ['kpiExpense', 'openExpenseBreakdown']]) {
+    const el = document.getElementById(id);
+    if (el) { el.style.cursor = 'pointer'; el.title = 'לחץ לפירוט מלא של החישוב'; el.onclick = () => window[fn](); }
+  }
   loadOpenInvoices();
   if (state.company === 'co_moshe') loadGroupSummary();
   // חלק "מסמכים" עבר ללשונית "מסמכים ולקוחות" (renderClients)

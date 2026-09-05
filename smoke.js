@@ -1212,6 +1212,67 @@ check('כרטיסיית האירועים לא ממתינה לסנכרון היו
   return true;
 });
 
+check('תוויות סוגי המסמכים זהות בכל המפות', () => {
+  // בבורר המסמכים בדף הבית 300 ו-10 היו הפוכים: "חשבון עסקה" סומן כהצעת מחיר
+  // ולהפך. שלוש מפות אחרות בקוד היו נכונות, ולכן אותו סוג הופיע בשני שמות.
+  const truth = { 10: 'הצעת מחיר', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 330: 'חשבונית זיכוי', 400: 'קבלה' };
+  const opts = app.match(/const DOC_TYPE_OPTIONS = \[([\s\S]*?)\];/);
+  if (!opts) throw new Error('בורר סוגי המסמכים לא נמצא');
+  for (const m of opts[1].matchAll(/\{ v: '(\d+)', label: '([^']+)' \}/g)) {
+    if (truth[m[1]] && truth[m[1]] !== m[2]) throw new Error(`סוג ${m[1]} מסומן "${m[2]}" במקום "${truth[m[1]]}"`);
+  }
+  const names = app.match(/const DOC_TYPE_NAMES = \{([^}]*)\}/);
+  for (const m of names[1].matchAll(/(\d+): '([^']+)'/g)) {
+    if (truth[m[1]] && truth[m[1]] !== m[2]) throw new Error(`DOC_TYPE_NAMES: סוג ${m[1]} = "${m[2]}"`);
+  }
+  const srv = fs.readFileSync('server.js', 'utf8').match(/const DOC_NAMES_HE = \{([^}]*)\}/);
+  for (const m of srv[1].matchAll(/(\d+): '([^']+)'/g)) {
+    if (truth[m[1]] && truth[m[1]] !== m[2]) throw new Error(`DOC_NAMES_HE: סוג ${m[1]} = "${m[2]}"`);
+  }
+  return true;
+});
+check('הכנסות עסק — זיכויים ומסמכים מבוטלים יורדים מהסכום', () => {
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const i = srv.indexOf("add('GET', /^\\/api\\/home-figures$/");
+  if (i < 0) throw new Error('הראוט לא נמצא');
+  const body = srv.slice(i, i + 2600);
+  if (!/Number\(d\.status\) !== 4/.test(body)) throw new Error('מסמכים מבוטלים נספרים כהכנסה');
+  if (!/netIncVat:[^\n]*- sum\(crd/.test(body)) throw new Error('זיכויים לא מופחתים מההכנסה');
+  if (!/\[305, 320\]\.includes/.test(body)) throw new Error('ההכנסה אינה מוגבלת לחשבוניות מס');
+  if (/400/.test(body.match(/incomeForRange\([^)]*\)/)[0])) throw new Error('קבלות נספרות — כפילות מול החשבונית');
+  // ההוצאות חייבות להשתמש באותה הגדרת שיוך כמו סיכום העסק
+  if (!/matchStatus === 'manual' \|\| t\.matchStatus === 'approved'/.test(body)) throw new Error('הגדרת ההוצאות אינה תואמת לסיכום העסק');
+  return true;
+});
+
+check('חלוניות הפירוט של דף הבית נבנות בלי שגיאת ריצה', () => {
+  // הבדיקות הסטטיות עיוורות ל-HTML שנשבר בזמן ריצה. כאן החלוניות באמת נבנות.
+  const helper = app.slice(app.indexOf('function _figModal('), app.indexOf('// "איך הגענו למספר"'));
+  const stubs = `
+    const money=(n)=>String(n);
+    let captured = '';
+    const document = { getElementById: () => null, createElement: () => ({ classList:{add(){},remove(){}}, style:{}, set innerHTML(v){ captured = v; }, get innerHTML(){ return captured; } }), body:{ appendChild(){} } };
+    const window = {};
+  `;
+  const fig = {
+    year: 2026,
+    income: { invoicesIncVat: 177000, invoicesExVat: 150000, invoiceCount: 2, creditsIncVat: 11800, creditsExVat: 10000,
+      creditCount: 1, cancelledCount: 1, cancelledIncVat: 23600, netIncVat: 165200, netExVat: 140000 },
+    expenses: { matched: 90000, matchedCount: 12, unmatched: 4000, unmatchedCount: 2 },
+  };
+  const src = app.slice(app.indexOf('window.openIncomeBreakdown'), app.indexOf('async function renderHome(c)'));
+  const run = new Function('fig', `${stubs}\n${helper}\n${src}\nlet _homeFig = fig;\nwindow.openIncomeBreakdown(); const a = captured; window.openExpenseBreakdown(); return [a, captured];`);
+  const [incHtml, expHtml] = run(fig);
+  for (const [html, want] of [[incHtml, '165,200'], [incHtml, 'הכנסות עסק'], [expHtml, 'הוצאות עסק']]) {
+    if (!String(html).length) throw new Error('החלונית יצאה ריקה');
+  }
+  if (!/165200|165,200/.test(incHtml)) throw new Error('סכום ההכנסות לא מופיע בחלונית');
+  if (!/חשבוניות זיכוי/.test(incHtml)) throw new Error('שורת הזיכויים חסרה');
+  if (!/מבוטלים/.test(incHtml)) throw new Error('שורת המסמכים המבוטלים חסרה');
+  if (!/ממתינות לשיוך/.test(expHtml)) throw new Error('שורת התנועות שלא שויכו חסרה');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { fail++; pass--; console.log('  ✗ חיווי סטטוס הרכבים\n      ' + e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
