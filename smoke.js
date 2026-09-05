@@ -1265,6 +1265,8 @@ check('חלוניות הפירוט של דף הבית נבנות בלי שגיא
   const helper = app.slice(app.indexOf('function _figModal('), app.indexOf('// "איך הגענו למספר"'));
   const stubs = `
     const money=(n)=>String(n);
+    const escapeHtml=(x)=>String(x==null?'':x);
+    const DOC_TYPE_SHORT = { 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 330: 'זיכוי' };
     let captured = '';
     const document = { getElementById: () => null, createElement: () => ({ classList:{add(){},remove(){}}, style:{}, set innerHTML(v){ captured = v; }, get innerHTML(){ return captured; } }), body:{ appendChild(){} } };
     const window = {};
@@ -1272,7 +1274,10 @@ check('חלוניות הפירוט של דף הבית נבנות בלי שגיא
   const fig = {
     year: 2026,
     income: { invoicesIncVat: 177000, invoicesExVat: 150000, invoiceCount: 2, creditsIncVat: 11800, creditsExVat: 10000,
-      creditCount: 1, cancelledCount: 1, cancelledIncVat: 23600, netIncVat: 165200, netExVat: 140000 },
+      creditCount: 1, cancelledCount: 1, cancelledIncVat: 23600, netIncVat: 165200, netExVat: 140000,
+      futureCount: 2, futureExVat: 35800, futureIncVat: 42244,
+      futureDocs: [{ id: 'f1', number: 50501, type: 305, date: '2026-10-01', clientName: 'לקוח עתידי', exVat: 20000, incVat: 23600 },
+                   { id: 'f2', number: 50502, type: 320, date: '2026-11-15', clientName: 'לקוח נוסף', exVat: 15800, incVat: 18644 }] },
     expenses: { matched: 90000, matchedCount: 12, unmatched: 4000, unmatchedCount: 2 },
   };
   const src = app.slice(app.indexOf('window.openIncomeBreakdown'), app.indexOf('async function renderHome(c)'));
@@ -1285,6 +1290,10 @@ check('חלוניות הפירוט של דף הבית נבנות בלי שגיא
   if (!/חשבוניות זיכוי/.test(incHtml)) throw new Error('שורת הזיכויים חסרה');
   if (!/מבוטלים/.test(incHtml)) throw new Error('שורת המסמכים המבוטלים חסרה');
   if (!/ממתינות לשיוך/.test(expHtml)) throw new Error('שורת התנועות שלא שויכו חסרה');
+  // רשימת המסמכים בתאריך עתידי — הדרך היחידה לראות מאיפה בא ההפרש מול חשבונית ירוקה
+  if (!/50501/.test(incHtml) || !/50502/.test(incHtml)) throw new Error('המסמכים בתאריך עתידי לא נפרטו');
+  if (!/01\/10\/2026/.test(incHtml)) throw new Error('התאריך אינו מוצג בפורמט ישראלי');
+  if (!/לקוח עתידי/.test(incHtml)) throw new Error('שם הלקוח חסר ברשימה');
   return true;
 });
 

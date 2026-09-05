@@ -919,6 +919,20 @@ window.openIncomeBreakdown = () => {
         <td>הכנסות עסק</td><td style="text-align:left">${money(f.netExVat)}</td><td style="text-align:left">${money(f.netIncVat)}</td>
       </tr></tfoot>
     </table>
+    ${f.futureCount && (f.futureDocs || []).length ? `
+      <div style="margin-top:12px;border:1px solid var(--line);border-radius:8px;padding:10px">
+        <div style="font-weight:700;font-size:13px;margin-bottom:6px">המסמכים בתאריך עתידי (${f.futureCount}) — סה"כ ${money(f.futureExVat)} לפני מע"מ</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">אלה המסמכים שנספרים אצלנו ולא במסך של חשבונית ירוקה כשהוא מוגדר "עד היום".</div>
+        <div style="max-height:260px;overflow:auto">
+        <table class="tbl no-cardify" style="width:100%;font-size:12.5px">
+          <thead><tr><th>תאריך</th><th>מסמך</th><th>לקוח</th><th style="text-align:left">לפני מע"מ</th></tr></thead>
+          <tbody>${f.futureDocs.map(x => `<tr>
+            <td style="white-space:nowrap">${String(x.date || '').split('-').reverse().join('/')}</td>
+            <td style="white-space:nowrap">${escapeHtml(DOC_TYPE_SHORT[x.type] || '')} ${escapeHtml(String(x.number || ''))}</td>
+            <td>${escapeHtml(x.clientName || '')}</td>
+            <td style="text-align:left;white-space:nowrap">${money(x.exVat)}</td></tr>`).join('')}</tbody>
+        </table></div>
+      </div>` : ''}
     <div class="muted" style="font-size:12.5px;margin-top:10px;line-height:1.6">
       <b>מה לא נספר:</b> הצעות מחיר וחשבונות עסקה — אלה התחייבויות ולא הכנסה.
       קבלות (סוג 400) גם לא, כי הן תקבול על חשבונית שכבר נספרה, וספירה שלהן הייתה מכפילה את הסכום.

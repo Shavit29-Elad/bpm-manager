@@ -5682,6 +5682,10 @@ add('GET', /^\/api\/home-figures$/, async (req, res, _p, q) => {
         creditsIncVat: sum(crd, 'amountIncVat'), creditsExVat: sum(crd, 'amountExVat'), creditCount: crd.length,
         cancelledCount: cancelled.length, cancelledIncVat: sum(cancelled, 'amountIncVat'),
         futureCount: future.length, futureIncVat: sum(future, 'amountIncVat'), futureExVat: sum(future, 'amountExVat'),
+        // הרשימה עצמה — כדי שאפשר יהיה לראות מאיפה בא ההפרש ולא רק את סכומו
+        futureDocs: future.slice(0, 60).map(d => ({ id: d.id, number: d.number, type: Number(d.type), date: dateOf(d),
+          clientName: d.clientName || '', exVat: Math.abs(Number(d.amountExVat) || 0), incVat: Math.abs(Number(d.amountIncVat) || 0) }))
+          .sort((a, b) => String(a.date).localeCompare(String(b.date))),
         asOf: todayIL,
         netIncVat: r2(sum(inv, 'amountIncVat') - sum(crd, 'amountIncVat')),
         netExVat: r2(sum(inv, 'amountExVat') - sum(crd, 'amountExVat')),
