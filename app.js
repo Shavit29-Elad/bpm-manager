@@ -411,8 +411,19 @@ async function vehiclePill() {
 })();
 window.gotoVehicles = () => { const t = document.querySelector('.tab[data-tab="vehicles"]'); if (t) t.click(); };
 
+// טוקן רינדור. כל מעבר כרטיסייה מקבל מספר חדש; רנדרר שסיים לטעון בודק שהמספר
+// עדיין שלו לפני שהוא כותב למסך. בלי זה תשובה איטית של הכרטיסייה הקודמת נכתבת
+// על הכרטיסייה שכבר נפתחה — וזה נראה כאילו המסך "נתקע" על נתונים ישנים.
+let _renderGen = 0;
+const rgen = (c) => (c && c.dataset ? c.dataset.rgen : undefined);
+const rstale = (c, g) => rgen(c) !== g;
+window.rgen = rgen; window.rstale = rstale;
+
 function render() {
   const c = $('#content');
+  c.dataset.rgen = String(++_renderGen);
+  // ניקוי מיידי — כדי שתוכן הכרטיסייה הקודמת לא יישאר על המסך בזמן הטעינה
+  c.innerHTML = '<div class="panel"><div class="empty">טוען…</div></div>';
   setTimeout(() => { try { window.avoidOverlap && window.avoidOverlap(); } catch { } }, 350);
   ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes,      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, vehicles: renderVehicles, business: renderBusiness }[state.tab])(c);
 }
@@ -841,6 +852,7 @@ window.waSendForDoc = async (docId) => {
 };
 
 async function renderHome(c) {
+  const _g = rgen(c);
   initPeriod();
   const curYear = new Date().getFullYear();
   c.innerHTML = `<div class="panel"><div class="empty">טוען נתונים מחשבונית ירוקה…</div></div>`;
@@ -854,6 +866,7 @@ async function renderHome(c) {
   const kpi = (lbl, val, sub, color, id) => `<div class="card"${id ? ` id="${id}"` : ''}><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div>${sub ? `<div class="muted" style="font-size:12px;margin-top:5px">${sub}</div>` : ''}</div>`;
   const otherErrs = Object.keys(err).filter(k => k !== 'greenInvoice').map(k => err[k]);
   const docs = d.docs || [];
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   c.innerHTML = `
     <div class="panel">
       <div class="row-between">
@@ -925,10 +938,12 @@ function groupSummaryHtml(r) {
 let _bizSumYear = null;
 window.setBizSumYear = (y) => { _bizSumYear = y; renderBusinessSummary($('#content')); };
 async function renderBusinessSummary(c) {
+  const _g = rgen(c);
   if (!mosheBank()) { c.innerHTML = '<div class="panel"><div class="empty">הסיכום זמין בעסק זה בלבד.</div></div>'; return; }
   const year = _bizSumYear || new Date().getFullYear();
   c.innerHTML = `<div class="panel"><div class="empty">טוען סיכום עסק…</div></div>`;
   const r = await api(`/api/group-summary?companyId=${state.company}&year=${year}`).catch(() => null);
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   if (!r || !r.ok) { c.innerHTML = '<div class="panel"><div class="empty">שגיאה בטעינת הסיכום</div></div>'; return; }
   c.innerHTML = businessSummaryHtml(r);
 }
@@ -2114,6 +2129,7 @@ window.clientDocsFilter = (v) => {
   if (cnt) cnt.textContent = `${filtered.length} מסמכים${qq ? ` (מתוך ${_clientDocsAll.length})` : ''} · סה"כ ${money(filtered.reduce((s, d) => s + (Number(d.amountIncVat) || 0), 0))}`;
 };
 async function renderClients(c) {
+  const _g = rgen(c);
   initPeriod();
   c.innerHTML = `<div class="panel"><div class="empty">טוען מסמכים ולקוחות…</div></div>`;
   // חלק המסמכים (עבר לכאן מדף הבית) — לפי הבוררים; ורשימת הלקוחות
@@ -2125,6 +2141,7 @@ async function renderClients(c) {
   const docs = d.docs || [];
   const label = periodLabel();
   _clientDocsAll = docs; _clientDocsText = ''; _clientDocsOpts = { showClient: true };
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   c.innerHTML = `
     <div class="panel">
       <div class="row-between">
@@ -2371,8 +2388,13 @@ function refreshInvoicingUI() {
 }
 window.refreshInvoicingUI = refreshInvoicingUI;
 async function renderCombined(c) {
+  const _g = rgen(c);
   ensureNamesSynced(() => { if (state.tab === 'combined' || state.tab === 'events') renderCombined($('#content')); }); // ברקע, פעם בחברה
-  await autoAdoptCalendar();
+  // אימוץ מהיומן רץ ברקע ולא חוסם את הציור. בשרת הוא חסום לפעם ביום, ולכן ברוב
+  // הכניסות הוא רק סיבוב רשת מיותר שהמסך המתין לו לפני שבכלל ביקש את האירועים.
+  autoAdoptCalendar()
+    .then(r => { if (r && r.adopted && (state.tab === 'events' || state.tab === 'combined')) renderCombined($('#content')); })
+    .catch(() => { });
   const events = await api(`/api/events?companyId=${state.company}`);
   const monthsSet = [...new Set(events.map(e => (e.date || e.dateRaw || '').slice(0, 7)).filter(Boolean))].sort().reverse();
   const filtered = _evMonthFilter === 'all' ? events : events.filter(e => (e.date || e.dateRaw || '').slice(0, 7) === _evMonthFilter);
@@ -2394,6 +2416,7 @@ async function renderCombined(c) {
   const anyApprovedFilter = _evClientFilter !== 'all' || _evContractorFilter !== 'all' || !!_evText.trim();
   const evClientSel = approvedClients.length ? `<select onchange="setEvClient(this.value)" style="padding:5px 10px;font-size:13px"><option value="all" ${_evClientFilter === 'all' ? 'selected' : ''}>כל הלקוחות</option>${approvedClients.map(cn => `<option value="${escAttr(cn)}" ${_evClientFilter === cn ? 'selected' : ''}>${escapeHtml(cn)}</option>`).join('')}</select>` : '';
   const evContractorSel = approvedContractors.length ? `<select onchange="setEvContractor(this.value)" style="padding:5px 10px;font-size:13px"><option value="all" ${_evContractorFilter === 'all' ? 'selected' : ''}>כל הקבלנים</option>${approvedContractors.map(cn => `<option value="${escAttr(cn)}" ${_evContractorFilter === cn ? 'selected' : ''}>${escapeHtml(cn)}</option>`).join('')}</select>` : '';
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   c.innerHTML = `
     <div class="panel" style="position:sticky;top:6px;z-index:30;display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 12px;margin-bottom:12px">
       <span class="muted" style="font-size:12.5px">קפיצה מהירה:</span>
@@ -4133,11 +4156,13 @@ window.quoteFilter = (v) => {
   const w = document.getElementById('quotesTableWrap'); if (w) w.innerHTML = table;
 };
 async function renderQuotes(c) {
+  const _g = rgen(c);
   c.innerHTML = `<div class="panel"><div class="empty">טוען הצעות מחיר…</div></div>`;
   const r = await api('/api/open-quotes').catch(() => ({ docs: [], error: 'שגיאת טעינה' }));
   _quotesAll = r.docs || [];
   _quotesText = '';
   const { summary, table } = quotesTableAndSummary();
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   c.innerHTML = `<div class="panel">
     <div class="row-between"><div><h2>הצעות מחיר פתוחות</h2>
       <span class="muted" id="quotesSummary">${summary}</span></div>
@@ -4481,6 +4506,7 @@ window.quoteClose = async (id, number) => {
 let _suppliers = [];
 let _ctrSyncNote = ''; // הודעה על עדכון אוטומטי של שמות קבלנים לפי חשבונית ירוקה
 async function renderContractors(c) {
+  const _g = rgen(c);
   c.innerHTML = `<div class="panel"><div class="empty">טוען קבלנים…</div></div>`;
   // עדכון אוטומטי של שמות הקבלנים לפי חשבונית ירוקה — רק בפתיחה הראשונה בסשן (לא בכל מעבר לשונית)
   if (!state._namesSynced) {
@@ -4509,6 +4535,7 @@ async function renderContractors(c) {
   purgeDuplicateDrafts();   // כפילויות נמחקות מעצמן — ההוצאה כבר קיימת, הטיוטה מיותרת
   const totalUnpaid = payables.reduce((s, x) => s + (x.unpaidTotal || 0), 0);
   const totalPaid = payables.reduce((s, x) => s + (x.paidTotal || 0), 0);
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   c.innerHTML = `<div class="panel" id="draftsPanel">${draftsSection()}</div>
   <div class="panel">${supplierPayablesSection(supPayables)}</div>
   <div class="panel">
@@ -6771,6 +6798,7 @@ window.syncEmployees = async (btn) => {
   renderPayroll($('#content'));
 };
 async function renderPayroll(c) {
+  const _g = rgen(c);
   if (!state.payMonth) state.payMonth = new Date().toISOString().slice(0, 7);
   const month = state.payMonth;
   const [emps, list] = await Promise.all([
@@ -6781,6 +6809,7 @@ async function renderPayroll(c) {
   const tot = (k) => list.reduce((s, e) => s + (e[k] || 0), 0);
   // שם מלא (פרטי + משפחה) לפי רשומת העובד — לתצוגה בטבלה ובמודל
   const fullNameOf = (first) => { const emp = emps.find(x => x.name === first); const ln = emp && emp.lastName ? String(emp.lastName).trim() : ''; return ln ? `${first} ${ln}` : first; };
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   c.innerHTML = `
     <div class="panel">
       <div class="warn-banner">מסך פנימי — נתוני שכר של עובד אינם נחשפים לעובדים אחרים.</div>
@@ -6959,6 +6988,7 @@ function vehWorst(v) {
 }
 
 async function renderVehicles(c) {
+  const _g = rgen(c);
   c.innerHTML = `<div class="panel"><div class="empty">טוען רכבים…</div></div>`;
   _vehicles = await api('/api/vehicles').catch(() => []);
   if (!Array.isArray(_vehicles)) _vehicles = [];
@@ -6981,6 +7011,7 @@ async function renderVehicles(c) {
       ${list.length ? `<div class="cards veh-cards">${list.map(vehCard).join('')}</div>` : `<div class="empty">${emptyTxt}</div>`}
     </div>`;
   };
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   c.innerHTML = section('company', 'רכבי חברה', '🚚', 'עדיין לא הוספת רכבי חברה.')
     + section('personal', 'רכבים אישיים — בעלי החברה', '🚗', 'עדיין לא הוספת רכבים אישיים.');
 }
@@ -7259,6 +7290,7 @@ window.deleteVehicle = async (id) => {
 };
 
 async function renderBusiness(c) {
+  const _g = rgen(c);
   const p = await api('/api/business-profile');
   _biz = p;
   if (mosheBank()) { await loadTxGroups(); try { _txGroupRules = (await api('/api/tx-group-rules')).rules || []; } catch { _txGroupRules = []; } }
@@ -7303,6 +7335,7 @@ async function renderBusiness(c) {
     ${bizDocRow('צילום אחורי', 'mgr' + i + '_licenseBack', mgrFile(i, 'licenseBack'))}
   </div>`;
   const addDocs = (p.additionalDocs || []);
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   c.innerHTML = `
   <div class="panel">
     <div class="row-between" style="margin:0"><h2 style="margin:0">🏢 פרטי העסק — ${escapeHtml(comp.name || '')}</h2>
@@ -8216,6 +8249,7 @@ window.approveAllStrong = async (btn) => {
 };
 
 async function renderBank(c, soft) {
+  const _g = rgen(c);
   if (!soft) c.innerHTML = `<div class="panel"><div class="empty">טוען תנועות…</div></div>`;
   await loadWhRate();   // שיעור ניכוי מס במקור של החברה — נחוץ לחישובי כיסוי/התאמה בתצוגה
   const all = await api(`/api/bank?companyId=${state.company}`);
@@ -8235,6 +8269,7 @@ async function renderBank(c, soft) {
       ${p('חשבונית מס / מס-קבלה')}${p(dir === 'debit' ? 'תיאור החשבונית' : 'קבלה')}${mosheBank() ? p('קבוצה') : ''}${p('הערות')}${p('אישור')}
     </tr></thead><tbody id="bankBody">${rows.map(bankTr).join('')}</tbody></table></div>`
     : `<div class="empty" style="margin-top:14px">אין תנועות בתצוגה הנוכחית.</div>`;
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
   c.innerHTML = `<div class="panel">
     <div class="row-between">
       <div><h2>🏦 בנק — התאמה לחשבוניות</h2><span class="muted">התאמה אוטומטית: תנועות זכות ↔ חשבוניות הכנסה · תנועות חובה ↔ חשבוניות ספקים</span></div>

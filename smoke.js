@@ -1160,6 +1160,58 @@ check('גיבוי — מדיניות שמירה מותירה ~33 מתוך 400', 
 check('גיבוי — לעולם לא מוחק את האחרון', () =>
   bk.planRetention([{ id: 'x', createdTime: '2020-01-01T00:00:00Z' }], new Date()).remove.length === 0);
 
+check('מעבר כרטיסייה — תשובה איטית של הקודמת לא נכתבת על החדשה', () => {
+  // הבאג: כל רנדרר כותב ל-DOM אחרי await. מי שהחליף כרטיסייה בזמן הטעינה קיבל
+  // את הנתונים של הכרטיסייה הקודמת על המסך החדש, או מסך שנתקע על תוכן ישן.
+  const decl = app.match(/const rgen = [^\n]+\nconst rstale = [^\n]+/);
+  if (!decl) throw new Error('עוזרי טוקן הרינדור לא נמצאו');
+  const { rgen, rstale } = new Function(`${decl[0]}\nreturn { rgen, rstale };`)();
+
+  const c = { dataset: {} };
+  c.dataset.rgen = '1';            // נכנסים לכרטיסייה א'
+  const gA = rgen(c);              // הרנדרר של א' לוכד את הטוקן ויוצא ל-await
+  c.dataset.rgen = '2';            // המשתמש עבר לכרטיסייה ב'
+  const gB = rgen(c);
+  if (!rstale(c, gA)) throw new Error('הרנדרר הישן היה כותב על הכרטיסייה החדשה');
+  if (rstale(c, gB)) throw new Error('הרנדרר הנוכחי נחסם בטעות');
+
+  // render() חייב להנפיק טוקן חדש ולנקות את המסך לפני הטעינה
+  const body = app.slice(app.indexOf('function render() {'), app.indexOf('function render() {') + 600);
+  if (!/dataset\.rgen = String\(\+\+_renderGen\)/.test(body)) throw new Error('render() לא מנפיק טוקן חדש');
+  if (!/c\.innerHTML = '<div class="panel"><div class="empty">טוען/.test(body)) throw new Error('render() לא מנקה את הכרטיסייה הקודמת');
+
+  // כל רנדרר של לשונית — לכידה בראש הפונקציה והגנה לפני הכתיבה
+  const renderers = ['renderHome', 'renderBusinessSummary', 'renderCombined', 'renderClients', 'renderQuotes',
+    'renderBank', 'renderContractors', 'renderPayroll', 'renderVehicles', 'renderBusiness'];
+  const L = app.split('\n');
+  for (const n of renderers) {
+    const st = L.findIndex(l => new RegExp(`^(async )?function ${n}\\b`).test(l));
+    if (st < 0) throw new Error(n + ' לא נמצא');
+    if (!/const _g = rgen\(c\);/.test(L[st + 1])) throw new Error(n + ' לא לוכד את הטוקן');
+    let d = 0, end = st;
+    for (let i = st; i < L.length; i++) { d += (L[i].split('{').length - 1) - (L[i].split('}').length - 1); if (d === 0 && i > st) { end = i; break; } }
+    let seenAwait = false, guarded = false;
+    for (let i = st; i <= end; i++) {
+      if (/\bawait\b/.test(L[i])) seenAwait = true;
+      if (/if \(rstale\(c, _g\)\) return;/.test(L[i])) guarded = true;
+      if (seenAwait && /^  c\.innerHTML\s*=|^  if \(!r \|\| !r\.ok\) \{ c\.innerHTML/.test(L[i])) {
+        if (!guarded) throw new Error(n + ' כותב ל-DOM אחרי await בלי הגנה (שורה ' + (i + 1) + ')');
+        break;
+      }
+    }
+  }
+  return true;
+});
+check('כרטיסיית האירועים לא ממתינה לסנכרון היומן', () => {
+  // האימוץ מהיומן חסום לפעם ביום בשרת; המתנה לו לפני בקשת האירועים היא סיבוב
+  // רשת מיותר בכל כניסה לכרטיסייה הנפוצה ביותר.
+  const i = app.indexOf('async function renderCombined');
+  const body = app.slice(i, i + 1200);
+  if (/await autoAdoptCalendar\(\)/.test(body)) throw new Error('הרינדור עדיין חוסם על סנכרון היומן');
+  if (!/autoAdoptCalendar\(\)\s*\n?\s*\.then\(/.test(body)) throw new Error('הסנכרון לא רץ ברקע');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { fail++; pass--; console.log('  ✗ חיווי סטטוס הרכבים\n      ' + e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
