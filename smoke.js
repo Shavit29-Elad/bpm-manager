@@ -1294,6 +1294,13 @@ check('חלוניות הפירוט של דף הבית נבנות בלי שגיא
   if (!/50501/.test(incHtml) || !/50502/.test(incHtml)) throw new Error('המסמכים בתאריך עתידי לא נפרטו');
   if (!/01\/10\/2026/.test(incHtml)) throw new Error('התאריך אינו מוצג בפורמט ישראלי');
   if (!/לקוח עתידי/.test(incHtml)) throw new Error('שם הלקוח חסר ברשימה');
+  // המצב ההפוך: אין מסמכים עתידיים. גם אז חייב להופיע חיווי, אחרת היעדר הטבלה
+  // לא אומר למשתמש כלום והוא מחפש משהו שלא קיים.
+  const none = JSON.parse(JSON.stringify(fig));
+  none.income.futureCount = 0; none.income.futureExVat = 0; none.income.futureDocs = [];
+  const [zeroHtml] = run(none);
+  if (!/מסמכים בתאריך עתידי: אין/.test(zeroHtml)) throw new Error('אין חיווי כשאין מסמכים עתידיים');
+  if (!/לא<\/b> נובע מטווח התאריכים/.test(zeroHtml)) throw new Error('חסר ההסבר שאפשר לפסול את טווח התאריכים');
   return true;
 });
 
