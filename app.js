@@ -870,13 +870,14 @@ window.openIncomeBreakdown = () => {
     <td style="text-align:left;white-space:nowrap">${money(ex)}</td><td style="text-align:left;white-space:nowrap">${money(inc)}</td></tr>`;
   _figModal('incBreakModal', `<div class="modal-card" style="width:min(640px,95vw)">
     <h3 style="margin:0 0 4px">הכנסות עסק — ${_homeFig.year}</h3>
-    <div class="muted" style="font-size:12.5px;margin-bottom:10px">כל הסכומים מחשבונית ירוקה, לפי תאריך המסמך.</div>
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px">כל הסכומים מחשבונית ירוקה, לפי תאריך המסמך — שנה קלנדרית מלאה, 01/01 עד 31/12.</div>
     <table class="tbl no-cardify" style="width:100%">
       <thead><tr><th>מרכיב</th><th style="text-align:left">לפני מע"מ</th><th style="text-align:left">כולל מע"מ</th></tr></thead>
       <tbody>
         ${row(`חשבוניות מס + מס-קבלה <b>(${f.invoiceCount})</b>`, f.invoicesExVat, f.invoicesIncVat)}
         ${f.creditCount ? row(`בניכוי חשבוניות זיכוי <b>(${f.creditCount})</b>`, -f.creditsExVat, -f.creditsIncVat, 'זיכוי מקטין את ההכנסה בפועל') : ''}
         ${f.cancelledCount ? row(`<span class="muted">לא נכללו: מסמכים מבוטלים (${f.cancelledCount})</span>`, 0, 0, `${money(f.cancelledIncVat)} שבוטלו בחשבונית ירוקה`) : ''}
+        ${f.futureCount ? row(`<span class="muted">מתוכם בתאריך עתידי (${f.futureCount})</span>`, 0, 0, `${money(f.futureExVat)} לפני מע"מ — נספרים כאן, אבל לא במסך של חשבונית ירוקה שמוגדר "עד היום"`) : ''}
       </tbody>
       <tfoot><tr style="font-weight:700;border-top:2px solid var(--line)">
         <td>הכנסות עסק</td><td style="text-align:left">${money(f.netExVat)}</td><td style="text-align:left">${money(f.netIncVat)}</td>
@@ -886,6 +887,13 @@ window.openIncomeBreakdown = () => {
       <b>מה לא נספר:</b> הצעות מחיר וחשבונות עסקה — אלה התחייבויות ולא הכנסה.
       קבלות (סוג 400) גם לא, כי הן תקבול על חשבונית שכבר נספרה, וספירה שלהן הייתה מכפילה את הסכום.
       מסמך שבוטל בחשבונית ירוקה יורד לגמרי.
+    </div>
+    <div class="muted" style="font-size:12.5px;margin-top:8px;line-height:1.6;border-top:1px solid var(--line);padding-top:8px">
+      <b>השוואה לחשבונית ירוקה:</b> שני הבדלים, ושניהם מכוונים.
+      <b>אחד</b> — המסך שלהם סופר חשבוניות ואינו מפחית זיכויים, ולכן השורה שמתלכדת עם "סה"כ הכנסות" שלהם
+      היא <b>${money(f.invoicesExVat)}</b>, ואילו אנחנו מורידים ${money(f.creditsExVat)} של זיכויים.
+      <b>שניים</b> — המסך שלהם מוגדר כברירת מחדל "עד היום"${f.futureCount ? `, ולכן ${f.futureCount} מסמכים בתאריך עתידי (${money(f.futureExVat)}) לא נספרים אצלם` : ''}.
+      כדי להשוות תפוח לתפוח, שנה שם את התקופה ל-31/12.
     </div>`);
 };
 

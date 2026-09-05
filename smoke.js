@@ -1235,7 +1235,7 @@ check('הכנסות עסק — זיכויים ומסמכים מבוטלים יו
   const srv = fs.readFileSync('server.js', 'utf8');
   const i = srv.indexOf("add('GET', /^\\/api\\/home-figures$/");
   if (i < 0) throw new Error('הראוט לא נמצא');
-  const body = srv.slice(i, i + 2600);
+  const body = srv.slice(i, srv.indexOf("\n});", i));
   if (!/Number\(d\.status\) !== 4/.test(body)) throw new Error('מסמכים מבוטלים נספרים כהכנסה');
   if (!/netIncVat:[^\n]*- sum\(crd/.test(body)) throw new Error('זיכויים לא מופחתים מההכנסה');
   if (!/\[305, 320\]\.includes/.test(body)) throw new Error('ההכנסה אינה מוגבלת לחשבוניות מס');

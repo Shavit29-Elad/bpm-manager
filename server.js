@@ -5663,7 +5663,13 @@ add('GET', /^\/api\/home-figures$/, async (req, res, _p, q) => {
       const r = await greenInvoice.incomeForRange(`${year}-01-01`, `${year}-12-31`, [305, 320, 330]);
       const all = r.docs || [];
       const cancelled = all.filter(d => Number(d.status) === 4);
+      // הטווח הוא השנה הקלנדרית המלאה, 01/01 עד 31/12. מסמכים שתאריכם עוד לא
+      // הגיע נספרים ככל השאר — הם רק מדווחים בנפרד, כי מסך חשבונית ירוקה מוגדר
+      // כברירת מחדל "עד היום" וזה מקור ההפרש בהשוואה בין שני המסכים.
+      const todayIL = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date());
+      const dateOf = (d) => String(d.date || '').slice(0, 10);
       const live = all.filter(d => Number(d.status) !== 4);
+      const future = live.filter(d => dateOf(d) > todayIL);
       const inv = live.filter(d => [305, 320].includes(Number(d.type)));
       const crd = live.filter(d => Number(d.type) === 330);
       const sum = (arr, k) => r2(arr.reduce((a, d) => a + Math.abs(Number(d[k]) || 0), 0));
@@ -5675,6 +5681,8 @@ add('GET', /^\/api\/home-figures$/, async (req, res, _p, q) => {
         invoicesIncVat: sum(inv, 'amountIncVat'), invoicesExVat: sum(inv, 'amountExVat'), invoiceCount: inv.length,
         creditsIncVat: sum(crd, 'amountIncVat'), creditsExVat: sum(crd, 'amountExVat'), creditCount: crd.length,
         cancelledCount: cancelled.length, cancelledIncVat: sum(cancelled, 'amountIncVat'),
+        futureCount: future.length, futureIncVat: sum(future, 'amountIncVat'), futureExVat: sum(future, 'amountExVat'),
+        asOf: todayIL,
         netIncVat: r2(sum(inv, 'amountIncVat') - sum(crd, 'amountIncVat')),
         netExVat: r2(sum(inv, 'amountExVat') - sum(crd, 'amountExVat')),
         byType,
