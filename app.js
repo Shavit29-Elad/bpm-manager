@@ -25,6 +25,31 @@ const API_TTL = 60000;       // תוקף 60 שניות
 const POST_WRITE_FRESH_MS = 30000;
 let _lastWriteAt = 0;
 function clearApiCache() { _apiCache.clear(); }
+const API_MAX = 150;                 // גבול גודל למטמון — הישן ביותר נזרק
+const _apiInflight = new Map();      // בקשה זהה שכבר בדרך — לא שולחים אותה פעמיים
+
+function _apiFetch(p, store) {
+  if (_apiInflight.has(p)) return _apiInflight.get(p);
+  const pr = fetch(p).then(r => r.text().then(txt => {
+    let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = {}; }
+    if (store && r.ok && (r.headers.get('content-type') || '').includes('json')) {
+      if (_apiCache.size >= API_MAX) _apiCache.delete(_apiCache.keys().next().value);
+      _apiCache.set(p, { t: Date.now(), txt });
+    }
+    return { data, txt };
+  })).finally(() => _apiInflight.delete(p));
+  _apiInflight.set(p, pr);
+  return pr;
+}
+
+// ציור מחדש של הלשונית הנוכחית בלי לנקות את המסך ובלי להנפיק טוקן חדש —
+// משמש כשרענון הרקע החזיר נתונים שהשתנו.
+function _softRerender() {
+  const c = $('#content');
+  const fn = c && TAB_RENDERERS[state.tab];
+  if (fn) { try { fn(c); } catch { /* לא מפיל את המסך הקיים */ } }
+}
+
 const api = (p) => {
   // בידוד חברות: צירוף companyId אוטומטי לכל קריאת GET (למעט auth), אם לא צוין כבר
   if (state.company && p.indexOf('/api/') === 0 && p.indexOf('/api/auth/') !== 0 && p.indexOf('companyId=') === -1) {
@@ -32,14 +57,22 @@ const api = (p) => {
   }
   const noCache = p.indexOf('fresh=1') !== -1 || (Date.now() - _lastWriteAt < POST_WRITE_FRESH_MS); // "רענן", או חלון-טרי אחרי פעולה
   const hit = noCache ? null : _apiCache.get(p);
-  if (hit && Date.now() - hit.t < API_TTL) {
-    try { return Promise.resolve(JSON.parse(hit.txt)); } catch { /* נטען מחדש */ }
+  if (hit) {
+    let data = null; try { data = JSON.parse(hit.txt); } catch { data = null; }
+    if (data !== null) {
+      // תשובה ישנה מוצגת מיד, והרענון רץ ברקע. המסך נצבע בלי המתנה לרשת, ואם
+      // התשובה הטרייה שונה — הלשונית מצטיירת מחדש. בלי זה כל מעבר בין לשוניות
+      // המתין לסיבוב רשת מלא, גם כשהנתונים לא השתנו כלל.
+      if (Date.now() - hit.t >= API_TTL) {
+        const before = hit.txt, gen = rgen($('#content')), tab = state.tab;
+        _apiFetch(p, true)
+          .then(res => { if (res.txt !== before && state.tab === tab && rgen($('#content')) === gen) _softRerender(); })
+          .catch(() => { });
+      }
+      return Promise.resolve(data);
+    }
   }
-  return fetch(p).then(r => r.text().then(txt => {
-    let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = {}; }
-    if (!noCache && r.ok && (r.headers.get('content-type') || '').includes('json')) _apiCache.set(p, { t: Date.now(), txt });
-    return data;
-  }));
+  return _apiFetch(p, !noCache).then(res => res.data);
 };
 // בידוד חברות + ניקוי מטמון: עוטף כל fetch.
 //  1) הזרקת companyId לכל בקשת /api/ (מלבד auth) שאין בה כבר — כך שאף בקשה, כולל כתיבות (POST/PUT/DELETE),
@@ -414,6 +447,9 @@ window.gotoVehicles = () => { const t = document.querySelector('.tab[data-tab="v
 // טוקן רינדור. כל מעבר כרטיסייה מקבל מספר חדש; רנדרר שסיים לטעון בודק שהמספר
 // עדיין שלו לפני שהוא כותב למסך. בלי זה תשובה איטית של הכרטיסייה הקודמת נכתבת
 // על הכרטיסייה שכבר נפתחה — וזה נראה כאילו המסך "נתקע" על נתונים ישנים.
+const TAB_RENDERERS = { home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients,
+  invoicing: renderCombined, quotes: renderQuotes, bank: renderBank, contractors: renderContractors,
+  payroll: renderPayroll, vehicles: renderVehicles, business: renderBusiness };
 let _renderGen = 0;
 const rgen = (c) => (c && c.dataset ? c.dataset.rgen : undefined);
 const rstale = (c, g) => rgen(c) !== g;
@@ -425,7 +461,7 @@ function render() {
   // ניקוי מיידי — כדי שתוכן הכרטיסייה הקודמת לא יישאר על המסך בזמן הטעינה
   c.innerHTML = '<div class="panel"><div class="empty">טוען…</div></div>';
   setTimeout(() => { try { window.avoidOverlap && window.avoidOverlap(); } catch { } }, 350);
-  ({ home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients, invoicing: renderCombined, quotes: renderQuotes,      bank: renderBank, contractors: renderContractors, payroll: renderPayroll, vehicles: renderVehicles, business: renderBusiness }[state.tab])(c);
+  (TAB_RENDERERS[state.tab])(c);
 }
 
 // ---- דף הבית (סקירה חודשית מחשבונית ירוקה) ----

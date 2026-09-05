@@ -21,7 +21,18 @@ const css = fs.readFileSync('styles.css', 'utf8');
 let pass = 0, fail = 0;
 const ok = (t) => { pass++; console.log(`  ✓ ${t}`); };
 const bad = (t, d) => { fail++; console.log(`  ✗ ${t}${d ? '\n      ' + d : ''}`); };
-const check = (t, fn) => { try { const r = fn(); r === false ? bad(t) : ok(t); } catch (e) { bad(t, e.message); } };
+const check = (t, fn) => {
+  try {
+    const r = fn();
+    // בדיקה אסינכרונית החזירה Promise. קודם הוא נחשב "לא false" ולכן כל בדיקה
+    // כזו נספרה כעוברת בלי שאיש בדק אותה. עכשיו ממתינים לה בסוף הריצה.
+    if (r && typeof r.then === 'function') {
+      pendingAsync.push(r.then(v => { v === false ? bad(t) : ok(t); }, e => bad(t, e.message)));
+      return;
+    }
+    r === false ? bad(t) : ok(t);
+  } catch (e) { bad(t, e.message); }
+};
 // אזהרה — מדווחת ולא מפילה. לבדיקות היוריסטיות שיש בהן התראות שווא.
 const warn = (t, fn) => { try { fn(); ok(t); } catch (e) { console.log(`  ⚠ ${t}\n      ${e.message}`); } };
 
@@ -44,10 +55,14 @@ check('כל לשונית ב-VALID_TABS קיימת ב-HTML', () => {
   return true;
 });
 check('לכל לשונית ב-HTML יש פונקציית רינדור', () => {
-  const map = app.match(/\(\{ home: renderHome,(.*?)\}\[state\.tab\]\)/s)?.[1] || '';
-  const routed = new Set([...map.matchAll(/(\w+):\s*render/g)].map(m => m[1]).concat(['home']));
+  const map = app.match(/const TAB_RENDERERS = \{(.*?)\};/s)?.[1] || '';
+  if (!map) throw new Error('TAB_RENDERERS לא נמצאה');
+  const routed = new Set([...map.matchAll(/(\w+):\s*render/g)].map(m => m[1]));
   const miss = [...htmlTabs].filter(t => !routed.has(t));
   if (miss.length) throw new Error('בלי רינדור: ' + miss);
+  // render() ו-_softRerender חייבים לשאוב מאותה מפה — אחרת רענון הרקע יצייר לשונית אחרת
+  if (!/\(TAB_RENDERERS\[state\.tab\]\)\(c\)/.test(app)) throw new Error('render() לא משתמש ב-TAB_RENDERERS');
+  if (!/const fn = c && TAB_RENDERERS\[state\.tab\]/.test(app)) throw new Error('_softRerender לא משתמש ב-TAB_RENDERERS');
   return true;
 });
 
@@ -1273,6 +1288,44 @@ check('חלוניות הפירוט של דף הבית נבנות בלי שגיא
   return true;
 });
 
-for (const pr of pendingAsync) { try { await pr; } catch (e) { fail++; pass--; console.log('  ✗ חיווי סטטוס הרכבים\n      ' + e.message); } }
+check('מטמון: לשונית מצטיירת מיד מהמטמון ומתרעננת ברקע', async () => {
+  // קודם: מטמון של 60 שניות שנמחק כולו אחרי כל פעולה, ולכן בזמן עבודה כל מעבר
+  // לשונית חיכה לסיבוב רשת מלא מול חשבונית ירוקה.
+  const src = app.slice(app.indexOf('const API_MAX = 150;'), app.indexOf('// בידוד חברות + ניקוי מטמון'));
+  let calls = 0, payload = '{"v":1}', rendered = 0;
+  const stubs = `
+    const _apiCache = new Map(); const API_TTL = 60000; const POST_WRITE_FRESH_MS = 30000;
+    let _lastWriteAt = 0;
+    const state = { company: 'co_bpm', tab: 'home' };
+    const $ = () => ({ dataset: { rgen: '1' } });
+    const rgen = (c) => (c && c.dataset ? c.dataset.rgen : undefined);
+    const TAB_RENDERERS = { home: () => { onRender(); } };
+    const fetch = (p) => { onFetch(); return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, text: () => Promise.resolve(body()) }); };
+  `;
+  const build = new Function('onFetch', 'onRender', 'body', `${stubs}\n${src}\nreturn { api, cache: _apiCache };`);
+  const { api, cache } = build(() => calls++, () => rendered++, () => payload);
+
+  const a = await api('/api/x');
+  if (a.v !== 1 || calls !== 1) throw new Error('הקריאה הראשונה לא פנתה לשרת פעם אחת');
+
+  const b = await api('/api/x');                       // בתוך התוקף — בלי רשת
+  if (b.v !== 1 || calls !== 1) throw new Error('קריאה חוזרת בתוך התוקף פנתה לשרת');
+
+  cache.get('/api/x?companyId=co_bpm').t -= 120000;    // הזדקנות
+  payload = '{"v":2}';
+  const t0 = Date.now();
+  const c2 = await api('/api/x');
+  if (Date.now() - t0 > 40) throw new Error('התשובה מהמטמון לא הוחזרה מיד');
+  if (c2.v !== 1) throw new Error('לא הוצג הערך מהמטמון בזמן הרענון');
+  if (calls !== 2) throw new Error('רענון הרקע לא יצא לדרך');
+  await new Promise(r => setTimeout(r, 30));
+  if (rendered !== 1) throw new Error('הנתונים השתנו והלשונית לא צוירה מחדש');
+
+  const d = await api('/api/x');                       // עכשיו המטמון מעודכן
+  if (d.v !== 2) throw new Error('המטמון לא התעדכן בתשובה הטרייה');
+  return true;
+});
+
+for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
