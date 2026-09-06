@@ -1528,6 +1528,21 @@ check('תיקון רטרואקטיבי: מקשר מסמכי המשך שלא קו
   });
 });
 
+check('כל greenInvoice.X שהשרת קורא לו קיים בייצוא', () => {
+  // השרת מייבא את המודול כברירת מחדל. פונקציה חדשה שנשכחה מאובייקט הייצוא
+  // עוברת תחביר ובדיקות עם סטאבים, ונופלת רק בפרודקשן.
+  const gi = fs.readFileSync('greenInvoice.js', 'utf8');
+  const exported = new Set((gi.match(/export const greenInvoice = \{([^}]*)\}/) || [, ''])[1]
+    .split(',').map(x => x.split(':')[0].trim()).filter(Boolean));
+  const srv = fs.readFileSync('server.js', 'utf8');
+  // לא לתפוס את המחרוזת './greenInvoice.js' של הייבוא
+  const used = new Set([...srv.matchAll(/(?<![./'"])\bgreenInvoice\.([A-Za-z_$][\w$]*)/g)].map(m => m[1]));
+  const consts = new Set([...gi.matchAll(/export const (\w+)/g)].map(m => m[1]));
+  const missing = [...used].filter(n => !exported.has(n) && !consts.has(n));
+  if (missing.length) throw new Error('חסר בייצוא: ' + missing.join(', '));
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
