@@ -1404,7 +1404,7 @@ check('תיקון רטרואקטיבי: מקשר מסמכי המשך שלא קו
   // התיקון כותב לנתוני אמת. הוא חייב: לקשר את מה שצריך, לא לגעת באירוע של
   // חברה אחרת, לא לגעת באירוע שכבר יש לו חשבונית, ולא למחוק כלום.
   const srv = fs.readFileSync('server.js', 'utf8');
-  const src = srv.slice(srv.indexOf('const BACKFILL_VERSION = 1;'), srv.indexOf('async function runAllFollowupBackfills'));
+  const src = srv.slice(srv.indexOf('const BACKFILL_VERSION'), srv.indexOf('async function runAllFollowupBackfills'));
   const link = srv.slice(srv.indexOf('function linkFollowupToEvents'), srv.indexOf('function followupRemarks'));
 
   let db = { events: [
