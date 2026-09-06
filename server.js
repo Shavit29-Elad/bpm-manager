@@ -3363,7 +3363,7 @@ async function resolveConvertedInvoice(db, cid, proforma, income) {
 // מסמך המקור. התוצאה: אירוע שהוצאה עליו חשבונית נראה כאילו אין לו חיוב.
 // התיקון קדימה נעשה בקוד; כאן נסרקים המסמכים שכבר הופקו. הסריקה רק מוסיפה
 // קישורים — היא לעולם לא מוחקת ולא משנה מסמך קיים.
-const BACKFILL_VERSION = 1;
+const BACKFILL_VERSION = 2;
 const FOLLOWUP_SRC_TYPES = [10, 300];        // מקור אפשרי: הצעת מחיר או חשבון עסקה
 const FOLLOWUP_DERIVED_TYPES = [300, 305, 320];
 
@@ -3389,7 +3389,22 @@ async function runFollowupBackfill(cid) {
   if (!giEnabled(cid) || !greenInvoice.haveCredentials()) return { skipped: 'לא מחובר' };
   let db = load();
   const cands = backfillCandidates(db, cid);
-  if (!cands.length) return { checked: 0, linked: 0 };
+  if (!cands.length) {
+    // למה אין מועמדים — ספירה בלבד, כדי שאפשר יהיה לאבחן מהלוג בלי גישה לנתונים
+    const evs = (db.events || []).filter(e => ownedBy(e, cid));
+    const types = {};
+    let noDocs = 0, allConverted = 0;
+    for (const e of evs) {
+      const ld = Array.isArray(e.linkedDocs) ? e.linkedDocs : [];
+      if (!ld.length) { noDocs++; continue; }
+      if (ld.every(d => d && (d.converted || d.credited || d.credit))) allConverted++;
+      for (const d of ld) {
+        const k = `${d && d.type != null ? d.type : 'ללא-סוג'}${d && d.uploaded ? '-הועלה' : ''}${d && d.converted ? '-הומר' : ''}`;
+        types[k] = (types[k] || 0) + 1;
+      }
+    }
+    return { checked: 0, linked: 0, diag: { events: evs.length, noDocs, allConverted, types } };
+  }
 
   const dates = cands.map(c => String(c.ev.date || c.ev.dateRaw || '').slice(0, 10)).filter(Boolean).sort();
   const from = shiftISODays(dates[0] || new Date().toISOString().slice(0, 10), -30);
@@ -3445,7 +3460,7 @@ async function runAllFollowupBackfills() {
     cur.followupBackfill[cid] = { version: BACKFILL_VERSION, at: new Date().toISOString(), ...res };
     save(cur); changed = true;
     if (res && res.linked) console.log(`תיקון מסמכי המשך (${cid}): קושרו ${res.linked} מסמכים מתוך ${res.checked} אירועים שנבדקו`);
-    else if (res && !res.skipped) console.log(`תיקון מסמכי המשך (${cid}): אין מה לתקן`);
+    else if (res && !res.skipped) console.log(`תיקון מסמכי המשך (${cid}): אין מה לתקן` + (res.diag ? ` · ${JSON.stringify(res.diag)}` : ''));
   }
   return changed;
 }
