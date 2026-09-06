@@ -558,9 +558,39 @@ add('GET', /^\/api\/calendar\/events$/, async (req, res, _p, q) => {
   res.end(JSON.stringify({ from: q.from, to: q.to, whatsapp: wa, calendar: cal, calendars, calendarError }));
 });
 
+// סכום הזיכוי אינו נשמר על שורת המסמך באירוע. בלי הסכום כל זיכוי נחשב מלא,
+// ולכן אירוע שזוכה חלקית חזר לרשימת ההפקה למרות שהחשבונית בתוקף על היתרה.
+// כאן הסכומים נמשכים מחשבונית ירוקה. משווים ללא מע"מ, כי סכום האירוע מוזן ללא מע"מ.
+async function enrichCreditAmounts(events, cid) {
+  const isCredit = (d) => d && (d.credit || Number(d.type) === 330);
+  const missing = events.some(ev => (ev.linkedDocs || []).some(d => isCredit(d) && d.id && !(Number(d.amount) > 0)));
+  if (!missing || !giEnabled(cid) || !greenInvoice.haveCredentials()) return events;
+  const dates = events.map(e => String(e.date || e.dateRaw || '').slice(0, 10)).filter(Boolean).sort();
+  if (!dates.length) return events;
+  const r = await greenInvoice.incomeForRange(shiftISODays(dates[0], -60), shiftISODays(dates[dates.length - 1], 400), [330]);
+  const byId = new Map(), byNum = new Map();
+  for (const d of ((r && r.docs) || [])) {
+    byId.set(String(d.id), d);
+    if (d.number != null) byNum.set(String(d.number), d);
+  }
+  if (!byId.size) return events;
+  return events.map(ev => ({
+    ...ev,
+    linkedDocs: (ev.linkedDocs || []).map(d => {
+      if (!isCredit(d) || Number(d.amount) > 0) return d;
+      const hit = byId.get(String(d.id)) || (d.number != null && byNum.get(String(d.number)));
+      return hit ? { ...d, amount: Math.abs(Number(hit.amountExVat) || 0) } : d;
+    }),
+  }));
+}
+
 // GET /api/invoicing/clients?companyId= — כל האירועים מקובצים לפי לקוח (עם סימון מחויבים)
-add('GET', /^\/api\/invoicing\/clients$/, (req, res, _p, q) =>
-  json(res, eventsByClient(companyEvents(load(), q.companyId))));
+add('GET', /^\/api\/invoicing\/clients$/, async (req, res, _p, q) => {
+  const cid = reqCompany(q);
+  let evs = companyEvents(load(), cid);
+  try { evs = await enrichCreditAmounts(evs, cid); } catch { /* נשארים עם ההתנהגות הזהירה */ }
+  json(res, eventsByClient(evs));
+});
 
 // POST /api/invoicing/preview — { eventIds } → שורות ברירת מחדל + נושא + סכומים (בלי ליצור מסמך)
 add('POST', /^\/api\/invoicing\/preview$/, async (req, res, _p, _q, body) => {

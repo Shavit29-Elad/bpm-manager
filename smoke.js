@@ -1543,6 +1543,44 @@ check('כל greenInvoice.X שהשרת קורא לו קיים בייצוא', () =
   return true;
 });
 
+check('סכום הזיכוי נמשך מחשבונית ירוקה לפני ההחלטה', () => {
+  // בלי הסכום כל זיכוי נחשב מלא, ולכן אירוע שזוכה חלקית חזר לרשימת ההפקה.
+  // ההשוואה חייבת להיות ללא מע"מ — סכום האירוע מוזן ללא מע"מ.
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const src = srv.slice(srv.indexOf('async function enrichCreditAmounts'), srv.indexOf('// GET /api/invoicing/clients'));
+  if (!/amountExVat/.test(src)) throw new Error('הסכום נלקח כולל מע"מ — ישווה מול סכום אירוע ללא מע"מ');
+  const docs = [{ id: 'c70099', number: 70099, type: 330, amountExVat: 5000, amountIncVat: 5900 }];
+  const fn = new Function('deps', `
+    const { giEnabled, greenInvoice, shiftISODays } = deps;
+    ${src}
+    return enrichCreditAmounts;
+  `)({
+    giEnabled: () => true,
+    greenInvoice: { haveCredentials: () => true, incomeForRange: async () => ({ docs }) },
+    shiftISODays: (iso, d) => { const t = new Date(iso); t.setDate(t.getDate() + d); return t.toISOString().slice(0, 10); },
+  });
+  const base = { id: 'e', clientName: 'לקוח', price: 26000, date: '2026-07-26', invoiceStatus: 'pending' };
+  const evs = [{ ...base, linkedDocs: [
+    { id: 'i', type: 305, number: '50425', credited: true },
+    { id: 'c70099', number: 70099, type: 330, credit: true },   // בלי סכום, כמו בפועל
+  ] }];
+  // לפני ההעשרה — הזיכוי נחשב מלא והאירוע חוזר לרשימה
+  if (invMod.eventsByClient(evs)[0].events[0].issued) throw new Error('בלי סכום האירוע כבר לא חוזר לרשימה — הבדיקה איבדה משמעות');
+  return fn(evs, 'co_bpm').then(out => {
+    const c = out[0].linkedDocs.find(d => d.id === 'c70099');
+    if (Number(c.amount) !== 5000) throw new Error('הסכום לא נמשך: ' + c.amount);
+    if (!invMod.eventsByClient(out)[0].events[0].issued) throw new Error('זיכוי חלקי עדיין מחזיר את האירוע לרשימה');
+    // וזיכוי מלא כן מחזיר
+    docs[0].amountExVat = 26000;
+    return fn([{ ...base, linkedDocs: [
+      { id: 'i', type: 305, number: '50425', credited: true },
+      { id: 'c70099', number: 70099, type: 330, credit: true }] }], 'co_bpm').then(full => {
+      if (invMod.eventsByClient(full)[0].events[0].issued) throw new Error('זיכוי מלא לא מחזיר את האירוע לרשימה');
+      return true;
+    });
+  });
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
