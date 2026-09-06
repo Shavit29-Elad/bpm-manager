@@ -3363,7 +3363,7 @@ async function resolveConvertedInvoice(db, cid, proforma, income) {
 // מסמך המקור. התוצאה: אירוע שהוצאה עליו חשבונית נראה כאילו אין לו חיוב.
 // התיקון קדימה נעשה בקוד; כאן נסרקים המסמכים שכבר הופקו. הסריקה רק מוסיפה
 // קישורים — היא לעולם לא מוחקת ולא משנה מסמך קיים.
-const BACKFILL_VERSION = 4;
+const BACKFILL_VERSION = 5;
 const FOLLOWUP_SRC_TYPES = [10, 300];        // מקור אפשרי: הצעת מחיר או חשבון עסקה
 const FOLLOWUP_DERIVED_TYPES = [300, 305, 320];
 
@@ -3413,33 +3413,33 @@ async function runFollowupBackfill(cid) {
   try { const r = await greenInvoice.incomeForRange(from, to, FOLLOWUP_DERIVED_TYPES); list = (r && r.docs) || []; }
   catch (e) { return { error: e.message }; }
 
-  let lookups = 200;                      // תקציב קריאות פרטניות. רץ פעם אחת, ברקע
+  // הקישור נשמר על המסמך הנגזר ומצביע למקור, והחיפוש אינו מחזיר אותו. לכן
+  // עוברים פעם אחת על מסמכי הטווח, קוראים כל אחד, ובונים אינדקס מקור→נגזר.
+  // ריצה חד-פעמית: עדיף מעבר אחד יסודי על ניחוש לפי שם לקוח, שלא אישר כלום.
+  const bySource = new Map();
+  let budget = 400;
+  const stat = { docsInRange: list.length, scanned: 0, links: 0, matched: 0, from, to };
+  for (const d of list) {
+    if (budget <= 0) break;
+    budget--;
+    await new Promise(r => setTimeout(r, 120));            // עדינות מול ה-API
+    const raw = await greenInvoice.getDocument(d.id).catch(() => null);
+    stat.scanned++;
+    for (const id of ((raw && raw.linkedDocumentIds) || [])) {
+      if (String(id) === String(d.id)) continue;
+      stat.links++;
+      if (!bySource.has(String(id))) bySource.set(String(id), d);
+    }
+  }
+
   let linked = 0;
-  const stat = { docsInRange: list.length, listHits: 0, fromSource: 0, confirmed: 0, srcNoLink: 0, from, to };
   for (const { ev, src } of cands) {
     const sid = String(src.id);
-    const points = (ids) => (ids || []).some(x => String(x) === sid);
-    const isDerived = (d) => d && FOLLOWUP_DERIVED_TYPES.includes(Number(d.type)) && String(d.id) !== sid;
-    let hit = list.find(d => points(d.linkedDocumentIds) && isDerived(d));
-    if (hit) stat.listHits++;
-    if (!hit && lookups > 0) {
-      // חשבונית ירוקה אינה מחזירה את הקישור בחיפוש. במקום לנחש מי הנגזר לפי שם
-      // וסכום — שואלים את מסמך המקור עצמו למי הוא מקושר. קריאה אחת, ותשובה
-      // ודאית במקום ניחוש.
-      lookups--;
-      await new Promise(r => setTimeout(r, 120));   // עדינות מול ה-API
-      const raw = await greenInvoice.getDocument(sid).catch(() => null);
-      const ids = (raw && raw.linkedDocumentIds) || [];
-      if (!ids.length) stat.srcNoLink++;
-      for (const id of ids) {
-        if (String(id) === sid) continue;
-        let d = list.find(x => String(x.id) === String(id));
-        if (!d && lookups > 0) { lookups--; d = await greenInvoice.getDocument(id).catch(() => null); }
-        if (isDerived(d)) { hit = d; stat.fromSource++; break; }
-      }
-    }
-    if (!hit) continue;
-    stat.confirmed++;
+    const hit = list.find(d => (d.linkedDocumentIds || []).some(x => String(x) === sid))
+      || bySource.get(sid);
+    if (!hit || String(hit.id) === sid) continue;
+    if (!FOLLOWUP_DERIVED_TYPES.includes(Number(hit.type))) continue;
+    stat.matched++;
     db = load();
     const fresh = (db.events || []).find(e => e.id === ev.id);
     if (!fresh) continue;

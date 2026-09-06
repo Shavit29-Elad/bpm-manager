@@ -1411,7 +1411,10 @@ check('תיקון רטרואקטיבי: מוצא את הנגזר כששאילת�
   // הרשימה נקייה מקישורים, כמו בפועל. הקישור יושב על הצעת המחיר עצמה.
   const list = [{ id: 'd40468', number: 40468, type: 300, clientName: 'אחר לגמרי', amount: 999, linkedDocumentIds: [] },
                 { id: 'dOther', number: 40100, type: 305, clientName: 'לקוח א', amount: 12345, linkedDocumentIds: [] }];
-  const full = { q616: { id: 'q616', type: 10, linkedDocumentIds: ['d40468'] } };
+  // הקישור יושב על הנגזר ומצביע למקור — כמו בפועל. המקור עצמו מחזיר קישור ריק.
+  const full = { q616: { id: 'q616', type: 10, linkedDocumentIds: [] },
+                 d40468: { id: 'd40468', type: 300, linkedDocumentIds: ['q616'] },
+                 dOther: { id: 'dOther', type: 305, linkedDocumentIds: [] } };
   let calls = 0;
   const run = new Function('deps', `
     const { giEnabled, greenInvoice, load, save, shiftISODays, sameClientName, ownedBy } = deps;
@@ -1428,8 +1431,9 @@ check('תיקון רטרואקטיבי: מוצא את הנגזר כששאילת�
     ownedBy: (r, c) => !r.companyId || r.companyId === c,
   });
   return run('co_bpm').then(res => {
-    if (res.linked !== 1) throw new Error('לא נמצא הנגזר דרך מסמך המקור (' + JSON.stringify(res.stat) + ')');
-    if (!res.stat || res.stat.fromSource !== 1) throw new Error('לא זוהה שההתאמה הגיעה ממסמך המקור');
+    if (res.linked !== 1) throw new Error('לא נמצא הנגזר (' + JSON.stringify(res.stat) + ')');
+    if (!res.stat || res.stat.matched !== 1) throw new Error('לא נרשמה התאמה אחת');
+    if (res.stat.scanned !== 2) throw new Error('לא נסרקו כל מסמכי הטווח');
     const e1 = db.events[0];
     if (!e1.linkedDocs.some(d => d.id === 'd40468')) throw new Error('המסמך לא קושר לאירוע');
     // ולא נבחר המסמך של אותו לקוח שאינו קשור — שם לקוח אינו ראיה
