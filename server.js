@@ -3358,6 +3358,98 @@ async function resolveConvertedInvoice(db, cid, proforma, income) {
   return remember(null);
 }
 
+// ── תיקון רטרואקטיבי: מסמכי המשך שלא נקשרו לאירועים ──────────────────────
+// שני מסלולי הפקה יצרו מסמך המשך בחשבונית ירוקה בלי לקשר אותו לאירועים של
+// מסמך המקור. התוצאה: אירוע שהוצאה עליו חשבונית נראה כאילו אין לו חיוב.
+// התיקון קדימה נעשה בקוד; כאן נסרקים המסמכים שכבר הופקו. הסריקה רק מוסיפה
+// קישורים — היא לעולם לא מוחקת ולא משנה מסמך קיים.
+const BACKFILL_VERSION = 1;
+const FOLLOWUP_SRC_TYPES = [10, 300];        // מקור אפשרי: הצעת מחיר או חשבון עסקה
+const FOLLOWUP_DERIVED_TYPES = [300, 305, 320];
+
+function backfillCandidates(db, cid) {
+  const out = [];
+  for (const ev of (db.events || [])) {
+    if (!ownedBy(ev, cid)) continue;
+    const ld = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+    if (!ld.length) continue;
+    for (const d of ld) {
+      if (!d || d.converted || d.credited || d.credit || d.uploaded) continue;
+      if (!FOLLOWUP_SRC_TYPES.includes(Number(d.type))) continue;
+      if (!d.id || /^(exp_|pay_|file_)/.test(String(d.id))) continue;
+      // כבר יש מסמך נגזר על האירוע? אין מה לתקן
+      if (ld.some(x => FOLLOWUP_DERIVED_TYPES.includes(Number(x.type)) && !x.converted && String(x.id) !== String(d.id))) continue;
+      out.push({ ev, src: d });
+    }
+  }
+  return out;
+}
+
+async function runFollowupBackfill(cid) {
+  if (!giEnabled(cid) || !greenInvoice.haveCredentials()) return { skipped: 'לא מחובר' };
+  let db = load();
+  const cands = backfillCandidates(db, cid);
+  if (!cands.length) return { checked: 0, linked: 0 };
+
+  const dates = cands.map(c => String(c.ev.date || c.ev.dateRaw || '').slice(0, 10)).filter(Boolean).sort();
+  const from = shiftISODays(dates[0] || new Date().toISOString().slice(0, 10), -30);
+  const to = shiftISODays(dates[dates.length - 1] || new Date().toISOString().slice(0, 10), 365);
+  let list = [];
+  try { const r = await greenInvoice.incomeForRange(from, to, FOLLOWUP_DERIVED_TYPES); list = (r && r.docs) || []; }
+  catch (e) { return { error: e.message }; }
+
+  let lookups = 40;                       // תקציב קריאות פרטניות — לא מציפים את ה-API בעלייה
+  let linked = 0;
+  for (const { ev, src } of cands) {
+    const sid = String(src.id);
+    const points = (ids) => (ids || []).some(x => String(x) === sid);
+    let hit = list.find(d => points(d.linkedDocumentIds));
+    if (!hit) {
+      // ה-API לא תמיד מחזיר את הקישור ברשימה. מצמצמים לפי לקוח וסכום, ומאמתים
+      // מול המסמך עצמו — צמצום הוא ניחוש, האימות הוא ודאות.
+      const amt = Number(src.amount) || 0;
+      const cands2 = list.filter(d => sameClientName(d.clientName, ev.clientName)
+        && (!amt || Math.abs((Number(d.amount) || 0) - amt) <= Math.max(3, amt * 0.004)));
+      for (const c of cands2.slice(0, 3)) {
+        if (lookups <= 0) break;
+        lookups--;
+        const raw = await greenInvoice.getDocument(c.id).catch(() => null);
+        if (raw && points(raw.linkedDocumentIds)) { hit = { ...c, ...raw }; break; }
+      }
+    }
+    if (!hit) continue;
+    db = load();
+    const fresh = (db.events || []).find(e => e.id === ev.id);
+    if (!fresh) continue;
+    const ld = Array.isArray(fresh.linkedDocs) ? fresh.linkedDocs : [];
+    if (ld.some(x => String(x.id) === String(hit.id))) continue;   // כבר קושר בינתיים
+    if (linkFollowupToEvents(db, cid, new Set([sid, String(src.number || '')].filter(Boolean)),
+        { id: hit.id, number: hit.number }, Number(hit.type))) { save(db); linked++; }
+  }
+  return { checked: cands.length, linked };
+}
+
+async function runAllFollowupBackfills() {
+  const db = load();
+  const done = db.followupBackfill || {};
+  const companies = (db.companies || []).map(c => c.id);
+  let changed = false;
+  for (const cid of companies) {
+    if (done[cid] && done[cid].version >= BACKFILL_VERSION) continue;
+    let res;
+    try { res = await greenInvoice.withCompany(cid, () => runFollowupBackfill(cid)); }
+    catch (e) { res = { error: e.message }; }
+    if (res && res.error) { console.log(`תיקון מסמכי המשך (${cid}): נכשל — ${res.error}. יינסה שוב בעלייה הבאה.`); continue; }
+    const cur = load();
+    cur.followupBackfill = cur.followupBackfill || {};
+    cur.followupBackfill[cid] = { version: BACKFILL_VERSION, at: new Date().toISOString(), ...res };
+    save(cur); changed = true;
+    if (res && res.linked) console.log(`תיקון מסמכי המשך (${cid}): קושרו ${res.linked} מסמכים מתוך ${res.checked} אירועים שנבדקו`);
+    else if (res && !res.skipped) console.log(`תיקון מסמכי המשך (${cid}): אין מה לתקן`);
+  }
+  return changed;
+}
+
 // זיווג חשבונית ↔ קבלה בתוך שורת בנק אחת.
 // העברה אחת מכסה לא פעם כמה חשבוניות של כמה אירועים — למשל שלוש חשבוניות של
 // אותו לקוח עם שלוש קבלות. כולן מאותו שם, ולכן שם הלקוח לא מבחין ביניהן; הסכום כן.
@@ -7028,6 +7120,9 @@ server.listen(PORT, async () => {
   console.log(`מערכת BPM רצה על http://localhost:${PORT}`);
   startWhatsappBridge(async (text) => { try { const wc = process.env.WHATSAPP_COMPANY || 'co_bpm'; await greenInvoice.withCompany(wc, () => ingestText(text, wc)); } catch {} })
     .then(r => { if (r && !r.ok) console.log('ווטסאפ:', r.reason); });
+  // תיקון רטרואקטיבי של מסמכי המשך שלא נקשרו לאירועים. רץ ברקע, פעם אחת לחברה,
+  // ולא חוסם את עליית השרת. הוא רק מוסיף קישורים.
+  setTimeout(() => { runAllFollowupBackfills().catch(e => console.log('תיקון מסמכי המשך נכשל:', e.message)); }, 8000);
   try { scheduleNightlyMailScan();
   scheduleDailyBackup();
   scheduleDailyReport(); scheduleVehicleAlerts(); } catch (e) { console.error('תזמון סריקת מייל נכשל:', e.message); } // סריקת מייל לילית אוטומטית לכל החברות

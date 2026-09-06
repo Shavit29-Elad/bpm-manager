@@ -1400,6 +1400,80 @@ check('שיוך מסמך המשך — ריצה אמיתית על אירועים'
   return true;
 });
 
+check('תיקון רטרואקטיבי: מקשר מסמכי המשך שלא קושרו, ולא נוגע בשאר', () => {
+  // התיקון כותב לנתוני אמת. הוא חייב: לקשר את מה שצריך, לא לגעת באירוע של
+  // חברה אחרת, לא לגעת באירוע שכבר יש לו חשבונית, ולא למחוק כלום.
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const src = srv.slice(srv.indexOf('const BACKFILL_VERSION = 1;'), srv.indexOf('async function runAllFollowupBackfills'));
+  const link = srv.slice(srv.indexOf('function linkFollowupToEvents'), srv.indexOf('function followupRemarks'));
+
+  let db = { events: [
+    // צריך תיקון: הצעת מחיר 616 בלי חשבונית על האירוע
+    { id: 'e1', companyId: 'co_bpm', clientName: 'לקוח א', date: '2026-06-25',
+      linkedDocs: [{ id: 'q616', number: 616, type: 10, amount: 10000 }] },
+    // כבר יש חשבונית מס פעילה — אין מה לתקן
+    { id: 'e2', companyId: 'co_bpm', clientName: 'לקוח ב', date: '2026-06-25',
+      linkedDocs: [{ id: 'q700', number: 700, type: 10 }, { id: 'd1', number: 50001, type: 305 }] },
+    // חברה אחרת — אסור לגעת
+    { id: 'e3', companyId: 'co_ofek', clientName: 'לקוח א', date: '2026-06-25',
+      linkedDocs: [{ id: 'q616', number: 616, type: 10 }] },
+    // מסמך שהועלה ידנית — לא מקור להמשך בחשבונית ירוקה
+    { id: 'e4', companyId: 'co_bpm', clientName: 'לקוח ד', date: '2026-06-25',
+      linkedDocs: [{ id: 'up1', number: 5, type: 300, uploaded: true }] },
+  ] };
+  const income = [{ id: 'd40468', number: 40468, type: 300, clientName: 'לקוח א', amount: 10000, linkedDocumentIds: ['q616'] }];
+  let getDocCalls = 0;
+  const gi = {
+    haveCredentials: () => true,
+    incomeForRange: async () => ({ docs: income }),
+    getDocument: async (id) => { getDocCalls++; return income.find(d => d.id === id) || null; },
+  };
+  const run = new Function('deps', `
+    const { giEnabled, greenInvoice, load, save, shiftISODays, sameClientName, ownedBy } = deps;
+    ${link}
+    ${src}
+    return { runFollowupBackfill, backfillCandidates };
+  `)({
+    giEnabled: () => true,
+    greenInvoice: gi,
+    load: () => db,
+    save: (x) => { db = x; },
+    shiftISODays: (iso, d) => { const t = new Date(iso); t.setDate(t.getDate() + d); return t.toISOString().slice(0, 10); },
+    sameClientName: (a, b) => String(a || '').trim() === String(b || '').trim(),
+    ownedBy: (r, c) => !r.companyId || r.companyId === c,
+  });
+
+  const cands = run.backfillCandidates(db, 'co_bpm');
+  const ids = cands.map(c => c.ev.id);
+  if (!ids.includes('e1')) throw new Error('האירוע שצריך תיקון לא זוהה');
+  if (ids.includes('e2')) throw new Error('אירוע שכבר יש לו חשבונית נבחר לתיקון');
+  // חשבון עסקה הוא מקור לגיטימי לחשבונית מס — לא לפסול אותו
+  const chain = { events: [{ id: 'x1', companyId: 'co_bpm', clientName: 'ל', date: '2026-06-25',
+    linkedDocs: [{ id: 'p300', number: 40001, type: 300 }] }] };
+  if (!run.backfillCandidates(chain, 'co_bpm').length) throw new Error('חשבון עסקה לא זוהה כמקור אפשרי');
+  if (ids.includes('e3')) throw new Error('זליגה: אירוע של חברה אחרת נבחר');
+  if (ids.includes('e4')) throw new Error('מסמך שהועלה ידנית נבחר כמקור');
+
+  return run.runFollowupBackfill('co_bpm').then(res => {
+    if (res.linked !== 1) throw new Error('קושרו ' + res.linked + ' במקום 1');
+    const e1 = db.events.find(e => e.id === 'e1');
+    if (!e1.linkedDocs.some(d => String(d.id) === 'd40468')) throw new Error('המסמך לא נוסף לאירוע');
+    if (!e1.linkedDocs.find(d => d.id === 'q616').converted) throw new Error('ההצעה לא סומנה כהומרה');
+    if (e1.invoiceNumber !== 40468) throw new Error('מספר החשבונית לא נשמר על האירוע');
+    if (e1.linkedDocs.length !== 2) throw new Error('נמחק או נוסף משהו מעבר לצפוי');
+    const e3 = db.events.find(e => e.id === 'e3');
+    if (e3.linkedDocs.length !== 1 || e3.linkedDocs[0].converted) throw new Error('אירוע של חברה אחרת נגוע');
+    const e2 = db.events.find(e => e.id === 'e2');
+    if (e2.linkedDocs.length !== 2) throw new Error('אירוע שלא היה צריך תיקון שונה');
+    // ריצה חוזרת לא משנה דבר (אידמפוטנטי)
+    return run.runFollowupBackfill('co_bpm').then(r2 => {
+      if (r2.linked !== 0) throw new Error('ריצה חוזרת קישרה שוב');
+      if (db.events.find(e => e.id === 'e1').linkedDocs.length !== 2) throw new Error('ריצה חוזרת שינתה את האירוע');
+      return true;
+    });
+  });
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
