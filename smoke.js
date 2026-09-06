@@ -1400,6 +1400,43 @@ check('שיוך מסמך המשך — ריצה אמיתית על אירועים'
   return true;
 });
 
+check('תיקון רטרואקטיבי: מוצא את הנגזר כששאילתת החיפוש לא מחזירה קישורים', () => {
+  // כך זה בפרודקשן: חשבונית ירוקה לא מחזירה linkedDocumentIds בתוצאות החיפוש
+  // (0 התאמות מתוך 140 מסמכים). הקישור קיים רק על המסמך עצמו.
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const src = srv.slice(srv.indexOf('const BACKFILL_VERSION'), srv.indexOf('async function runAllFollowupBackfills'));
+  const link = srv.slice(srv.indexOf('function linkFollowupToEvents'), srv.indexOf('function followupRemarks'));
+  let db = { events: [{ id: 'e1', companyId: 'co_bpm', clientName: 'לקוח א', date: '2026-06-25',
+    linkedDocs: [{ id: 'q616', number: 616, type: 10 }] }] };
+  // הרשימה נקייה מקישורים, כמו בפועל. הקישור יושב על הצעת המחיר עצמה.
+  const list = [{ id: 'd40468', number: 40468, type: 300, clientName: 'אחר לגמרי', amount: 999, linkedDocumentIds: [] },
+                { id: 'dOther', number: 40100, type: 305, clientName: 'לקוח א', amount: 12345, linkedDocumentIds: [] }];
+  const full = { q616: { id: 'q616', type: 10, linkedDocumentIds: ['d40468'] } };
+  let calls = 0;
+  const run = new Function('deps', `
+    const { giEnabled, greenInvoice, load, save, shiftISODays, sameClientName, ownedBy } = deps;
+    ${link}
+    ${src}
+    return runFollowupBackfill;
+  `)({
+    giEnabled: () => true,
+    greenInvoice: { haveCredentials: () => true, incomeForRange: async () => ({ docs: list }),
+      getDocument: async (id) => { calls++; return full[id] || list.find(d => d.id === id) || null; } },
+    load: () => db, save: (x) => { db = x; },
+    shiftISODays: (iso, d) => { const t = new Date(iso); t.setDate(t.getDate() + d); return t.toISOString().slice(0, 10); },
+    sameClientName: (a, b) => String(a || '').trim() === String(b || '').trim(),
+    ownedBy: (r, c) => !r.companyId || r.companyId === c,
+  });
+  return run('co_bpm').then(res => {
+    if (res.linked !== 1) throw new Error('לא נמצא הנגזר דרך מסמך המקור (' + JSON.stringify(res.stat) + ')');
+    if (!res.stat || res.stat.fromSource !== 1) throw new Error('לא זוהה שההתאמה הגיעה ממסמך המקור');
+    const e1 = db.events[0];
+    if (!e1.linkedDocs.some(d => d.id === 'd40468')) throw new Error('המסמך לא קושר לאירוע');
+    // ולא נבחר המסמך של אותו לקוח שאינו קשור — שם לקוח אינו ראיה
+    if (e1.linkedDocs.some(d => d.id === 'dOther')) throw new Error('נבחר מסמך לא קשור לפי שם לקוח');
+    return true;
+  });
+});
 check('תיקון רטרואקטיבי: מקשר מסמכי המשך שלא קושרו, ולא נוגע בשאר', () => {
   // התיקון כותב לנתוני אמת. הוא חייב: לקשר את מה שצריך, לא לגעת באירוע של
   // חברה אחרת, לא לגעת באירוע שכבר יש לו חשבונית, ולא למחוק כלום.
