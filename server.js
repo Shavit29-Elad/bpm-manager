@@ -3425,15 +3425,6 @@ async function runFollowupBackfill(cid) {
     await new Promise(r => setTimeout(r, 120));            // עדינות מול ה-API
     const raw = await greenInvoice.getDocument(d.id).catch(() => null);
     stat.scanned++;
-    // אף מסמך לא החזיר linkedDocumentIds. לפני שממשיכים לנחש — לראות אילו שדות
-    // באמת קיימים. נרשמים שמות שדות בלבד, לא ערכים.
-    if (stat.scanned <= 2 && raw) {
-      const keys = Object.keys(raw);
-      const linkish = keys.filter(k => /link|relat|source|origin|parent|child|doc/i.test(k))
-        .map(k => `${k}=${JSON.stringify(raw[k])}`.slice(0, 120));
-      console.log(`מבנה מסמך (${cid}, סוג ${raw.type}): שדות=[${keys.join(',')}]`);
-      if (linkish.length) console.log(`  שדות קישור אפשריים: ${linkish.join(' | ')}`);
-    }
     for (const id of greenInvoice.linkedIdsOf(raw)) {
       if (String(id) === String(d.id)) continue;
       stat.links++;
