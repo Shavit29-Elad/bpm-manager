@@ -1360,6 +1360,46 @@ check('הפקת מסמך אינה מבקשת מחשבונית ירוקה לשל�
   return true;
 });
 
+check('כל מסלול מסמך המשך מקשר את המסמך לאירועים של המקור', () => {
+  // שלושת המסלולים שמפיקים מסמך המשך חייבים לקשר אותו לאירועים של המקור.
+  // שניים מהם לא עשו זאת, ולכן חשבונית שהופקה מהצעת מחיר לא הופיעה על האירוע.
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const starts = [...srv.matchAll(/^add\('POST', \/\^[^\n]*$/gm)].map(m => ({ i: m.index, t: m[0] }));
+  const routeBody = (needle) => {
+    const k = starts.findIndex(x => x.t.includes(needle));
+    if (k < 0) throw new Error('ראוט לא נמצא: ' + needle);
+    return srv.slice(starts[k].i, k + 1 < starts.length ? starts[k + 1].i : srv.length);
+  };
+  for (const [needle, label] of [['/derive$', 'מסמך המשך'], ['/quotes\\/([^/]+)\\/followup$', 'המשך מהצעת מחיר'], ['/documents\\/consolidate$', 'איחוד מסמכים']]) {
+    const b = routeBody(needle);
+    if (!/linkFollowupToEvents\(/.test(b)) throw new Error(`מסלול "${label}" אינו מקשר לאירועים`);
+  }
+  const helper = srv.slice(srv.indexOf('function linkFollowupToEvents'), srv.indexOf('function followupRemarks'));
+  if (!/ownedBy\(ev, cid\)/.test(helper)) throw new Error('הלולאה על האירועים אינה מסננת לפי חברה');
+  return true;
+});
+check('שיוך מסמך המשך — ריצה אמיתית על אירועים', () => {
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const src = srv.slice(srv.indexOf('function linkFollowupToEvents'), srv.indexOf('function followupRemarks'));
+  const fn = new Function('ownedBy', `${src}\nreturn linkFollowupToEvents;`)((r, c) => !r.companyId || r.companyId === c);
+  const db = { events: [
+    { id: 'e1', companyId: 'co_bpm', linkedDocs: [{ id: 'q616', number: 616, type: 10 }] },
+    { id: 'e2', companyId: 'co_bpm', linkedDocs: [{ id: 'q616', number: 616, type: 10 }] },
+    { id: 'e3', companyId: 'co_ofek', linkedDocs: [{ id: 'q616', number: 616, type: 10 }] },
+    { id: 'e4', companyId: 'co_bpm', linkedDocs: [{ id: 'zzz', number: 999, type: 10 }] },
+  ] };
+  const touched = fn(db, 'co_bpm', new Set(['q616', '616']), { id: 'd40468', number: 40468 }, 300);
+  if (!touched) throw new Error('לא סומן שינוי');
+  const e1 = db.events[0];
+  if (!e1.linkedDocs.some(d => d.id === 'd40468')) throw new Error('המסמך החדש לא נוסף לאירוע');
+  if (!e1.linkedDocs.find(d => d.id === 'q616').converted) throw new Error('ההצעה לא סומנה כהומרה');
+  if (e1.invoiceId !== 'd40468' || e1.invoiceStatus !== 'invoiced') throw new Error('האירוע לא סומן כמחויב');
+  if (!db.events[1].linkedDocs.some(d => d.id === 'd40468')) throw new Error('אירוע שני של אותה הצעה לא קושר');
+  if (db.events[2].linkedDocs.some(d => d.id === 'd40468')) throw new Error('זליגה: אירוע של חברה אחרת קושר');
+  if (db.events[3].linkedDocs.some(d => d.id === 'd40468')) throw new Error('אירוע ללא קשר למקור קושר');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

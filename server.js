@@ -2289,6 +2289,27 @@ add('POST', /^\/api\/quotes\/([^/]+)\/close$/, async (req, res, params) => {
 // פרטי חשבון להעברה בנקאית + שורת התייחסות למקור — נכנסים להערות של כל מסמך המשך
 const DOC_NAMES_HE = { 10: 'הצעת מחיר', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה', 330: 'חשבונית זיכוי' };
 // שורת מקור למסמך המשך (תמיד מופיעה). פרטי הבנק מגיעים מההערה הקבועה של העסק (documentBody מזריק אותה).
+// שיוך מסמך המשך לאירועים שהמקור שלו היה מקושר אליהם, וסימון המקור כ"הומר".
+// בלי זה מסמך ההמשך מתנתק: האירוע ממשיך להציג את הצעת המחיר הישנה, ואם ההצעה
+// כבר סומנה כהומרה — האירוע נופל ל"חסר חשבונית" למרות שהוצאה עליו חשבונית.
+function linkFollowupToEvents(db, cid, sourceKeys, doc, type) {
+  const keys = new Set([...sourceKeys].map(String).filter(Boolean));
+  if (!keys.size || !doc || !doc.id) return false;
+  let touched = false;
+  for (const ev of (db.events || [])) {
+    if (!ownedBy(ev, cid)) continue;
+    const ld = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+    if (!ld.some(d => keys.has(String(d.id)) || keys.has(String(d.number)))) continue;
+    for (const d of ld) if (keys.has(String(d.id)) || keys.has(String(d.number))) d.converted = true;
+    if (!ld.some(d => String(d.id) === String(doc.id))) ld.push({ id: doc.id, number: doc.number, type, uploaded: false });
+    ev.linkedDocs = ld.slice(0, 12);
+    ev.invoiceStatus = 'invoiced'; ev.invoiceId = doc.id; ev.invoiceNumber = doc.number; ev.invoiceType = type;
+    if (type === 320) ev.clientPaid = true; // מס-קבלה = שולם → האירוע סגור
+    touched = true;
+  }
+  return touched;
+}
+
 function followupRemarks(srcType, srcNumber) {
   const nm = DOC_NAMES_HE[Number(srcType)] || 'מסמך';
   return `מסמך המשך ל${nm}${srcNumber ? ` מס' ${srcNumber}` : ''}`;
@@ -2310,6 +2331,14 @@ add('POST', /^\/api\/quotes\/([^/]+)\/followup$/, async (req, res, params, _q, b
       items, description: src.description || '', remarks: followupRemarks(src.type, src.number),
       linkedDocumentIds: [params[0]],
     });
+    // אותו שיוך שנעשה במסלול "מסמך המשך" הרגיל. עד עכשיו המסלול הזה יצר את
+    // המסמך ולא נגע באירועים כלל, ולכן אירוע שהצעת המחיר שלו הומרה נשאר בלי
+    // החשבונית שהופקה עבורו.
+    try {
+      const db = load();
+      const keys = new Set([String(params[0]), String(src.number || '')].filter(Boolean));
+      if (linkFollowupToEvents(db, reqCompany(_q, body), keys, doc, type)) save(db);
+    } catch { /* לא חוסם את הצלחת ההפקה */ }
     json(res, { ok: true, doc });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
@@ -3001,6 +3030,13 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
     }
     const doc = await createDocFwd(opts);
     // שליחה ללקוח מצדנו, אם התבקשה בחלונית. חשבונית ירוקה אינה שולחת.
+    // שיוך לאירועים של המסמך המקורי. עד עכשיו המסלול הזה יצר את המסמך ולא נגע
+    // באירועים, ולכן חשבונית שהופקה כהמשך להצעת מחיר לא הופיעה על האירוע שלה.
+    try {
+      const db = load();
+      const keys = new Set([String(params[0]), String((src && src.number) || '')].filter(Boolean));
+      if (linkFollowupToEvents(db, reqCompany(_q, body), keys, doc, type)) save(db);
+    } catch { /* לא חוסם את הצלחת ההפקה */ }
     let mail = null;
     if (body.sendEmail) mail = await mailDocToClient(reqCompany(_q, body), doc, [body.email, body.email2], { type, clientName: (src && src.client && src.client.name) || '' });
     json(res, { ok: true, mail, doc });
@@ -3121,17 +3157,7 @@ add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) =>
     try {
       const db = load();
       const srcKeys = new Set(sourceIds.map(String).concat(srcDocs.map(d => String(d.number)).filter(Boolean)));
-      let touched = false;
-      for (const ev of (db.events || [])) {
-        const ld = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
-        if (!ld.some(d => srcKeys.has(String(d.id)) || srcKeys.has(String(d.number)))) continue;
-        for (const d of ld) { if (srcKeys.has(String(d.id)) || srcKeys.has(String(d.number))) d.converted = true; }
-        ld.push({ id: doc.id, number: doc.number, type, uploaded: false });
-        ev.linkedDocs = ld.slice(0, 12);
-        ev.invoiceStatus = 'invoiced'; ev.invoiceId = doc.id; ev.invoiceNumber = doc.number; ev.invoiceType = type;
-        if (type === 320) ev.clientPaid = true; // מס-קבלה = שולם → האירוע סגור
-        touched = true;
-      }
+      let touched = linkFollowupToEvents(db, reqCompany(_q, body), srcKeys, doc, type);
       // מקורות שהועלו ידנית (אופק) — סימון כ"הומר" (converted) כך שיורדים מ"חשבוניות פתוחות", + סגירת האירוע/הרשומה
       for (const us of uploadedSources) {
         if (us.eventId) {
