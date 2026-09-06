@@ -3363,7 +3363,7 @@ async function resolveConvertedInvoice(db, cid, proforma, income) {
 // מסמך המקור. התוצאה: אירוע שהוצאה עליו חשבונית נראה כאילו אין לו חיוב.
 // התיקון קדימה נעשה בקוד; כאן נסרקים המסמכים שכבר הופקו. הסריקה רק מוסיפה
 // קישורים — היא לעולם לא מוחקת ולא משנה מסמך קיים.
-const BACKFILL_VERSION = 5;
+const BACKFILL_VERSION = 6;
 const FOLLOWUP_SRC_TYPES = [10, 300];        // מקור אפשרי: הצעת מחיר או חשבון עסקה
 const FOLLOWUP_DERIVED_TYPES = [300, 305, 320];
 
@@ -3425,6 +3425,15 @@ async function runFollowupBackfill(cid) {
     await new Promise(r => setTimeout(r, 120));            // עדינות מול ה-API
     const raw = await greenInvoice.getDocument(d.id).catch(() => null);
     stat.scanned++;
+    // אף מסמך לא החזיר linkedDocumentIds. לפני שממשיכים לנחש — לראות אילו שדות
+    // באמת קיימים. נרשמים שמות שדות בלבד, לא ערכים.
+    if (stat.scanned <= 2 && raw) {
+      const keys = Object.keys(raw);
+      const linkish = keys.filter(k => /link|relat|source|origin|parent|child|doc/i.test(k))
+        .map(k => `${k}=${JSON.stringify(raw[k])}`.slice(0, 120));
+      console.log(`מבנה מסמך (${cid}, סוג ${raw.type}): שדות=[${keys.join(',')}]`);
+      if (linkish.length) console.log(`  שדות קישור אפשריים: ${linkish.join(' | ')}`);
+    }
     for (const id of ((raw && raw.linkedDocumentIds) || [])) {
       if (String(id) === String(d.id)) continue;
       stat.links++;
