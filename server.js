@@ -2914,7 +2914,7 @@ add('POST', /^\/api\/payment-status\/send$/, async (req, res, _p, q, body) => {
   // אותו עוטף HTML כמו בכל שאר המיילים היוצאים — RTL + חתימת החברה מפרטי העסק
   const html = htmlBodyWithSig(db, cid, text);
   try {
-    await sendMailLogged(creds, { __meta: { kind: 'test', companyId: cid, ref: null }, to: emails, subject, text, html, attachments });
+    await sendMailLogged(creds, { __meta: { kind: 'client-payment-status', companyId: cid, ref: null }, to: emails, subject, text, html, attachments });
     json(res, { ok: true, sentTo: emails, attached: attachments.length, failed });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
