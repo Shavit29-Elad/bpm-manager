@@ -5709,6 +5709,21 @@ add('GET', /^\/api\/home-figures$/, async (req, res, _p, q) => {
   json(res, out);
 });
 
+// GET /api/diag/doc-payloads — מה בדיוק נשלח לחשבונית ירוקה בהפקות האחרונות.
+// אבחון לשאלה "מי שלח את המסמך ללקוח": אם אין כאן שדה emails ואין sendEmail,
+// לא אנחנו ביקשנו את השליחה.
+add('GET', /^\/api\/diag\/doc-payloads$/, (req, res) => {
+  const items = (greenInvoice.lastDocBodies || []).map(x => ({
+    at: x.at,
+    type: x.body && x.body.type,
+    // השדות היחידים שגורמים לחשבונית ירוקה לשלוח ללקוח
+    emails: (x.body && x.body.emails) || null,
+    clientEmails: (x.body && x.body.client && x.body.client.emails) || null,
+    weAskedToSend: !!(x.body && Array.isArray(x.body.emails) && x.body.emails.length),
+  }));
+  json(res, { total: items.length, weEverAskedToSend: items.some(i => i.weAskedToSend), items });
+});
+
 // GET /api/clients — רשימת לקוחות (fresh=1 מרענן מחשבונית ירוקה)
 add('GET', /^\/api\/clients$/, async (req, res, _p, q) => {
   if (q.fresh) greenInvoice.clearDataCache();

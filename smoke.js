@@ -1342,6 +1342,24 @@ check('מטמון: לשונית מצטיירת מיד מהמטמון ומתרע�
   return true;
 });
 
+check('הפקת מסמך אינה מבקשת מחשבונית ירוקה לשלוח ללקוח', () => {
+  // המשתמש דיווח שמסמך נשלח ללקוח למרות שלא סימן שליחה. הבדיקה נועלת את הצד
+  // שלנו: הגוף שנשלח ל-POST /documents מקבל emails רק כששניהם נכונים.
+  const gi = fs.readFileSync('greenInvoice.js', 'utf8');
+  const body = gi.slice(gi.indexOf('function documentBody'), gi.indexOf('export async function createDocument'));
+  const mails = [...body.matchAll(/body\.emails\s*=/g)];
+  if (mails.length !== 1) throw new Error(`יש ${mails.length} מקומות שקובעים emails בגוף המסמך`);
+  if (!/if \(sendEmail && email\) body\.emails =/.test(body)) throw new Error('emails נקבע בלי תנאי שליחה מפורש');
+  // ואף ראוט הפקה אינו מעביר sendEmail לחשבונית ירוקה
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const leaks = [...srv.matchAll(/opts\.sendEmail\s*=|sendEmail:\s*Boolean\(body\.sendEmail\)/g)];
+  if (leaks.length) throw new Error('ראוט מעביר בקשת שליחה לחשבונית ירוקה');
+  // האבחון קיים, אחרת אין דרך להוכיח מי שלח
+  if (!/api\\\/diag\\\/doc-payloads/.test(srv)) throw new Error('ראוט האבחון חסר');
+  if (!/recordDocBody\(_body\)/.test(gi)) throw new Error('גוף הבקשה אינו מתועד');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

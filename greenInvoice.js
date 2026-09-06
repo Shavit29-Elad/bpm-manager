@@ -217,8 +217,21 @@ function documentBody({ client, items, type, remarks, description, dueDate, date
 }
 
 // יצירת מסמך גנרי (עסקה/מס/מס-קבלה/קבלה) והחזרת גרסה ממופה
+// תיעוד של הבקשות האחרונות ליצירת מסמך. נועד לשאלה אחת: כשמסמך נשלח ללקוח
+// בלי שביקשנו, האם אנחנו ביקשנו מחשבונית ירוקה לשלוח, או שהיא שלחה מעצמה.
+// בלי זה אפשר רק להסיק מהקוד; עם זה רואים בדיוק מה נשלח.
+export const lastDocBodies = [];
+export function recordDocBody(body) {
+  try {
+    lastDocBodies.unshift({ at: new Date().toISOString(), body: JSON.parse(JSON.stringify(body)) });
+    if (lastDocBodies.length > 20) lastDocBodies.length = 20;
+  } catch { /* תיעוד בלבד — לא חוסם הפקה */ }
+}
+
 export async function createDocument(opts) {
-  const raw = await api('/documents', { method: 'POST', body: documentBody(opts) });
+  const _body = documentBody(opts);
+  recordDocBody(_body);
+  const raw = await api('/documents', { method: 'POST', body: _body });
   clearDataCache();
   const url = (raw.url && (raw.url.he || raw.url.origin || raw.url.pdf)) || (typeof raw.url === 'string' ? raw.url : null);
   return { id: raw.id, number: raw.number, type: raw.type, url, raw };
