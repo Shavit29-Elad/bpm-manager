@@ -3363,7 +3363,7 @@ async function resolveConvertedInvoice(db, cid, proforma, income) {
 // מסמך המקור. התוצאה: אירוע שהוצאה עליו חשבונית נראה כאילו אין לו חיוב.
 // התיקון קדימה נעשה בקוד; כאן נסרקים המסמכים שכבר הופקו. הסריקה רק מוסיפה
 // קישורים — היא לעולם לא מוחקת ולא משנה מסמך קיים.
-const BACKFILL_VERSION = 2;
+const BACKFILL_VERSION = 3;
 const FOLLOWUP_SRC_TYPES = [10, 300];        // מקור אפשרי: הצעת מחיר או חשבון עסקה
 const FOLLOWUP_DERIVED_TYPES = [300, 305, 320];
 
@@ -3415,21 +3415,24 @@ async function runFollowupBackfill(cid) {
 
   let lookups = 40;                       // תקציב קריאות פרטניות — לא מציפים את ה-API בעלייה
   let linked = 0;
+  const stat = { docsInRange: list.length, listHits: 0, nameMatches: 0, confirmed: 0, noName: 0, from, to };
   for (const { ev, src } of cands) {
     const sid = String(src.id);
     const points = (ids) => (ids || []).some(x => String(x) === sid);
     let hit = list.find(d => points(d.linkedDocumentIds));
+    if (hit) stat.listHits++;
     if (!hit) {
       // ה-API לא תמיד מחזיר את הקישור ברשימה. מצמצמים לפי לקוח וסכום, ומאמתים
       // מול המסמך עצמו — צמצום הוא ניחוש, האימות הוא ודאות.
       const amt = Number(src.amount) || 0;
       const cands2 = list.filter(d => sameClientName(d.clientName, ev.clientName)
         && (!amt || Math.abs((Number(d.amount) || 0) - amt) <= Math.max(3, amt * 0.004)));
+      if (!cands2.length) stat.noName++; else stat.nameMatches++;
       for (const c of cands2.slice(0, 3)) {
         if (lookups <= 0) break;
         lookups--;
         const raw = await greenInvoice.getDocument(c.id).catch(() => null);
-        if (raw && points(raw.linkedDocumentIds)) { hit = { ...c, ...raw }; break; }
+        if (raw && points(raw.linkedDocumentIds)) { hit = { ...c, ...raw }; stat.confirmed++; break; }
       }
     }
     if (!hit) continue;
@@ -3441,7 +3444,7 @@ async function runFollowupBackfill(cid) {
     if (linkFollowupToEvents(db, cid, new Set([sid, String(src.number || '')].filter(Boolean)),
         { id: hit.id, number: hit.number }, Number(hit.type))) { save(db); linked++; }
   }
-  return { checked: cands.length, linked };
+  return { checked: cands.length, linked, stat };
 }
 
 async function runAllFollowupBackfills() {
@@ -3459,8 +3462,8 @@ async function runAllFollowupBackfills() {
     cur.followupBackfill = cur.followupBackfill || {};
     cur.followupBackfill[cid] = { version: BACKFILL_VERSION, at: new Date().toISOString(), ...res };
     save(cur); changed = true;
-    if (res && res.linked) console.log(`תיקון מסמכי המשך (${cid}): קושרו ${res.linked} מסמכים מתוך ${res.checked} אירועים שנבדקו`);
-    else if (res && !res.skipped) console.log(`תיקון מסמכי המשך (${cid}): אין מה לתקן` + (res.diag ? ` · ${JSON.stringify(res.diag)}` : ''));
+    if (res && res.linked) console.log(`תיקון מסמכי המשך (${cid}): קושרו ${res.linked} מסמכים מתוך ${res.checked} אירועים שנבדקו · ${JSON.stringify(res.stat || {})}`);
+    else if (res && !res.skipped) console.log(`תיקון מסמכי המשך (${cid}): לא קושר דבר · נבדקו ${res.checked || 0}` + (res.diag ? ` · ${JSON.stringify(res.diag)}` : '') + (res.stat ? ` · ${JSON.stringify(res.stat)}` : ''));
   }
   return changed;
 }
