@@ -15,6 +15,9 @@ const app = fs.readFileSync('app.js', 'utf8');
 const srv = fs.readFileSync('server.js', 'utf8');
 // בדיקות אסינכרוניות נאספות כאן ומאומתות בסוף, אחרי כל הבדיקות הסינכרוניות
 const pendingAsync = [];
+// אותו נרמול שבקוד — לבדיקות שמצריכות אותו כתלות
+const giLinkedIds = (d) => [...new Set([].concat(d?.linkedDocuments || [], d?.linkedDocumentIds || [])
+  .map(x => (x && typeof x === 'object') ? x.id : x).filter(x => x != null && String(x)).map(String))];
 const html = fs.readFileSync('index.html', 'utf8');
 const css = fs.readFileSync('styles.css', 'utf8');
 
@@ -332,15 +335,25 @@ check('לשונית האירועים מקבלת את סטטוס התשלום מ�
   // חיפוש בכיוון ההפוך — מה מקושר לחשבון העסקה — לא מוצא כלום.
   if (!/pointsAtSource/.test(chain)) throw new Error('החיפוש בכיוון ההפוך — לא ימצא מסמך המשך');
   const iDirect = chain.indexOf('const direct = list.find');
-  const iConfirm = chain.indexOf('pointsAtSource(raw.linkedDocumentIds)');
+  const iConfirm = chain.indexOf('pointsAtSource(greenInvoice.linkedIdsOf(raw))');
   if (iDirect < 0 || iConfirm < 0) throw new Error('חסר אחד ממסלולי האיתור');
   if (iDirect > iConfirm) throw new Error('המסלול היקר רץ לפני הזול');
   // צמצום לפי לקוח/סכום הוא ניחוש — האימות מול הקישור הוא מה שמכריע
   const confirmBlock = chain.slice(chain.indexOf('const cands ='), chain.indexOf('// 3)'));
-  if (!/pointsAtSource\(raw\.linkedDocumentIds\)/.test(confirmBlock))
+  if (!/pointsAtSource\(greenInvoice\.linkedIdsOf\(raw\)\)/.test(confirmBlock))
     throw new Error('מסמך נבחר לפי לקוח וסכום בלי אימות הקישור');
-  if (!/linkedDocumentIds: Array\.isArray\(d\.linkedDocumentIds\)/.test(fs.readFileSync('greenInvoice.js', 'utf8')))
+  // חשבונית ירוקה מחזירה linkedDocuments (אובייקטים), ושולחים לה linkedDocumentIds.
+  // קריאת שם השדה של הבקשה בתוך התשובה החזירה שרשרת ריקה תמיד.
+  const giSrc = fs.readFileSync('greenInvoice.js', 'utf8');
+  if (!/linkedDocumentIds: linkedIdsOf\(d\)/.test(giSrc))
     throw new Error('רשימת המסמכים לא נושאת את הקישור');
+  const norm = giSrc.slice(giSrc.indexOf('export function linkedIdsOf'), giSrc.indexOf('function mapDoc'));
+  if (!/linkedDocuments/.test(norm)) throw new Error('הנרמול אינו קורא את linkedDocuments');
+  const ids = new Function(norm.replace('export function', 'function') + '\nreturn linkedIdsOf;')();
+  const got = ids({ linkedDocuments: [{ id: 'a', type: 300 }, { id: 'b' }] });
+  if (got.join(',') !== 'a,b') throw new Error('נרמול linkedDocuments נכשל: ' + got);
+  if (ids({ linkedDocumentIds: ['c'] }).join(',') !== 'c') throw new Error('נרמול linkedDocumentIds נכשל');
+  if (ids({}).length) throw new Error('מסמך בלי קישורים החזיר ערכים');
   if (!/buildBankPaidMap\(db, cid\)/.test(srv)) throw new Error('הראוט לא משתמש במפת הבנק');
   if (/clientPaid: eventClientPaid\(e, bankPaid, openNums\)\s*\}\)\);/.test(srv))
     throw new Error('דורס את clientPaid — שדה בוליאני קיים על אירוע שמור');
@@ -1423,7 +1436,7 @@ check('תיקון רטרואקטיבי: מוצא את הנגזר כששאילת�
     return runFollowupBackfill;
   `)({
     giEnabled: () => true,
-    greenInvoice: { haveCredentials: () => true, incomeForRange: async () => ({ docs: list }),
+    greenInvoice: { linkedIdsOf: giLinkedIds, haveCredentials: () => true, incomeForRange: async () => ({ docs: list }),
       getDocument: async (id) => { calls++; return full[id] || list.find(d => d.id === id) || null; } },
     load: () => db, save: (x) => { db = x; },
     shiftISODays: (iso, d) => { const t = new Date(iso); t.setDate(t.getDate() + d); return t.toISOString().slice(0, 10); },
@@ -1476,7 +1489,7 @@ check('תיקון רטרואקטיבי: מקשר מסמכי המשך שלא קו
     return { runFollowupBackfill, backfillCandidates };
   `)({
     giEnabled: () => true,
-    greenInvoice: gi,
+    greenInvoice: Object.assign({ linkedIdsOf: giLinkedIds }, gi),
     load: () => db,
     save: (x) => { db = x; },
     shiftISODays: (iso, d) => { const t = new Date(iso); t.setDate(t.getDate() + d); return t.toISOString().slice(0, 10); },

@@ -3345,11 +3345,11 @@ async function resolveConvertedInvoice(db, cid, proforma, income) {
       && (!amt || Math.abs((Number(d.amount) || 0) - amt) <= Math.max(3, amt * 0.004)));
     for (const c of cands.slice(0, 4)) {
       const raw = await greenInvoice.getDocument(c.id).catch(() => null);
-      if (raw && pointsAtSource(raw.linkedDocumentIds)) return remember(pack({ ...c, ...raw, url: c.url }));
+      if (raw && pointsAtSource(greenInvoice.linkedIdsOf(raw))) return remember(pack({ ...c, ...raw, url: c.url }));
     }
     // 3) גיבוי: ייתכן שהקישור דו־כיווני ומופיע דווקא על חשבון העסקה
     const src = await greenInvoice.getDocument(pid).catch(() => null);
-    for (const id of ((src && src.linkedDocumentIds) || [])) {
+    for (const id of greenInvoice.linkedIdsOf(src)) {
       if (String(id) === pid) continue;
       const d = list.find(x => String(x.id) === String(id)) || await greenInvoice.getDocument(id).catch(() => null);
       if (d && [305, 320].includes(Number(d.type))) return remember(pack(d));
@@ -3363,7 +3363,7 @@ async function resolveConvertedInvoice(db, cid, proforma, income) {
 // מסמך המקור. התוצאה: אירוע שהוצאה עליו חשבונית נראה כאילו אין לו חיוב.
 // התיקון קדימה נעשה בקוד; כאן נסרקים המסמכים שכבר הופקו. הסריקה רק מוסיפה
 // קישורים — היא לעולם לא מוחקת ולא משנה מסמך קיים.
-const BACKFILL_VERSION = 6;
+const BACKFILL_VERSION = 7;
 const FOLLOWUP_SRC_TYPES = [10, 300];        // מקור אפשרי: הצעת מחיר או חשבון עסקה
 const FOLLOWUP_DERIVED_TYPES = [300, 305, 320];
 
@@ -3434,7 +3434,7 @@ async function runFollowupBackfill(cid) {
       console.log(`מבנה מסמך (${cid}, סוג ${raw.type}): שדות=[${keys.join(',')}]`);
       if (linkish.length) console.log(`  שדות קישור אפשריים: ${linkish.join(' | ')}`);
     }
-    for (const id of ((raw && raw.linkedDocumentIds) || [])) {
+    for (const id of greenInvoice.linkedIdsOf(raw)) {
       if (String(id) === String(d.id)) continue;
       stat.links++;
       if (!bySource.has(String(id))) bySource.set(String(id), d);

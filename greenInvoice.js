@@ -318,6 +318,22 @@ const VAT_RATE = Number(process.env.VAT_RATE) || 0.18;
 const VAT_DIV = 1 + VAT_RATE;
 
 // מיפוי מסמך לתצוגה, כולל פירוק מע"מ (הסכום בחשבונית ירוקה כולל מע"מ)
+// חשבונית ירוקה מחזירה את שרשרת המסמכים בשדה linkedDocuments — מערך אובייקטים
+// {id,type,number,...} על המסמך הנגזר, המצביע למקור. בבקשת היצירה השדה נקרא
+// linkedDocumentIds, ומהשוני הזה נולד באג: קראנו בתשובה את שם השדה של הבקשה,
+// ולכן כל שרשרת מסמכים נראתה ריקה. כאן שני השמות מנורמלים למערך מזהים.
+export function linkedIdsOf(d) {
+  const out = [];
+  const push = (x) => {
+    if (x == null) return;
+    const id = (typeof x === 'object') ? x.id : x;
+    if (id != null && String(id)) out.push(String(id));
+  };
+  if (Array.isArray(d?.linkedDocuments)) d.linkedDocuments.forEach(push);
+  if (Array.isArray(d?.linkedDocumentIds)) d.linkedDocumentIds.forEach(push);
+  return [...new Set(out)];
+}
+
 function mapDoc(d) {
   const amount = num(d.amount ?? d.total ?? d.sum); // כולל מע"מ
   const vat = d.vat != null ? num(d.vat) : amount - amount / VAT_DIV; // אם לא סופק — לפי שיעור המע"מ המוגדר
@@ -332,10 +348,10 @@ function mapDoc(d) {
     clientName: d.client?.name || d.clientName || d.client_name || '—',
     // הקישור לשרשרת נשמר על המסמך הנגזר ומצביע למקור — כך אפשר למצוא מסמך המשך
     // בלי קריאה נפרדת לכל מסמך. אם ה-API לא מחזיר את השדה ברשימה, נשאר מערך ריק.
-    linkedDocumentIds: Array.isArray(d.linkedDocumentIds) ? d.linkedDocumentIds.map(String) : [],
+    linkedDocumentIds: linkedIdsOf(d),
     // הקישור לשרשרת נשמר על המסמך הנגזר ומצביע למקור — כך אפשר למצוא מסמך המשך
     // בלי קריאה נפרדת לכל מסמך. אם ה-API לא מחזיר את השדה ברשימה, נשאר מערך ריק.
-    linkedDocumentIds: Array.isArray(d.linkedDocumentIds) ? d.linkedDocumentIds.map(String) : [],
+    linkedDocumentIds: linkedIdsOf(d),
     url: (d.url && (d.url.he || d.url.origin || d.url.pdf)) || (typeof d.url === 'string' ? d.url : null),
     amountDue: d.amountDue,
   };
