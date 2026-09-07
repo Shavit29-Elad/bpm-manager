@@ -1643,6 +1643,41 @@ check('יומית וחצי מתפרקת לתשלום ובונוס גם בהגד�
   return true;
 });
 
+check('תצוגת חיוב — החלונית נבנית ומציגה את מסמכי האירוע', () => {
+  // ממסך הספקים, כשכתוב "ממתין לתשלום מהלקוח", צריך להגיע לחשבונית עצמה.
+  const src = app.slice(app.indexOf('window.openBillingView'), app.indexOf('function clientPaidBadge'));
+  let captured = '', url = '';
+  const stubs = `
+    const money=(n)=>String(n), escapeHtml=(x)=>String(x==null?'':x), ddmy=(d)=>String(d||'');
+    const DOC_TYPE_SHORT = { 300: 'חשבון עסקה', 305: 'חשבונית מס', 330: 'זיכוי' };
+    const api = (p) => { url = p; return Promise.resolve(payload); };
+    const document = { getElementById: () => null, body: { appendChild(){} },
+      createElement: () => ({ classList:{add(){},remove(){}}, style:{}, set innerHTML(v){ captured = v; }, get innerHTML(){ return captured; } }) };
+    const window = {};
+  `;
+  const build = (payload) => new Function('payload', `${stubs}\n${src}\nreturn window.openBillingView('ev1').then(() => [captured, url]);`)(payload);
+
+  return build({ ok: true, eventId: 'ev1', clientName: 'לקוח א', artist: 'אמן', date: '2026-08-20', amount: 5000,
+    docs: [{ id: 'd1', number: 40468, type: 300, credit: false, converted: false, credited: false, amount: 5000 },
+           { id: 'd2', number: 70099, type: 330, credit: true, amount: 1000 }] }).then(([html, u]) => {
+    if (!/\/api\/events\/ev1\/billing/.test(u)) throw new Error('נקרא ראוט שגוי: ' + u);
+    if (!/40468/.test(html)) throw new Error('החשבונית לא מוצגת');
+    if (!/previewLinkedDoc\('d1'/.test(html)) throw new Error('אין כפתור צפייה למסמך');
+    if (!/זיכוי/.test(html)) throw new Error('מצב הזיכוי לא מסומן');
+    if (!/לקוח א/.test(html)) throw new Error('שם הלקוח חסר');
+    // מסמך שהועלה ידנית נפתח מהקבצים ולא מחשבונית ירוקה
+    return build({ ok: true, eventId: 'ev1', clientName: 'ל', amount: 0,
+      docs: [{ id: 'f1', number: 5, type: 305, uploaded: true }] }).then(([h2]) => {
+      if (!/api\/files\/f1/.test(h2)) throw new Error('מסמך שהועלה לא נפתח מהקבצים');
+      // ואירוע בלי מסמכים מסביר מה לעשות
+      return build({ ok: true, eventId: 'ev1', clientName: 'ל', amount: 0, docs: [] }).then(([h3]) => {
+        if (!/שייך מסמכים/.test(h3)) throw new Error('אין הכוונה כשאין מסמכים');
+        return true;
+      });
+    });
+  });
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

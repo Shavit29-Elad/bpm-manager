@@ -4715,6 +4715,50 @@ async function renderContractors(c) {
   }
   kickDraftsAi(); // AI קורא את הטיוטות ברקע כדי שהכרטיסים יציגו ספק/סכום/תיאור והמסך יהיה מוכן מראש
 }
+// "תצוגת חיוב" — המסמכים שהופקו ללקוח עבור האירוע, מתוך מסך הספקים.
+// בלי זה, כשכתוב "ממתין לתשלום מהלקוח", אין דרך להגיע מכאן לחשבונית עצמה.
+window.openBillingView = async (eventId) => {
+  let m = document.getElementById('billViewModal');
+  if (!m) { m = document.createElement('div'); m.id = 'billViewModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.style.zIndex = '300';
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  const close = `<div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('billViewModal').classList.add('hidden')">סגור</button></div>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(620px,95vw)"><div class="empty">טוען…</div></div>`;
+  const r = await api(`/api/events/${encodeURIComponent(eventId)}/billing`).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || r.error) {
+    m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">${escapeHtml(String((r && r.error) || 'שגיאה'))}</div>${close}</div>`;
+    return;
+  }
+  const head = `<h3 style="margin:0 0 2px">🧾 תצוגת חיוב</h3>
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px">${escapeHtml(r.clientName || 'ללא לקוח')}${r.artist ? ` · ${escapeHtml(r.artist)}` : ''}${r.date ? ` · ${ddmy(r.date)}` : ''} · סכום האירוע ${money(r.amount)} ללא מע״מ</div>`;
+  if (!(r.docs || []).length) {
+    m.innerHTML = `<div class="modal-card" style="width:min(520px,94vw)">${head}
+      <div class="empty">לא שויכה לאירוע הזה שום חשבונית.</div>
+      <div class="muted" style="font-size:12.5px">אפשר לשייך מסמך קיים מלשונית האירועים, בכפתור 🔗 שייך מסמכים.</div>${close}</div>`;
+    return;
+  }
+  const rows = r.docs.map(d => {
+    const name = DOC_TYPE_SHORT[d.type] || 'מסמך';
+    const state = d.credit ? '<span class="tag" style="background:#fde8e8;color:#b42318">זיכוי</span>'
+      : d.converted ? '<span class="tag" style="background:#eef0fb;color:#5b6180">הומר למסמך המשך</span>'
+      : d.credited ? '<span class="tag" style="background:#fff4e5;color:#a15c00">זוכה</span>'
+      : '<span class="tag invoiced">פעיל</span>';
+    const view = d.uploaded
+      ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="previewDoc('/api/files/${encodeURIComponent(d.id)}')">👁 לצפייה</button>`
+      : `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="previewLinkedDoc('${d.id}',this,'${r.eventId}')">👁 לצפייה</button>`;
+    return `<tr><td style="white-space:nowrap">${escapeHtml(name)} ${d.number != null ? '#' + escapeHtml(String(d.number)) : ''}</td>
+      <td>${state}</td>
+      <td style="text-align:left;white-space:nowrap">${d.amount != null ? money(d.amount) : '<span class="muted">—</span>'}</td>
+      <td style="text-align:left">${view}</td></tr>`;
+  }).join('');
+  m.innerHTML = `<div class="modal-card" style="width:min(620px,95vw)">${head}
+    <table class="tbl no-cardify" style="width:100%">
+      <thead><tr><th>מסמך</th><th>מצב</th><th style="text-align:left">סכום</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>${close}</div>`;
+};
+
 // חיווי "האם הלקוח שילם" על האירוע (לפי בנק / חשבונית ירוקה) — מוצג בשורת האירוע ב"קבלנים לתשלום"
 function clientPaidBadge(cp) {
   cp = cp || { status: 'unknown' };
@@ -4757,6 +4801,7 @@ function contractorCard(x) {
       <span class="muted" style="white-space:nowrap">${ddmy(ev.date)}</span>
       <span style="flex:1;min-width:0">${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''}</span>
       ${clientPaidBadge(cp)}
+      <button class="btn ghost" style="padding:2px 9px;font-size:11.5px;white-space:nowrap" title="החשבונית שהופקה ללקוח עבור האירוע הזה" onclick="openBillingView('${ev.eventId}')">🧾 תצוגת חיוב</button>
       <span style="text-align:left;white-space:nowrap"><span style="font-weight:600">${money(ev.amount)}</span> <span class="muted" style="font-size:11px">ללא מע״מ</span><br><span class="muted" style="font-size:11px">כולל מע״מ ${money(ev.amount * (1 + VAT_RATE))}</span></span>
       <button class="btn ${ev.paid ? 'success' : 'ghost'}" style="padding:3px 10px;font-size:12px" onclick="toggleContractorPaid('${ev.eventId}',${ev.index},${ev.paid ? 0 : 1},'${cp.status}')">${ev.paid ? 'בטל תשלום' : 'שולם'}</button>
     </div>`;

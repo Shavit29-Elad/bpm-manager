@@ -5082,6 +5082,24 @@ add('DELETE', /^\/api\/business-profile\/file$/, async (req, res, _p, q) => {
   json(res, { ok: true });
 });
 
+// GET /api/events/:id/billing — מסמכי החיוב של האירוע ללקוח.
+// נדרש ממסך הספקים: כשכתוב "ממתין לתשלום מהלקוח", צריך להגיע משם לחשבונית
+// עצמה בלי לחפש אותה בלשונית אחרת.
+add('GET', /^\/api\/events\/([^/]+)\/billing$/, (req, res, params, q) => {
+  const db = load(), cid = reqCompany(q);
+  const ev = (db.events || []).find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'האירוע לא נמצא' }, 404);
+  if (!ownedBy(ev, cid)) return wrongCompany(res, 'האירוע');
+  const BILL = [300, 305, 320, 400, 330];
+  const docs = (ev.linkedDocs || [])
+    .filter(d => d && d.id && BILL.includes(Number(d.type)))
+    .map(d => ({ id: d.id, number: d.number != null ? d.number : null, type: Number(d.type),
+      uploaded: !!d.uploaded, converted: !!d.converted, credit: !!(d.credit || Number(d.type) === 330),
+      credited: !!d.credited, amount: d.amount != null ? Number(d.amount) : null }));
+  json(res, { ok: true, eventId: ev.id, clientName: ev.clientName || '', artist: ev.artist || '',
+    location: ev.location || '', date: ev.date || ev.dateRaw || null, amount: eventTotal(ev), docs });
+});
+
 // GET /api/employees/:id/jobs?month= — עבודות של עובד לחודש (מתוך חישוב השכר)
 add('GET', /^\/api\/employees\/([^/]+)\/jobs$/, (req, res, params, q) => {
   const db = load();
