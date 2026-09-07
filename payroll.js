@@ -5,6 +5,9 @@
 
 // מקבל אירועים + רשימת עובדים (עם שכר בסיס), מחזיר סיכום לכל עובד לחודש.
 // בסיס למשמרת = שכר בסיס יומי × פקטור (יומית=1, כפולה=2, חצי=0.5). ניתן לדרוס עם w.rate.
+// פקטורים שמוצגים כיומית + בונוס. המפתח הוא הפקטור, והבונוס הוא ההפרש ממנו ל-1.
+export const FACTOR_LABELS = { 1.5: 'יומית וחצי', 2: 'יומית כפולה' };
+
 export function employeePayForMonth(events, month /* yyyy-mm */, employees = []) {
   const rateOf = (name) => {
     const e = (employees || []).find(x => x.name === name);
@@ -26,9 +29,20 @@ export function employeePayForMonth(events, month /* yyyy-mm */, employees = [])
       }
       const rate = rateOf(name);
       const factor = w.factor != null && w.factor !== '' ? Number(w.factor) : 1;
-      const base = (w.rate != null && w.rate !== '' ? Number(w.rate) : rate * factor) || 0;
+      const explicitRate = w.rate != null && w.rate !== '';
+      let base = (explicitRate ? Number(w.rate) : rate * factor) || 0;
       // בונוס = סכום קבוע + (שבר יומית × שכר בסיס). "בונוס חצי יומית" → bonusFactor 0.5
-      const bonus = (Number(w.bonus) || 0) + (Number(w.bonusFactor) || 0) * rate;
+      let bonus = (Number(w.bonus) || 0) + (Number(w.bonusFactor) || 0) * rate;
+      // יומית וחצי/כפולה מוצגות כיומית מלאה + בונוס על התוספת, כמו בגיליון.
+      // הסכום הכולל אינו משתנה — רק הפירוק. עד עכשיו הפירוק נעשה רק כשהביטוי
+      // זוהה בהערת האירוע; הגדרה ידנית של הפקטור הציגה סכום אחד בלי בונוס.
+      // שכר שהוזן ידנית למשמרת הוא סכום מפורש ואינו מפורק.
+      let factorLabel = null;
+      if (!explicitRate && rate > 0 && FACTOR_LABELS[factor]) {
+        base = rate;
+        bonus += rate * (factor - 1);
+        factorLabel = FACTOR_LABELS[factor];
+      }
       const food = Number(w.food) || 0;
       // נסיעות: אם הוזן ידנית במשמרת — משתמשים בו; אחרת ברירת המחדל מכרטיס העובד
       const travel = (w.travel != null && w.travel !== '') ? Number(w.travel) || 0 : travelOf(name);
@@ -38,7 +52,8 @@ export function employeePayForMonth(events, month /* yyyy-mm */, employees = [])
       byEmployee[name].travel += travel;
       byEmployee[name].total += base + bonus + food + travel;
       byEmployee[name].shifts.push({
-        eventId: ev.id, date: ev.date, artist: ev.artist, location: ev.location || '', factor, base, bonus, food, travel, note: w.note || '',
+        eventId: ev.id, date: ev.date, artist: ev.artist, location: ev.location || '', factor, factorLabel,
+        base, bonus, food, travel, note: w.note || '',
       });
     }
   }
@@ -52,4 +67,4 @@ export function payForEmployee(events, employeeName, month) {
   return employeePayForMonth(events, month).find(e => e.name === employeeName) || null;
 }
 
-export default { employeePayForMonth, payForEmployee };
+export default { employeePayForMonth, payForEmployee, FACTOR_LABELS };

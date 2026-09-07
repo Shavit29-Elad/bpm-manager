@@ -1607,6 +1607,42 @@ check('מסך לד — מחיר בלי כמות נחשב כמות 1', () => {
   return true;
 });
 
+check('יומית וחצי מתפרקת לתשלום ובונוס גם בהגדרה ידנית', async () => {
+  // הפירוק נעשה רק כשהביטוי זוהה בהערת האירוע. הגדרה ידנית של הפקטור הציגה
+  // סכום אחד בלי בונוס, ולכן בטבלת העובד לא נראה מאיפה מגיעה התוספת.
+  const pr = await import('./payroll.js');
+  const mk = (det) => ({ id: 'e1', date: '2026-08-20', artist: 'הופעה', location: 'תל אביב', employeeDetails: [det] });
+  const emps = [{ name: 'כפיר', baseRate: 800 }];
+  const run = (det) => pr.employeePayForMonth([mk(det)], '2026-08', emps)[0];
+
+  const half = run({ name: 'כפיר', factor: 1.5 });
+  const s1 = half.shifts[0];
+  if (s1.base !== 800 || s1.bonus !== 400) throw new Error(`יומית וחצי: תשלום ${s1.base} בונוס ${s1.bonus}`);
+  if (s1.factorLabel !== 'יומית וחצי') throw new Error('חסרה תווית: ' + s1.factorLabel);
+  if (half.total !== 1200) throw new Error('הסכום הכולל השתנה: ' + half.total);
+
+  const dbl = run({ name: 'כפיר', factor: 2 });
+  if (dbl.shifts[0].base !== 800 || dbl.shifts[0].bonus !== 800) throw new Error('כפולה לא התפרקה');
+  if (dbl.total !== 1600) throw new Error('הסכום הכולל של כפולה השתנה: ' + dbl.total);
+
+  // יומית רגילה — בלי תווית ובלי בונוס
+  const one = run({ name: 'כפיר', factor: 1 });
+  if (one.shifts[0].bonus !== 0 || one.shifts[0].factorLabel) throw new Error('יומית רגילה סומנה');
+
+  // שכר שהוזן ידנית למשמרת הוא סכום מפורש — לא מפורק
+  const manual = run({ name: 'כפיר', factor: 1.5, rate: 1000 });
+  if (manual.shifts[0].base !== 1000 || manual.shifts[0].bonus !== 0) throw new Error('שכר ידני פורק בטעות');
+
+  // בונוס קיים אינו נמחק — הוא מצטבר
+  const withBonus = run({ name: 'כפיר', factor: 1.5, bonus: 100 });
+  if (withBonus.shifts[0].bonus !== 500) throw new Error('בונוס קיים נדרס: ' + withBonus.shifts[0].bonus);
+
+  // התווית מגיעה לטבלה במסך
+  if (!/factorLabel: s\.factorLabel/.test(app)) throw new Error('התווית לא מועברת לשורות הדוח');
+  if (!/r\.factorLabel \?/.test(app)) throw new Error('התווית לא מוצגת בשורה');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

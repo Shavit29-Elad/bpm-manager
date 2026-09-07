@@ -6590,7 +6590,7 @@ function openEmpJobsModal(name, r) {
     empTravel: Number(emp.travel) || 0,
     allManual,
     rows: [
-      ...shifts.map(s => ({ eventId: s.eventId, artist: s.artist || '', date: s.date, location: s.location || '', payment: Number(s.base) || 0, bonus: Number(s.bonus) || 0, food: Number(s.food) || 0, travel: Number(s.travel) || 0, note: s.note || '' })),
+      ...shifts.map(s => ({ eventId: s.eventId, artist: s.artist || '', date: s.date, location: s.location || '', payment: Number(s.base) || 0, bonus: Number(s.bonus) || 0, food: Number(s.food) || 0, travel: Number(s.travel) || 0, note: s.note || '', factorLabel: s.factorLabel || null })),
       ...monthManual.map(ml => ({ manual: true, mlId: ml.id || ('ml_' + Math.random().toString(36).slice(2, 8)), eventId: null, artist: ml.artist || '', date: ml.date || '', location: ml.location || '', payment: Number(ml.payment) || 0, bonus: Number(ml.bonus) || 0, food: Number(ml.food) || 0, travel: Number(ml.travel) || 0, note: ml.note || '' })),
     ],
   };
@@ -6631,7 +6631,9 @@ function renderJobsReport() {
         ${rows.map((r, i) => {
           const first = r.manual ? `<button title="מחק שורה ידנית" onclick="delManualLine(${i})" style="border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>` : (i + 1);
           const dateC = r.manual ? cell(inTxt(i, 'date')) : cell(dmy(r.date), 'white-space:nowrap');
-          const artistC = cell(inTxt(i, 'artist') + (r.manual ? ' <span style="font-size:9px;background:#fde68a;color:#92400e;border-radius:4px;padding:1px 4px;white-space:nowrap">ידני</span>' : ''));
+          // תווית "יומית וחצי"/"יומית כפולה" — מסבירה למה יש בונוס בשורה
+          const facTag = r.factorLabel ? ` <span style="font-size:9px;background:#dbeafe;color:#1e40af;border-radius:4px;padding:1px 4px;white-space:nowrap">${escapeHtml(r.factorLabel)}</span>` : '';
+          const artistC = cell(inTxt(i, 'artist') + (r.manual ? ' <span style="font-size:9px;background:#fde68a;color:#92400e;border-radius:4px;padding:1px 4px;white-space:nowrap">ידני</span>' : '') + facTag);
           return `<tr style="${r.manual ? 'background:#fff7ed' : (i % 2 ? 'background:#fafbff' : '')}">${cell(first)}${artistC}${dateC}${cell(inTxt(i, 'location'))}${cell(inNum(i, 'payment'))}${cell(inNum(i, 'bonus'))}${cell(inNum(i, 'food'))}${showTravel ? cell(inNum(i, 'travel')) : ''}${cell(inTxt(i, 'note'))}</tr>`;
         }).join('')}
         <tr>${cell('<b>סה"כ</b>', 'border-top:2px solid #c7cce0;text-align:center')}<td colspan="3" style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td>${cell('<b>' + _nisFmt(sum('payment')) + '</b>', 'border-top:2px solid #c7cce0', 'sumPay')}${cell('<b>' + _nisFmt(sum('bonus')) + '</b>', 'border-top:2px solid #c7cce0', 'sumBonus')}${cell('<b>' + _nisFmt(sum('food')) + '</b>', 'border-top:2px solid #c7cce0', 'sumFood')}${showTravel ? cell('<b>' + _nisFmt(sum('travel')) + '</b>', 'border-top:2px solid #c7cce0', 'sumTravel') : ''}<td style="border:1px solid #d8dced;border-top:2px solid #c7cce0"></td></tr>
