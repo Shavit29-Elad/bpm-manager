@@ -2871,7 +2871,10 @@ window.duplicateEventRow = async (id) => {
 // אירועים מקובצים לפי חודש — כל חודש בטבלה נפרדת עם סיכום
 const VAT_RATE = 0.18; // מע"מ בישראל
 // סכום ברוטו של אירוע (ללא מע"מ) — הגברה+תאורה+סאונד+בקליין+מסך לד(מ'×מחיר)+תוספות
-const evGross = (e) => (Number(e.price) || 0) + (Number(e.priceLighting) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceBackline) || 0) + ((Number(e.ledPricePerMeter) || 0) * (Number(e.ledMeters) || 0)) + (Number(e.priceExtras) || 0);
+// כמות מטרי הלד — מחיר בלי כמות נחשב כמות 1. חייב להיות זהה ל-ledQtyOf שב-invoicing.js,
+// אחרת המסך יראה סכום אחד והחשבונית תופק על אחר.
+const evLedQty = (e) => (Number(e.ledMeters) || 0) || ((Number(e.ledPricePerMeter) || 0) ? 1 : 0);
+const evGross = (e) => (Number(e.price) || 0) + (Number(e.priceLighting) || 0) + (Number(e.priceSound) || 0) + (Number(e.priceBackline) || 0) + ((Number(e.ledPricePerMeter) || 0) * evLedQty(e)) + (Number(e.priceExtras) || 0);
 // ---- מזעור חודשים ברשימת האירועים ----
 // המצב נשמר בדפדפן כדי שיישאר אחרי רינדור מחדש (עריכת אירוע, סינון) וגם אחרי רענון.
 let _evCollapsed = new Set();
@@ -2990,7 +2993,7 @@ function rowEvent(e) {
     <td data-label="זמר">${e.artist || '—'}${(!e.confirmed && e._possibleMatch) ? `<div style="font-size:11px;color:#b45309;margin-top:2px">🟡 אולי כבר קיים במאושרים · ${escapeHtml(e._possibleMatch.why)}${e._possibleMatch.client ? ` · ${escapeHtml(e._possibleMatch.client)}` : ''}</div>` : ''}</td>
     <td data-label="מיקום">${e.location || '—'}</td>
     <td data-label="לקוח">${e.clientName ? escapeHtml(e.clientName) : '<span class="muted">—</span>'}</td>
-    <td data-label="תמחור (ללא מע&quot;מ)">${money(e.price)}${(e.priceLighting || e.priceSound || e.priceBackline || (e.ledMeters && e.ledPricePerMeter) || e.priceExtras) ? `<div class="muted" style="font-size:11px">${e.priceLighting ? `תאורה ${money(e.priceLighting)} · ` : ''}${e.priceSound ? `סאונד ${money(e.priceSound)}` : ''}${e.priceBackline ? ` · בקליין ${money(e.priceBackline)}` : ''}${(e.ledMeters && e.ledPricePerMeter) ? ` · לד ${e.ledMeters}מ׳×${money(e.ledPricePerMeter)}` : ''}${e.priceExtras ? ` · תוספות ${money(e.priceExtras)}` : ''}</div>` : ''}</td>
+    <td data-label="תמחור (ללא מע&quot;מ)">${money(e.price)}${(e.priceLighting || e.priceSound || e.priceBackline || e.ledPricePerMeter || e.priceExtras) ? `<div class="muted" style="font-size:11px">${e.priceLighting ? `תאורה ${money(e.priceLighting)} · ` : ''}${e.priceSound ? `סאונד ${money(e.priceSound)}` : ''}${e.priceBackline ? ` · בקליין ${money(e.priceBackline)}` : ''}${e.ledPricePerMeter ? ` · לד ${evLedQty(e)}מ׳×${money(e.ledPricePerMeter)}` : ''}${e.priceExtras ? ` · תוספות ${money(e.priceExtras)}` : ''}</div>` : ''}</td>
     <td data-label="כולל מע&quot;מ" style="white-space:nowrap;font-weight:600">${money(evGross(e) * (1 + VAT_RATE))}</td>
     <td data-label="עובדים">${(e.employees || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>
     <td data-label="קבלנים">${(e.contractors || []).map(n => `<span class="chip">${n}</span>`).join('') || '—'}</td>

@@ -1581,6 +1581,32 @@ check('סכום הזיכוי נמשך מחשבונית ירוקה לפני הה�
   });
 });
 
+check('מסך לד — מחיר בלי כמות נחשב כמות 1', () => {
+  // הוזן מחיר לד בלי כמות מטרים: השורה נעדרה מהחשבונית, והסכום הכולל של
+  // האירוע יצא נמוך מהמוסכם — בשקט, בלי שום חיווי.
+  const ev = { id: 'e', artist: 'אמן', date: '2026-07-26', ledPricePerMeter: 5000 };
+  if (invMod.eventTotal(ev) !== 5000) throw new Error('סכום האירוע: ' + invMod.eventTotal(ev));
+  const lines = invMod.invoiceItemsFromEvents([ev]);
+  const led = lines.find(l => /מסך לד/.test(l.description));
+  if (!led) throw new Error('שורת הלד לא נכנסה לחשבונית');
+  if (led.quantity !== 1 || led.price !== 5000) throw new Error(`כמות ${led.quantity} מחיר ${led.price}`);
+  // כמות מפורשת גוברת
+  const ev2 = { ...ev, ledMeters: 4 };
+  if (invMod.eventTotal(ev2) !== 20000) throw new Error('כמות מפורשת לא נלקחה: ' + invMod.eventTotal(ev2));
+  // כמות בלי מחיר — אין שורה ואין סכום
+  const ev3 = { id: 'e3', ledMeters: 6 };
+  if (invMod.eventTotal(ev3) !== 0) throw new Error('כמות בלי מחיר יצרה סכום');
+  if (invMod.invoiceItemsFromEvents([ev3]).some(l => /מסך לד/.test(l.description))) throw new Error('כמות בלי מחיר יצרה שורה');
+
+  // המסך והחשבונית חייבים להסכים על אותו סכום
+  const evGrossSrc = app.slice(app.indexOf('const evLedQty ='), app.indexOf('\n', app.indexOf('const evGross =')));
+  const gross = new Function(`${evGrossSrc}\nreturn evGross;`)();
+  for (const t of [ev, ev2, ev3, { ...ev, price: 1200, priceExtras: 300 }]) {
+    if (gross(t) !== invMod.eventTotal(t)) throw new Error(`המסך מראה ${gross(t)} והחשבונית ${invMod.eventTotal(t)}`);
+  }
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

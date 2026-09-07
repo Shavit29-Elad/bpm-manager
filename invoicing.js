@@ -13,8 +13,11 @@ function ddmyDots(iso) {
 }
 const num = (v) => Number(v) || 0;
 
+// כמות מטרי הלד. הוזן מחיר בלי כמות — הכמות היא 1. בלי זה הסכום מתאפס בשקט,
+// השורה נעדרת מהחשבונית, וגם הסכום הכולל של האירוע יוצא נמוך ממה שסוכם.
+function ledQtyOf(ev) { return num(ev.ledMeters) || (num(ev.ledPricePerMeter) ? 1 : 0); }
 // סכום מסך לד = מחיר למ' × כמות מ'
-function ledTotal(ev) { return num(ev.ledPricePerMeter) * num(ev.ledMeters); }
+function ledTotal(ev) { return num(ev.ledPricePerMeter) * ledQtyOf(ev); }
 // סכום כולל של אירוע = הגברה + תאורה + סאונד + בקליין + מסך לד + תוספות (עם נפילה ל-price בלבד)
 export function eventTotal(ev) {
   const parts = num(ev.price) + num(ev.priceLighting) + num(ev.priceSound) + num(ev.priceBackline) + ledTotal(ev) + num(ev.priceExtras);
@@ -41,8 +44,8 @@ export function eventInvoiceLines(ev) {
   if (num(ev.priceSound)) lines.push(line('סאונד', ev.priceSound));
   if (num(ev.priceBackline)) lines.push(line('בקליין', ev.priceBackline));
   // מסך לד — כמות מטרים × מחיר ליחידה (מוצג בחשבונית ככמות × מחיר יחידה)
-  const ledQty = num(ev.ledMeters), ledUnit = num(ev.ledPricePerMeter);
-  if (ledQty && ledUnit) lines.push(line('מסך לד', ledUnit, ledQty));
+  const ledUnit = num(ev.ledPricePerMeter), ledQty = ledQtyOf(ev);
+  if (ledUnit && ledQty) lines.push(line('מסך לד', ledUnit, ledQty));
   if (num(ev.priceExtras)) lines.push(line('תוספות', ev.priceExtras));
   if (!lines.length && eventTotal(ev)) lines.push(line('הגברה', eventTotal(ev)));
   return lines;
