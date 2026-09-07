@@ -1678,6 +1678,25 @@ check('תצוגת חיוב — החלונית נבנית ומציגה את מס�
   });
 });
 
+check('"תצוגת חיוב" מופיע בכל מסך שמציג את חיווי תשלום הלקוח', () => {
+  // הכפתור נוסף תחילה לכרטיס הקבלנים בלבד, ולכן נעדר ממסך "ספקים לתשלום".
+  // עכשיו הוא נבנה בתוך החיווי עצמו — מקום אחד שמשרת את כל המסכים.
+  const src = app.slice(app.indexOf('function clientPaidBadge('), app.indexOf('window.filterReadyToPay'));
+  const fn = new Function('payDateFmt', `${src}\nreturn clientPaidBadge;`)(() => '');
+  for (const st of ['paid', 'charged', 'pending', 'uninvoiced']) {
+    const html = fn({ status: st }, 'ev1');
+    if (!/openBillingView\('ev1'\)/.test(html)) throw new Error(`מצב ${st}: אין כפתור תצוגת חיוב`);
+  }
+  // בלי מזהה אירוע אין כפתור, ובאירוע ללא חיוב גם לא
+  if (/openBillingView/.test(fn({ status: 'pending' }))) throw new Error('כפתור נוצר בלי מזהה אירוע');
+  if (/openBillingView/.test(fn({ status: 'noinvoice' }, 'ev1'))) throw new Error('כפתור נוצר לאירוע ללא חיוב');
+  // ושני המסכים באמת מעבירים מזהה
+  const calls = [...app.matchAll(/clientPaidBadge\(([^)]*)\)/g)].map(m => m[1]).filter(x => !/^cp, eventId$/.test(x));
+  const bad = calls.filter(c => c.split(',').length < 2);
+  if (bad.length) throw new Error('קריאה בלי מזהה אירוע: ' + bad.join(' | '));
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

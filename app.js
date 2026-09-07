@@ -4760,20 +4760,25 @@ window.openBillingView = async (eventId) => {
 };
 
 // חיווי "האם הלקוח שילם" על האירוע (לפי בנק / חשבונית ירוקה) — מוצג בשורת האירוע ב"קבלנים לתשלום"
-function clientPaidBadge(cp) {
+function clientPaidBadge(cp, eventId) {
   cp = cp || { status: 'unknown' };
+  // הכפתור נבנה כאן ולא בכל מסך בנפרד — אחרת הוא מופיע במסך אחד ונעדר באחר,
+  // וזה בדיוק מה שקרה כשהוא נוסף רק לכרטיס הקבלנים.
+  const view = (eventId != null && eventId !== '' && cp.status !== 'noinvoice')
+    ? ` <button class="btn ghost" style="padding:2px 9px;font-size:11.5px;white-space:nowrap" title="החשבונית שהופקה ללקוח עבור האירוע הזה" onclick="openBillingView('${eventId}')">🧾 תצוגת חיוב</button>`
+    : '';
   // ירוק — מס-קבלה/קבלה (320/400) או תשלום שזוהה בבנק
   if (cp.status === 'paid') {
     const d = cp.date ? ' · ' + payDateFmt(cp.date) : '';
     const src = cp.via === 'bank' ? 'זוהה תשלום בבנק'
       : cp.via === 'closed' ? 'החשבונית נסגרה בחשבונית ירוקה — הופקה עליה קבלה. תאריך התשלום אינו ידוע כאן: הקבלה לא הופקה דרך המערכת ואין התאמה בבנק'
       : 'הופקה מס-קבלה/קבלה';
-    return `<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap" title="${src}">🟢 הלקוח שילם${d}</span>`;
+    return `<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap" title="${src}">🟢 הלקוח שילם${d}</span>` + view;
   }
   // צהוב — הופקה חשבונית עסקה/מס (300/305), טרם שולם
-  if (cp.status === 'charged' || cp.status === 'pending') return `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap" title="הופקה חשבונית עסקה/מס — טרם שולם">🟡 ממתין לתשלום מהלקוח</span>`;
+  if (cp.status === 'charged' || cp.status === 'pending') return `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap" title="הופקה חשבונית עסקה/מס — טרם שולם">🟡 ממתין לתשלום מהלקוח</span>` + view;
   // אדום — אין חשבונית (או רק הצעת מחיר)
-  if (cp.status === 'uninvoiced') return `<span class="tag" style="background:#fde8e8;color:#b42318;white-space:nowrap" title="לא הופקה חשבונית עסקה/מס (הצעת מחיר אינה נחשבת)">🔴 טרם חויב</span>`;
+  if (cp.status === 'uninvoiced') return `<span class="tag" style="background:#fde8e8;color:#b42318;white-space:nowrap" title="לא הופקה חשבונית עסקה/מס (הצעת מחיר אינה נחשבת)">🔴 טרם חויב</span>` + view;
   if (cp.status === 'noinvoice') return `<span class="muted" style="font-size:11px;white-space:nowrap">ללא חשבונית</span>`;
   return '';
 }
@@ -4800,8 +4805,7 @@ function contractorCard(x) {
       <span style="width:28px;text-align:center">${sel}</span>
       <span class="muted" style="white-space:nowrap">${ddmy(ev.date)}</span>
       <span style="flex:1;min-width:0">${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''}</span>
-      ${clientPaidBadge(cp)}
-      <button class="btn ghost" style="padding:2px 9px;font-size:11.5px;white-space:nowrap" title="החשבונית שהופקה ללקוח עבור האירוע הזה" onclick="openBillingView('${ev.eventId}')">🧾 תצוגת חיוב</button>
+      ${clientPaidBadge(cp, ev.eventId)}
       <span style="text-align:left;white-space:nowrap"><span style="font-weight:600">${money(ev.amount)}</span> <span class="muted" style="font-size:11px">ללא מע״מ</span><br><span class="muted" style="font-size:11px">כולל מע״מ ${money(ev.amount * (1 + VAT_RATE))}</span></span>
       <button class="btn ${ev.paid ? 'success' : 'ghost'}" style="padding:3px 10px;font-size:12px" onclick="toggleContractorPaid('${ev.eventId}',${ev.index},${ev.paid ? 0 : 1},'${cp.status}')">${ev.paid ? 'בטל תשלום' : 'שולם'}</button>
     </div>`;
@@ -5184,7 +5188,7 @@ function supplierPayablesSection(list) {
     ${p.description ? `<div style="font-size:12.5px;margin:5px 0 0;white-space:pre-wrap;word-break:break-word"><span class="muted">תיאור:</span> ${escapeHtml(p.description)}</div>` : ''}
     ${(p.coveredEvents && p.coveredEvents.length) ? `<div style="margin:7px 0 0;padding:7px 9px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;font-size:12px">
       <div class="muted" style="font-weight:600;margin-bottom:3px">📋 פירוט אירועים (${p.coveredEvents.length}):</div>
-      ${p.coveredEvents.slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || ''))).map(e => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0;border-top:1px dashed var(--line)"><span style="flex:1;min-width:90px">${ddmy(e.date)}${e.artist ? ` · ${escapeHtml(e.artist)}` : ''}${e.location ? ` · ${escapeHtml(e.location)}` : ''}</span>${clientPaidBadge(e.clientPaid)}${e.supplierPaid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap">✅ שולם לספק</span>' : `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap">⏳ טרם שולם לספק</span>${e.eventId != null ? `<button class="btn ghost" style="padding:1px 7px;font-size:11px;color:var(--accent2);white-space:nowrap" onclick="markSupplierPaidEvent('${e.eventId}',${e.index},this)" title="סימון ידני: שילמת לספק בפועל (מחוץ למעקב הבנק)">✓ סמן ששולם ידנית</button>` : ''}${_canGoToEvent(e) ? `<button class="btn ghost" style="padding:1px 8px;font-size:11px;white-space:nowrap" onclick="goToEventFromPayable('${e.eventId}','${escAttr(String(e.invoice.id))}','${escAttr(String(e.invoice.number || ''))}',${Number(e.invoice.type) || 0},${e.invoice.creditAmount != null ? Number(e.invoice.creditAmount) : 'null'})" title="פתיחת האירוע לעריכה, עם חשבונית הלקוח בצד">↗ מעבר לאירוע</button>` : ''}`}<span style="white-space:nowrap;font-weight:600">${money(e.amount)}</span></div>`).join('')}
+      ${p.coveredEvents.slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || ''))).map(e => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0;border-top:1px dashed var(--line)"><span style="flex:1;min-width:90px">${ddmy(e.date)}${e.artist ? ` · ${escapeHtml(e.artist)}` : ''}${e.location ? ` · ${escapeHtml(e.location)}` : ''}</span>${clientPaidBadge(e.clientPaid, e.eventId)}${e.supplierPaid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33;white-space:nowrap">✅ שולם לספק</span>' : `<span class="tag" style="background:#fff4e5;color:#a15c00;white-space:nowrap">⏳ טרם שולם לספק</span>${e.eventId != null ? `<button class="btn ghost" style="padding:1px 7px;font-size:11px;color:var(--accent2);white-space:nowrap" onclick="markSupplierPaidEvent('${e.eventId}',${e.index},this)" title="סימון ידני: שילמת לספק בפועל (מחוץ למעקב הבנק)">✓ סמן ששולם ידנית</button>` : ''}${_canGoToEvent(e) ? `<button class="btn ghost" style="padding:1px 8px;font-size:11px;white-space:nowrap" onclick="goToEventFromPayable('${e.eventId}','${escAttr(String(e.invoice.id))}','${escAttr(String(e.invoice.number || ''))}',${Number(e.invoice.type) || 0},${e.invoice.creditAmount != null ? Number(e.invoice.creditAmount) : 'null'})" title="פתיחת האירוע לעריכה, עם חשבונית הלקוח בצד">↗ מעבר לאירוע</button>` : ''}`}<span style="white-space:nowrap;font-weight:600">${money(e.amount)}</span></div>`).join('')}
     </div>` : ''}
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:7px">
       <span style="font-size:12.5px">ללא מע"מ: <b>${money(p.amountExcludeVat)}</b></span>
