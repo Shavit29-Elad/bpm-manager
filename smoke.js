@@ -1697,6 +1697,41 @@ check('"תצוגת חיוב" מופיע בכל מסך שמציג את חיווי
   return true;
 });
 
+check('נושא המייל של מסמך שהועלה ידנית נושא סוג ומספר', () => {
+  // אצל אופק רוב המסמכים מועלים ידנית. מסלול השליחה שלהם העביר ערכים ריקים
+  // קבועים, ולכן הנושא יצא "מסמך" בלי סוג המסמך ובלי מספרו.
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const src = srv.slice(srv.indexOf('function uploadedDocMeta'), srv.indexOf('function mailSubjectFor'));
+  const fn = new Function('ownedBy', 'DOC_NAMES_HE', `${src}\nreturn uploadedDocMeta;`)(
+    (r, c) => !r.companyId || r.companyId === c,
+    { 10: 'הצעת מחיר', 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 330: 'חשבונית זיכוי', 400: 'קבלה' });
+  const db = {
+    events: [{ id: 'e1', companyId: 'co_ofek', clientName: 'לקוח א',
+      linkedDocs: [{ id: 'up1', number: 512, type: 305, uploaded: true }] },
+      { id: 'e2', companyId: 'co_bpm', clientName: 'לא רלוונטי',
+      linkedDocs: [{ id: 'up9', number: 999, type: 305, uploaded: true }] }],
+    oldInvoices: [{ id: 'o1', companyId: 'co_ofek', clientName: 'לקוח ב',
+      linkedDocs: [{ id: 'up2', number: 77, type: 300, uploaded: true }] }],
+  };
+  const a = fn(db, 'co_ofek', 'up1');
+  if (a.docType !== 'חשבונית מס' || a.number !== '512' || a.clientName !== 'לקוח א') throw new Error(JSON.stringify(a));
+  const b = fn(db, 'co_ofek', 'up2');
+  if (b.docType !== 'חשבון עסקה' || b.number !== '77') throw new Error('חשבונית ישנה: ' + JSON.stringify(b));
+  // בידוד חברות — מסמך של חברה אחרת אינו נקרא
+  const c = fn(db, 'co_ofek', 'up9');
+  if (c.docType !== 'מסמך' || c.number !== '') throw new Error('זליגה בין חברות: ' + JSON.stringify(c));
+  // מסמך שלא נמצא — נפילה חיננית ולא קריסה
+  const d = fn(db, 'co_ofek', 'לא-קיים');
+  if (d.docType !== 'מסמך') throw new Error('מסמך לא מוכר החזיר ' + d.docType);
+  // ומסלול השליחה באמת משתמש בזה
+  const bStart = srv.indexOf('// מסמך שהועלה ידנית (אינו בחשבונית ירוקה)');
+  if (bStart < 0) throw new Error('מסלול המסמך שהועלה לא נמצא');
+  const branch = srv.slice(bStart, bStart + 1800);
+  if (!/uploadedDocMeta\(_db, _ucid, params\[0\]\)/.test(branch)) throw new Error('מסלול השליחה לא קורא את פרטי המסמך');
+  if (/docType: 'מסמך' \}\)/.test(branch)) throw new Error('נשארו ערכים ריקים קבועים בנושא');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

@@ -2807,8 +2807,13 @@ add('POST', /^\/api\/documents\/([^/]+)\/send$/, async (req, res, params, q, bod
       if (!mailer.companyMailConfigured(creds) && !mailer.mailerConfigured()) return json(res, { error: 'לחברה זו אין חשבון מייל מוגדר — הגדר חשבון מייל בפרטי העסק.' }, 400);
       const content = Buffer.from(String(f.data || ''), 'base64');
       const _ucid = _cid || giCompanyId();
-      const body = mailBodyFor(_db, _ucid, { clientName: '', num: '', docType: 'מסמך' });
-      const subj = mailSubjectFor(_db, _ucid, { clientName: '', num: '', docType: 'מסמך' });
+      // סוג המסמך ומספרו נלקחים מהרשומה שאליה הוא שויך. קודם הועברו ערכים ריקים
+      // קבועים, ולכן נושא המייל יצא "מסמך" בלי סוג ובלי מספר — בדיוק במסמכים
+      // שהועלו ידנית, שהם רוב המסמכים של אופק.
+      const _meta = uploadedDocMeta(_db, _ucid, params[0]);
+      const _mv = { clientName: _meta.clientName, num: _meta.number || '', docType: _meta.docType };
+      const body = mailBodyFor(_db, _ucid, _mv);
+      const subj = mailSubjectFor(_db, _ucid, _mv);
       await sendMailLogged(creds, { __meta: { kind: 'document-client', companyId: _ucid, docId: params[0], ref: f.filename || null }, to: emailsIn, subject: subj, text: body, html: htmlBodyWithSig(_db, _ucid, body), attachments: [{ filename: f.filename || 'document.pdf', content }] });
       return json(res, { ok: true, sentTo: emailsIn, uploaded: true });
     }
@@ -4555,6 +4560,27 @@ function mailBodyFor(db, cid, opts = {}) {
   return `שלום${v.client ? ' ' + v.client : ''},\nמצורף ${v.docType}${v.num ? ' מספר ' + v.num : ''} לעיונכם.\nתודה${v.company ? ', ' + v.company : ''}.`;
 }
 // שורת הנושא של המייל ללקוח — לפי "ניסוח נושא קבוע" של החברה. ריק = ברירת מחדל "חברה | סוג | מס' X".
+// פרטי מסמך שהועלה ידנית — הם אינם בחשבונית ירוקה, ולכן נקראים מהרשומה
+// שאליה שויך: אירוע או חשבונית ישנה. בלי זה אין לנו סוג, מספר ושם לקוח.
+function uploadedDocMeta(db, cid, docId) {
+  const id = String(docId);
+  const find = (arr) => {
+    for (const rec of (arr || [])) {
+      if (!ownedBy(rec, cid)) continue;
+      const d = (rec.linkedDocs || []).find(x => x && String(x.id) === id);
+      if (d) return { d, rec };
+    }
+    return null;
+  };
+  const hit = find(db.events) || find(db.oldInvoices);
+  const d = hit && hit.d, rec = hit && hit.rec;
+  return {
+    docType: (d && DOC_NAMES_HE[Number(d.type)]) || 'מסמך',
+    number: (d && d.number != null) ? String(d.number) : '',
+    clientName: (rec && (rec.clientName || rec.client)) || '',
+  };
+}
+
 function mailSubjectFor(db, cid, opts = {}) {
   const { p, v } = _mailVals(db, cid, opts);
   const tpl = String(p.mailSubjectTemplate || '').trim();
