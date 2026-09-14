@@ -2423,6 +2423,9 @@ add('GET', /^\/api\/documents\/([^/]+)\/lines$/, async (req, res, params) => {
       description: src.description || '',
       remarks: src.remarks || '',
       srcType: src.type, srcNumber: src.number,
+      // סכום המקור כולל מע"מ — משמש להמרת סכומי זיכוי (שמגיעים כולל) לשורות
+      // ללא מע"מ, לפי שיעור המע"מ של המסמך עצמו ולא לפי הנחה
+      srcAmount: src.amount != null ? Number(src.amount) : null,
       lastDocDate,
     });
   } catch (e) { json(res, { error: e.message }, 500); }

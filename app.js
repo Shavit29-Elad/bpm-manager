@@ -1551,6 +1551,20 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
   if (!r || !r.ok) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת השורות: ${escapeHtml(String(r?.error || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">סגור</button></div></div>`; return; }
   const needsPay = DER_PAYMENT_DOCS.has(Number(type));
   const items = (r.items || []).map(it => ({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }));
+  // זיכויים שיצאו על מסמך המקור. בלי זה הקבלה מופקת על הסכום המקורי — המסך
+  // הציג נכון את היתרה אחרי הזיכוי, אבל המסמך עצמו נבנה מהשורות המלאות.
+  // סכומי הזיכוי מגיעים כולל מע"מ; השורות כאן ללא מע"מ, ולכן ממירים לפי יחס
+  // המע"מ של מסמך המקור עצמו — הזיכוי הוא כנגדו ולכן אותו שיעור בדיוק.
+  if (Array.isArray(opts.credits) && opts.credits.length && items.length) {
+    const exSum = items.reduce((a, it) => a + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
+    const incSum = Number(r.srcAmount) || 0;
+    const toEx = (incSum > 0 && exSum > 0) ? (exSum / incSum) : (1 / (1 + VAT_RATE));
+    for (const c of opts.credits) {
+      const inc = Math.abs(Number(c.amount) || 0);
+      if (!inc) continue;
+      items.push({ description: `זיכוי #${c.number || ''}`.trim(), quantity: 1, price: -Math.round(inc * toEx * 100) / 100 });
+    }
+  }
   const date = opts.date || todayIso();
   const isLinked = linked === true || linked === 'true';
   // מסמך המשך: הערות = שורת התייחסות למקור + פרטי חשבון בנק. שכפול: משאירים את הערות המקור.
@@ -8589,7 +8603,7 @@ function bankTr(t) {
       if (u.receipt) return `<span style="white-space:nowrap">קבלה #${u.receipt.number}${act(u.receipt.url, { id: u.receipt.id, number: u.receipt.number, type: 400, clientName: i.clientName })}</span>`;
       if (Number(i.type) === 320) return '<span class="muted" style="font-size:11px">כלול בחשבונית</span>';
       // חשבונית מס (305) ששולמה בבנק אך אין לה קבלה — התראה + כפתור הפקת קבלה מקושרת לתנועה
-      if (Number(i.type) === 305) return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start"><span class="tag" style="background:#fef3c7;color:#92400e;font-size:10px;white-space:nowrap" title="התקבל תשלום בבנק אך עדיין לא הופקה קבלה">💰 התקבל תשלום · חסרה קבלה</span><button class="btn primary" style="padding:2px 9px;font-size:11px;white-space:nowrap" onclick="event.stopPropagation();incProduce('${i.id}',305,'${t.id}',${Number(u.net) || 0},false)" title="הפקת קבלה למסמך זה בחשבונית ירוקה${(u.credits || []).length ? ` — על ${money(u.net)}, הסכום שנותר אחרי הזיכוי${u.credits.length > 1 ? 'ים' : ''}` : ''}">🧾 הפק קבלה${(u.credits || []).length ? ` · ${money(u.net)}` : ''}</button></div>`;
+      if (Number(i.type) === 305) return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start"><span class="tag" style="background:#fef3c7;color:#92400e;font-size:10px;white-space:nowrap" title="התקבל תשלום בבנק אך עדיין לא הופקה קבלה">💰 התקבל תשלום · חסרה קבלה</span><button class="btn primary" style="padding:2px 9px;font-size:11px;white-space:nowrap" onclick="event.stopPropagation();incProduce('${i.id}',305,'${t.id}',${Number(u.net) || 0},false,'${(u.credits || []).map(c => `${c.number || ''}:${Math.abs(Number(c.amount) || 0)}`).join(',')}')" title="הפקת קבלה למסמך זה בחשבונית ירוקה${(u.credits || []).length ? ` — על ${money(u.net)}, הסכום שנותר אחרי הזיכוי${u.credits.length > 1 ? 'ים' : ''}` : ''}">🧾 הפק קבלה${(u.credits || []).length ? ` · ${money(u.net)}` : ''}</button></div>`;
       return '—';
     }));
     invAmt = stack(units.map(u => {
@@ -9035,9 +9049,13 @@ function renderCreateIncome() {
 }
 window.incSearch = (q) => { _incQuery = q || ''; const box = document.getElementById('incList'); if (!box || !_incCtx) return; const { txId } = _incCtx; const tgtName = (s) => DOC_TYPE_SHORT[incTargetFor(s)] || 'מסמך'; const docs = (_incOpenDocs || []).filter(d => !_incQuery || String(d.number || '').includes(_incQuery) || (d.clientName || '').includes(_incQuery)).slice(0, 60); box.innerHTML = docs.map(d => `<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--line)"><span style="flex:1">${DOC_TYPE_SHORT[d.type] || 'מסמך'} #${d.number} · ${escapeHtml(d.clientName || '')} · ${money(Number(d.amountDue ?? d.amount) || 0)}</span><button class="btn ghost" style="padding:3px 10px;font-size:11.5px;white-space:nowrap" onclick="incProduce('${d.id}',${d.type},'${txId}',${_incCtx.X},false)">בחר → ${tgtName(d.type)}</button></div>`).join('') || '<span class="muted">אין תוצאות.</span>'; };
 // הפקת מסמך-המשך מחשבונית פתוחה, עם תאריך+תקבול לפי התנועה, וקישור לבנק
-window.incProduce = (docId, srcType, txId, X, isWh) => {
+window.incProduce = (docId, srcType, txId, X, isWh, creditsStr) => {
   const im = document.getElementById('incModal'); if (im) im.classList.add('hidden');
-  openDeriveEditor(docId, incTargetFor(srcType), true, { date: txIsoDate(txId) || todayIso(), bankReceived: Number(X) || 0, withholding: isWh === true || isWh === 'true', bankTxId: txId, sourceDocId: docId });
+  // "70098:590,70099:9440" → הזיכויים שיצאו על המסמך, כדי שהקבלה תופק על היתרה
+  const credits = String(creditsStr || '').split(',').filter(Boolean).map(x => {
+    const [n, a] = x.split(':'); return { number: n, amount: Number(a) || 0 };
+  }).filter(c => c.amount > 0);
+  openDeriveEditor(docId, incTargetFor(srcType), true, { credits, date: txIsoDate(txId) || todayIso(), bankReceived: Number(X) || 0, withholding: isWh === true || isWh === 'true', bankTxId: txId, sourceDocId: docId });
 };
 // הפקת קבלה לחשבונית מס ששולמה בבנק — תאריך המסמך והתקבול נקבעים אוטומטית לתאריך כניסת הכסף (מגיע מהשרת, ללא תלות ברשימת הבנק שנטענה)
 window.issuePaidReceipt = (docId, paidDate, txId, amount) => {

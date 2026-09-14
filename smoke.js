@@ -1759,6 +1759,40 @@ check('הפקת קבלה בבנק — על הסכום שנותר אחרי הזי
   return true;
 });
 
+check('קבלה מהבנק — שורות הזיכוי מקטינות את סכום המסמך', () => {
+  // הכפתור העביר את הנטו, אבל העורך בנה את המסמך משורות החשבונית המלאה,
+  // ולכן הקבלה יצאה על 61,360 במקום 51,330.
+  const src = app.slice(app.indexOf('  // זיכויים שיצאו על מסמך המקור'), app.indexOf('  const date = opts.date || todayIso();'));
+  const run = (items, credits, srcAmount) => new Function('items', 'opts', 'r', 'VAT_RATE', `${src}\nreturn items;`)(
+    items, { credits }, { srcAmount }, 0.18);
+
+  // המקרה האמיתי: 52,000 ללא מע"מ (61,360 כולל), זיכויים 590 ו-9,440 כולל מע"מ
+  const items = [{ description: 'הגברה', quantity: 1, price: 52000 }];
+  const out = run(items, [{ number: 70098, amount: 590 }, { number: 70099, amount: 9440 }], 61360);
+  const exTotal = out.reduce((a, it) => a + it.price * it.quantity, 0);
+  const incTotal = Math.round(exTotal * 1.18 * 100) / 100;
+  if (Math.abs(incTotal - 51330) > 1) throw new Error('סה"כ כולל מע"מ: ' + incTotal + ' במקום 51330');
+  if (out.length !== 3) throw new Error('מספר שורות: ' + out.length);
+  if (!/70098/.test(out[1].description)) throw new Error('שורת הזיכוי לא מזוהה: ' + out[1].description);
+  if (out[1].price >= 0) throw new Error('שורת הזיכוי אינה שלילית');
+
+  // בלי זיכויים — השורות לא נגעו
+  const plain = run([{ description: 'x', quantity: 1, price: 100 }], [], 118);
+  if (plain.length !== 1) throw new Error('שורות נוספו בלי זיכוי');
+
+  // בלי סכום מקור — נפילה לשיעור המע"מ המוגדר, ולא קריסה
+  const noSrc = run([{ description: 'x', quantity: 1, price: 1000 }], [{ number: 1, amount: 118 }], null);
+  if (Math.abs(noSrc[1].price + 100) > 0.5) throw new Error('המרה בלי סכום מקור: ' + noSrc[1].price);
+
+  // והכפתור באמת מעביר את הזיכויים
+  const btnLine = app.split('\n').find(l => l.includes('incProduce(') && l.includes("',305,'"));
+  if (!btnLine) throw new Error('כפתור הפקת הקבלה לא נמצא');
+  if (!/\(u\.credits \|\| \[\]\)\.map/.test(btnLine)) throw new Error('הכפתור אינו מעביר את הזיכויים');
+  const ip = app.slice(app.indexOf('window.incProduce ='), app.indexOf('window.issuePaidReceipt'));
+  if (!/credits,/.test(ip)) throw new Error('incProduce אינו מעביר את הזיכויים לעורך');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
