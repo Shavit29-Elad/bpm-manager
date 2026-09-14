@@ -1732,6 +1732,33 @@ check('נושא המייל של מסמך שהועלה ידנית נושא סוג
   return true;
 });
 
+check('הפקת קבלה בבנק — על הסכום שנותר אחרי הזיכויים', () => {
+  // חשבונית 61,360 עם זיכויים 590 ו-9,440 — הקבלה חייבת להיות על 51,330.
+  // הכפתור העביר את הסכום המקורי, ולכן הקבלה נפתחה על סכום שכבר לא קיים.
+  const src = app.slice(app.indexOf('recNo = stack(units.map('), app.indexOf('invAmt = stack(units.map('));
+  if (/incProduce\('\$\{i\.id\}',305,'\$\{t\.id\}',\$\{Number\(i\.amount\)/.test(src))
+    throw new Error('הקבלה עדיין מבוססת על סכום החשבונית לפני הזיכוי');
+  if (!/incProduce\('\$\{i\.id\}',305,'\$\{t\.id\}',\$\{Number\(u\.net\)/.test(src))
+    throw new Error('הקבלה אינה מבוססת על הסכום נטו');
+
+  // u.net באמת מחושב כסכום פחות הזיכויים
+  const build = app.slice(app.indexOf('  const isExp = (x) => x.kind'), app.indexOf('for (const o of others)'));
+  const fn = new Function('list', 'sameClient', `${build}\nreturn units;`);
+  const units = fn([
+    { id: 'i1', number: 50425, type: 305, amount: 61360, clientName: 'גאגא' },
+    { id: 'c1', number: 70098, type: 330, amount: 590, clientName: 'גאגא' },
+    { id: 'c2', number: 70099, type: 330, amount: 9440, clientName: 'גאגא' },
+  ], (a, b) => a === b);
+  const u = units.find(x => x.inv.id === 'i1');
+  if (!u) throw new Error('היחידה לא נבנתה');
+  if (u.credits.length !== 2) throw new Error('הזיכויים לא צורפו: ' + u.credits.length);
+  if (u.net !== 51330) throw new Error('נטו שגוי: ' + u.net);
+  // בלי זיכויים — הנטו הוא הסכום המלא
+  const plain = fn([{ id: 'i2', number: 1, type: 305, amount: 1000, clientName: 'ל' }], (a, b) => a === b);
+  if (plain[0].net !== 1000) throw new Error('נטו בלי זיכוי: ' + plain[0].net);
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

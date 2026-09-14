@@ -8589,7 +8589,7 @@ function bankTr(t) {
       if (u.receipt) return `<span style="white-space:nowrap">קבלה #${u.receipt.number}${act(u.receipt.url, { id: u.receipt.id, number: u.receipt.number, type: 400, clientName: i.clientName })}</span>`;
       if (Number(i.type) === 320) return '<span class="muted" style="font-size:11px">כלול בחשבונית</span>';
       // חשבונית מס (305) ששולמה בבנק אך אין לה קבלה — התראה + כפתור הפקת קבלה מקושרת לתנועה
-      if (Number(i.type) === 305) return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start"><span class="tag" style="background:#fef3c7;color:#92400e;font-size:10px;white-space:nowrap" title="התקבל תשלום בבנק אך עדיין לא הופקה קבלה">💰 התקבל תשלום · חסרה קבלה</span><button class="btn primary" style="padding:2px 9px;font-size:11px;white-space:nowrap" onclick="event.stopPropagation();incProduce('${i.id}',305,'${t.id}',${Number(i.amount) || 0},false)" title="הפקת קבלה למסמך זה בחשבונית ירוקה">🧾 הפק קבלה</button></div>`;
+      if (Number(i.type) === 305) return `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start"><span class="tag" style="background:#fef3c7;color:#92400e;font-size:10px;white-space:nowrap" title="התקבל תשלום בבנק אך עדיין לא הופקה קבלה">💰 התקבל תשלום · חסרה קבלה</span><button class="btn primary" style="padding:2px 9px;font-size:11px;white-space:nowrap" onclick="event.stopPropagation();incProduce('${i.id}',305,'${t.id}',${Number(u.net) || 0},false)" title="הפקת קבלה למסמך זה בחשבונית ירוקה${(u.credits || []).length ? ` — על ${money(u.net)}, הסכום שנותר אחרי הזיכוי${u.credits.length > 1 ? 'ים' : ''}` : ''}">🧾 הפק קבלה${(u.credits || []).length ? ` · ${money(u.net)}` : ''}</button></div>`;
       return '—';
     }));
     invAmt = stack(units.map(u => {
