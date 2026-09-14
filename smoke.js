@@ -1793,6 +1793,40 @@ check('קבלה מהבנק — שורות הזיכוי מקטינות את סכ�
   return true;
 });
 
+check('שיוך אירועים לספק — אירוע שכבר שויך לחשבונית אחרת יורד מהאפשרויות', () => {
+  // בלי זה אותה עבודה נקשרת לשתי חשבוניות של אותו ספק.
+  const src = app.slice(app.indexOf('function renderLinkEvRows()'), app.indexOf('window.toggleLinkShowLinked'));
+  const stubs = `
+    const money=(n)=>String(n), escapeHtml=(x)=>String(x==null?'':x), ddmy=(d)=>String(d||'');
+    const MONTHS_HE = [];
+    const _linkNorm = (x)=>String(x||'').trim();
+    let __h = '';
+    const document = { getElementById: () => ({ set innerHTML(v){ __h = v; }, get innerHTML(){ return __h; } }) };
+  `;
+  const run = (showLinked) => {
+    const _linkPay = { pid: 'p1', name: 'ספק', q: '', year: 'all', month: 'all', sel: new Set(), showLinked,
+      events: [
+        { eventId: 'e1', index: 0, date: '2026-07-02', artist: 'פנוי', contractor: 'ספק', amount: 1000, linkedPayableId: null },
+        { eventId: 'e2', index: 0, date: '2026-07-09', artist: 'משויך לאחרת', contractor: 'ספק', amount: 2000, linkedPayableId: 'p2' },
+        { eventId: 'e3', index: 0, date: '2026-07-10', artist: 'משויך לזו', contractor: 'ספק', amount: 3000, linkedPayableId: 'p1' },
+      ] };
+    return new Function('_linkPay', `${stubs}\n${src}\nrenderLinkEvRows();\nreturn __h;`)(_linkPay);
+  };
+
+  const hidden = run(false);
+  if (!/פנוי/.test(hidden)) throw new Error('אירוע פנוי לא מוצג');
+  if (/משויך לאחרת/.test(hidden)) throw new Error('אירוע שכבר שויך לחשבונית אחרת עדיין מוצע');
+  if (/משויך לזו/.test(hidden)) throw new Error('אירוע של ההוצאה הנוכחית מוצע שוב');
+  if (!/הוסתרו/.test(hidden)) throw new Error('אין חיווי כמה אירועים הוסתרו');
+  if (!/הצג בכל זאת/.test(hidden)) throw new Error('אין דרך להציג בכל זאת — מבוי סתום');
+
+  const shown = run(true);
+  if (!/משויך לאחרת/.test(shown)) throw new Error('הצגה מפורשת לא החזירה את האירוע');
+  if (!/>משויך</.test(shown)) throw new Error('האירוע המשויך אינו מסומן כשהוא מוצג');
+  if (/משויך לזו/.test(shown)) throw new Error('אירוע של ההוצאה הנוכחית חזר להצעות');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

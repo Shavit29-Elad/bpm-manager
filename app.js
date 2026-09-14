@@ -5276,8 +5276,13 @@ function renderLinkEvRows() {
   const box = document.getElementById('linkEvRows'); if (!box || !_linkPay) return;
   const low = s => (s || '').toString().toLowerCase();
   const tokens = low(_linkPay.q).trim().split(/\s+/).filter(Boolean);
+  // אירוע שכבר שויך לחשבונית אחרת יורד מהאפשרויות — אחרת אותה עבודה נקשרת
+  // לשתי חשבוניות של אותו ספק. מוצג מונה עם אפשרות להציג בכל זאת, כדי שלא
+  // ייווצר מבוי סתום אם השיוך הקודם היה שגוי.
+  let hiddenLinked = 0;
   let evs = (_linkPay.events || []).filter(ev => {
     if (String(ev.linkedPayableId || '') === String(_linkPay.pid)) return false; // כבר משויך להוצאה זו — מוצג ב"משויכים כעת"
+    if (ev.linkedPayableId) { hiddenLinked++; if (!_linkPay.showLinked) return false; }
     const iso = String(ev.date || ''); const y = iso.slice(0, 4), mo = iso.slice(5, 7);
     if (_linkPay.year !== 'all' && y !== _linkPay.year) return false;
     if (_linkPay.month !== 'all' && mo !== _linkPay.month) return false;
@@ -5285,7 +5290,11 @@ function renderLinkEvRows() {
     return true;
   });
   evs.sort((a, b) => { const am = _linkNorm(a.contractor) === _linkNorm(_linkPay.name) ? 0 : 1, bm = _linkNorm(b.contractor) === _linkNorm(_linkPay.name) ? 0 : 1; return am - bm || String(a.date || '').localeCompare(String(b.date || '')); });
-  if (!evs.length) { box.innerHTML = '<div class="muted" style="font-size:12.5px;padding:8px">לא נמצאו אירועים תואמים.</div>'; return; }
+  const linkedNote = hiddenLinked ? `<div class="muted" style="font-size:11.5px;padding:6px 8px;border-top:1px solid var(--line);background:var(--panel2)">
+      ${_linkPay.showLinked ? `מוצגים גם ${hiddenLinked} אירועים שכבר משויכים לחשבונית אחרת של הספק` : `${hiddenLinked} אירועים הוסתרו — כבר משויכים לחשבונית אחרת של הספק`}
+      <button class="btn ghost" style="padding:1px 8px;font-size:11px;margin-inline-start:6px" onclick="toggleLinkShowLinked()">${_linkPay.showLinked ? 'הסתר' : 'הצג בכל זאת'}</button>
+    </div>` : '';
+  if (!evs.length) { box.innerHTML = '<div class="muted" style="font-size:12.5px;padding:8px">לא נמצאו אירועים תואמים.</div>' + linkedNote; return; }
   const rows = evs.map(ev => {
     const key = ev.eventId + '|' + ev.index;
     const on = _linkPay.sel.has(key);
@@ -5297,11 +5306,13 @@ function renderLinkEvRows() {
       <span style="white-space:nowrap">${ddmy(ev.date)}</span>
       <span style="flex:1;min-width:0">${escapeHtml(ev.artist || '')}${ev.location ? ` · ${escapeHtml(ev.location)}` : ''} <span class="muted">· ${escapeHtml(ev.contractor || '')}</span></span>
       <span title="תשלום מהלקוח">${cpTag}</span>
+      ${ev.linkedPayableId ? '<span class="tag" style="background:#fff4e5;color:#a15c00;font-size:10px;white-space:nowrap" title="האירוע כבר משויך לחשבונית אחרת של הספק">משויך</span>' : ''}
       <span style="white-space:nowrap;font-weight:600">${money(ev.amount)}</span></label>`;
   }).join('');
   const selCount = _linkPay.sel.size;
-  box.innerHTML = `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}</div><div class="muted" style="font-size:11.5px;margin-top:5px">מוצגים ${evs.length} אירועים${selCount ? ` · נבחרו ${selCount}` : ''}</div>`;
+  box.innerHTML = `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}${linkedNote}</div><div class="muted" style="font-size:11.5px;margin-top:5px">מוצגים ${evs.length} אירועים${selCount ? ` · נבחרו ${selCount}` : ''}</div>`;
 }
+window.toggleLinkShowLinked = () => { if (!_linkPay) return; _linkPay.showLinked = !_linkPay.showLinked; renderLinkEvRows(); };
 window.onLinkEvSearch = (v) => { if (!_linkPay) return; _linkPay.q = v; renderLinkEvRows(); };
 window.setLinkEvYM = (k, v) => { if (!_linkPay) return; _linkPay[k] = v; renderLinkEvRows(); };
 window.toggleLinkEv = (key, on) => { if (!_linkPay) return; if (on) _linkPay.sel.add(key); else _linkPay.sel.delete(key); };
