@@ -7465,7 +7465,8 @@ window.boardDelete = async (id) => {
 const SUP_DOC_NAMES = { 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה' };
 const supDocTypes = (r) => (r && r.vatExempt) ? [400] : [300, 305, 320];
 const bDocUrl = (d) => d.payableId ? `/api/supplier-payables/${d.payableId}/file` : `/api/files/${encodeURIComponent(d.fileId)}`;
-let _bvOpen = {};   // אילו שורות פתוחות לצפייה, לפי אינדקס
+let _bvOpen = {};   // אילו שורות פתוחות לפירוט, לפי אינדקס
+let _bvDoc = null;  // המסמך שמוצג כרגע בתוך החלונית (id) — צפייה בלי לצאת ממנה
 
 function bDocChips(ev, r) {
   const docs = r.docs || [];
@@ -7485,10 +7486,13 @@ function bDocPanel(ev, r) {
       <td style="text-align:left;white-space:nowrap">${d.amount != null ? money(d.amount) : ''}</td>
       <td class="muted" style="font-size:11px;white-space:nowrap">${d.fromPayables ? 'שויך ממסך הספקים' : (d.payableId ? 'מהוצאות המערכת' : 'קובץ שהועלה')}</td>
       <td style="text-align:left;white-space:nowrap">
-        <button class="btn ghost" style="padding:1px 8px;font-size:11px" onclick="previewDoc('${bDocUrl(d)}')">👁</button>
+        <button class="btn ${_bvDoc === d.id ? 'primary' : 'ghost'}" style="padding:1px 8px;font-size:11px" onclick="bDocShow('${d.id}')" title="${_bvDoc === d.id ? 'סגירת התצוגה' : 'צפייה כאן, בתוך החלונית'}">${_bvDoc === d.id ? '▴ סגור' : '👁 לצפייה'}</button>
         <a class="btn ghost" style="padding:1px 8px;font-size:11px;text-decoration:none" href="${bDocUrl(d)}" download target="_blank" rel="noopener">⬇</a>
         <button class="btn ghost" style="padding:1px 8px;font-size:11px;color:var(--danger)" onclick="bDocRemove('${ev.id}',${r.index},'${d.id}')" title="נתק מהשורה">✕</button>
-      </td></tr>`).join('') : '<tr><td colspan="5" class="muted" style="padding:6px">עדיין לא שויך מסמך לספק הזה.</td></tr>';
+      </td></tr>${_bvDoc === d.id ? `<tr><td colspan="5" style="padding:0">
+        <div style="margin:4px 0 8px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff">
+          <iframe src="${bDocUrl(d)}" style="width:100%;height:min(62vh,560px);border:0;display:block"></iframe>
+        </div></td></tr>` : ''}`).join('') : '<tr><td colspan="5" class="muted" style="padding:6px">עדיין לא שויך מסמך לספק הזה.</td></tr>';
   return `<tr class="bv-docs"><td colspan="7" style="padding:0">
     <div style="margin:0 0 6px;padding:8px 10px;background:var(--panel2);border-radius:8px">
       <div style="font-size:12px;font-weight:600;margin-bottom:5px">מסמכי ${escapeHtml(r.name || r.role)} — ${r.vatExempt ? 'עוסק פטור (קבלה)' : 'עוסק מורשה (עסקה → מס / מס-קבלה)'}</div>
@@ -7500,7 +7504,17 @@ function bDocPanel(ev, r) {
       <div id="bDocStatus${r.index}" style="font-size:11.5px;min-height:14px;margin-top:4px"></div>
     </div></td></tr>`;
 }
-window.bDocToggle = (idx) => { _bvOpen[idx] = !_bvOpen[idx]; const ev = _bvEvent; if (ev) openBoardView(ev.id, true); };
+window.bDocToggle = (idx) => {
+  _bvOpen[idx] = !_bvOpen[idx];
+  if (!_bvOpen[idx]) _bvDoc = null;     // סגירת הפירוט סוגרת גם תצוגה פתוחה
+  const ev = _bvEvent; if (ev) openBoardView(ev.id, true);
+};
+// צפייה במסמך בתוך חלונית האירוע. קודם נפתחה חלונית נפרדת מעל, וההקשר של
+// האירוע נעלם. כאן המסמך נפתח מתחת לשורה שלו, באותו חלון.
+window.bDocShow = (docId) => {
+  _bvDoc = (_bvDoc === docId) ? null : docId;
+  const ev = _bvEvent; if (ev) openBoardView(ev.id, true);
+};
 
 window.bDocRemove = async (evId, idx, docId) => {
   if (!confirm('לנתק את המסמך מהשורה? הקובץ עצמו לא נמחק.')) return;
@@ -7621,7 +7635,7 @@ async function boardReloadInto(evId) {
 let _bvEvent = null;
 window.openBoardView = (id, keepOpen) => {
   const ev = boardFind(id); if (!ev) return;
-  if (!keepOpen) _bvOpen = {};      // פתיחה חדשה — כל השורות מכווצות
+  if (!keepOpen) { _bvOpen = {}; _bvDoc = null; }   // פתיחה חדשה — הכל מכווץ
   _bvEvent = ev;
   let m = document.getElementById('bvModal');
   if (!m) { m = document.createElement('div'); m.id = 'bvModal'; m.className = 'modal'; document.body.appendChild(m); }
@@ -7636,7 +7650,7 @@ window.openBoardView = (id, keepOpen) => {
       <td style="text-align:left;white-space:nowrap">${money(r.inc)}${r.vatExempt ? ' <span class="tag" style="background:#eef0fb;color:#5b6180;font-size:10px">פטור</span>' : ''}</td>
       <td style="white-space:nowrap">${r.paid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33">שולם</span>' : '<span class="tag" style="background:#fff4e5;color:#a15c00">טרם שולם</span>'}</td>
       <td style="white-space:nowrap">${bDocChips(ev, r)}
-        <button class="btn ghost" style="padding:1px 8px;font-size:11px;margin-inline-start:4px" onclick="bDocToggle(${r.index})" title="צפייה במסמכי הספק">${_bvOpen[r.index] ? '▴' : '👁'}</button></td>
+        <button class="btn ghost" style="padding:1px 8px;font-size:11px;margin-inline-start:4px" onclick="bDocToggle(${r.index})" title="${_bvOpen[r.index] ? 'סגירת הפירוט' : 'פתיחת פירוט המסמכים'}">${_bvOpen[r.index] ? '▴ סגור' : '▾ פירוט'}</button></td>
       <td class="muted" style="font-size:12px">${escapeHtml(r.note || '')}</td>
     </tr>${_bvOpen[r.index] ? bDocPanel(ev, r) : ''}`).join('')
     : '<tr><td colspan="7" class="muted" style="padding:10px">עדיין לא מולאו שורות הוצאה.</td></tr>';

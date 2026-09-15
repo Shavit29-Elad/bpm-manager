@@ -1972,7 +1972,14 @@ check('מסמכי ספק — הסוגים המותרים לפי סוג העוס�
   const body = route.slice(0, 2200);
   if (!/const allowed = eventBoard\.supDocTypesFor\(r\.row\)/.test(body)) throw new Error('השרת אינו מחשב את הסוגים המותרים');
   // בשיוך, האימות חייב להיות על הסוג האמיתי של ההוצאה ולא על מה שנשלח בבקשה
-  if (!/allowed\.includes\(Number\(p\.documentType\)\)/.test(body)) throw new Error('שיוך אינו מאמת את סוג ההוצאה עצמה');
+  if (!/allowed\.includes\(eventBoard\.normDocType\(p\.documentType\)\)/.test(body)) throw new Error('שיוך אינו מאמת את סוג ההוצאה עצמה');
+  // הוצאות ספק שומרות חשבון עסקה כסוג 20 ולא 300 — בלי נרמול הוא לא מזוהה כלל
+  if (boardMod.normDocType(20) !== 300) throw new Error('סוג 20 אינו מנורמל לחשבון עסקה');
+  if (boardMod.normDocType(305) !== 305) throw new Error('נרמול שינה סוג תקין');
+  if (boardMod.normDocType(null) !== null) throw new Error('נרמול של ריק אינו ריק');
+  const pay = new Map([['p1', { id: 'p1', documentType: 20, number: '88' }]]);
+  const d = boardMod.rowDocs({ paidPayableId: 'p1' }, pay)[0];
+  if (d.type !== 300) throw new Error('חשבון עסקה ששויך אינו מזוהה: ' + d.type);
   if (!/allowed\.includes\(type\)/.test(body)) throw new Error('העלאת קובץ אינה מאומתת');
   return true;
 });
@@ -2067,6 +2074,22 @@ check('מסמכי ספק — שיוך ממסך הספקים נראה גם בלו
   const del = srv.slice(srv.indexOf("add('DELETE', /^\\/api\\/event-board\\/([^/]+)\\/row"));
   if (!/\^pay:\(\.\+\)\$/.test(del.slice(0, 1200))) throw new Error('ניתוק שיוך ממסך הספקים אינו נתמך');
   if (!/paidPayableId = null/.test(del.slice(0, 1200))) throw new Error('הניתוק אינו מנקה את השדה');
+  return true;
+});
+
+check('צפייה במסמך ספק — בתוך חלונית האירוע ולא בחלון חדש', () => {
+  const src = app.slice(app.indexOf('function bDocPanel('), app.indexOf('window.bDocToggle'));
+  if (/previewDoc\(/.test(src)) throw new Error('הצפייה עדיין פותחת חלונית נפרדת');
+  if (!/<iframe/.test(src)) throw new Error('אין תצוגה מוטמעת');
+  if (!/_bvDoc === d\.id/.test(src)) throw new Error('אין מצב "המסמך המוצג"');
+  // הכפתור בשורה מרחיב פירוט ואינו מתחזה לצפייה במסמך
+  const rowBtn = app.split('\n').find(l => l.includes('bDocToggle(${r.index})'));
+  if (!rowBtn) throw new Error('כפתור הפירוט לא נמצא');
+  if (/👁/.test(rowBtn)) throw new Error('כפתור הפירוט מסומן כעין ומטעה');
+  if (!/פירוט/.test(rowBtn)) throw new Error('הכפתור אינו אומר מה הוא עושה');
+  // סגירת הפירוט סוגרת גם תצוגה פתוחה, אחרת נשאר מסמך תלוי באוויר
+  const tog = app.slice(app.indexOf('window.bDocToggle ='), app.indexOf('window.bDocShow ='));
+  if (!/_bvDoc = null/.test(tog)) throw new Error('סגירת הפירוט משאירה תצוגה פתוחה');
   return true;
 });
 

@@ -24,6 +24,10 @@ export const SUP_DOC_TYPES_LICENSED = [300, 305, 320];
 export const SUP_DOC_TYPES_EXEMPT = [400];
 export const SUP_DOC_NAMES = { 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה' };
 export const supDocTypesFor = (row) => (row && row.vatExempt) ? SUP_DOC_TYPES_EXEMPT : SUP_DOC_TYPES_LICENSED;
+// הוצאות ספק נשמרות עם סוג 20 לחשבון עסקה, בעוד שמסמכי הכנסה משתמשים ב-300.
+// בלי הנרמול הזה חשבון עסקה ששויך לא זוהה כלל, הוצג כ"מסמך", והשורה המשיכה
+// לדווח שחשבון עסקה חסר.
+export const normDocType = (t) => (Number(t) === 20 ? 300 : Number(t) || null);
 
 const num = (v) => Number(v) || 0;
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -56,7 +60,7 @@ export function rowDocs(d, payablesById) {
     const p = payablesById && payablesById.get ? payablesById.get(String(pid)) : null;
     docs.push({
       id: 'pay:' + pid, payableId: String(pid), fileId: null,
-      type: p ? Number(p.documentType) : null,
+      type: p ? normDocType(p.documentType) : null,
       number: (p && p.number) || (d && d.paidInvoice) || null,
       date: (p && p.date) || null,
       amount: (p && p.amount != null) ? Number(p.amount) : null,
@@ -163,4 +167,4 @@ export function normalizeRows(rows, prev = []) {
   return out;
 }
 
-export default { VAT_RATE, BOARD_ROLES, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, rowDocs, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
+export default { VAT_RATE, BOARD_ROLES, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, normDocType, rowDocs, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };

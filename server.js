@@ -364,10 +364,10 @@ add('GET', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/candidates$/, (req, res, p
     .filter(p => (p.companyId || giCompanyId()) === cid)
     .filter(p => !used.has(String(p.id)))
     .filter(p => !want || norm(p.supplierName).includes(want) || want.includes(norm(p.supplierName)))
-    .filter(p => allowed.has(Number(p.documentType)))
+    .filter(p => allowed.has(eventBoard.normDocType(p.documentType)))
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
     .slice(0, 60)
-    .map(p => ({ id: p.id, supplierName: p.supplierName, documentType: Number(p.documentType),
+    .map(p => ({ id: p.id, supplierName: p.supplierName, documentType: eventBoard.normDocType(p.documentType),
       number: p.number || null, date: p.date || null, amount: p.amount, hasFile: !!(p.localFileId || p.giExpenseId) }));
   json(res, { ok: true, allowed: [...allowed], names: eventBoard.SUP_DOC_NAMES, items });
 });
@@ -389,9 +389,9 @@ add('POST', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc$/, async (req, res, p
     if ((p.companyId || giCompanyId()) !== cid) return wrongCompany(res, 'ההוצאה');
     // האימות על הסוג האמיתי של ההוצאה ולא על מה שנשלח בבקשה — אחרת אפשר לשלוח
     // סוג מותר ולשייך בפועל מסמך מסוג אחר.
-    if (!allowed.includes(Number(p.documentType))) return reject();
+    if (!allowed.includes(eventBoard.normDocType(p.documentType))) return reject();
     if ((r.row.docs || []).some(d => String(d.payableId) === String(p.id))) return json(res, { error: 'המסמך כבר משויך לשורה' }, 400);
-    doc = { id: id('bdoc'), type: Number(p.documentType), number: p.number || null, date: p.date || null,
+    doc = { id: id('bdoc'), type: eventBoard.normDocType(p.documentType), number: p.number || null, date: p.date || null,
       amount: p.amount != null ? Number(p.amount) : null, payableId: p.id, fileId: null, addedAt: new Date().toISOString() };
   } else if (b.data) {
     if (!allowed.includes(type)) return reject();
