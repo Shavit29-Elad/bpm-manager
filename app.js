@@ -7469,8 +7469,10 @@ let _bvOpen = {};   // אילו שורות פתוחות לצפייה, לפי א�
 
 function bDocChips(ev, r) {
   const docs = r.docs || [];
-  const chips = docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;white-space:nowrap">${escapeHtml(SUP_DOC_NAMES[d.type] || 'מסמך')}${d.number ? ' #' + escapeHtml(String(d.number)) : ''}</span>`).join(' ');
-  const missing = supDocTypes(r).filter(t => !docs.some(d => Number(d.type) === t));
+  const chips = docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;white-space:nowrap" title="${d.fromPayables ? 'שויך ממסך הספקים' : (d.payableId ? 'מהוצאות המערכת' : 'קובץ שהועלה')}">${escapeHtml(SUP_DOC_NAMES[d.type] || 'מסמך')}${d.number ? ' #' + escapeHtml(String(d.number)) : ''}</span>`).join(' ');
+  // סוג לא ידוע אינו נחשב כיסוי לשום סוג, אבל גם לא מוצג כ"חסר הכל"
+  const known = docs.some(d => d.type == null);
+  const missing = known ? [] : supDocTypes(r).filter(t => !docs.some(d => Number(d.type) === t));
   const hint = docs.length ? '' : `<span class="muted" style="font-size:10.5px">אין מסמכים</span>`;
   return `${chips || hint}${docs.length && missing.length ? ` <span class="muted" style="font-size:10.5px">· חסר: ${missing.map(t => SUP_DOC_NAMES[t]).join(' / ')}</span>` : ''}`;
 }
@@ -7481,7 +7483,7 @@ function bDocPanel(ev, r) {
       <td style="white-space:nowrap">${escapeHtml(SUP_DOC_NAMES[d.type] || 'מסמך')}${d.number ? ' #' + escapeHtml(String(d.number)) : ''}</td>
       <td class="muted" style="white-space:nowrap">${d.date ? ddmy(d.date) : ''}</td>
       <td style="text-align:left;white-space:nowrap">${d.amount != null ? money(d.amount) : ''}</td>
-      <td class="muted" style="font-size:11px;white-space:nowrap">${d.payableId ? 'מהוצאות המערכת' : 'קובץ שהועלה'}</td>
+      <td class="muted" style="font-size:11px;white-space:nowrap">${d.fromPayables ? 'שויך ממסך הספקים' : (d.payableId ? 'מהוצאות המערכת' : 'קובץ שהועלה')}</td>
       <td style="text-align:left;white-space:nowrap">
         <button class="btn ghost" style="padding:1px 8px;font-size:11px" onclick="previewDoc('${bDocUrl(d)}')">👁</button>
         <a class="btn ghost" style="padding:1px 8px;font-size:11px;text-decoration:none" href="${bDocUrl(d)}" download target="_blank" rel="noopener">⬇</a>

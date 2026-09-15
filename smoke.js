@@ -2044,6 +2044,32 @@ check('העלאת מסמך ספק — חלונית ולא prompt', () => {
   return true;
 });
 
+check('מסמכי ספק — שיוך ממסך הספקים נראה גם בלוח', () => {
+  // שני מנגנוני שיוך: הלוח שומר ב-docs, ומסך הספקים שומר ב-paidPayableId.
+  // בלי איחוד, מסמך ששויך במסך הספקים פשוט לא נראה בלוח.
+  const pay = new Map([['pay1', { id: 'pay1', documentType: 305, number: '1391', date: '2026-10-01', amount: 1770 }]]);
+  const row = { role: 'חדר חזרות', name: 'מוסטקי', priceExVat: 1500, paidPayableId: 'pay1', paidInvoice: '1391' };
+  const docs = boardMod.rowDocs(row, pay);
+  if (docs.length !== 1) throw new Error('מסמכים: ' + docs.length);
+  if (docs[0].type !== 305 || docs[0].number !== '1391') throw new Error('פרטי המסמך: ' + JSON.stringify(docs[0]));
+  if (!docs[0].fromPayables) throw new Error('המקור לא מסומן');
+  if (docs[0].id !== 'pay:pay1') throw new Error('מזהה לניתוק: ' + docs[0].id);
+  // בלי מפת הוצאות — עדיין מוצג, עם מה שיש על השורה
+  const bare = boardMod.rowDocs(row, null);
+  if (bare.length !== 1 || bare[0].number !== '1391') throw new Error('נפילה בלי מפה: ' + JSON.stringify(bare));
+  // לא כופלים מסמך שכבר ברשימה
+  const both = boardMod.rowDocs({ ...row, docs: [{ id: 'd1', payableId: 'pay1', type: 305 }] }, pay);
+  if (both.length !== 1) throw new Error('המסמך הוכפל');
+  // שורה בלי שיוך — ריקה
+  if (boardMod.rowDocs({ role: 'קלידן' }, pay).length) throw new Error('נוצר מסמך יש מאין');
+  // והשרת יודע לנתק שיוך כזה
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const del = srv.slice(srv.indexOf("add('DELETE', /^\\/api\\/event-board\\/([^/]+)\\/row"));
+  if (!/\^pay:\(\.\+\)\$/.test(del.slice(0, 1200))) throw new Error('ניתוק שיוך ממסך הספקים אינו נתמך');
+  if (!/paidPayableId = null/.test(del.slice(0, 1200))) throw new Error('הניתוק אינו מנקה את השדה');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

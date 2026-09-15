@@ -296,7 +296,10 @@ add('GET', /^\/api\/event-board$/, (req, res, _p, q) => {
   const db = load(), cid = reqCompany(q);
   const year = String(q.year || new Date().getFullYear());
   const evs = (db.events || []).filter(e => ownedBy(e, cid));
-  const out = eventBoard.boardByMonth(evs, year);
+  // מפת ההוצאות — כדי שגם שיוך שנעשה ממסך הספקים יופיע בלוח עם סוג ומספר
+  const payablesById = new Map((db.supplierPayables || [])
+    .filter(p => (p.companyId || giCompanyId()) === cid).map(p => [String(p.id), p]));
+  const out = eventBoard.boardByMonth(evs, year, payablesById);
   const years = [...new Set(evs.map(e => String(e.date || e.dateRaw || '').slice(0, 4)).filter(Boolean))].sort().reverse();
   json(res, { ok: true, year, years, roles: eventBoard.BOARD_ROLES, vatRate: eventBoard.VAT_RATE, ...out });
 });
@@ -407,6 +410,15 @@ add('DELETE', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc\/([^/]+)$/, (req, r
   const db = load(), cid = reqCompany(q);
   const r = boardRowAt(db, cid, params[0], params[1]);
   if (r.error) return r.code === 403 ? wrongCompany(res, 'האירוע') : json(res, { error: r.error }, r.code);
+  // מסמך שהגיע משיוך במסך הספקים אינו ברשימה — הוא שדה על השורה, ולכן הניתוק
+  // שלו הוא ניקוי השדה. בלי זה כפתור הניתוק לא עושה דבר ונראה שבור.
+  const legacy = String(params[2]).match(/^pay:(.+)$/);
+  if (legacy) {
+    if (String(r.row.paidPayableId || '') !== legacy[1]) return json(res, { error: 'המסמך לא נמצא בשורה' }, 404);
+    r.row.paidPayableId = null; r.row.paidInvoice = null;
+    save(db);
+    return json(res, { ok: true, unlinkedPayable: legacy[1] });
+  }
   const before = r.row.docs.length;
   r.row.docs = r.row.docs.filter(d => String(d.id) !== String(params[2]));
   if (r.row.docs.length === before) return json(res, { error: 'המסמך לא נמצא בשורה' }, 404);

@@ -46,14 +46,34 @@ export function rowTotals(row) {
   return { ex: r2(entered), inc, vat: r2(inc - entered) };
 }
 
+// מסמכי השורה. שיוך שנעשה ממסך "ספקים לתשלום" נשמר ב-paidPayableId ולא ברשימת
+// המסמכים של הלוח, ולכן מסמך ששויך שם לא נראה כאן בכלל. שני המנגנונים מאוחדים
+// לרשימה אחת, וההוצאה עצמה מספקת את הסוג והמספר להצגה.
+export function rowDocs(d, payablesById) {
+  const docs = Array.isArray(d && d.docs) ? d.docs.slice() : [];
+  const pid = d && d.paidPayableId;
+  if (pid && !docs.some(x => String(x.payableId) === String(pid))) {
+    const p = payablesById && payablesById.get ? payablesById.get(String(pid)) : null;
+    docs.push({
+      id: 'pay:' + pid, payableId: String(pid), fileId: null,
+      type: p ? Number(p.documentType) : null,
+      number: (p && p.number) || (d && d.paidInvoice) || null,
+      date: (p && p.date) || null,
+      amount: (p && p.amount != null) ? Number(p.amount) : null,
+      fromPayables: true,
+    });
+  }
+  return docs;
+}
+
 // שורות הלוח של אירוע: התפקידים הקבועים תמיד, ואחריהם שורות חופשיות שנוספו.
-export function boardRows(ev) {
+export function boardRows(ev, payablesById) {
   const details = Array.isArray(ev && ev.contractorDetails) ? ev.contractorDetails : [];
   const byRole = new Map();
   const extras = [];
   details.forEach((d, index) => {
     const role = String((d && d.role) || '').trim();
-    const row = { ...d, index, role, docs: Array.isArray(d && d.docs) ? d.docs : [], ...rowTotals(d) };
+    const row = { ...d, index, role, docs: rowDocs(d, payablesById), ...rowTotals(d) };
     if (isFixedRole(role) && !byRole.has(role)) byRole.set(role, row);
     else if (role) extras.push(row);
   });
@@ -80,7 +100,7 @@ export function eventTotals(ev) {
 }
 
 // קיבוץ לפי חודש, מהחדש לישן. כל חודש נושא את סיכומיו ואת האירועים שבו.
-export function boardByMonth(events, year) {
+export function boardByMonth(events, year, payablesById) {
   const y = String(year || '').trim();
   const byMonth = new Map();
   for (const ev of (events || [])) {
@@ -96,7 +116,7 @@ export function boardByMonth(events, year) {
       price: ev.price ?? null, notes: ev.boardNotes || '',
       linkedDocs: (ev.linkedDocs || []).map(d => ({ id: d.id, number: d.number ?? null, type: Number(d.type),
         uploaded: !!d.uploaded, converted: !!d.converted, credit: !!(d.credit || Number(d.type) === 330) })),
-      rows: boardRows(ev).all, totals: t });
+      rows: boardRows(ev, payablesById).all, totals: t });
     g.incomeEx = r2(g.incomeEx + t.incomeEx);
     g.expenseEx = r2(g.expenseEx + t.expenseEx);
     g.expenseInc = r2(g.expenseInc + t.expenseInc);
@@ -143,4 +163,4 @@ export function normalizeRows(rows, prev = []) {
   return out;
 }
 
-export default { VAT_RATE, BOARD_ROLES, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
+export default { VAT_RATE, BOARD_ROLES, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, rowDocs, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
