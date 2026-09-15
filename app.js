@@ -4504,8 +4504,8 @@ function renderNewQuote() {
   const clientOpts = clients.map(c => `<option value="${escAttr(c.name)}">`).join(''); // אפשרויות ל-datalist (חיפוש חופשי לפי שם)
   const itemRows = e.items.map((it, i) => `<div class="nq-item" style="display:grid;grid-template-columns:1fr 62px 96px 28px;gap:6px;align-items:center;margin-bottom:6px">
     <input class="nq-desc" value="${escAttr(it.description)}" placeholder="תיאור" style="padding:6px 8px">
-    <input class="nq-qty" type="number" step="any" value="${it.quantity}" oninput="nqRecalc()" style="padding:6px 6px;text-align:center" title="כמות">
-    <input class="nq-price" type="number" step="any" value="${it.price}" oninput="nqRecalc()" style="padding:6px 6px;text-align:left" title="מחיר יחידה (ללא מע״מ)">
+    <input class="nq-qty" type="number" step="any" value="${it.quantity}" oninput="nqRecalc()" placeholder="כמות" style="padding:6px 6px;text-align:center" title="כמות">
+    <input class="nq-price" type="number" step="any" value="${it.price}" oninput="nqRecalc()" placeholder="מחיר" style="padding:6px 6px;text-align:left" title="מחיר יחידה (ללא מע״מ)">
     <button class="btn ghost" style="padding:4px 8px;font-size:14px" onclick="nqDelItem(${i})" title="מחק שורה">✕</button>
   </div>`).join('');
   const selClient = clients.find(c => String(c.id) === String(e.clientId));
@@ -7319,7 +7319,7 @@ async function renderEventsBoard(c) {
     c.innerHTML = `<div class="panel"><div class="warn-banner">${escapeHtml(String((r && r.error) || 'שגיאה'))}</div></div>`;
     return;
   }
-  _board = r;
+  _board = r; window._board = r;   // נגיש לבדיקות ולאבחון
   const yrs = [...new Set([...(r.years || []), String(year)])].sort().reverse();
   const t = r.totals || {};
   const kpi = (lbl, val, color) => `<div class="card"><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div></div>`;
@@ -7376,8 +7376,11 @@ window.boardSetYear = (y) => { _boardYear = y; renderEventsBoard($('#content'));
 // חלונית הוספה/עריכה — קומפקטית, בגודל של הוספת רכב.
 window.openBoardEdit = async (id) => {
   // רשימות הספקים והלקוחות נטענות פעם אחת — בלי זה שדות ההשלמה ריקים בפתיחה הראשונה
-  if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
-  if (!(_suppliers || []).length) { try { _suppliers = await api('/api/suppliers') || []; } catch { _suppliers = []; } }
+  // הראוטים האלה מחזירים אובייקט שגיאה כשחשבונית ירוקה אינה זמינה, ולא מערך.
+  // בלי ההגנה הזו החלונית נפלה כולה על map של לא-מערך ולא נפתחה בכלל.
+  const asArr = (x) => (Array.isArray(x) ? x : []);
+  if (!Array.isArray(_evClients)) { try { _evClients = asArr(await api('/api/clients')); } catch { _evClients = []; } }
+  if (!asArr(_suppliers).length) { try { _suppliers = asArr(await api('/api/suppliers')); } catch { _suppliers = []; } }
   const ev = id ? boardFind(id) : null;
   const rows = BOARD_ROLES.map(role => {
     const cur = ev && (ev.rows || []).find(r => r.role === role);
@@ -7426,7 +7429,7 @@ function renderBoardEdit() {
   if (!m) { m = document.createElement('div'); m.id = 'bdModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
   m.onclick = (x) => { if (x.target === m) m.classList.add('hidden'); };
-  const sup = (_suppliers || []).map(s => `<option value="${escAttr(s.name)}"></option>`).join('');
+  const sup = (Array.isArray(_suppliers) ? _suppliers : []).map(s => `<option value="${escAttr(s.name)}"></option>`).join('');
   const totalEx = e.rows.reduce((a, r) => a + bRowEx(r), 0);
   const totalInc = e.rows.reduce((a, r) => a + bRowInc(r), 0);
   const income = Number(e.price) || 0;
@@ -7442,7 +7445,8 @@ function renderBoardEdit() {
     <input class="bd-note" value="${escAttr(r.note)}" placeholder="הערה" style="padding:4px 6px;font-size:12px"/>
     ${r.fixed ? '<span></span>' : `<button class="btn ghost" style="padding:1px 6px;color:var(--danger)" onclick="boardDelRow(${i})" title="הסר שורה">✕</button>`}
   </div>`;
-  m.innerHTML = `<div class="modal-card" style="width:min(860px,96vw);max-height:90vh;max-height:90dvh;overflow:auto">
+  m.innerHTML = `<div class="modal-card tall-form" style="width:min(860px,96vw)">
+    <div class="tall-body">
     <h3 style="margin:0 0 10px">${e.id ? 'עריכת אירוע' : 'הוספת אירוע'}</h3>
     <datalist id="bdSupList">${sup}</datalist>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px">
@@ -7452,10 +7456,10 @@ function renderBoardEdit() {
       <label style="font-size:12.5px">לקוח<input id="bdClient" list="bdClientList" value="${escAttr(e.clientName)}" style="width:100%;padding:6px 8px"/></label>
       <label style="font-size:12.5px">מחיר ללקוח (ללא מע״מ)<input id="bdPrice" type="number" inputmode="decimal" value="${escAttr(String(e.price))}" oninput="boardRecalc()" style="width:100%;padding:6px 8px"/></label>
     </div>
-    <datalist id="bdClientList">${(_evClients || []).map(c => `<option value="${escAttr(c.name)}"></option>`).join('')}</datalist>
+    <datalist id="bdClientList">${(Array.isArray(_evClients) ? _evClients : []).map(c => `<option value="${escAttr(c.name)}"></option>`).join('')}</datalist>
     <label style="font-size:12.5px;display:block;margin-top:8px">הערות לאירוע<input id="bdNotes" value="${escAttr(e.notes)}" style="width:100%;padding:6px 8px"/></label>
     <div style="margin-top:12px;font-size:13px;font-weight:700">שורות הוצאה</div>
-    <div style="display:grid;grid-template-columns:104px 1fr 92px 56px 76px 1fr 28px;gap:6px;font-size:11px;color:var(--muted);padding-bottom:2px">
+    <div class="bd-head" style="display:grid;grid-template-columns:104px 1fr 92px 56px 76px 1fr 28px;gap:6px;font-size:11px;color:var(--muted);padding-bottom:2px">
       <span>תפקיד</span><span>ספק</span><span>מחיר</span><span>פטור</span><span>כולל מע״מ</span><span>הערה</span><span></span></div>
     ${e.rows.map(rowHtml).join('')}
     <button class="btn ghost" style="margin-top:8px;padding:3px 10px;font-size:12px" onclick="boardAddRow()">➕ הוספת שורה</button>
@@ -7463,6 +7467,7 @@ function renderBoardEdit() {
       הוצאות: <b>${money(totalEx)}</b> ללא מע״מ · <b>${money(totalInc)}</b> כולל · הכנסה: <b style="color:var(--accent2)">${money(income)}</b> · רווח: <b style="color:${income - totalEx >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(income - totalEx)}</b>
     </div>
     <div id="bdStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+    </div>
     <div class="modal-actions">
       ${e.id ? `<button class="btn ghost" style="color:var(--danger)" onclick="boardDelete('${e.id}')">מחק אירוע</button>` : ''}
       <button class="btn ghost" onclick="document.getElementById('bdModal').classList.add('hidden')">ביטול</button>
@@ -7548,7 +7553,7 @@ function bDocPanel(ev, r) {
         <a class="btn ghost" style="padding:1px 8px;font-size:11px;text-decoration:none" href="${bDocUrl(d)}" download target="_blank" rel="noopener">⬇</a>
         <button class="btn ghost" style="padding:1px 8px;font-size:11px;color:var(--danger)" onclick="bDocRemove('${ev.id}',${r.index},'${d.id}')" title="נתק מהשורה">✕</button>
       </td></tr>`).join('') : '<tr><td colspan="5" class="muted" style="padding:6px">עדיין לא שויך מסמך לספק הזה.</td></tr>';
-  return `<tr class="bv-docs"><td colspan="7" style="padding:0">
+  return `<tr class="bv-docs"><td colspan="7" data-label="" style="padding:0">
     <div style="margin:0 0 6px;padding:8px 10px;background:var(--panel2);border-radius:8px">
       <div style="font-size:12px;font-weight:600;margin-bottom:5px">מסמכי ${escapeHtml(r.name || r.role)} — ${r.vatExempt ? 'עוסק פטור (קבלה)' : 'עוסק מורשה (עסקה → מס / מס-קבלה)'}</div>
       <table class="tbl no-cardify" style="width:100%;font-size:12px"><tbody>${rows}</tbody></table>
@@ -7707,14 +7712,14 @@ window.openBoardView = (id, keepOpen) => {
   const t = ev.totals || {};
   const filled = (ev.rows || []).filter(r => (Number(r.priceExVat) || 0) > 0);
   const rows = filled.length ? filled.map(r => `<tr>
-      <td style="white-space:nowrap;font-weight:600">${escapeHtml(r.role)}</td>
-      <td>${escapeHtml(r.name || '—')}</td>
-      <td style="text-align:left;white-space:nowrap">${money(r.ex)}</td>
-      <td style="text-align:left;white-space:nowrap">${money(r.inc)}${r.vatExempt ? ' <span class="tag" style="background:#eef0fb;color:#5b6180;font-size:10px">פטור</span>' : ''}</td>
-      <td style="white-space:nowrap">${r.paid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33">שולם</span>' : '<span class="tag" style="background:#fff4e5;color:#a15c00">טרם שולם</span>'}</td>
-      <td style="white-space:nowrap">${bDocChips(ev, r)}
+      <td data-label="תפקיד" style="font-weight:600">${escapeHtml(r.role)}</td>
+      <td data-label="ספק">${escapeHtml(r.name || '—')}</td>
+      <td data-label="ללא מע״מ" style="text-align:left;white-space:nowrap">${money(r.ex)}</td>
+      <td data-label="כולל מע״מ" style="text-align:left;white-space:nowrap">${money(r.inc)}${r.vatExempt ? ' <span class="tag" style="background:#eef0fb;color:#5b6180;font-size:10px">פטור</span>' : ''}</td>
+      <td data-label="תשלום" style="white-space:nowrap">${r.paid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33">שולם</span>' : '<span class="tag" style="background:#fff4e5;color:#a15c00">טרם שולם</span>'}</td>
+      <td data-label="מסמכי ספק" style="white-space:normal">${bDocChips(ev, r)}
         <button class="btn ghost" style="padding:1px 8px;font-size:11px;margin-inline-start:4px" onclick="bDocToggle(${r.index})" title="${_bvOpen[r.index] ? 'סגירת הפירוט' : 'פתיחת פירוט המסמכים'}">${_bvOpen[r.index] ? '▴ סגור' : '▾ פירוט'}</button></td>
-      <td class="muted" style="font-size:12px">${escapeHtml(r.note || '')}</td>
+      ${r.note ? `<td data-label="הערה" class="muted" style="font-size:12px">${escapeHtml(r.note)}</td>` : '<td></td>'}
     </tr>${_bvOpen[r.index] ? bDocPanel(ev, r) : ''}`).join('')
     : '<tr><td colspan="7" class="muted" style="padding:10px">עדיין לא מולאו שורות הוצאה.</td></tr>';
 
@@ -7768,7 +7773,7 @@ window.openBoardView = (id, keepOpen) => {
     </div>
 
     <div style="font-size:13px;font-weight:700;margin-bottom:4px">פירוט הוצאות</div>
-    <table class="tbl no-cardify" style="width:100%;font-size:12.5px">
+    <table class="tbl cardify bv-rows" style="width:100%;font-size:12.5px">
       <thead><tr><th>תפקיד</th><th>ספק</th><th style="text-align:left">ללא מע״מ</th><th style="text-align:left">כולל מע״מ</th><th>תשלום</th><th>מסמכי ספק</th><th>הערה</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>

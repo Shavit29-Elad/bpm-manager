@@ -2199,6 +2199,38 @@ check('צפיין המסמכים המשותף — לרוחב, עם זום והר
   return true;
 });
 
+check('פלאפון — טפסים ברשת פיקסלים נערמים ולא חורגים מהמסך', () => {
+  // נמדד בדפדפן אמיתי ברוחב 390: שורת פריט במסמך גלשה ל-426px וכפתור מחיקת
+  // השורה נפל מחוץ למסך; שורת התפקיד בלוח גלשה ל-683px ושדה ההערה נעלם.
+  const mob = css.slice(css.indexOf('@media (max-width: 640px)'));
+  for (const [sel, what] of [['.nq-item', 'שורת פריט במסמך'], ['.bd-row', 'שורת תפקיד בלוח']]) {
+    const i = mob.indexOf(sel + ' {');
+    if (i < 0) throw new Error(`אין כלל פלאפון ל${what}`);
+    const block = mob.slice(i, mob.indexOf('}', i));
+    if (!/grid-template-columns:[^;]*!important/.test(block)) throw new Error(`${what} לא נערמת בפלאפון`);
+  }
+  // כותרות העמודות מוסתרות כשאין עמודות
+  if (!/\.bd-head\s*\{\s*display:\s*none/.test(mob)) throw new Error('כותרת העמודות נשארת בפלאפון בלי עמודות');
+  // טבלת פירוט ההוצאות הפכה לכרטיסים, אחרת כפתור "פירוט" נופל מחוץ למסך
+  if (!/class="tbl cardify bv-rows"/.test(app)) throw new Error('פירוט ההוצאות אינו הופך לכרטיסים');
+  const labels = (app.match(/<td data-label="[^"]+"/g) || []).length;
+  if (labels < 6) throw new Error('חסרות תוויות לשדות בכרטיס: ' + labels);
+  return true;
+});
+check('כפתורי השמירה בחלונית גבוהה נשארים על המסך', () => {
+  // בלוח האירועים יש 14 שורות תפקיד, והכפתורים נדחפו אל מתחת לקצה המסך —
+  // גם במחשב (נמדד: top=917 על מסך 900). בפלאפון כבר היה כלל דביק.
+  if (!/class="modal-card tall-form"/.test(app)) throw new Error('חלונית האירוע אינה מסומנת כגבוהה');
+  if (!/<div class="tall-body">/.test(app)) throw new Error('אין אזור גלילה נפרד מהכפתורים');
+  const rule = css.slice(css.indexOf('.modal-card.tall-form'));
+  if (!/position:sticky/.test(rule.slice(0, 900))) throw new Error('הכפתורים אינם דביקים');
+  // הכלל מוגבל למסך רחב — בפלאפון יש כלל משלו עם שוליים צרים יותר
+  const at = css.indexOf('.modal-card.tall-form > .modal-actions');
+  const before = css.slice(Math.max(0, at - 400), at);
+  if (!/@media \(min-width: 641px\)/.test(before)) throw new Error('הכלל אינו מוגבל למסך רחב, והשוליים השליליים חורגים בפלאפון');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

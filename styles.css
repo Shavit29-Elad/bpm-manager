@@ -200,6 +200,17 @@ tbody tr:last-child td{border-bottom:none}
 .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:26px;width:min(560px,92vw);box-shadow:var(--shadow-lg)}
 .modal-card textarea{width:100%;margin:12px 0}
 .modal-actions{display:flex;justify-content:flex-end;gap:10px}
+/* חלונית גבוהה (לוח האירועים: 14 שורות תפקיד ועוד) דוחפת את כפתורי השמירה
+   מתחת לקצה המסך גם במחשב. בפלאפון יש כלל דביק כללי; כאן הוא מוחל גם ברוחב
+   מלא, כי המשתמש לא יודע שהחלונית נגללת ופשוט לא מוצא את "שמור". */
+.modal-card.tall-form{display:flex;flex-direction:column;max-height:92vh;max-height:92dvh;overflow:hidden}
+.modal-card.tall-form > .tall-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden}
+/* בפלאפון כבר קיים כלל דביק ל-.modal-actions עם שוליים המותאמים לריפוד הצר
+   שם. הכלל הזה מוגבל למסך רחב, אחרת השוליים השליליים חורגים מרוחב המסך. */
+@media (min-width: 641px) {
+  .modal-card.tall-form > .modal-actions{position:sticky;bottom:0;background:var(--panel);
+    margin:10px -26px -26px;padding:12px 26px;border-top:1px solid var(--line);box-shadow:0 -6px 16px rgba(0,0,0,.06)}
+}
 
 /* ===== באנרים / ריק ===== */
 .warn-banner{background:rgba(245,158,11,.11);border:1px solid rgba(245,158,11,.42);color:var(--warn);padding:12px 16px;border-radius:12px;font-size:13px;margin-bottom:16px}
@@ -320,8 +331,25 @@ tbody tr:last-child td{border-bottom:none}
   .panel table:not(.cardify) th:first-child,
   .panel table:not(.cardify) td:first-child{position:sticky;right:0;background:var(--panel);z-index:1}
 
+
+  /* פירוט ההוצאות בחלונית האירוע — שבע עמודות לא נכנסות ל-390px, וכפתור
+     "פירוט" של מסמכי הספק נדחף אל מחוץ למסך ולא היה אפשר להגיע אליו.
+     כאן כל שורה הופכת לכרטיס, ורצועת המסמכים נפרשת ברוחב מלא. */
+  table.bv-rows tr.bv-docs { border: none; background: transparent; margin-bottom: 0; }
+  table.bv-rows tr.bv-docs td { display: block; padding: 0; border: none; }
+  table.bv-rows tr.bv-docs td::before { content: none; }
+  table.bv-rows td[data-label="מסמכי ספק"] { flex-wrap: wrap; }
+
   /* כרטיסים בעמודה אחת */
   .cards{grid-template-columns:1fr}
+
+  /* בתוך חלונית, כרטיסי המדדים בעמודה אחת בלעו מסך שלם לפני שהגיעו לתוכן.
+     שלושה אריחים צרים נכנסים ברוחב אחד ומשאירים את הפירוט מעל הקיפול. */
+  .modal-card .cards{grid-template-columns:repeat(3,1fr);gap:6px}
+  .modal-card .cards .card{padding:9px 7px}
+  .modal-card .cards .label{font-size:10.5px;line-height:1.25}
+  .modal-card .cards .big{font-size:15px;line-height:1.3;word-break:break-word}
+  .modal-card .cards .card .muted{font-size:9.5px}
 
   /* מטרות מגע — המלצת אפל/גוגל היא 44px. כפתורי הפעולה בטבלאות מוגדרים inline
      עם padding זעיר (עד 2px), ו-min-height גובר עליהם בלי לגעת בדסקטופ.
@@ -390,4 +418,37 @@ textarea.doc-desc {
     border-inline-start: 0 !important; padding-inline-start: 0 !important;
     border-top: 1px solid var(--line); padding-top: 10px; }
   .bv-side iframe { min-height: 46vh !important; }
+}
+
+/* ── התאמות לפלאפון: טפסים בתוך חלוניות ─────────────────────────────────
+   רשתות עם עמודות בפיקסלים לא נכנסות ל-390px. במחשב הן קריאות; בפלאפון
+   הן דחפו שדות וכפתורים אל מחוץ למסך, ובפועל לא היה אפשר להגיע אליהם.
+   במסך צר הן נערמות, וכל שדה מקבל תווית משלו. */
+@media (max-width: 640px) {
+  /* שורת פריט במסמך: תיאור מלא, ואז כמות/מחיר/מחיקה בשורה שנייה */
+  .nq-item {
+    grid-template-columns: 1fr 96px 34px !important;
+    grid-template-areas: "desc desc desc" "qty price del" !important;
+    gap: 5px !important;
+    padding-bottom: 7px;
+    border-bottom: 1px solid var(--line);
+  }
+  .nq-item > .nq-desc { grid-area: desc; }
+  .nq-item > .nq-qty  { grid-area: qty; }
+  .nq-item > .nq-price{ grid-area: price; }
+  .nq-item > :last-child { grid-area: del; justify-self: end; }
+
+  /* שורת תפקיד בלוח האירועים: שבע עמודות הופכות לכרטיס */
+  .bd-row {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 5px 8px !important;
+    padding: 8px 0 !important;
+  }
+  .bd-row > :first-child { grid-column: 1 / -1; font-size: 13px !important; }
+  .bd-row > .bd-sup   { grid-column: 1 / -1; }
+  .bd-row > .bd-price { grid-column: 1 / -1; }
+  .bd-row > .bd-note  { grid-column: 1 / -1; }
+  /* שני הסימונים זה לצד זה — הם קשורים זה לזה והבחירה ביניהם קלה יותר כך */
+  .bd-row > label { justify-content: flex-start; }
+  .bd-head { display: none !important; }
 }
