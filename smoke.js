@@ -1881,6 +1881,13 @@ check('בורר תנאי התשלום נבנה ומופיע רק בהצעת מח
   // וההגדרות באמת נשלחות לשרת משלושת המסלולים
   const sends = (app.match(/paymentTerms: e\.payTerms \|\| null/g) || []).length;
   if (sends < 3) throw new Error('רק ' + sends + ' מסלולים שולחים תנאי תשלום');
+  // חלק ממסלולי החלונית יוצרים _nq בלי type (שכפול הצעה, יצירה רגילה). היעדר
+  // סוג בחלונית הזו פירושו הצעת מחיר, ולכן הבורר חייב להופיע גם שם.
+  const cond = app.split('\n').find(l => l.includes("payTermsBlock(e.payTerms, 'nq')"));
+  if (!/Number\(e\.type \|\| 10\)/.test(cond || '')) throw new Error('הבורר נעלם כשאין סוג מפורש בחלונית');
+  const inits = app.split('\n').filter(l => l.includes('_nq = {'));
+  const noType = inits.filter(l => !/type:/.test(l)).length;
+  if (noType && !/Number\(e\.type \|\| 10\)/.test(cond || '')) throw new Error('יש אתחול בלי סוג והתנאי אינו מכסה אותו');
   return true;
 });
 

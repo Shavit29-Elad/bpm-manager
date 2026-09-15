@@ -4478,7 +4478,7 @@ function renderNewQuote() {
     ${discountBoxHtml(e, 'nq')}
     <div id="nqTotals" style="margin-top:10px;font-size:14px"></div>
     <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית (לא חובה) <input class="nq-remarks" value="${escAttr(e.remarks)}" style="width:100%;padding:6px 8px;margin-top:3px"></label>
-    ${PAY_TERMS_DOCS.has(Number(e.type)) ? payTermsBlock(e.payTerms, 'nq') : ''}
+    ${PAY_TERMS_DOCS.has(Number(e.type || 10)) ? payTermsBlock(e.payTerms, 'nq') : ''}
     <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:10px"><input type="checkbox" class="nq-sendemail" ${e.sendEmail ? 'checked' : ''}> שלח את ההצעה ללקוח במייל</label>
     <input class="nq-email" type="email" dir="ltr" value="${escAttr(email)}" placeholder="mail@example.com" style="width:100%;padding:6px 8px;margin-top:6px">
     <input class="nq-email2" type="email" dir="ltr" value="${escAttr(e.email2 || '')}" placeholder="כתובת נוספת — אופציונלי (יישלח מייל אחד לשתיהן)" style="width:100%;padding:6px 8px;margin-top:6px">
