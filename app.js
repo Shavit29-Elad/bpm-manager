@@ -7467,6 +7467,18 @@ const supDocTypes = (r) => (r && r.vatExempt) ? [400] : [300, 305, 320];
 const bDocUrl = (d) => d.payableId ? `/api/supplier-payables/${d.payableId}/file` : `/api/files/${encodeURIComponent(d.fileId)}`;
 let _bvOpen = {};   // אילו שורות פתוחות לפירוט, לפי אינדקס
 let _bvDoc = null;  // המסמך שמוצג כרגע בתוך החלונית (id) — צפייה בלי לצאת ממנה
+let _bvZoom = 0;    // 0 = התאמה לרוחב; אחרת אחוז תצוגה
+let _bvWide = false; // הרחבת לוח הצפייה על חשבון הפירוט
+// צפיין ה-PDF של הדפדפן נפתח כברירת מחדל ב"התאם לעמוד", ובפאנל צר המסמך יוצא
+// זעיר. הפרמטרים בכתובת הם מה שהצפיין מקבל, ולכן הזום כאן חד ואמיתי ולא
+// מתיחה של תמונה. #view=FitH ממלא את רוחב הפאנל.
+const bDocFrag = () => _bvZoom ? `#toolbar=1&navpanes=0&zoom=${_bvZoom}` : '#toolbar=1&navpanes=0&view=FitH';
+window.bDocZoom = (delta) => {
+  const cur = _bvZoom || 100;
+  _bvZoom = delta === 0 ? 0 : Math.min(400, Math.max(40, cur + delta));
+  const ev = _bvEvent; if (ev) openBoardView(ev.id, true);
+};
+window.bDocWide = () => { _bvWide = !_bvWide; const ev = _bvEvent; if (ev) openBoardView(ev.id, true); };
 
 function bDocChips(ev, r) {
   const docs = r.docs || [];
@@ -7640,7 +7652,7 @@ function bvFindDoc(ev, docId) {
 }
 window.openBoardView = (id, keepOpen) => {
   const ev = boardFind(id); if (!ev) return;
-  if (!keepOpen) { _bvOpen = {}; _bvDoc = null; }   // פתיחה חדשה — הכל מכווץ
+  if (!keepOpen) { _bvOpen = {}; _bvDoc = null; _bvZoom = 0; _bvWide = false; }   // פתיחה חדשה — הכל מכווץ
   _bvEvent = ev;
   let m = document.getElementById('bvModal');
   if (!m) { m = document.createElement('div'); m.id = 'bvModal'; m.className = 'modal'; document.body.appendChild(m); }
@@ -7676,16 +7688,23 @@ window.openBoardView = (id, keepOpen) => {
   // כשמסמך פתוח, החלונית מתרחבת ולוח הצפייה נפתח בצדה. הוא מופיע ראשון ב-DOM
   // כדי שב-RTL הוא ייפול בצד ימין, וכל תוכן האירוע נשאר גלוי לצדו.
   const shown = _bvDoc ? bvFindDoc(ev, _bvDoc) : null;
-  const side = shown ? `<div class="bv-side" style="flex:0 0 min(52%,620px);min-width:300px;display:flex;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
-      <div class="row-between" style="margin:0 0 6px">
-        <div style="font-size:13px;font-weight:700">${escapeHtml(SUP_DOC_NAMES[shown.doc.type] || 'מסמך')}${shown.doc.number ? ' #' + escapeHtml(String(shown.doc.number)) : ''}
+  const zb = (lbl, act, t) => `<button class="btn ghost" style="padding:2px 8px;font-size:12px;line-height:1.3" onclick="${act}" title="${t}">${lbl}</button>`;
+  const side = shown ? `<div class="bv-side" style="flex:0 0 ${_bvWide ? 'min(74%,1080px)' : 'min(52%,620px)'};min-width:300px;display:flex;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
+      <div class="row-between" style="margin:0 0 6px;gap:8px;flex-wrap:wrap">
+        <div style="font-size:13px;font-weight:700;min-width:0">${escapeHtml(SUP_DOC_NAMES[shown.doc.type] || 'מסמך')}${shown.doc.number ? ' #' + escapeHtml(String(shown.doc.number)) : ''}
           <span class="muted" style="font-weight:400">· ${escapeHtml(shown.row.name || shown.row.role || '')}</span></div>
-        <div style="display:flex;gap:6px">
-          <a class="btn ghost" style="padding:2px 9px;font-size:11.5px;text-decoration:none" href="${bDocUrl(shown.doc)}" download target="_blank" rel="noopener">⬇ הורדה</a>
-          <button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="bDocShow('${shown.doc.id}')">✕ סגור</button>
+        <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+          ${zb('−', 'bDocZoom(-25)', 'הקטנה')}
+          <span class="muted" style="font-size:11.5px;min-width:52px;text-align:center">${_bvZoom ? _bvZoom + '%' : 'לרוחב'}</span>
+          ${zb('+', 'bDocZoom(25)', 'הגדלה')}
+          ${zb('⤢', 'bDocZoom(0)', 'התאמה לרוחב הפאנל')}
+          ${zb(_bvWide ? '⇥' : '⇤', 'bDocWide()', _bvWide ? 'הקטנת הפאנל' : 'הרחבת הפאנל')}
+          <a class="btn ghost" style="padding:2px 8px;font-size:12px;text-decoration:none" href="${bDocUrl(shown.doc)}" target="_blank" rel="noopener" title="פתיחה בלשונית נפרדת, במסך מלא">⧉</a>
+          <a class="btn ghost" style="padding:2px 8px;font-size:12px;text-decoration:none" href="${bDocUrl(shown.doc)}" download target="_blank" rel="noopener" title="הורדה">⬇</a>
+          ${zb('✕', `bDocShow('${shown.doc.id}')`, 'סגירה')}
         </div>
       </div>
-      <iframe src="${bDocUrl(shown.doc)}" style="flex:1;min-height:60vh;width:100%;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+      <iframe src="${bDocUrl(shown.doc)}${bDocFrag()}" style="flex:1;min-height:66vh;width:100%;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
     </div>` : '';
   m.innerHTML = `<div class="modal-card bv-split" style="width:${shown ? 'min(1480px,98vw)' : 'min(1000px,97vw)'};max-height:92vh;max-height:92dvh;overflow:hidden;display:flex;gap:14px;align-items:stretch">
     ${side}

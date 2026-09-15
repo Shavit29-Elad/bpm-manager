@@ -1995,6 +1995,7 @@ check('מסמכי ספק — עריכת שורה אינה מוחקת מסמכי�
 check('מסמכי ספק — לוח הצפייה נבנה ומציג את מה שמקושר', () => {
   const src = app.slice(app.indexOf('const SUP_DOC_NAMES ='), app.indexOf('window.bDocToggle'));
   const fns = new Function(`const escapeHtml=(x)=>String(x==null?'':x), money=(n)=>String(n), ddmy=(d)=>String(d||'');
+    const window = {}; const openBoardView = () => {};
 \n${src}\nreturn { bDocChips, bDocPanel };`)();
   const ev = { id: 'e1' };
   const licensed = { index: 0, role: 'קלידן', name: 'דני', vatExempt: false,
@@ -2085,7 +2086,7 @@ check('צפייה במסמך ספק — בתוך חלונית האירוע ול�
   const view = app.slice(app.indexOf('window.openBoardView ='), app.indexOf('// הפקת מסמך לאירוע'));
   if (!/<iframe/.test(view)) throw new Error('אין תצוגה מוטמעת בחלונית');
   if (!/bvFindDoc\(ev, _bvDoc\)/.test(view)) throw new Error('המסמך המוצג אינו מאותר');
-  if (!/flex:0 0 min\(52%/.test(view)) throw new Error('התצוגה אינה לוח צד');
+  if (!/flex:0 0 \$\{_bvWide \? 'min\(74%/.test(view)) throw new Error('התצוגה אינה לוח צד');
   if (!/min\(1480px,98vw\)/.test(view)) throw new Error('החלונית אינה מתרחבת כשמסמך פתוח');
   // הכפתור בשורה מרחיב פירוט ואינו מתחזה לצפייה במסמך
   const rowBtn = app.split('\n').find(l => l.includes('bDocToggle(${r.index})'));
@@ -2129,6 +2130,36 @@ check('חלונית האירוע נבנית תקין גם עם מסמך פתוח
   // ה-HTML מאוזן — שחזור מבנה שבור כאן היה מפיל את כל החלונית
   const opens = (open.match(/<div\b/g) || []).length, closes = (open.match(/<\/div>/g) || []).length;
   if (opens !== closes) throw new Error(`div לא מאוזן: ${opens} נפתחו, ${closes} נסגרו`);
+  return true;
+});
+
+check('צפיין המסמך — פתיחה לרוחב, וזום שנשלט מהצפיין עצמו', () => {
+  // ברירת המחדל של צפיין ה-PDF היא "התאם לעמוד", ובפאנל צר המסמך יוצא זעיר.
+  const view = app.slice(app.indexOf('let _bvDoc = null;'), app.indexOf('// הפקת מסמך לאירוע'));
+  const frag = new Function(`let _bvZoom = 0;
+    ${app.slice(app.indexOf('const bDocFrag ='), app.indexOf('window.bDocZoom ='))}
+    return (z) => { _bvZoom = z; return bDocFrag(); };`)();
+  if (!/view=FitH/.test(frag(0))) throw new Error('ברירת המחדל אינה מילוי רוחב: ' + frag(0));
+  if (!/zoom=150/.test(frag(150))) throw new Error('הזום אינו מועבר לצפיין: ' + frag(150));
+  // הזום נשלט מהכתובת ולא ממתיחת תמונה — אחרת PDF יוצא מטושטש
+  if (/transform:\s*scale/.test(view)) throw new Error('הזום נעשה במתיחה במקום בצפיין');
+
+  // גבולות — לא להיתקע על זום בלתי שמיש
+  const zoomFn = new Function(`let _bvZoom = 0; const _bvEvent = null; const openBoardView = () => {};
+    const window = {};
+    ${app.slice(app.indexOf('window.bDocZoom ='), app.indexOf('window.bDocWide ='))}
+    return { set: (v) => { _bvZoom = v; }, run: (d) => { window.bDocZoom(d); return _bvZoom; } };`)();
+  zoomFn.set(40); if (zoomFn.run(-25) !== 40) throw new Error('ירידה מתחת למינימום');
+  zoomFn.set(400); if (zoomFn.run(25) !== 400) throw new Error('עלייה מעל המקסימום');
+  zoomFn.set(150); if (zoomFn.run(0) !== 0) throw new Error('כפתור ההתאמה לרוחב לא מאפס');
+
+  // הכפתורים קיימים בפועל
+  for (const [pat, what] of [[/bDocZoom\(-25\)/, 'הקטנה'], [/bDocZoom\(25\)/, 'הגדלה'],
+      [/bDocZoom\(0\)/, 'התאמה לרוחב'], [/bDocWide\(\)/, 'הרחבת הפאנל'], [/target="_blank"[^>]*title="פתיחה בלשונית/, 'פתיחה במסך מלא']]) {
+    if (!pat.test(view)) throw new Error('חסר כפתור: ' + what);
+  }
+  // פתיחה חדשה מאפסת זום ורוחב, אחרת הגדרה מאירוע קודם נדבקת
+  if (!/_bvZoom = 0; _bvWide = false;/.test(view)) throw new Error('פתיחה חדשה לא מאפסת את הצפיין');
   return true;
 });
 
