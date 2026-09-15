@@ -2163,6 +2163,42 @@ check('צפיין המסמך — פתיחה לרוחב, וזום שנשלט מה
   return true;
 });
 
+check('תצוגת מסמך — עוברת דרך השרת ולא מול קישור חיצוני', () => {
+  // הקישור של חשבונית ירוקה הוא חיצוני, והדפדפן חסום מלמשוך אותו (CORS).
+  // תצוגה שנשענה עליו נכשלה ונפלה ל"לא ניתן להציג את המסמך כאן".
+  const pl = app.slice(app.indexOf('window.previewLinkedDoc ='), app.indexOf('window.previewDeriveFromDoc'));
+  if (/previewDoc\(r\.url/.test(pl)) throw new Error('התצוגה עדיין נשענת על הקישור החיצוני');
+  if (!/\/api\/documents\/\$\{encodeURIComponent\(docId\)\}\/download/.test(pl)) throw new Error('התצוגה אינה עוברת דרך השרת');
+  if (!/fallbackUrl: r\.url/.test(pl)) throw new Error('אין נפילה לקישור החיצוני כשאי אפשר להגיש');
+  // רשת ביטחון גם לכל קורא אחר שמעביר docId
+  const pd = app.slice(app.indexOf('window.previewDoc = async'), app.indexOf('window.closePreview ='));
+  if (!/viaServer/.test(pd)) throw new Error('אין ניסיון חוזר דרך השרת אחרי כשל');
+  if (!/!String\(url\)\.startsWith\('\/api\/documents\/'\)/.test(pd)) throw new Error('הניסיון החוזר עלול להיכנס ללולאה');
+  return true;
+});
+check('צפיין המסמכים המשותף — לרוחב, עם זום והרחבה', () => {
+  const src = app.slice(app.indexOf('function previewShell('), app.indexOf('window.previewDoc = async'));
+  const body = new Function(`let _pv = { blobUrl: 'blob:x', type: '', zoom: 0, wide: false, url: 'u', opts: {} };
+    const escAttr = (x) => String(x == null ? '' : x);
+    ${src}
+    return (type, zoom) => { _pv.type = type; _pv.zoom = zoom; return previewBody(); };`)();
+  if (!/view=FitH/.test(body('application/pdf', 0))) throw new Error('PDF אינו נפתח לרוחב');
+  if (!/zoom=150/.test(body('application/pdf', 150))) throw new Error('הזום אינו מועבר לצפיין');
+  if (!/max-width:100%/.test(body('image/png', 0))) throw new Error('תמונה אינה מותאמת');
+  if (!/width:150%/.test(body('image/png', 150))) throw new Error('תמונה אינה מוגדלת');
+  // שורת הכלים
+  const shell = app.slice(app.indexOf('function previewShell('), app.indexOf('function previewBody('));
+  for (const [pat, what] of [[/pvZoom\(-25\)/, 'הקטנה'], [/pvZoom\(25\)/, 'הגדלה'], [/pvZoom\(0\)/, 'התאמה לרוחב'], [/pvWide\(\)/, 'הרחבה']]) {
+    if (!pat.test(shell)) throw new Error('חסר כפתור: ' + what);
+  }
+  // כל הכפתורים הוותיקים נשמרו — הצפיין משרת מסכים רבים
+  for (const [pat, what] of [[/openDocLinks/, 'מסמכים מקושרים'], [/openDocSendHistory/, 'היסטוריית שליחה'],
+      [/deleteDraft/, 'מחיקת טיוטה'], [/opts\.extraActions/, 'כפתורים נוספים'], [/closePreview\(\)/, 'סגירה']]) {
+    if (!pat.test(shell)) throw new Error('אבד כפתור קיים: ' + what);
+  }
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

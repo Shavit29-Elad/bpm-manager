@@ -597,49 +597,92 @@ window.openDocSendHistory = async (docId) => {
     ${rows}${close}</div>`;
 };
 
+// ---- צפיין המסמכים המשותף ----
+// נפתח ממקומות רבים (אירועים, בנק, ספקים, לוח האירועים). צפיין ה-PDF של
+// הדפדפן נפתח כברירת מחדל ב"התאם לעמוד" והמסמך יוצא קטן, ולכן כאן הוא נפתח
+// לרוחב החלונית ויש שליטה מפורשת בהגדלה. הזום מועבר לצפיין עצמו דרך הכתובת,
+// כדי שהטקסט יישאר חד; בתמונה אין צפיין ולכן היא נמתחת לפי רוחב.
+let _pv = { url: null, blobUrl: null, type: '', opts: {}, zoom: 0, wide: false };
+window.pvZoom = (delta) => {
+  const cur = _pv.zoom || 100;
+  _pv.zoom = delta === 0 ? 0 : Math.min(400, Math.max(40, cur + delta));
+  renderPreviewBody();
+};
+window.pvWide = () => { _pv.wide = !_pv.wide; renderPreviewBody(); };
+
+function previewShell(inner) {
+  const { url, opts } = _pv;
+  const extra = opts.extraActions || '';
+  const _draftId = opts.deleteDraftId || (String(url).match(/\/api\/expense-drafts\/([^/]+)\/file/) || [])[1] || null;
+  const delBtn = _draftId ? `<button class="btn ghost" style="padding:6px 13px;color:var(--danger)" onclick="closePreview();deleteDraft('${_draftId}')">🗑 מחק</button>` : '';
+  const _docId = opts.docId || (String(url).match(/\/api\/documents\/([^/]+)\/(?:url|file)/) || [])[1] || null;
+  const linkBtn = _docId ? `<button class="btn ghost" style="padding:6px 13px" onclick="openDocLinks('${escAttr(String(_docId))}')">🔗 מסמכים מקושרים</button>` : '';
+  const histBtn = _docId ? `<button class="btn ghost" style="padding:6px 13px" onclick="openDocSendHistory('${escAttr(String(_docId))}')">📬 היסטוריית שליחה</button>` : '';
+  const zb = (lbl, act, t) => `<button class="btn ghost" style="padding:5px 9px;font-size:13px;line-height:1.2" onclick="${act}" title="${t}">${lbl}</button>`;
+  const zoomBar = `<div style="display:flex;gap:3px;align-items:center">
+      ${zb('−', 'pvZoom(-25)', 'הקטנה')}
+      <span class="muted" style="font-size:12px;min-width:54px;text-align:center">${_pv.zoom ? _pv.zoom + '%' : 'לרוחב'}</span>
+      ${zb('+', 'pvZoom(25)', 'הגדלה')}
+      ${zb('⤢', 'pvZoom(0)', 'התאמה לרוחב')}
+      ${zb(_pv.wide ? '⇥' : '⇤', 'pvWide()', _pv.wide ? 'הקטנת החלונית' : 'הרחבת החלונית למסך מלא')}
+      ${_pv.blobUrl ? `<a class="btn ghost" style="padding:5px 9px;font-size:13px;text-decoration:none" href="${_pv.blobUrl}" target="_blank" rel="noopener" title="פתיחה בלשונית נפרדת">⧉</a>` : ''}
+    </div>`;
+  return `<div class="modal-card" style="width:${_pv.wide ? '98vw' : 'min(920px,95vw)'};height:${_pv.wide ? '96vh' : '90vh'};height:${_pv.wide ? '96dvh' : '90dvh'};padding:0;display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line)">
+      <b style="white-space:nowrap">תצוגה מקדימה של המסמך</b>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${zoomBar}
+        ${linkBtn}${histBtn}
+        ${extra}
+        <a href="${_docId ? `/api/documents/${encodeURIComponent(_docId)}/download` : url}" target="_blank" class="btn ghost" style="padding:6px 13px;text-decoration:none">הורדה ↓</a>
+        ${delBtn}
+        <button class="btn primary" style="padding:6px 13px" onclick="closePreview()">סגור</button>
+      </div>
+    </div>${inner}</div>`;
+}
+
+function previewBody() {
+  if (!_pv.blobUrl) return `<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען מסמך…</div>`;
+  if (_pv.type.startsWith('image')) {
+    const w = _pv.zoom ? `width:${_pv.zoom}%;max-width:none` : 'max-width:100%;max-height:100%';
+    return `<div style="flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:center;background:#fff;padding:6px">
+      <img src="${_pv.blobUrl}" style="${w};object-fit:contain"/></div>`;
+  }
+  const frag = _pv.zoom ? `#toolbar=1&navpanes=0&zoom=${_pv.zoom}` : '#toolbar=1&navpanes=0&view=FitH';
+  return `<iframe src="${_pv.blobUrl}${frag}" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
+}
+
+function renderPreviewBody() {
+  const cur = document.getElementById('docPreview');
+  if (cur && !cur.classList.contains('hidden')) cur.innerHTML = previewShell(previewBody());
+}
+
 window.previewDoc = async (url, opts = {}) => {
   if (!url) return;
   let m = document.getElementById('docPreview');
   if (!m) { m = document.createElement('div'); m.id = 'docPreview'; m.className = 'modal'; document.body.appendChild(m); }
   m.style.zIndex = '200'; // תמיד מעל כל מודל אחר שפתוח (שיוך מסמך, עריכת אירוע וכו')
   m.classList.remove('hidden');
-  const extra = opts.extraActions || '';
-  // כשמציגים טיוטת חשבונית לקליטה (URL של expense-drafts) — מוסיפים כפתור מחק ליד ההורדה.
-  const _draftId = opts.deleteDraftId || (String(url).match(/\/api\/expense-drafts\/([^/]+)\/file/) || [])[1] || null;
-  const delBtn = _draftId ? `<button class="btn ghost" style="padding:6px 13px;color:var(--danger)" onclick="closePreview();deleteDraft('${_draftId}')">🗑 מחק</button>` : '';
-  // מזהה המסמך (אם ידוע) — מאפשר כפתור "מסמכים מקושרים" שמציג את כל שרשרת המסמכים (הצעת מחיר→עסקה→מס→קבלה + זיכויים)
-  const _docId = opts.docId || (String(url).match(/\/api\/documents\/([^/]+)\/(?:url|file)/) || [])[1] || null;
-  const linkBtn = _docId ? `<button class="btn ghost" style="padding:6px 13px" onclick="openDocLinks('${escAttr(String(_docId))}')">🔗 מסמכים מקושרים</button>` : '';
-  const histBtn = _docId ? `<button class="btn ghost" style="padding:6px 13px" onclick="openDocSendHistory('${escAttr(String(_docId))}')">📬 היסטוריית שליחה</button>` : '';
-  const shell = (inner) => `<div class="modal-card" style="width:min(920px,95vw);height:90vh;height:90dvh;padding:0;display:flex;flex-direction:column;overflow:hidden">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)">
-      <b>תצוגה מקדימה של המסמך</b>
-      <div style="display:flex;gap:8px;align-items:center">
-        ${linkBtn}${histBtn}
-        ${extra}
-        <a href="${url}" target="_blank" class="btn ghost" style="padding:6px 13px;text-decoration:none">הורדה ↓</a>
-        ${delBtn}
-        <button class="btn primary" style="padding:6px 13px" onclick="closePreview()">סגור</button>
-      </div>
-    </div>${inner}</div>`;
-  m.innerHTML = shell(`<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען מסמך…</div>`);
+  if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
+  _pv = { url, blobUrl: null, type: '', opts: opts || {}, zoom: 0, wide: false };   // מסמך חדש — זום נקי
+  m.innerHTML = previewShell(previewBody());
   m.onclick = (e) => { if (e.target === m) closePreview(); };
   try {
     const r = await fetch(url);
     const blob = await r.blob();
-    const t = (blob.type || r.headers.get('content-type') || '').toLowerCase();
-    if (_previewBlobUrl) URL.revokeObjectURL(_previewBlobUrl);
     _previewBlobUrl = URL.createObjectURL(blob);
-    const cur = document.getElementById('docPreview');
-    if (cur && !cur.classList.contains('hidden')) {
-      const body = t.startsWith('image')
-        ? `<div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;background:#fff;padding:6px"><img src="${_previewBlobUrl}" style="max-width:100%;max-height:100%;object-fit:contain" alt="מסמך"/></div>`
-        : `<iframe src="${_previewBlobUrl}#toolbar=1" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
-      cur.innerHTML = shell(body);
-    }
+    _pv.blobUrl = _previewBlobUrl;
+    _pv.type = (blob.type || r.headers.get('content-type') || '').toLowerCase();
+    renderPreviewBody();
   } catch (e) {
+    // כתובת חיצונית (חשבונית ירוקה) נחסמת ב-CORS. אם יש מזהה מסמך, השרת שלנו
+    // יכול להגיש את אותו קובץ מאותו דומיין — מנסים דרכו לפני שמוותרים.
+    const viaServer = (opts.docId && !String(url).startsWith('/api/documents/'))
+      ? `/api/documents/${encodeURIComponent(opts.docId)}/download` : null;
+    if (viaServer) { try { return await previewDoc(viaServer, { ...opts, fallbackUrl: url }); } catch { /* ממשיכים להודעה */ } }
+    const open = opts.fallbackUrl || url;
     const cur = document.getElementById('docPreview');
-    if (cur) cur.innerHTML = shell(`<div class="empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px"><div>לא ניתן להציג את המסמך כאן.</div><a href="${url}" target="_blank" class="btn primary" style="text-decoration:none">פתח בכרטיסייה חדשה ↗</a></div>`);
+    if (cur) cur.innerHTML = previewShell(`<div class="empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px"><div>לא ניתן להציג את המסמך כאן.</div><a class="btn primary" href="${open}" target="_blank" rel="noopener" style="text-decoration:none">פתיחה בלשונית חדשה</a></div>`);
   }
 };
 window.closePreview = () => {
@@ -710,7 +753,10 @@ window.previewLinkedDoc = async (docId, el, eventId) => {
   if (Number(r.status) === 0 && tp !== 10 && FOLLOWUP_FOR[tp] && FOLLOWUP_FOR[tp].length) {
     extra = `<button class="btn success" style="padding:6px 12px" onclick="previewDeriveFromDoc('${docId}','${escAttr(String(r.number || ''))}',${tp},'${eventId || ''}')">↪ מסמך המשך</button>`;
   }
-  previewDoc(r.url, { extraActions: extra, docId });
+  // לא פותחים את הקישור של חשבונית ירוקה ישירות: הוא חיצוני, והדפדפן חסום
+  // מלמשוך אותו (CORS), ולכן התצוגה נכשלה ונפלה ל"לא ניתן להציג". השרת שלנו
+  // מתווך את אותו קובץ מאותו דומיין, וגם מטפל במסמך שהועלה ידנית.
+  previewDoc(`/api/documents/${encodeURIComponent(docId)}/download`, { extraActions: extra, docId, fallbackUrl: r.url });
 };
 // הפקת מסמך המשך מתוך חלונית התצוגה המקדימה — מסמך ההמשך יקושר לאירוע (אם ידוע)
 window.previewDeriveFromDoc = (docId, number, type, eventId) => {
