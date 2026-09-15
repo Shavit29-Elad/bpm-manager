@@ -334,6 +334,83 @@ add('POST', /^\/api\/event-board$/, (req, res, _p, q, body) => {
   json(res, { ok: true, id: ev.id, totals: eventBoard.eventTotals(ev) });
 });
 
+// ── מסמכי ספק בשורת אירוע ────────────────────────────────────────────────
+// לכל שורת ספק רשימת מסמכים משלה: עוסק מורשה — חשבון עסקה ואחריו חשבונית מס
+// או מס-קבלה; עוסק פטור — קבלה. המסמך מגיע או מהעלאת קובץ, או משיוך להוצאת
+// ספק שכבר נקלטה. קישור מסמך אינו תשלום — הסטטוס ממשיך להיקבע בבנק או ידנית.
+function boardRowAt(db, cid, eventId, index) {
+  const ev = (db.events || []).find(e => e.id === eventId);
+  if (!ev) return { error: 'האירוע לא נמצא', code: 404 };
+  if (!ownedBy(ev, cid)) return { error: 'wrong', code: 403 };
+  const row = (ev.contractorDetails || [])[Number(index)];
+  if (!row) return { error: 'שורת הספק לא נמצאה', code: 404 };
+  if (!Array.isArray(row.docs)) row.docs = [];
+  return { ev, row };
+}
+
+// GET — הוצאות ספק שכבר נקלטו ומתאימות לשיוך לשורה הזו
+add('GET', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/candidates$/, (req, res, params, q) => {
+  const db = load(), cid = reqCompany(q);
+  const r = boardRowAt(db, cid, params[0], params[1]);
+  if (r.error) return r.code === 403 ? wrongCompany(res, 'האירוע') : json(res, { error: r.error }, r.code);
+  const allowed = new Set(eventBoard.supDocTypesFor(r.row));
+  const norm = (x) => String(x || '').replace(/בע["\'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
+  const want = norm(r.row.name);
+  const used = new Set((r.row.docs || []).map(d => String(d.payableId || '')).filter(Boolean));
+  const items = (db.supplierPayables || [])
+    .filter(p => (p.companyId || giCompanyId()) === cid)
+    .filter(p => !used.has(String(p.id)))
+    .filter(p => !want || norm(p.supplierName).includes(want) || want.includes(norm(p.supplierName)))
+    .filter(p => allowed.has(Number(p.documentType)))
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+    .slice(0, 60)
+    .map(p => ({ id: p.id, supplierName: p.supplierName, documentType: Number(p.documentType),
+      number: p.number || null, date: p.date || null, amount: p.amount, hasFile: !!(p.localFileId || p.giExpenseId) }));
+  json(res, { ok: true, allowed: [...allowed], names: eventBoard.SUP_DOC_NAMES, items });
+});
+
+// POST — הוספת מסמך לשורה: payableId (שיוך) או data (העלאת קובץ)
+add('POST', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc$/, async (req, res, params, q, body) => {
+  const b = body || {};
+  const cid = reqCompany(q, b);
+  const db = load();
+  const r = boardRowAt(db, cid, params[0], params[1]);
+  if (r.error) return r.code === 403 ? wrongCompany(res, 'האירוע') : json(res, { error: r.error }, r.code);
+  const type = Number(b.type) || 0;
+  if (!eventBoard.supDocTypesFor(r.row).includes(type)) {
+    return json(res, { error: r.row.vatExempt ? 'לעוסק פטור אפשר לשייך קבלה בלבד' : 'סוג מסמך שאינו מתאים לספק מורשה' }, 400);
+  }
+  let doc = null;
+  if (b.payableId) {
+    const p = (db.supplierPayables || []).find(x => x.id === b.payableId);
+    if (!p) return json(res, { error: 'ההוצאה לא נמצאה' }, 404);
+    if ((p.companyId || giCompanyId()) !== cid) return wrongCompany(res, 'ההוצאה');
+    if ((r.row.docs || []).some(d => String(d.payableId) === String(p.id))) return json(res, { error: 'המסמך כבר משויך לשורה' }, 400);
+    doc = { id: id('bdoc'), type: Number(p.documentType), number: p.number || null, date: p.date || null,
+      amount: p.amount != null ? Number(p.amount) : null, payableId: p.id, fileId: null, addedAt: new Date().toISOString() };
+  } else if (b.data) {
+    const saved = await saveFile({ employeeId: 'evdoc:' + r.ev.id, kind: 'supplier-doc',
+      filename: b.filename || 'document', mime: b.mime || 'application/octet-stream', data: String(b.data) });
+    doc = { id: id('bdoc'), type, number: (b.number != null && String(b.number).trim()) ? String(b.number).trim() : null,
+      date: b.date || null, amount: b.amount != null && b.amount !== '' ? Number(b.amount) : null,
+      payableId: null, fileId: saved.id, filename: b.filename || null, addedAt: new Date().toISOString() };
+  } else return json(res, { error: 'לא נבחר מסמך ולא הועלה קובץ' }, 400);
+  r.row.docs.push(doc);
+  save(db);
+  json(res, { ok: true, doc });
+});
+
+add('DELETE', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc\/([^/]+)$/, (req, res, params, q) => {
+  const db = load(), cid = reqCompany(q);
+  const r = boardRowAt(db, cid, params[0], params[1]);
+  if (r.error) return r.code === 403 ? wrongCompany(res, 'האירוע') : json(res, { error: r.error }, r.code);
+  const before = r.row.docs.length;
+  r.row.docs = r.row.docs.filter(d => String(d.id) !== String(params[2]));
+  if (r.row.docs.length === before) return json(res, { error: 'המסמך לא נמצא בשורה' }, 404);
+  save(db);
+  json(res, { ok: true });
+});
+
 add('DELETE', /^\/api\/event-board\/([^/]+)$/, (req, res, params, q) => {
   const db = load(), cid = reqCompany(q);
   const ev = (db.events || []).find(e => e.id === params[0]);

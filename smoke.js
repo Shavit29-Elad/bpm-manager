@@ -1953,6 +1953,56 @@ check('לוח האירועים — מוצג למשה בלבד', () => {
   return true;
 });
 
+check('מסמכי ספק — הסוגים המותרים לפי סוג העוסק', () => {
+  const lic = boardMod.supDocTypesFor({ vatExempt: false });
+  if (lic.join(',') !== '300,305,320') throw new Error('עוסק מורשה: ' + lic);
+  const ex = boardMod.supDocTypesFor({ vatExempt: true });
+  if (ex.join(',') !== '400') throw new Error('עוסק פטור: ' + ex);
+  // הממשק חייב להסכים עם השרת, אחרת המסך יציע סוג שהשרת ידחה
+  const uiNames = app.match(/const SUP_DOC_NAMES = \{([^}]*)\}/);
+  if (!uiNames) throw new Error('שמות המסמכים חסרים בממשק');
+  for (const [t, n] of Object.entries(boardMod.SUP_DOC_NAMES)) {
+    if (!new RegExp(`${t}:\\s*'${n}'`).test(uiNames[1])) throw new Error(`סוג ${t} אינו "${n}" בממשק`);
+  }
+  const uiFn = app.match(/const supDocTypes = \(r\) => [^\n]+/);
+  if (!uiFn || !/\[400\]/.test(uiFn[0]) || !/\[300, 305, 320\]/.test(uiFn[0])) throw new Error('כללי הסוגים בממשק אינם תואמים');
+  // השרת אוכף — לא רק מציג
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const route = srv.slice(srv.indexOf("add('POST', /^\\/api\\/event-board\\/([^/]+)\\/row"));
+  if (!/supDocTypesFor\(r\.row\)\.includes\(type\)/.test(route.slice(0, 1500))) throw new Error('השרת אינו אוכף את סוג המסמך');
+  return true;
+});
+check('מסמכי ספק — עריכת שורה אינה מוחקת מסמכים', () => {
+  const prev = [{ role: 'קלידן', name: 'דני', priceExVat: 1500, docs: [{ id: 'd1', type: 300, number: '1204' }] }];
+  const out = boardMod.normalizeRows([{ role: 'קלידן', name: 'דני', priceExVat: 1600 }], prev);
+  if ((out[0].docs || []).length !== 1) throw new Error('המסמכים נמחקו בעריכה');
+  if (out[0].docs[0].number !== '1204') throw new Error('המסמך השתנה');
+  // שורה חדשה מתחילה בלי מסמכים
+  if (boardMod.normalizeRows([{ role: 'בסיסט', name: 'א', priceExVat: 100 }])[0].docs.length) throw new Error('שורה חדשה קיבלה מסמכים');
+  return true;
+});
+check('מסמכי ספק — לוח הצפייה נבנה ומציג את מה שמקושר', () => {
+  const src = app.slice(app.indexOf('const SUP_DOC_NAMES ='), app.indexOf('window.bDocToggle'));
+  const fns = new Function(`const escapeHtml=(x)=>String(x==null?'':x), money=(n)=>String(n), ddmy=(d)=>String(d||'');
+\n${src}\nreturn { bDocChips, bDocPanel };`)();
+  const ev = { id: 'e1' };
+  const licensed = { index: 0, role: 'קלידן', name: 'דני', vatExempt: false,
+    docs: [{ id: 'd1', type: 300, number: '1204', payableId: 'pay1' }] };
+  const chips = fns.bDocChips(ev, licensed);
+  if (!/1204/.test(chips)) throw new Error('התג לא מציג את המסמך');
+  if (!/חסר/.test(chips)) throw new Error('אין חיווי מה עוד חסר');
+  const panel = fns.bDocPanel(ev, licensed);
+  if (!/supplier-payables\/pay1\/file/.test(panel)) throw new Error('מסמך משויך אינו נפתח מהוצאות המערכת');
+  if (!/עוסק מורשה/.test(panel)) throw new Error('סוג העוסק לא מוצג');
+  const exempt = { index: 1, role: 'מתופף', name: 'רון', vatExempt: true, docs: [{ id: 'd2', type: 400, fileId: 'f9' }] };
+  const p2 = fns.bDocPanel(ev, exempt);
+  if (!/עוסק פטור/.test(p2)) throw new Error('עוסק פטור לא מסומן');
+  if (!/api\/files\/f9/.test(p2)) throw new Error('קובץ שהועלה אינו נפתח מהקבצים');
+  // שורה ריקה מסבירה ולא נראית שבורה
+  if (!/עדיין לא שויך מסמך/.test(fns.bDocPanel(ev, { index: 2, role: 'תאורן', name: '', docs: [] }))) throw new Error('אין הסבר כשאין מסמכים');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

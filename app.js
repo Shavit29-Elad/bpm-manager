@@ -7444,9 +7444,122 @@ window.boardDelete = async (id) => {
   renderEventsBoard($('#content'));
 };
 
+// מסמכי ספק בשורת אירוע. עוסק מורשה: חשבון עסקה ואחריו חשבונית מס או מס-קבלה.
+// עוסק פטור: קבלה בלבד. הצפייה מרחיבה את השורה בתוך חלונית האירוע — בלי לצאת
+// ממנה — כדי שאפשר יהיה לראות מה מקושר בלי לאבד את ההקשר.
+const SUP_DOC_NAMES = { 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה' };
+const supDocTypes = (r) => (r && r.vatExempt) ? [400] : [300, 305, 320];
+const bDocUrl = (d) => d.payableId ? `/api/supplier-payables/${d.payableId}/file` : `/api/files/${encodeURIComponent(d.fileId)}`;
+let _bvOpen = {};   // אילו שורות פתוחות לצפייה, לפי אינדקס
+
+function bDocChips(ev, r) {
+  const docs = r.docs || [];
+  const chips = docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;white-space:nowrap">${escapeHtml(SUP_DOC_NAMES[d.type] || 'מסמך')}${d.number ? ' #' + escapeHtml(String(d.number)) : ''}</span>`).join(' ');
+  const missing = supDocTypes(r).filter(t => !docs.some(d => Number(d.type) === t));
+  const hint = docs.length ? '' : `<span class="muted" style="font-size:10.5px">אין מסמכים</span>`;
+  return `${chips || hint}${docs.length && missing.length ? ` <span class="muted" style="font-size:10.5px">· חסר: ${missing.map(t => SUP_DOC_NAMES[t]).join(' / ')}</span>` : ''}`;
+}
+
+function bDocPanel(ev, r) {
+  const docs = r.docs || [];
+  const rows = docs.length ? docs.map(d => `<tr>
+      <td style="white-space:nowrap">${escapeHtml(SUP_DOC_NAMES[d.type] || 'מסמך')}${d.number ? ' #' + escapeHtml(String(d.number)) : ''}</td>
+      <td class="muted" style="white-space:nowrap">${d.date ? ddmy(d.date) : ''}</td>
+      <td style="text-align:left;white-space:nowrap">${d.amount != null ? money(d.amount) : ''}</td>
+      <td class="muted" style="font-size:11px;white-space:nowrap">${d.payableId ? 'מהוצאות המערכת' : 'קובץ שהועלה'}</td>
+      <td style="text-align:left;white-space:nowrap">
+        <button class="btn ghost" style="padding:1px 8px;font-size:11px" onclick="previewDoc('${bDocUrl(d)}')">👁</button>
+        <a class="btn ghost" style="padding:1px 8px;font-size:11px;text-decoration:none" href="${bDocUrl(d)}" download target="_blank" rel="noopener">⬇</a>
+        <button class="btn ghost" style="padding:1px 8px;font-size:11px;color:var(--danger)" onclick="bDocRemove('${ev.id}',${r.index},'${d.id}')" title="נתק מהשורה">✕</button>
+      </td></tr>`).join('') : '<tr><td colspan="5" class="muted" style="padding:6px">עדיין לא שויך מסמך לספק הזה.</td></tr>';
+  return `<tr class="bv-docs"><td colspan="7" style="padding:0">
+    <div style="margin:0 0 6px;padding:8px 10px;background:var(--panel2);border-radius:8px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:5px">מסמכי ${escapeHtml(r.name || r.role)} — ${r.vatExempt ? 'עוסק פטור (קבלה)' : 'עוסק מורשה (עסקה → מס / מס-קבלה)'}</div>
+      <table class="tbl no-cardify" style="width:100%;font-size:12px"><tbody>${rows}</tbody></table>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
+        <button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="bDocLink('${ev.id}',${r.index})">🔗 שיוך מהוצאות המערכת</button>
+        <button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="bDocUpload('${ev.id}',${r.index})">📎 העלאת קובץ</button>
+      </div>
+      <div id="bDocStatus${r.index}" style="font-size:11.5px;min-height:14px;margin-top:4px"></div>
+    </div></td></tr>`;
+}
+window.bDocToggle = (idx) => { _bvOpen[idx] = !_bvOpen[idx]; const ev = _bvEvent; if (ev) openBoardView(ev.id, true); };
+
+window.bDocRemove = async (evId, idx, docId) => {
+  if (!confirm('לנתק את המסמך מהשורה? הקובץ עצמו לא נמחק.')) return;
+  const r = await fetch(`/api/event-board/${evId}/row/${idx}/doc/${docId}`, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || r.error) { const st = document.getElementById('bDocStatus' + idx); if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  await boardReloadInto(evId);
+};
+
+window.bDocUpload = (evId, idx) => {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'application/pdf,image/*';
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; if (!f) return;
+    const st = document.getElementById('bDocStatus' + idx);
+    const row = bvRow(idx);
+    const types = supDocTypes(row);
+    const type = types.length === 1 ? types[0] : Number(prompt(`סוג המסמך?\n${types.map((t, i) => `${i + 1}) ${SUP_DOC_NAMES[t]}`).join('\n')}`, '1') || 0) ;
+    const chosen = types.length === 1 ? types[0] : types[(type || 1) - 1];
+    if (!chosen) return;
+    if (st) st.innerHTML = '<span class="muted">מעלה…</span>';
+    const data = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.readAsDataURL(f); });
+    const num = prompt('מספר המסמך (לא חובה)', '') || '';
+    const r = await fetch(`/api/event-board/${evId}/row/${idx}/doc`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: chosen, filename: f.name, mime: f.type || 'application/octet-stream', data, number: num }) })
+      .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+    await boardReloadInto(evId);
+  };
+  inp.click();
+};
+
+window.bDocLink = async (evId, idx) => {
+  const st = document.getElementById('bDocStatus' + idx);
+  if (st) st.innerHTML = '<span class="muted">טוען הוצאות…</span>';
+  const r = await api(`/api/event-board/${evId}/row/${idx}/candidates`).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  if (!(r.items || []).length) {
+    if (st) st.innerHTML = '<span class="muted">לא נמצאו הוצאות מתאימות לספק הזה. אפשר להעלות קובץ.</span>';
+    return;
+  }
+  const opts = r.items.map(p => `<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;padding:5px 7px;border-top:1px solid var(--line)">
+      <input type="radio" name="bdocpick" value="${p.id}"/>
+      <span style="flex:1">${escapeHtml(SUP_DOC_NAMES[p.documentType] || '')}${p.number ? ' #' + escapeHtml(String(p.number)) : ''} · ${escapeHtml(p.supplierName || '')}</span>
+      <span class="muted" style="white-space:nowrap">${p.date ? ddmy(p.date) : ''}</span>
+      <span style="white-space:nowrap;font-weight:600">${money(p.amount)}</span></label>`).join('');
+  if (st) st.innerHTML = `<div style="border:1px solid var(--line);border-radius:8px;margin-top:4px">${opts}</div>
+    <div style="margin-top:6px"><button class="btn primary" style="padding:2px 10px;font-size:11.5px" onclick="bDocLinkConfirm('${evId}',${idx})">שייך</button></div>`;
+};
+window.bDocLinkConfirm = async (evId, idx) => {
+  const sel = document.querySelector('input[name="bdocpick"]:checked');
+  const st = document.getElementById('bDocStatus' + idx);
+  if (!sel) { if (st) st.innerHTML = '<span style="color:var(--danger)">לא נבחר מסמך.</span>'; return; }
+  const row = bvRow(idx);
+  const r = await fetch(`/api/event-board/${evId}/row/${idx}/doc`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ payableId: sel.value, type: (row.docsPickType || supDocTypes(row)[0]) }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  await boardReloadInto(evId);
+};
+function bvRow(idx) {
+  const ev = _bvEvent; if (!ev) return {};
+  return (ev.rows || []).find(r => r.index === Number(idx)) || {};
+}
+async function boardReloadInto(evId) {
+  const year = _boardYear || new Date().getFullYear();
+  const r = await api(`/api/event-board?year=${year}&fresh=1`).catch(() => null);
+  if (r && !r.error) _board = r;
+  openBoardView(evId, true);
+  const c = $('#content'); if (c && state.tab === 'eventsboard') renderEventsBoard(c);
+}
+
 // חלונית צפייה מורחבת — הפירוט המלא של האירוע, המסמכים המקושרים והפקת חשבונית.
-window.openBoardView = (id) => {
+let _bvEvent = null;
+window.openBoardView = (id, keepOpen) => {
   const ev = boardFind(id); if (!ev) return;
+  if (!keepOpen) _bvOpen = {};      // פתיחה חדשה — כל השורות מכווצות
+  _bvEvent = ev;
   let m = document.getElementById('bvModal');
   if (!m) { m = document.createElement('div'); m.id = 'bvModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
@@ -7459,9 +7572,11 @@ window.openBoardView = (id) => {
       <td style="text-align:left;white-space:nowrap">${money(r.ex)}</td>
       <td style="text-align:left;white-space:nowrap">${money(r.inc)}${r.vatExempt ? ' <span class="tag" style="background:#eef0fb;color:#5b6180;font-size:10px">פטור</span>' : ''}</td>
       <td style="white-space:nowrap">${r.paid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33">שולם</span>' : '<span class="tag" style="background:#fff4e5;color:#a15c00">טרם שולם</span>'}</td>
+      <td style="white-space:nowrap">${bDocChips(ev, r)}
+        <button class="btn ghost" style="padding:1px 8px;font-size:11px;margin-inline-start:4px" onclick="bDocToggle(${r.index})" title="צפייה במסמכי הספק">${_bvOpen[r.index] ? '▴' : '👁'}</button></td>
       <td class="muted" style="font-size:12px">${escapeHtml(r.note || '')}</td>
-    </tr>`).join('')
-    : '<tr><td colspan="6" class="muted" style="padding:10px">עדיין לא מולאו שורות הוצאה.</td></tr>';
+    </tr>${_bvOpen[r.index] ? bDocPanel(ev, r) : ''}`).join('')
+    : '<tr><td colspan="7" class="muted" style="padding:10px">עדיין לא מולאו שורות הוצאה.</td></tr>';
 
   const docs = (ev.linkedDocs || []).length ? (ev.linkedDocs || []).map(d => {
     const nm = `${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number != null ? ' #' + d.number : ''}`;
@@ -7491,7 +7606,7 @@ window.openBoardView = (id) => {
 
     <div style="font-size:13px;font-weight:700;margin-bottom:4px">פירוט הוצאות</div>
     <table class="tbl no-cardify" style="width:100%;font-size:12.5px">
-      <thead><tr><th>תפקיד</th><th>ספק</th><th style="text-align:left">ללא מע״מ</th><th style="text-align:left">כולל מע״מ</th><th>תשלום</th><th>הערה</th></tr></thead>
+      <thead><tr><th>תפקיד</th><th>ספק</th><th style="text-align:left">ללא מע״מ</th><th style="text-align:left">כולל מע״מ</th><th>תשלום</th><th>מסמכי ספק</th><th>הערה</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
 

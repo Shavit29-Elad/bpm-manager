@@ -17,6 +17,14 @@ export const BOARD_ROLES = [
 const ROLE_SET = new Set(BOARD_ROLES);
 export const isFixedRole = (role) => ROLE_SET.has(String(role || '').trim());
 
+// מסמכי הספק המותרים לשורה, לפי סוג העוסק. עוסק פטור אינו מוציא חשבונית מס,
+// ולכן המסמך היחיד שלו הוא קבלה. עוסק מורשה: חשבון עסקה, ואחריו חשבונית מס
+// או חשבונית מס-קבלה.
+export const SUP_DOC_TYPES_LICENSED = [300, 305, 320];
+export const SUP_DOC_TYPES_EXEMPT = [400];
+export const SUP_DOC_NAMES = { 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה' };
+export const supDocTypesFor = (row) => (row && row.vatExempt) ? SUP_DOC_TYPES_EXEMPT : SUP_DOC_TYPES_LICENSED;
+
 const num = (v) => Number(v) || 0;
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -37,12 +45,12 @@ export function boardRows(ev) {
   const extras = [];
   details.forEach((d, index) => {
     const role = String((d && d.role) || '').trim();
-    const row = { ...d, index, role, ...rowTotals(d) };
+    const row = { ...d, index, role, docs: Array.isArray(d && d.docs) ? d.docs : [], ...rowTotals(d) };
     if (isFixedRole(role) && !byRole.has(role)) byRole.set(role, row);
     else if (role) extras.push(row);
   });
   const fixed = BOARD_ROLES.map(role => byRole.get(role)
-    || { role, index: -1, name: '', priceExVat: null, vatExempt: false, note: '', ex: 0, inc: 0, vat: 0 });
+    || { role, index: -1, name: '', priceExVat: null, vatExempt: false, note: '', docs: [], ex: 0, inc: 0, vat: 0 });
   return { fixed, extras, all: [...fixed, ...extras] };
 }
 
@@ -119,9 +127,11 @@ export function normalizeRows(rows, prev = []) {
       note: String((r && r.note) || '').trim(),
       amount: t.inc,                      // הסכום שמשולם בפועל — עליו עובד מעקב הספקים
       supplierId: (r && r.supplierId) || old.supplierId || null,
+      docs: Array.isArray(old.docs) ? old.docs : [],   // מסמכי הספק — נשמרים בעריכה
+
     });
   }
   return out;
 }
 
-export default { VAT_RATE, BOARD_ROLES, isFixedRole, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
+export default { VAT_RATE, BOARD_ROLES, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
