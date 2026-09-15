@@ -989,18 +989,12 @@ check('שורת האירוע ותא מסמכי החיוב נבנים בלי שג
 });
 
 check('חלונית שנפתחת מתוך תצוגת מסמך מופיעה מעליה', () => {
-  // חלונית התצוגה מוגדרת z-index 200. חלונית שנפתחת מתוכה ונשארת בברירת המחדל
-  // (50) נפתחת מאחוריה — נראית כאילו לא קרה כלום.
-  const preview = app.match(/window\.previewDoc = async[\s\S]*?zIndex = '(\d+)'/);
-  if (!preview) throw new Error('לא נמצא z-index לחלונית התצוגה');
-  const base = Number(preview[1]);
-  for (const id of ['docSendHistModal', 'docLinks', 'sendDocModal']) {
-    const i = app.indexOf(`m.id = '${id}'`);
-    if (i < 0) throw new Error(`${id} לא נמצאה`);
-    const win = app.slice(i, i + 400);
-    const z = win.match(/zIndex = '(\d+)'/);
-    if (!z) throw new Error(`${id}: אין z-index — תיפתח מאחורי חלונית התצוגה`);
-    if (Number(z[1]) <= base) throw new Error(`${id}: z-index ${z[1]} אינו מעל ${base}`);
+  // השכבה נגזרת ממה שפתוח בפועל (topZ), ולא ממספר קבוע שנשבר בכל מסלול חדש.
+  for (const id of ['docSendHistModal', 'docLinks']) {
+    const i = app.indexOf(`id = '${id}'`);
+    if (i < 0) throw new Error(id + ' לא נמצא');
+    if (!/style\.zIndex = topZ\(/.test(app.slice(i, i + 900)))
+      throw new Error(`${id}: אין חישוב שכבה — תיפתח מאחורי חלונית התצוגה`);
   }
   return true;
 });
@@ -1282,7 +1276,7 @@ check('חלוניות הפירוט של דף הבית נבנות בלי שגיא
     const DOC_TYPE_SHORT = { 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 330: 'זיכוי' };
     let captured = '';
     const document = { getElementById: () => null, createElement: () => ({ classList:{add(){},remove(){}}, style:{}, set innerHTML(v){ captured = v; }, get innerHTML(){ return captured; } }), body:{ appendChild(){} } };
-    const window = {};
+    const window = {}; const topZ = () => '300';
   `;
   const fig = {
     year: 2026,
@@ -1653,7 +1647,7 @@ check('תצוגת חיוב — החלונית נבנית ומציגה את מס�
     const api = (p) => { url = p; return Promise.resolve(payload); };
     const document = { getElementById: () => null, body: { appendChild(){} },
       createElement: () => ({ classList:{add(){},remove(){}}, style:{}, set innerHTML(v){ captured = v; }, get innerHTML(){ return captured; } }) };
-    const window = {};
+    const window = {}; const topZ = () => '300';
   `;
   const build = (payload) => new Function('payload', `${stubs}\n${src}\nreturn window.openBillingView('ev1').then(() => [captured, url]);`)(payload);
 
@@ -2228,6 +2222,38 @@ check('כפתורי השמירה בחלונית גבוהה נשארים על ה�
   const at = css.indexOf('.modal-card.tall-form > .modal-actions');
   const before = css.slice(Math.max(0, at - 400), at);
   if (!/@media \(min-width: 641px\)/.test(before)) throw new Error('הכלל אינו מוגבל למסך רחב, והשוליים השליליים חורגים בפלאפון');
+  return true;
+});
+
+check('סדר החלוניות — חלונית שנפתחת מתוך אחרת יושבת מעליה', () => {
+  // כל חלונית נשאה מספר שכבה קבוע. ברגע שנוסף מסלול פתיחה חדש — תצוגת מסמך
+  // מתוך "תצוגת חיוב" — המספר הנמוך גרם לה להיפתח מאחור.
+  const src = app.slice(app.indexOf('function topZ('), app.indexOf('window.openDocSendHistory'));
+  const topZ = new Function(`${src}\nreturn topZ;`)();
+  const mk = (z, hidden) => ({ classList: { contains: () => !!hidden }, __z: z });
+  const docAll = (list) => { global.document = { querySelectorAll: () => list }; };
+  global.getComputedStyle = (el) => ({ zIndex: String(el.__z) });
+
+  docAll([]);
+  if (topZ(200) !== '200') throw new Error('בלי חלוניות פתוחות לא נשמר המינימום');
+  docAll([mk(300)]);
+  if (topZ(200) !== '310') throw new Error('לא עלה מעל חלונית פתוחה: ' + topZ(200));
+  docAll([mk(300), mk(310)]);
+  if (topZ(200) !== '320') throw new Error('לא עלה מעל העליונה: ' + topZ(200));
+  docAll([mk(9999, true)]);
+  if (topZ(200) !== '200') throw new Error('חלונית מוסתרת נספרה');
+  const self = mk(500);
+  docAll([self, mk(300)]);
+  if (topZ(200, self) !== '310') throw new Error('החלונית עצמה נספרה ומטפסת בכל פתיחה');
+
+  // אין יותר מספרים קבועים בחלוניות שנפתחות מעל אחרות
+  for (const id of ['docPreview', 'docSendHistModal', 'docLinks', 'billViewModal', 'bDocUpModal']) {
+    const i = app.indexOf(`id = '${id}'`);
+    if (i < 0) continue;
+    const near = app.slice(i, i + 900);
+    const fixed = near.match(/style\.zIndex = '(\d+)'/);
+    if (fixed) throw new Error(`${id} עדיין עם שכבה קבועה (${fixed[1]})`);
+  }
   return true;
 });
 

@@ -566,10 +566,24 @@ function fmtDate(s) { if (!s) return '—'; const m = String(s).slice(0, 10).mat
 // תצוגה מקדימה של מסמך (PDF) בחלון קופץ — מושכים את הקובץ כ-blob ומציגים בתוך המסך (בלי הורדה)
 let _previewBlobUrl = null;
 // היסטוריית השליחה של מסמך מסוים — מתי נשלח, לאיזו כתובת, והאם הצליח.
+// שכבת התצוגה של חלונית שנפתחת מעל חלוניות אחרות. עד עכשיו כל חלונית נשאה
+// מספר קבוע, וברגע שנוסף מסלול פתיחה חדש — למשל תצוגת מסמך שנפתחת מתוך
+// "תצוגת חיוב" — המספר הקבוע הנמוך יותר גרם לה להיפתח מאחור. כאן השכבה
+// נגזרת ממה שפתוח בפועל, ולכן החדשה תמיד מעל.
+function topZ(min, self) {
+  let max = 0;
+  document.querySelectorAll('.modal').forEach(m => {
+    if (m === self || m.classList.contains('hidden')) return;
+    const z = Number(getComputedStyle(m).zIndex) || 0;
+    if (z > max) max = z;
+  });
+  return String(Math.max(Number(min) || 0, max + 10));
+}
+
 window.openDocSendHistory = async (docId) => {
   let m = document.getElementById('docSendHistModal');
   if (!m) { m = document.createElement('div'); m.id = 'docSendHistModal'; m.className = 'modal'; document.body.appendChild(m); }
-  m.style.zIndex = '300'; // מעל חלונית התצוגה המקדימה (z-index 200) — נפתחת מתוכה
+  m.style.zIndex = topZ(300, m); // תמיד מעל מה שפתוח, גם כשנפתחת מתוך חלונית אחרת
   m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   m.innerHTML = `<div class="modal-card" style="width:min(560px,95vw)"><div class="empty">טוען היסטוריית שליחה…</div></div>`;
@@ -661,7 +675,7 @@ window.previewDoc = async (url, opts = {}) => {
   if (!url) return;
   let m = document.getElementById('docPreview');
   if (!m) { m = document.createElement('div'); m.id = 'docPreview'; m.className = 'modal'; document.body.appendChild(m); }
-  m.style.zIndex = '200'; // תמיד מעל כל מודל אחר שפתוח (שיוך מסמך, עריכת אירוע וכו')
+  m.style.zIndex = topZ(200, m); // תמיד מעל כל מודל אחר שפתוח (שיוך מסמך, תצוגת חיוב, עריכת אירוע)
   m.classList.remove('hidden');
   if (_previewBlobUrl) { URL.revokeObjectURL(_previewBlobUrl); _previewBlobUrl = null; }
   _pv = { url, blobUrl: null, type: '', opts: opts || {}, zoom: 0, wide: false };   // מסמך חדש — זום נקי
@@ -696,7 +710,7 @@ window.openDocLinks = async (docId) => {
   if (!docId) return;
   let m = document.getElementById('docLinks');
   if (!m) { m = document.createElement('div'); m.id = 'docLinks'; m.className = 'modal'; document.body.appendChild(m); }
-  m.style.zIndex = '210'; // מעל חלונית התצוגה המקדימה (200)
+  m.style.zIndex = topZ(210, m); // מעל חלונית התצוגה המקדימה שממנה נפתחה
   m.classList.remove('hidden');
   const shell = (inner) => `<div class="modal-card" style="width:min(560px,94vw);max-height:82vh;max-height:82dvh;display:flex;flex-direction:column;overflow:hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
@@ -845,7 +859,7 @@ window.openSendDoc = (id, number, typeName, clientNameEnc) => {
   let m = document.getElementById('sendDocModal');
   if (!m) { m = document.createElement('div'); m.id = 'sendDocModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
-  m.style.zIndex = '300'; // מעל חלונית התצוגה המקדימה (z-index 200) — כדי שיפתח מעליה כשמפעילים מתוך התצוגה
+  m.style.zIndex = topZ(300, m); // מעל החלונית שממנה הופעל
   m.innerHTML = `<div class="modal-card" style="width:min(440px,94vw)">
     <div class="row-between" style="margin:0"><h3 style="margin:0">✉️ שליחת ${escapeHtml(typeName || 'מסמך')} #${escapeHtml(String(number))}</h3>
       <button class="btn ghost" style="padding:2px 10px" onclick="document.getElementById('sendDocModal').classList.add('hidden')">✕</button></div>
@@ -3785,7 +3799,7 @@ window.aiFillOldDoc = async (inputEl, prefix) => {
 window.openAttachDoc = (eventId, presetType) => {
   let m = document.getElementById('attachDocModal');
   if (!m) { m = document.createElement('div'); m.id = 'attachDocModal'; m.className = 'modal'; document.body.appendChild(m); }
-  m.style.zIndex = '210';
+  m.style.zIndex = topZ(210, m);
   m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const today = new Date().toISOString().slice(0, 10);
@@ -3852,7 +3866,7 @@ window.evRemoveUploadedDoc = async (eventId, docId) => {
 window.openOldInvoice = async (mode, oldInvoiceId, presetType) => {
   let m = document.getElementById('oldInvModal');
   if (!m) { m = document.createElement('div'); m.id = 'oldInvModal'; m.className = 'modal'; document.body.appendChild(m); }
-  m.style.zIndex = '210'; m.classList.remove('hidden');
+  m.style.zIndex = topZ(210, m); m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   // רשימת הלקוחות המלאה מחשבונית ירוקה (לא רק לקוחות עם חשבוניות פתוחות) — כדי שאפשר יהיה לבחור כל לקוח קיים
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
@@ -3952,7 +3966,7 @@ window.openBulkOldInvoices = async () => {
   _bulkFiles = [];
   let m = document.getElementById('bulkOldModal');
   if (!m) { m = document.createElement('div'); m.id = 'bulkOldModal'; m.className = 'modal'; document.body.appendChild(m); }
-  m.style.zIndex = '210'; m.classList.remove('hidden');
+  m.style.zIndex = topZ(210, m); m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   m.innerHTML = `<div class="modal-card" style="width:min(1120px,97vw);max-height:92vh;max-height:92dvh;overflow:auto">
     <div class="row-between"><h3>📎 העלאה מרובה — מסמכי הכנסה</h3>
@@ -4810,7 +4824,7 @@ async function renderContractors(c) {
 window.openBillingView = async (eventId) => {
   let m = document.getElementById('billViewModal');
   if (!m) { m = document.createElement('div'); m.id = 'billViewModal'; m.className = 'modal'; document.body.appendChild(m); }
-  m.style.zIndex = '300';
+  m.style.zIndex = topZ(300, m);
   m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const close = `<div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('billViewModal').classList.add('hidden')">סגור</button></div>`;
@@ -7596,7 +7610,7 @@ function renderBDocUpload() {
   const u = _bDocUp; if (!u) return;
   let m = document.getElementById('bDocUpModal');
   if (!m) { m = document.createElement('div'); m.id = 'bDocUpModal'; m.className = 'modal'; document.body.appendChild(m); }
-  m.style.zIndex = '320';   // מעל חלונית האירוע
+  m.style.zIndex = topZ(320, m);   // מעל חלונית האירוע
   m.classList.remove('hidden');
   m.onclick = (x) => { if (x.target === m) m.classList.add('hidden'); };
   const row = bvRow(u.idx);
