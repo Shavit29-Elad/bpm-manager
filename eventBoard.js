@@ -28,14 +28,22 @@ export const supDocTypesFor = (row) => (row && row.vatExempt) ? SUP_DOC_TYPES_EX
 const num = (v) => Number(v) || 0;
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
-// סכומי שורה אחת. המחיר מוזן תמיד ללא מע"מ, למעט עוסק פטור — אצלו המחיר שהוזן
-// הוא הסכום הסופי, כי אין מע"מ להוסיף. בלי ההבחנה הזו ספק פטור היה מנופח ב-18%.
+// סכומי שורה אחת. המספר שמוזן בשדה המחיר מתפרש לפי שני הסימונים שלצדו:
+//   ברירת מחדל  — המחיר ללא מע"מ, והכולל מחושב ממנו.
+//   "כולל מע״מ" — המחיר הוא הסכום הסופי, והמע"מ מחולץ ממנו אחורה.
+//   "פטור"      — אין מע"מ כלל, והמחיר הוא גם הסופי. גובר על "כולל מע״מ",
+//                 כי לעוסק פטור אין מע"מ לחלץ.
+// (השדה נשמר בשם priceExVat מטעמי תאימות; הוא תמיד המספר שהוזן בפועל.)
 export function rowTotals(row) {
-  const ex = num(row && row.priceExVat);
-  if (!ex) return { ex: 0, inc: 0, vat: 0 };
-  if (row && row.vatExempt) return { ex: r2(ex), inc: r2(ex), vat: 0 };
-  const inc = r2(ex * (1 + VAT_RATE));
-  return { ex: r2(ex), inc, vat: r2(inc - ex) };
+  const entered = num(row && row.priceExVat);
+  if (!entered) return { ex: 0, inc: 0, vat: 0 };
+  if (row && row.vatExempt) return { ex: r2(entered), inc: r2(entered), vat: 0 };
+  if (row && row.priceIncVat) {
+    const ex = r2(entered / (1 + VAT_RATE));
+    return { ex, inc: r2(entered), vat: r2(entered - ex) };
+  }
+  const inc = r2(entered * (1 + VAT_RATE));
+  return { ex: r2(entered), inc, vat: r2(inc - entered) };
 }
 
 // שורות הלוח של אירוע: התפקידים הקבועים תמיד, ואחריהם שורות חופשיות שנוספו.
@@ -50,7 +58,7 @@ export function boardRows(ev) {
     else if (role) extras.push(row);
   });
   const fixed = BOARD_ROLES.map(role => byRole.get(role)
-    || { role, index: -1, name: '', priceExVat: null, vatExempt: false, note: '', docs: [], ex: 0, inc: 0, vat: 0 });
+    || { role, index: -1, name: '', priceExVat: null, vatExempt: false, priceIncVat: false, note: '', docs: [], ex: 0, inc: 0, vat: 0 });
   return { fixed, extras, all: [...fixed, ...extras] };
 }
 
@@ -118,12 +126,13 @@ export function normalizeRows(rows, prev = []) {
     if (!name && !ex && !String((r && r.note) || '').trim()) continue;   // שורה ריקה לגמרי — לא נשמרת
     const old = prevByRole.get(role) || {};
     const vatExempt = Boolean(r && r.vatExempt);
-    const t = rowTotals({ priceExVat: ex, vatExempt });
+    const priceIncVat = !vatExempt && Boolean(r && r.priceIncVat);   // פטור גובר
+    const t = rowTotals({ priceExVat: ex, vatExempt, priceIncVat });
     out.push({
       ...old,
       role, name,
       priceExVat: ex || null,
-      vatExempt,
+      vatExempt, priceIncVat,
       note: String((r && r.note) || '').trim(),
       amount: t.inc,                      // הסכום שמשולם בפועל — עליו עובד מעקב הספקים
       supplierId: (r && r.supplierId) || old.supplierId || null,

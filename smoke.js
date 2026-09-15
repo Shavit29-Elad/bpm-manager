@@ -1969,7 +1969,11 @@ check('מסמכי ספק — הסוגים המותרים לפי סוג העוס�
   // השרת אוכף — לא רק מציג
   const srv = fs.readFileSync('server.js', 'utf8');
   const route = srv.slice(srv.indexOf("add('POST', /^\\/api\\/event-board\\/([^/]+)\\/row"));
-  if (!/supDocTypesFor\(r\.row\)\.includes\(type\)/.test(route.slice(0, 1500))) throw new Error('השרת אינו אוכף את סוג המסמך');
+  const body = route.slice(0, 2200);
+  if (!/const allowed = eventBoard\.supDocTypesFor\(r\.row\)/.test(body)) throw new Error('השרת אינו מחשב את הסוגים המותרים');
+  // בשיוך, האימות חייב להיות על הסוג האמיתי של ההוצאה ולא על מה שנשלח בבקשה
+  if (!/allowed\.includes\(Number\(p\.documentType\)\)/.test(body)) throw new Error('שיוך אינו מאמת את סוג ההוצאה עצמה');
+  if (!/allowed\.includes\(type\)/.test(body)) throw new Error('העלאת קובץ אינה מאומתת');
   return true;
 });
 check('מסמכי ספק — עריכת שורה אינה מוחקת מסמכים', () => {
@@ -2000,6 +2004,43 @@ check('מסמכי ספק — לוח הצפייה נבנה ומציג את מה �
   if (!/api\/files\/f9/.test(p2)) throw new Error('קובץ שהועלה אינו נפתח מהקבצים');
   // שורה ריקה מסבירה ולא נראית שבורה
   if (!/עדיין לא שויך מסמך/.test(fns.bDocPanel(ev, { index: 2, role: 'תאורן', name: '', docs: [] }))) throw new Error('אין הסבר כשאין מסמכים');
+  return true;
+});
+
+check('מחיר בשורת ספק — שלושת מצבי המע״מ', () => {
+  const p = (o) => boardMod.rowTotals(o);
+  const a = p({ priceExVat: 1000 });
+  if (a.ex !== 1000 || a.inc !== 1180) throw new Error('ברירת מחדל: ' + JSON.stringify(a));
+  const b = p({ priceExVat: 1180, priceIncVat: true });
+  if (b.ex !== 1000 || b.inc !== 1180) throw new Error('כולל מע״מ: ' + JSON.stringify(b));
+  const c = p({ priceExVat: 1000, vatExempt: true });
+  if (c.ex !== 1000 || c.inc !== 1000 || c.vat !== 0) throw new Error('פטור: ' + JSON.stringify(c));
+  // פטור גובר — לעוסק פטור אין מע"מ לחלץ
+  const d = p({ priceExVat: 1000, vatExempt: true, priceIncVat: true });
+  if (d.inc !== 1000) throw new Error('פטור לא גבר: ' + JSON.stringify(d));
+  if (boardMod.normalizeRows([{ role: 'קלידן', name: 'א', priceExVat: 1000, vatExempt: true, priceIncVat: true }])[0].priceIncVat)
+    throw new Error('נרמול לא ניטרל "כולל מע״מ" אצל פטור');
+  // הממשק מחשב זהה לשרת
+  const uiSrc = app.slice(app.indexOf('const bRowInc ='), app.indexOf('const bMonthName'));
+  const ui = new Function(`const VAT_RATE=0.18;\n${uiSrc}\nreturn { bRowInc, bRowEx };`)();
+  for (const row of [{ priceExVat: 1000 }, { priceExVat: 1180, priceIncVat: true }, { priceExVat: 1000, vatExempt: true }, { priceExVat: 0 }]) {
+    const srv = boardMod.rowTotals(row);
+    if (ui.bRowInc(row) !== srv.inc) throw new Error(`כולל מע״מ: ממשק ${ui.bRowInc(row)} שרת ${srv.inc}`);
+    if (ui.bRowEx(row) !== srv.ex) throw new Error(`ללא מע״מ: ממשק ${ui.bRowEx(row)} שרת ${srv.ex}`);
+  }
+  // ושני הסימונים קיימים בטופס
+  if (!/class="bd-inc"/.test(app)) throw new Error('סימון "כולל מע״מ" חסר בטופס');
+  if (!/if \(r\.vatExempt\) r\.priceIncVat = false;/.test(app)) throw new Error('הטופס לא מנטרל "כולל מע״מ" אצל פטור');
+  return true;
+});
+check('העלאת מסמך ספק — חלונית ולא prompt', () => {
+  const src = app.slice(app.indexOf('window.bDocUpload ='), app.indexOf('window.bDocLink ='));
+  if (/\bprompt\(/.test(src)) throw new Error('עדיין נעשה שימוש ב-prompt');
+  for (const id of ['bduType', 'bduNum', 'bduDate', 'bduAmt', 'bduDrop']) {
+    if (!src.includes(id)) throw new Error('חסר שדה: ' + id);
+  }
+  if (!/z-index|zIndex/.test(src)) throw new Error('החלונית עלולה להיפתח מתחת לחלונית האירוע');
+  if (!/ondrop=/.test(src)) throw new Error('אין גרירת קובץ');
   return true;
 });
 

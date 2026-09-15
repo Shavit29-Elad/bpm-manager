@@ -7244,9 +7244,20 @@ const BOARD_ROLES = ['מנהלת הצגה', 'קלידן', 'מתופף', 'גיט�
   'תאורן', 'פרומטר', 'הגברה', 'הסעה', 'חדר חזרות', 'קופה קטנה', 'הוצאות נוספות'];
 let _board = null, _boardEdit = null, _boardYear = null;
 
+// פירוש המספר שהוזן, זהה ל-rowTotals שבשרת: פטור → סופי; "כולל מע״מ" → חילוץ
+// אחורה; אחרת → הוספת מע"מ. פטור גובר, כי אין ממה לחלץ.
 const bRowInc = (r) => {
-  const ex = Number(r && r.priceExVat) || 0;
-  return r && r.vatExempt ? ex : Math.round(ex * (1 + VAT_RATE) * 100) / 100;
+  const v = Number(r && r.priceExVat) || 0;
+  if (!v) return 0;
+  if (r && r.vatExempt) return v;
+  if (r && r.priceIncVat) return Math.round(v * 100) / 100;
+  return Math.round(v * (1 + VAT_RATE) * 100) / 100;
+};
+const bRowEx = (r) => {
+  const v = Number(r && r.priceExVat) || 0;
+  if (!v) return 0;
+  if (r && !r.vatExempt && r.priceIncVat) return Math.round(v / (1 + VAT_RATE) * 100) / 100;
+  return Math.round(v * 100) / 100;
 };
 const bMonthName = (key) => {
   const [y, m] = String(key).split('-');
@@ -7325,10 +7336,10 @@ window.openBoardEdit = async (id) => {
   const rows = BOARD_ROLES.map(role => {
     const cur = ev && (ev.rows || []).find(r => r.role === role);
     return { role, name: (cur && cur.name) || '', priceExVat: (cur && cur.priceExVat) || '',
-      vatExempt: !!(cur && cur.vatExempt), note: (cur && cur.note) || '', fixed: true };
+      vatExempt: !!(cur && cur.vatExempt), priceIncVat: !!(cur && cur.priceIncVat), note: (cur && cur.note) || '', fixed: true };
   });
   const extras = ev ? (ev.rows || []).filter(r => !BOARD_ROLES.includes(r.role))
-    .map(r => ({ role: r.role, name: r.name || '', priceExVat: r.priceExVat || '', vatExempt: !!r.vatExempt, note: r.note || '', fixed: false })) : [];
+    .map(r => ({ role: r.role, name: r.name || '', priceExVat: r.priceExVat || '', vatExempt: !!r.vatExempt, priceIncVat: !!r.priceIncVat, note: r.note || '', fixed: false })) : [];
   _boardEdit = {
     id: ev ? ev.id : null,
     date: (ev && ev.date) || todayIso(),
@@ -7357,6 +7368,8 @@ function boardEditSync() {
     r.name = row.querySelector('.bd-sup')?.value ?? r.name;
     r.priceExVat = row.querySelector('.bd-price')?.value ?? r.priceExVat;
     r.vatExempt = row.querySelector('.bd-vat')?.checked ?? r.vatExempt;
+    r.priceIncVat = row.querySelector('.bd-inc')?.checked ?? r.priceIncVat;
+    if (r.vatExempt) r.priceIncVat = false;   // פטור גובר
     r.note = row.querySelector('.bd-note')?.value ?? r.note;
     if (!r.fixed) r.role = row.querySelector('.bd-role')?.value ?? r.role;
   });
@@ -7368,16 +7381,18 @@ function renderBoardEdit() {
   m.classList.remove('hidden');
   m.onclick = (x) => { if (x.target === m) m.classList.add('hidden'); };
   const sup = (_suppliers || []).map(s => `<option value="${escAttr(s.name)}"></option>`).join('');
-  const totalEx = e.rows.reduce((a, r) => a + (Number(r.priceExVat) || 0), 0);
+  const totalEx = e.rows.reduce((a, r) => a + bRowEx(r), 0);
   const totalInc = e.rows.reduce((a, r) => a + bRowInc(r), 0);
   const income = Number(e.price) || 0;
-  const rowHtml = (r, i) => `<div class="bd-row" style="display:grid;grid-template-columns:110px 1fr 96px 62px 1fr 28px;gap:6px;align-items:center;padding:4px 0;border-top:1px solid var(--line)">
+  const rowHtml = (r, i) => `<div class="bd-row" style="display:grid;grid-template-columns:104px 1fr 92px 56px 76px 1fr 28px;gap:6px;align-items:center;padding:4px 0;border-top:1px solid var(--line)">
     ${r.fixed ? `<span style="font-size:12.5px;font-weight:600">${escapeHtml(r.role)}</span>`
       : `<input class="bd-role" value="${escAttr(r.role)}" placeholder="שם השורה" style="padding:4px 6px;font-size:12px"/>`}
     <input class="bd-sup" list="bdSupList" value="${escAttr(r.name)}" placeholder="ספק" style="padding:4px 6px;font-size:12.5px"/>
-    <input class="bd-price" type="number" inputmode="decimal" value="${escAttr(String(r.priceExVat))}" placeholder="ללא מע״מ" oninput="boardRecalc()" style="padding:4px 6px;font-size:12.5px"/>
-    <label style="display:flex;gap:3px;align-items:center;font-size:11px;white-space:nowrap" title="עוסק פטור — המחיר שהוזן הוא הסופי, בלי תוספת מע״מ">
+    <input class="bd-price" type="number" inputmode="decimal" value="${escAttr(String(r.priceExVat))}" placeholder="סכום" oninput="boardRecalc()" style="padding:4px 6px;font-size:12.5px"/>
+    <label style="display:flex;gap:3px;align-items:center;font-size:11px;white-space:nowrap" title="עוסק פטור — המחיר שהוזן הוא הסופי, בלי מע״מ כלל">
       <input type="checkbox" class="bd-vat" ${r.vatExempt ? 'checked' : ''} onchange="boardRecalc()"/>פטור</label>
+    <label style="display:flex;gap:3px;align-items:center;font-size:11px;white-space:nowrap${r.vatExempt ? ';opacity:.4' : ''}" title="המחיר שהוזן כבר כולל מע״מ — המע״מ יחולץ ממנו אחורה">
+      <input type="checkbox" class="bd-inc" ${r.priceIncVat && !r.vatExempt ? 'checked' : ''} ${r.vatExempt ? 'disabled' : ''} onchange="boardRecalc()"/>כולל מע״מ</label>
     <input class="bd-note" value="${escAttr(r.note)}" placeholder="הערה" style="padding:4px 6px;font-size:12px"/>
     ${r.fixed ? '<span></span>' : `<button class="btn ghost" style="padding:1px 6px;color:var(--danger)" onclick="boardDelRow(${i})" title="הסר שורה">✕</button>`}
   </div>`;
@@ -7394,8 +7409,8 @@ function renderBoardEdit() {
     <datalist id="bdClientList">${(_evClients || []).map(c => `<option value="${escAttr(c.name)}"></option>`).join('')}</datalist>
     <label style="font-size:12.5px;display:block;margin-top:8px">הערות לאירוע<input id="bdNotes" value="${escAttr(e.notes)}" style="width:100%;padding:6px 8px"/></label>
     <div style="margin-top:12px;font-size:13px;font-weight:700">שורות הוצאה</div>
-    <div style="display:grid;grid-template-columns:110px 1fr 96px 62px 1fr 28px;gap:6px;font-size:11px;color:var(--muted);padding-bottom:2px">
-      <span>תפקיד</span><span>ספק</span><span>מחיר ללא מע״מ</span><span>פטור</span><span>הערה</span><span></span></div>
+    <div style="display:grid;grid-template-columns:104px 1fr 92px 56px 76px 1fr 28px;gap:6px;font-size:11px;color:var(--muted);padding-bottom:2px">
+      <span>תפקיד</span><span>ספק</span><span>מחיר</span><span>פטור</span><span>כולל מע״מ</span><span>הערה</span><span></span></div>
     ${e.rows.map(rowHtml).join('')}
     <button class="btn ghost" style="margin-top:8px;padding:3px 10px;font-size:12px" onclick="boardAddRow()">➕ הוספת שורה</button>
     <div id="bdTotals" style="margin-top:12px;padding:9px 11px;background:var(--panel2);border-radius:8px;font-size:13px">
@@ -7412,13 +7427,13 @@ function renderBoardEdit() {
 window.boardRecalc = () => {
   boardEditSync();
   const e = _boardEdit; if (!e) return;
-  const ex = e.rows.reduce((a, r) => a + (Number(r.priceExVat) || 0), 0);
+  const ex = e.rows.reduce((a, r) => a + bRowEx(r), 0);
   const inc = e.rows.reduce((a, r) => a + bRowInc(r), 0);
   const income = Number(e.price) || 0;
   const box = document.getElementById('bdTotals');
   if (box) box.innerHTML = `הוצאות: <b>${money(ex)}</b> ללא מע״מ · <b>${money(inc)}</b> כולל · הכנסה: <b style="color:var(--accent2)">${money(income)}</b> · רווח: <b style="color:${income - ex >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(income - ex)}</b>`;
 };
-window.boardAddRow = () => { boardEditSync(); _boardEdit.rows.push({ role: '', name: '', priceExVat: '', vatExempt: false, note: '', fixed: false }); renderBoardEdit(); };
+window.boardAddRow = () => { boardEditSync(); _boardEdit.rows.push({ role: '', name: '', priceExVat: '', vatExempt: false, priceIncVat: false, note: '', fixed: false }); renderBoardEdit(); };
 window.boardDelRow = (i) => { boardEditSync(); _boardEdit.rows.splice(i, 1); renderBoardEdit(); };
 window.boardSave = async (btn) => {
   boardEditSync();
@@ -7428,7 +7443,7 @@ window.boardSave = async (btn) => {
   if (btn) btn.disabled = true;
   const body = { id: e.id, date: e.date, artist: e.artist, location: e.location, clientName: e.clientName,
     clientId: e.clientId || null, price: e.price === '' ? null : Number(e.price), notes: e.notes,
-    rows: e.rows.map(r => ({ role: r.role, name: r.name, priceExVat: r.priceExVat === '' ? null : Number(r.priceExVat), vatExempt: !!r.vatExempt, note: r.note })) };
+    rows: e.rows.map(r => ({ role: r.role, name: r.name, priceExVat: r.priceExVat === '' ? null : Number(r.priceExVat), vatExempt: !!r.vatExempt, priceIncVat: !!r.priceIncVat, note: r.note })) };
   const r = await fetch('/api/event-board', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
@@ -7492,27 +7507,73 @@ window.bDocRemove = async (evId, idx, docId) => {
   await boardReloadInto(evId);
 };
 
+// חלונית העלאת מסמך ספק. קודם סוג המסמך והמספר נשאלו ב-prompt של הדפדפן —
+// עבד, אבל בלי אפשרות לתקן, בלי תאריך וסכום, ובלי לראות מה נבחר.
+let _bDocUp = null;
 window.bDocUpload = (evId, idx) => {
-  const inp = document.createElement('input');
-  inp.type = 'file'; inp.accept = 'application/pdf,image/*';
-  inp.onchange = async () => {
-    const f = inp.files && inp.files[0]; if (!f) return;
-    const st = document.getElementById('bDocStatus' + idx);
-    const row = bvRow(idx);
-    const types = supDocTypes(row);
-    const type = types.length === 1 ? types[0] : Number(prompt(`סוג המסמך?\n${types.map((t, i) => `${i + 1}) ${SUP_DOC_NAMES[t]}`).join('\n')}`, '1') || 0) ;
-    const chosen = types.length === 1 ? types[0] : types[(type || 1) - 1];
-    if (!chosen) return;
-    if (st) st.innerHTML = '<span class="muted">מעלה…</span>';
-    const data = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.readAsDataURL(f); });
-    const num = prompt('מספר המסמך (לא חובה)', '') || '';
-    const r = await fetch(`/api/event-board/${evId}/row/${idx}/doc`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: chosen, filename: f.name, mime: f.type || 'application/octet-stream', data, number: num }) })
-      .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-    if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
-    await boardReloadInto(evId);
-  };
-  inp.click();
+  const row = bvRow(idx);
+  const types = supDocTypes(row);
+  _bDocUp = { evId, idx, type: types[0], number: '', date: '', amount: '', file: null, types };
+  renderBDocUpload();
+};
+function renderBDocUpload() {
+  const u = _bDocUp; if (!u) return;
+  let m = document.getElementById('bDocUpModal');
+  if (!m) { m = document.createElement('div'); m.id = 'bDocUpModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.style.zIndex = '320';   // מעל חלונית האירוע
+  m.classList.remove('hidden');
+  m.onclick = (x) => { if (x.target === m) m.classList.add('hidden'); };
+  const row = bvRow(u.idx);
+  m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)">
+    <h3 style="margin:0 0 4px">📎 העלאת מסמך ספק</h3>
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px">${escapeHtml(row.name || row.role || '')} · ${row.vatExempt ? 'עוסק פטור' : 'עוסק מורשה'}</div>
+    <label style="font-size:12.5px;display:block">סוג המסמך
+      <select id="bduType" onchange="bDocUpSet('type',this.value)" style="width:100%;padding:6px 8px;margin-top:3px">
+        ${u.types.map(t => `<option value="${t}" ${Number(u.type) === t ? 'selected' : ''}>${SUP_DOC_NAMES[t]}</option>`).join('')}
+      </select></label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+      <label style="font-size:12.5px">מספר מסמך<input id="bduNum" value="${escAttr(u.number)}" oninput="bDocUpSet('number',this.value)" placeholder="לא חובה" style="width:100%;padding:6px 8px"/></label>
+      <label style="font-size:12.5px">תאריך<input id="bduDate" type="date" value="${escAttr(u.date)}" onchange="bDocUpSet('date',this.value)" style="width:100%;padding:6px 8px"/></label>
+    </div>
+    <label style="font-size:12.5px;display:block;margin-top:8px">סכום (לא חובה)<input id="bduAmt" type="number" inputmode="decimal" value="${escAttr(String(u.amount))}" oninput="bDocUpSet('amount',this.value)" style="width:100%;padding:6px 8px"/></label>
+    <div id="bduDrop" onclick="document.getElementById('bduFile').click()"
+      ondragover="event.preventDefault();this.style.borderColor='var(--accent)'" ondragleave="this.style.borderColor='var(--line)'"
+      ondrop="bDocUpDrop(event,this)"
+      style="margin-top:10px;padding:16px;border:2px dashed var(--line);border-radius:10px;text-align:center;cursor:pointer">
+      <div style="font-size:20px">📎</div>
+      <div style="font-size:13px;font-weight:600;margin-top:3px">${u.file ? escapeHtml(u.file.name) : 'גרור לכאן קובץ או לחץ לבחירה'}</div>
+      <div class="muted" style="font-size:11.5px">PDF או תמונה</div>
+    </div>
+    <input id="bduFile" type="file" accept="application/pdf,image/*" style="display:none" onchange="bDocUpPick(this.files[0])"/>
+    <div id="bduStatus" style="font-size:12.5px;min-height:16px;margin-top:6px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('bDocUpModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="bDocUpSave(this)">העלה ושייך</button>
+    </div>
+  </div>`;
+}
+window.bDocUpSet = (k, v) => { if (_bDocUp) _bDocUp[k] = v; };
+window.bDocUpPick = (f) => { if (!f || !_bDocUp) return; _bDocUp.file = f; renderBDocUpload(); };
+window.bDocUpDrop = (e, el) => {
+  e.preventDefault(); el.style.borderColor = 'var(--line)';
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) bDocUpPick(f);
+};
+window.bDocUpSave = async (btn) => {
+  const u = _bDocUp; if (!u) return;
+  const st = document.getElementById('bduStatus');
+  if (!u.file) { if (st) st.innerHTML = '<span style="color:var(--danger)">לא נבחר קובץ.</span>'; return; }
+  if (btn) btn.disabled = true;
+  if (st) st.innerHTML = '<span class="muted">מעלה…</span>';
+  const data = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.readAsDataURL(u.file); });
+  const r = await fetch(`/api/event-board/${u.evId}/row/${u.idx}/doc`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: Number(u.type), filename: u.file.name, mime: u.file.type || 'application/octet-stream',
+      data, number: u.number, date: u.date || null, amount: u.amount === '' ? null : Number(u.amount) }) })
+    .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) btn.disabled = false;
+  if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || 'ההעלאה נכשלה'))}</span>`; return; }
+  document.getElementById('bDocUpModal').classList.add('hidden');
+  await boardReloadInto(u.evId);
 };
 
 window.bDocLink = async (evId, idx) => {
@@ -7536,9 +7597,9 @@ window.bDocLinkConfirm = async (evId, idx) => {
   const sel = document.querySelector('input[name="bdocpick"]:checked');
   const st = document.getElementById('bDocStatus' + idx);
   if (!sel) { if (st) st.innerHTML = '<span style="color:var(--danger)">לא נבחר מסמך.</span>'; return; }
-  const row = bvRow(idx);
+  // הסוג נקבע מההוצאה עצמה בשרת — אין צורך ואין טעם לשלוח אותו מכאן
   const r = await fetch(`/api/event-board/${evId}/row/${idx}/doc`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ payableId: sel.value, type: (row.docsPickType || supDocTypes(row)[0]) }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    body: JSON.stringify({ payableId: sel.value }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
   await boardReloadInto(evId);
 };

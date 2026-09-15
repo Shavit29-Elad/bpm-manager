@@ -376,19 +376,22 @@ add('POST', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc$/, async (req, res, p
   const db = load();
   const r = boardRowAt(db, cid, params[0], params[1]);
   if (r.error) return r.code === 403 ? wrongCompany(res, 'האירוע') : json(res, { error: r.error }, r.code);
+  const allowed = eventBoard.supDocTypesFor(r.row);
+  const reject = () => json(res, { error: r.row.vatExempt ? 'לעוסק פטור אפשר לשייך קבלה בלבד' : 'סוג מסמך שאינו מתאים לספק מורשה' }, 400);
   const type = Number(b.type) || 0;
-  if (!eventBoard.supDocTypesFor(r.row).includes(type)) {
-    return json(res, { error: r.row.vatExempt ? 'לעוסק פטור אפשר לשייך קבלה בלבד' : 'סוג מסמך שאינו מתאים לספק מורשה' }, 400);
-  }
   let doc = null;
   if (b.payableId) {
     const p = (db.supplierPayables || []).find(x => x.id === b.payableId);
     if (!p) return json(res, { error: 'ההוצאה לא נמצאה' }, 404);
     if ((p.companyId || giCompanyId()) !== cid) return wrongCompany(res, 'ההוצאה');
+    // האימות על הסוג האמיתי של ההוצאה ולא על מה שנשלח בבקשה — אחרת אפשר לשלוח
+    // סוג מותר ולשייך בפועל מסמך מסוג אחר.
+    if (!allowed.includes(Number(p.documentType))) return reject();
     if ((r.row.docs || []).some(d => String(d.payableId) === String(p.id))) return json(res, { error: 'המסמך כבר משויך לשורה' }, 400);
     doc = { id: id('bdoc'), type: Number(p.documentType), number: p.number || null, date: p.date || null,
       amount: p.amount != null ? Number(p.amount) : null, payableId: p.id, fileId: null, addedAt: new Date().toISOString() };
   } else if (b.data) {
+    if (!allowed.includes(type)) return reject();
     const saved = await saveFile({ employeeId: 'evdoc:' + r.ev.id, kind: 'supplier-doc',
       filename: b.filename || 'document', mime: b.mime || 'application/octet-stream', data: String(b.data) });
     doc = { id: id('bdoc'), type, number: (b.number != null && String(b.number).trim()) ? String(b.number).trim() : null,
