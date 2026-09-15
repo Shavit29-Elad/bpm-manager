@@ -2080,8 +2080,13 @@ check('מסמכי ספק — שיוך ממסך הספקים נראה גם בלו
 check('צפייה במסמך ספק — בתוך חלונית האירוע ולא בחלון חדש', () => {
   const src = app.slice(app.indexOf('function bDocPanel('), app.indexOf('window.bDocToggle'));
   if (/previewDoc\(/.test(src)) throw new Error('הצפייה עדיין פותחת חלונית נפרדת');
-  if (!/<iframe/.test(src)) throw new Error('אין תצוגה מוטמעת');
-  if (!/_bvDoc === d\.id/.test(src)) throw new Error('אין מצב "המסמך המוצג"');
+  if (!/bDocShow\(/.test(src)) throw new Error('אין כפתור שמציג את המסמך בחלונית');
+  // התצוגה עצמה היא לוח צד בתוך חלונית האירוע
+  const view = app.slice(app.indexOf('window.openBoardView ='), app.indexOf('// הפקת מסמך לאירוע'));
+  if (!/<iframe/.test(view)) throw new Error('אין תצוגה מוטמעת בחלונית');
+  if (!/bvFindDoc\(ev, _bvDoc\)/.test(view)) throw new Error('המסמך המוצג אינו מאותר');
+  if (!/flex:0 0 min\(52%/.test(view)) throw new Error('התצוגה אינה לוח צד');
+  if (!/min\(1480px,98vw\)/.test(view)) throw new Error('החלונית אינה מתרחבת כשמסמך פתוח');
   // הכפתור בשורה מרחיב פירוט ואינו מתחזה לצפייה במסמך
   const rowBtn = app.split('\n').find(l => l.includes('bDocToggle(${r.index})'));
   if (!rowBtn) throw new Error('כפתור הפירוט לא נמצא');
@@ -2090,6 +2095,40 @@ check('צפייה במסמך ספק — בתוך חלונית האירוע ול�
   // סגירת הפירוט סוגרת גם תצוגה פתוחה, אחרת נשאר מסמך תלוי באוויר
   const tog = app.slice(app.indexOf('window.bDocToggle ='), app.indexOf('window.bDocShow ='));
   if (!/_bvDoc = null/.test(tog)) throw new Error('סגירת הפירוט משאירה תצוגה פתוחה');
+  return true;
+});
+
+check('חלונית האירוע נבנית תקין גם עם מסמך פתוח בצד', () => {
+  const view = app.slice(app.indexOf('let _bvEvent = null;'), app.indexOf('// הפקת מסמך לאירוע'));
+  const helpers = app.slice(app.indexOf('const SUP_DOC_NAMES ='), app.indexOf('window.bDocToggle'));
+  const stubs = `
+    const escapeHtml=(x)=>String(x==null?'':x), escAttr=(x)=>String(x==null?'':x);
+    const money=(n)=>String(n), ddmy=(d)=>String(d||'');
+    let __h='';
+    const document = { getElementById: () => null, body:{ appendChild(){} },
+      createElement: () => ({ classList:{add(){},remove(){}}, style:{}, set innerHTML(v){ __h=v; }, get innerHTML(){ return __h; } }) };
+    const window = {};
+    const boardFind = () => ev;
+  `;
+  const ev = { id: 'e1', date: '2026-10-08', artist: 'רידינג 3', clientName: 'לקוח', notes: '',
+    totals: { incomeEx: 5000, incomeInc: 5900, expenseEx: 1500, expenseInc: 1770, profitEx: 3500, unpaidRows: 1 },
+    linkedDocs: [],
+    rows: [{ index: 0, role: 'חדר חזרות', name: 'מוסטקי', priceExVat: 1500, ex: 1500, inc: 1770, vatExempt: false, note: '',
+      docs: [{ id: 'pay:p1', type: 300, number: '88', payableId: 'p1', fromPayables: true }] }] };
+  const run = (openDoc) => new Function('ev', 'openDoc', `${stubs}\n${helpers}\n${view}\n_bvOpen={0:true}; _bvDoc=openDoc;\nwindow.openBoardView('e1', true);\nreturn __h;`)(ev, openDoc);
+
+  const closed = run(null);
+  if (/<iframe/.test(closed)) throw new Error('התצוגה פתוחה בלי שנלחצה');
+  if (!/88/.test(closed)) throw new Error('המסמך לא מופיע בשורה');
+
+  const open = run('pay:p1');
+  if (!/<iframe/.test(open)) throw new Error('לוח הצד לא נפתח');
+  if (!/bv-side/.test(open)) throw new Error('לוח הצד בלי המחלקה שמטפלת במסך צר');
+  if (!/min\(1480px,98vw\)/.test(open)) throw new Error('החלונית לא התרחבה');
+  if (!/חדר חזרות/.test(open)) throw new Error('תוכן האירוע נעלם כשנפתח מסמך');
+  // ה-HTML מאוזן — שחזור מבנה שבור כאן היה מפיל את כל החלונית
+  const opens = (open.match(/<div\b/g) || []).length, closes = (open.match(/<\/div>/g) || []).length;
+  if (opens !== closes) throw new Error(`div לא מאוזן: ${opens} נפתחו, ${closes} נסגרו`);
   return true;
 });
 

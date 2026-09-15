@@ -7489,10 +7489,7 @@ function bDocPanel(ev, r) {
         <button class="btn ${_bvDoc === d.id ? 'primary' : 'ghost'}" style="padding:1px 8px;font-size:11px" onclick="bDocShow('${d.id}')" title="${_bvDoc === d.id ? 'סגירת התצוגה' : 'צפייה כאן, בתוך החלונית'}">${_bvDoc === d.id ? '▴ סגור' : '👁 לצפייה'}</button>
         <a class="btn ghost" style="padding:1px 8px;font-size:11px;text-decoration:none" href="${bDocUrl(d)}" download target="_blank" rel="noopener">⬇</a>
         <button class="btn ghost" style="padding:1px 8px;font-size:11px;color:var(--danger)" onclick="bDocRemove('${ev.id}',${r.index},'${d.id}')" title="נתק מהשורה">✕</button>
-      </td></tr>${_bvDoc === d.id ? `<tr><td colspan="5" style="padding:0">
-        <div style="margin:4px 0 8px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff">
-          <iframe src="${bDocUrl(d)}" style="width:100%;height:min(62vh,560px);border:0;display:block"></iframe>
-        </div></td></tr>` : ''}`).join('') : '<tr><td colspan="5" class="muted" style="padding:6px">עדיין לא שויך מסמך לספק הזה.</td></tr>';
+      </td></tr>`).join('') : '<tr><td colspan="5" class="muted" style="padding:6px">עדיין לא שויך מסמך לספק הזה.</td></tr>';
   return `<tr class="bv-docs"><td colspan="7" style="padding:0">
     <div style="margin:0 0 6px;padding:8px 10px;background:var(--panel2);border-radius:8px">
       <div style="font-size:12px;font-weight:600;margin-bottom:5px">מסמכי ${escapeHtml(r.name || r.role)} — ${r.vatExempt ? 'עוסק פטור (קבלה)' : 'עוסק מורשה (עסקה → מס / מס-קבלה)'}</div>
@@ -7633,6 +7630,14 @@ async function boardReloadInto(evId) {
 
 // חלונית צפייה מורחבת — הפירוט המלא של האירוע, המסמכים המקושרים והפקת חשבונית.
 let _bvEvent = null;
+// המסמך שמוצג כרגע בלוח הצד, מאותר מכל שורות האירוע
+function bvFindDoc(ev, docId) {
+  for (const r of (ev.rows || [])) {
+    const d = (r.docs || []).find(x => String(x.id) === String(docId));
+    if (d) return { doc: d, row: r };
+  }
+  return null;
+}
 window.openBoardView = (id, keepOpen) => {
   const ev = boardFind(id); if (!ev) return;
   if (!keepOpen) { _bvOpen = {}; _bvDoc = null; }   // פתיחה חדשה — הכל מכווץ
@@ -7668,7 +7673,23 @@ window.openBoardView = (id, keepOpen) => {
     return `<tr><td style="white-space:nowrap">${escapeHtml(nm)}</td><td>${state}</td><td style="text-align:left;white-space:nowrap">${view}</td></tr>`;
   }).join('') : '<tr><td colspan="3" class="muted" style="padding:10px">עדיין לא הופק מסמך לאירוע הזה.</td></tr>';
 
-  m.innerHTML = `<div class="modal-card" style="width:min(1000px,97vw);max-height:92vh;max-height:92dvh;overflow:auto">
+  // כשמסמך פתוח, החלונית מתרחבת ולוח הצפייה נפתח בצדה. הוא מופיע ראשון ב-DOM
+  // כדי שב-RTL הוא ייפול בצד ימין, וכל תוכן האירוע נשאר גלוי לצדו.
+  const shown = _bvDoc ? bvFindDoc(ev, _bvDoc) : null;
+  const side = shown ? `<div class="bv-side" style="flex:0 0 min(52%,620px);min-width:300px;display:flex;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
+      <div class="row-between" style="margin:0 0 6px">
+        <div style="font-size:13px;font-weight:700">${escapeHtml(SUP_DOC_NAMES[shown.doc.type] || 'מסמך')}${shown.doc.number ? ' #' + escapeHtml(String(shown.doc.number)) : ''}
+          <span class="muted" style="font-weight:400">· ${escapeHtml(shown.row.name || shown.row.role || '')}</span></div>
+        <div style="display:flex;gap:6px">
+          <a class="btn ghost" style="padding:2px 9px;font-size:11.5px;text-decoration:none" href="${bDocUrl(shown.doc)}" download target="_blank" rel="noopener">⬇ הורדה</a>
+          <button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="bDocShow('${shown.doc.id}')">✕ סגור</button>
+        </div>
+      </div>
+      <iframe src="${bDocUrl(shown.doc)}" style="flex:1;min-height:60vh;width:100%;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+    </div>` : '';
+  m.innerHTML = `<div class="modal-card bv-split" style="width:${shown ? 'min(1480px,98vw)' : 'min(1000px,97vw)'};max-height:92vh;max-height:92dvh;overflow:hidden;display:flex;gap:14px;align-items:stretch">
+    ${side}
+    <div style="flex:1;min-width:0;overflow:auto">
     <div class="row-between" style="margin:0 0 4px">
       <h3 style="margin:0">${escapeHtml(ev.artist || 'אירוע')}</h3>
       <button class="btn ghost" style="padding:3px 11px;font-size:12.5px" onclick="document.getElementById('bvModal').classList.add('hidden');openBoardEdit('${ev.id}')">✏️ עריכה</button>
@@ -7696,6 +7717,7 @@ window.openBoardView = (id, keepOpen) => {
       <tbody>${docs}</tbody>
     </table>
     <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('bvModal').classList.add('hidden')">סגור</button></div>
+    </div>
   </div>`;
 };
 

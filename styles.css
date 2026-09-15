@@ -381,3 +381,13 @@ textarea.doc-desc {
   box-sizing: border-box;
   field-sizing: content; /* Chrome: גדילה אוטומטית לפי התוכן */
 }
+
+/* לוח האירועים — תצוגת מסמך בצד החלונית. במסך צר אין מקום לשתי עמודות,
+   ולכן היא נערמת מתחת לתוכן במקום להצטמצם לרוחב בלתי קריא. */
+@media (max-width: 900px) {
+  .bv-split { flex-direction: column !important; overflow: auto !important; }
+  .bv-side { flex: 0 0 auto !important; min-width: 0 !important;
+    border-inline-start: 0 !important; padding-inline-start: 0 !important;
+    border-top: 1px solid var(--line); padding-top: 10px; }
+  .bv-side iframe { min-height: 46vh !important; }
+}
