@@ -1827,6 +1827,63 @@ check('שיוך אירועים לספק — אירוע שכבר שויך לחש�
   return true;
 });
 
+check('תנאי תשלום — ניסוח חלופי מחליף את ההערה הקבועה ולא מתווסף אליה', () => {
+  // ההערה הקבועה של העסק נדחפת לכל מסמך. כשנבחר ניסוח אחר, שני הניסוחים היו
+  // מופיעים יחד וסותרים זה את זה.
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const src = srv.slice(srv.indexOf('const PAY_TERMS_TEXT'), srv.indexOf('function followupRemarks'));
+  const fn = new Function(`${src}\nreturn applyPaymentTerms;`)();
+
+  const def = fn({ remarks: 'הערה שלי' }, { paymentTerms: { mode: 'default' } });
+  if (def.noDefaultRemark) throw new Error('ברירת המחדל השתיקה את ההערה הקבועה');
+  if (def.remarks !== 'הערה שלי') throw new Error('ברירת המחדל שינתה את ההערה');
+
+  const day = fn({ remarks: 'הערה שלי' }, { paymentTerms: { mode: 'eventday' } });
+  if (!day.noDefaultRemark) throw new Error('ניסוח ליום האירוע לא השתיק את הקבועה');
+  if (!/ביום האירוע/.test(day.remarks)) throw new Error('הניסוח לא נוסף: ' + day.remarks);
+  if (!/הערה שלי/.test(day.remarks)) throw new Error('ההערה של המשתמש נמחקה');
+
+  const cus = fn({}, { paymentTerms: { mode: 'custom', text: '  מזומן מראש  ' } });
+  if (cus.remarks !== 'מזומן מראש' || !cus.noDefaultRemark) throw new Error('טקסט חופשי: ' + JSON.stringify(cus));
+
+  // "אחר" בלי טקסט — לא משתיקים את הקבועה בלי תחליף, אחרת המסמך יוצא בלי תנאים
+  const empty = fn({ remarks: 'x' }, { paymentTerms: { mode: 'custom', text: '   ' } });
+  if (empty.noDefaultRemark) throw new Error('הקבועה הושתקה בלי תחליף');
+  if (fn({}, {}).noDefaultRemark) throw new Error('בקשה בלי תנאים השתיקה את הקבועה');
+
+  // הדגל באמת מונע את ההוספה בבניית המסמך
+  const gi = fs.readFileSync('greenInvoice.js', 'utf8');
+  if (!/const defRemark = noDefaultRemark \? '' :/.test(gi)) throw new Error('הדגל אינו משפיע על בניית המסמך');
+  if (!/function documentBody\(\{ noDefaultRemark,/.test(gi)) throw new Error('הדגל אינו מתקבל ב-documentBody');
+
+  // ושלושת ראוטי ההפקה מחילים אותו
+  const applied = (srv.match(/applyPaymentTerms\(opts, body\)/g) || []).length;
+  if (applied < 3) throw new Error('רק ' + applied + ' ראוטים מחילים תנאי תשלום');
+  return true;
+});
+
+check('בורר תנאי התשלום נבנה ומופיע רק בהצעת מחיר וחשבון עסקה', () => {
+  const src = app.slice(app.indexOf('const PAY_TERMS_DOCS'), app.indexOf('function renderNewQuote('));
+  const build = new Function(`const escapeHtml=(x)=>String(x==null?'':x);\n${src}\nreturn { payTermsBlock, PAY_TERMS_DOCS };`)();
+  const def = build.payTermsBlock({ mode: 'default', text: '' }, 'nq');
+  if (!/תשלום ביום האירוע/.test(def)) throw new Error('חסרה אפשרות ליום האירוע');
+  if (!/הניסוח הקבוע מפרטי העסק יופיע/.test(def)) throw new Error('אין חיווי שהקבועה תופיע');
+  if (!/nqSetPayTerms\('custom'\)/.test(def)) throw new Error('חסרה אפשרות "אחר"');
+  if (!/display:none/.test(def)) throw new Error('שדה הטקסט החופשי פתוח בברירת מחדל');
+  const cus = build.payTermsBlock({ mode: 'custom', text: 'מזומן' }, 'der');
+  if (/display:none/.test(cus)) throw new Error('שדה הטקסט סגור במצב "אחר"');
+  if (!/מזומן/.test(cus)) throw new Error('הטקסט שהוזן לא נשמר');
+  if (!/derSetPayTermsText/.test(cus)) throw new Error('הקידומת לא הוחלה');
+  if (!/לא יופיע במסמך הזה/.test(cus)) throw new Error('אין חיווי שהקבועה מושתקת');
+  // רק הצעת מחיר וחשבון עסקה
+  for (const t of [10, 300]) if (!build.PAY_TERMS_DOCS.has(t)) throw new Error('סוג ' + t + ' חסר');
+  for (const t of [305, 320, 400, 330]) if (build.PAY_TERMS_DOCS.has(t)) throw new Error('סוג ' + t + ' נכלל בטעות');
+  // וההגדרות באמת נשלחות לשרת משלושת המסלולים
+  const sends = (app.match(/paymentTerms: e\.payTerms \|\| null/g) || []).length;
+  if (sends < 3) throw new Error('רק ' + sends + ' מסלולים שולחים תנאי תשלום');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

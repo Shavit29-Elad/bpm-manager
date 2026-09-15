@@ -1190,6 +1190,7 @@ add('POST', /^\/api\/quotes\/create$/, async (req, res, _p, _q, body) => {
     if (body.skipDateValidation) opts.skipDateValidation = true; // הפקה מחוץ לרצף (תאריך מוקדם מהמסמך האחרון)
     // השליחה נעשית מצדנו אחרי היצירה — ראה mailDocToClient. לא מעבירים כתובות
     // לחשבונית ירוקה, כדי שלא יישלחו שני עותקים ללקוח.
+    applyPaymentTerms(opts, body);   // תנאי תשלום שנבחרו למסמך הזה
     const doc = await createDocFwd(opts);
     let mail = null;
     if (body.sendEmail) mail = await mailDocToClient(_q.companyId || giCompanyId(), doc,
@@ -1225,6 +1226,7 @@ add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
         return row;
       }).filter(p => Math.abs(p.price) > 0);
     }
+    applyPaymentTerms(opts, body);   // תנאי תשלום שנבחרו למסמך הזה
     const doc = await createDocFwd(opts);
     let mail = null;
     if (body.sendEmail) mail = await mailDocToClient(_q.companyId || giCompanyId(), doc,
@@ -2340,6 +2342,22 @@ function linkFollowupToEvents(db, cid, sourceKeys, doc, type) {
   return touched;
 }
 
+// תנאי תשלום למסמך. ברירת המחדל היא ההערה הקבועה של העסק; אפשר להחליף אותה
+// לניסוח קצר ליום האירוע, או לטקסט חופשי. כשנבחר ניסוח אחר, ההערה הקבועה
+// אינה נוספת — אחרת שני הניסוחים מופיעים יחד וסותרים זה את זה.
+const PAY_TERMS_TEXT = { eventday: 'התשלום יבוצע ביום האירוע.' };
+function applyPaymentTerms(opts, body) {
+  const t = body && body.paymentTerms;
+  const mode = t && typeof t === 'object' ? String(t.mode || 'default') : 'default';
+  if (mode === 'default' || !mode) return opts;
+  const txt = mode === 'custom' ? String((t && t.text) || '').trim() : (PAY_TERMS_TEXT[mode] || '');
+  if (!txt) return opts;                       // "אחר" בלי טקסט — לא משתיקים את הקבועה בלי תחליף
+  const cur = String(opts.remarks || '').trim();
+  opts.remarks = cur ? `${cur}\n\n${txt}` : txt;
+  opts.noDefaultRemark = true;
+  return opts;
+}
+
 function followupRemarks(srcType, srcNumber) {
   const nm = DOC_NAMES_HE[Number(srcType)] || 'מסמך';
   return `מסמך המשך ל${nm}${srcNumber ? ` מס' ${srcNumber}` : ''}`;
@@ -3066,6 +3084,7 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
       const cur = (body.remarks != null) ? String(body.remarks).trim() : '';
       opts.remarks = cur.includes(ref) ? cur : (cur ? `${ref}\n\n${cur}` : ref);
     }
+    applyPaymentTerms(opts, body);   // תנאי תשלום שנבחרו למסמך הזה
     const doc = await createDocFwd(opts);
     // שליחה ללקוח מצדנו, אם התבקשה בחלונית. חשבונית ירוקה אינה שולחת.
     // שיוך לאירועים של המסמך המקורי. עד עכשיו המסלול הזה יצר את המסמך ולא נגע

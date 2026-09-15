@@ -165,7 +165,7 @@ const PAYMENT_REQUIRED = new Set([320, 400, 405]);
 
 // בונה גוף מסמך. items = [{ description, quantity, price }].
 // client = { id? , name, taxId?, emails? } — אם יש id משתמשים בו (נמנע כפילות לקוח).
-function documentBody({ client, items, type, remarks, description, dueDate, date, payment, sendEmail, email, linkedDocumentIds, linkType, skipDateValidation, discount }) {
+function documentBody({ noDefaultRemark, client, items, type, remarks, description, dueDate, date, payment, sendEmail, email, linkedDocumentIds, linkType, skipDateValidation, discount }) {
   const total = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
   const body = {
     type,
@@ -199,7 +199,10 @@ function documentBody({ client, items, type, remarks, description, dueDate, date
   if (sendEmail && email) body.emails = [String(email).trim()];
   if (description) body.description = description;   // כותרת/נושא המסמך
   // הערה בתחתית: הערת המשתמש + הערת ברירת המחדל של העסק (פרטי בנק וכו') — נוספת לכל המסמכים
-  const defRemark = _companyRemark.get(curCompany());
+  // noDefaultRemark — המשתמש בחר תנאי תשלום אחרים למסמך הזה, ולכן ההערה הקבועה
+  // של העסק (תנאי התשלום הסטנדרטיים) אינה נוספת. בלי דגל כזה היא נדחפת תמיד
+  // ושני הניסוחים היו מופיעים באותו מסמך וסותרים זה את זה.
+  const defRemark = noDefaultRemark ? '' : _companyRemark.get(curCompany());
   let finalRemarks = remarks ? String(remarks) : '';
   if (defRemark && !finalRemarks.includes(defRemark)) finalRemarks = finalRemarks ? finalRemarks + '\n\n' + defRemark : defRemark;
   if (finalRemarks) body.remarks = finalRemarks;

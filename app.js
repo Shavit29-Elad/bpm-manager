@@ -1774,6 +1774,7 @@ function renderDeriveEditor() {
     </div>` : ''}
 
     <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית${e.linked ? ' (כולל התייחסות למקור ופרטי חשבון להעברה — ניתן לעריכה)' : ' (לא חובה)'}<textarea class="der-rem" rows="${e.linked ? 6 : 2}" style="width:100%;padding:6px 8px;margin-top:3px;font-family:inherit;resize:vertical">${escapeHtml(e.remarks)}</textarea></label>
+    ${PAY_TERMS_DOCS.has(Number(e.type)) ? payTermsBlock(e.payTerms, 'der') : ''}
 
     <div style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:8px">
       <label style="display:flex;gap:7px;align-items:center;font-size:13px"><input type="checkbox" id="derAutoSend" ${autoSendPref() ? 'checked' : ''} onchange="setAutoSendPref(this.checked);derToggleSendEmail()"> שלח אוטומטית למייל הלקוח בעת ההפקה</label>
@@ -1871,6 +1872,7 @@ window.derConfirm = async () => {
     : await fetch(`/api/documents/${e.id}/derive`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: e.type, linked: e.linked, items: apiItems, discount: apiDiscount, date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate,
           // הסימון בחלונית קרא רק להצגת חלונית מוכנות — לא לשליחה. עכשיו הוא שולח.
+          paymentTerms: e.payTerms || null,
           sendEmail: !!(document.getElementById('derAutoSend') || {}).checked,
           email: ((document.getElementById('derSendEmail') || {}).value || '').trim(),
           email2: ((document.getElementById('derSendEmail2') || {}).value || '').trim() }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
@@ -4323,7 +4325,7 @@ window.openNewQuote = async () => {
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
   // טעינה רעננה של רשימת הלקוחות המלאה (כדי שלקוחות חדשים יופיעו וניתן יהיה לחפש את כולם)
   try { const cl = await api('/api/clients'); if (Array.isArray(cl) && cl.length) _evClients = cl; } catch { if (!_evClients) _evClients = []; }
-  _nq = { clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', email2: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
+  _nq = { clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', email2: '', sendEmail: false, payTerms: { mode: 'default', text: '' }, items: [{ description: '', quantity: 1, price: 0 }] };
   renderNewQuote();
 };
 // מסמך חדש מכל מקום באתר (כפתור ה-+ הצף) — הצעת מחיר(10) / חשבונית עסקה(300) / חשבונית מס(305) / חשבונית מס-קבלה(320)
@@ -4332,7 +4334,7 @@ window.openNewDoc = async (type) => {
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
   try { const cl = await api('/api/clients'); if (Array.isArray(cl) && cl.length) _evClients = cl; } catch { if (!_evClients) _evClients = []; }
-  _nq = { type: Number(type) || 10, clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', email2: '', sendEmail: false, items: [{ description: '', quantity: 1, price: 0 }] };
+  _nq = { type: Number(type) || 10, clientId: '', clientName: '', date: todayIso(), subject: '', remarks: '', email: '', email2: '', payTerms: { mode: 'default', text: '' }, sendEmail: false, payTerms: { mode: 'default', text: '' }, items: [{ description: '', quantity: 1, price: 0 }] };
   renderNewQuote();
 };
 window.toggleFabMenu = () => { const mn = document.getElementById('fabMenu'); if (mn) mn.classList.toggle('hidden'); };
@@ -4346,7 +4348,7 @@ window.openDuplicateQuote = async (id) => {
   const r = await api(`/api/documents/${id}/lines`).catch(() => null);
   if (!r || !r.ok) { m.innerHTML = `<div class="modal-card" style="width:min(460px,94vw)"><div class="warn-banner">שגיאה בטעינת ההצעה: ${escapeHtml(String(r?.error || ''))}</div><div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('newQuoteModal').classList.add('hidden')">סגור</button></div></div>`; return; }
   const items = (r.items || []).map(it => ({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }));
-  _nq = { clientId: r.client?.id || '', clientName: r.client?.name || '', date: todayIso(), subject: r.description || '', remarks: r.remarks || '', email: '', sendEmail: false, isDuplicate: true, items: items.length ? items : [{ description: '', quantity: 1, price: 0 }] };
+  _nq = { clientId: r.client?.id || '', clientName: r.client?.name || '', date: todayIso(), subject: r.description || '', remarks: r.remarks || '', email: '', sendEmail: false, payTerms: { mode: 'default', text: '' }, isDuplicate: true, items: items.length ? items : [{ description: '', quantity: 1, price: 0 }] };
   renderNewQuote();
 };
 function nqSync() {
@@ -4422,6 +4424,29 @@ window.nqSetInclVat = (on) => { _nq.pricesInclVat = !!on; nqRecalc(); };
 window.nqSetDiscAmount = (v) => { _nq.discAmount = (v === '' ? 0 : Number(v) || 0); nqRecalc(); };
 window.nqSetDiscType = (v) => { _nq.discType = v; const w = document.getElementById('nqDiscAfterWrap'); if (w) w.style.display = v === 'percentage' ? 'none' : 'inline-flex'; nqRecalc(); };
 window.nqSetDiscAfterVat = (on) => { _nq.discAfterVat = !!on; nqRecalc(); };
+// בורר תנאי תשלום. ברירת המחדל היא הניסוח הקבוע של העסק; אפשר להחליף אותו
+// לניסוח קצר ליום האירוע או לטקסט חופשי. רלוונטי להצעת מחיר ולחשבון עסקה.
+const PAY_TERMS_DOCS = new Set([10, 300]);
+function payTermsBlock(pt, prefix) {
+  const mode = (pt && pt.mode) || 'default';
+  const opt = (v, lbl) => `<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;cursor:pointer">
+    <input type="radio" name="${prefix}pt" value="${v}" ${mode === v ? 'checked' : ''} onchange="${prefix}SetPayTerms('${v}')"/>${lbl}</label>`;
+  return `<div style="margin-top:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:6px">תנאי תשלום</div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      ${opt('default', 'הניסוח הקבוע של העסק')}
+      ${opt('eventday', 'תשלום ביום האירוע')}
+      ${opt('custom', 'אחר')}
+    </div>
+    <textarea id="${prefix}ptText" rows="2" placeholder="נסח כאן את תנאי התשלום למסמך הזה"
+      style="width:100%;margin-top:7px;padding:6px 8px;${mode === 'custom' ? '' : 'display:none'}"
+      oninput="${prefix}SetPayTermsText(this.value)">${escapeHtml((pt && pt.text) || '')}</textarea>
+    <div class="muted" style="font-size:11.5px;margin-top:5px">${mode === 'default'
+      ? 'הניסוח הקבוע מפרטי העסק יופיע בתחתית המסמך.'
+      : 'הניסוח הקבוע לא יופיע במסמך הזה — רק מה שנבחר כאן.'}</div>
+  </div>`;
+}
+
 function renderNewQuote() {
   const e = _nq; if (!e) return;
   const m = document.getElementById('newQuoteModal');
@@ -4453,6 +4478,7 @@ function renderNewQuote() {
     ${discountBoxHtml(e, 'nq')}
     <div id="nqTotals" style="margin-top:10px;font-size:14px"></div>
     <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית (לא חובה) <input class="nq-remarks" value="${escAttr(e.remarks)}" style="width:100%;padding:6px 8px;margin-top:3px"></label>
+    ${PAY_TERMS_DOCS.has(Number(e.type)) ? payTermsBlock(e.payTerms, 'nq') : ''}
     <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:10px"><input type="checkbox" class="nq-sendemail" ${e.sendEmail ? 'checked' : ''}> שלח את ההצעה ללקוח במייל</label>
     <input class="nq-email" type="email" dir="ltr" value="${escAttr(email)}" placeholder="mail@example.com" style="width:100%;padding:6px 8px;margin-top:6px">
     <input class="nq-email2" type="email" dir="ltr" value="${escAttr(e.email2 || '')}" placeholder="כתובת נוספת — אופציונלי (יישלח מייל אחד לשתיהן)" style="width:100%;padding:6px 8px;margin-top:6px">
@@ -4491,7 +4517,7 @@ window.createNewQuote = async (btn) => {
     if (e.sendEmail && !(e.email || '').trim()) { alert('סמנת "שלח במייל" — יש להזין כתובת מייל.'); if (btn) btn.disabled = false; return; }
     const body = { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, skipDateValidation: !!e.skipSeq,
       // הסימון "שלח ללקוח במייל" נקרא מהמסך אבל לא נשלח — ולכן לא עשה כלום
-      sendEmail: !!e.sendEmail, email: (e.email || '').trim(), email2: (e.email2 || '').trim() };
+      sendEmail: !!e.sendEmail, email: (e.email || '').trim(), email2: (e.email2 || '').trim(), paymentTerms: e.payTerms || null };
     if (needsPay) body.payment = [{ type: 4, price: +total.toFixed(2), date: e.date }];
     const r = await fetch('/api/documents/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (btn) btn.disabled = false;
@@ -4512,7 +4538,7 @@ window.createNewQuote = async (btn) => {
   if (e.sendEmail && !e.email.trim()) { alert('סמנת "שלח במייל" — יש להזין כתובת מייל.'); return; }
   if (e.sendEmail && !confirm(`ליצור את הצעת המחיר ולשלוח אותה במייל ל-${e.email.trim()}?`)) return;
   if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">יוצר הצעת מחיר…</span>';
-  const body = { clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim(), email2: (e.email2 || '').trim(), skipDateValidation: !!e.skipSeq };
+  const body = { clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim(), email2: (e.email2 || '').trim(), paymentTerms: e.payTerms || null, skipDateValidation: !!e.skipSeq };
   const r = await fetch('/api/quotes/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
   if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''}</span>`; document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); showDocReadyPopup(r.doc, 'הצעת מחיר'); }
@@ -5313,6 +5339,20 @@ function renderLinkEvRows() {
   box.innerHTML = `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}${linkedNote}</div><div class="muted" style="font-size:11.5px;margin-top:5px">מוצגים ${evs.length} אירועים${selCount ? ` · נבחרו ${selCount}` : ''}</div>`;
 }
 window.toggleLinkShowLinked = () => { if (!_linkPay) return; _linkPay.showLinked = !_linkPay.showLinked; renderLinkEvRows(); };
+window.nqSetPayTerms = (v) => {
+  if (!_nq) return;
+  nqSync();
+  _nq.payTerms = { mode: v, text: (_nq.payTerms && _nq.payTerms.text) || '' };
+  renderNewQuote();
+};
+window.nqSetPayTermsText = (v) => { if (_nq) _nq.payTerms = { mode: 'custom', text: v }; };
+window.derSetPayTerms = (v) => {
+  if (!_derEdit) return;
+  derSyncFromDom();
+  _derEdit.payTerms = { mode: v, text: (_derEdit.payTerms && _derEdit.payTerms.text) || '' };
+  renderDeriveEditor();
+};
+window.derSetPayTermsText = (v) => { if (_derEdit) _derEdit.payTerms = { mode: 'custom', text: v }; };
 window.onLinkEvSearch = (v) => { if (!_linkPay) return; _linkPay.q = v; renderLinkEvRows(); };
 window.setLinkEvYM = (k, v) => { if (!_linkPay) return; _linkPay[k] = v; renderLinkEvRows(); };
 window.toggleLinkEv = (key, on) => { if (!_linkPay) return; if (on) _linkPay.sel.add(key); else _linkPay.sel.delete(key); };
@@ -9081,7 +9121,7 @@ window.incNewDoc = async (txId, type, X) => {
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
   const exVat = +((Number(X) || 0) / (1 + VAT_RATE)).toFixed(2);
-  _nq = { type: Number(type), bankTxId: txId, clientId: '', clientName: '', date: txIsoDate(txId) || todayIso(), subject: '', remarks: '', email: '', email2: '', sendEmail: false, items: [{ description: 'הכנסה', quantity: 1, price: exVat }] };
+  _nq = { type: Number(type), bankTxId: txId, clientId: '', clientName: '', date: txIsoDate(txId) || todayIso(), subject: '', remarks: '', email: '', email2: '', payTerms: { mode: 'default', text: '' }, sendEmail: false, payTerms: { mode: 'default', text: '' }, items: [{ description: 'הכנסה', quantity: 1, price: exVat }] };
   renderNewQuote();
 };
 window.openBankImport = () => {
