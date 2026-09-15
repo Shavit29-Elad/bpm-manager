@@ -12,6 +12,7 @@ import { init as initStore, load, save, id, upsertEvent, companyEvents, saveFile
 import { parseEventMessage, parseEventMessages } from './whatsappParser.js';
 import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar, calendarCompanies, setDbIcal } from './googleCalendar.js';
 import { contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents, eventTotal } from './invoicing.js';
+import eventBoard from './eventBoard.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
 import { parseBank, extractAccountBalance } from './bankParser.js';
@@ -286,6 +287,62 @@ add('POST', /^\/api\/events$/, async (req, res, _p, _q, body) => {
     createdAt: new Date().toISOString(),
   };
   upsertEvent(db, event); save(db); json(res, event);
+});
+
+// ── לוח האירועים (משה כורסיה) ────────────────────────────────────────────
+// GET /api/event-board?year= — אירועי השנה מקובצים לחודשים, עם סיכומי הכנסה
+// והוצאה לכל חודש ולכל אירוע.
+add('GET', /^\/api\/event-board$/, (req, res, _p, q) => {
+  const db = load(), cid = reqCompany(q);
+  const year = String(q.year || new Date().getFullYear());
+  const evs = (db.events || []).filter(e => ownedBy(e, cid));
+  const out = eventBoard.boardByMonth(evs, year);
+  const years = [...new Set(evs.map(e => String(e.date || e.dateRaw || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  json(res, { ok: true, year, years, roles: eventBoard.BOARD_ROLES, vatRate: eventBoard.VAT_RATE, ...out });
+});
+
+// POST /api/event-board — יצירה או עדכון של אירוע בלוח.
+// השורות נשמרות ב-contractorDetails, אותו מבנה שבו משתמשים מסך הספקים
+// והתאמות הבנק, כדי ששורה שנוספת כאן תיכנס למעקב התשלומים הקיים.
+add('POST', /^\/api\/event-board$/, (req, res, _p, q, body) => {
+  const b = body || {};
+  const cid = reqCompany(q, b);
+  const db = load();
+  let ev = b.id ? (db.events || []).find(e => e.id === b.id) : null;
+  if (b.id && !ev) return json(res, { error: 'האירוע לא נמצא' }, 404);
+  if (ev && !ownedBy(ev, cid)) return wrongCompany(res, 'האירוע');
+  if (!String(b.date || '').trim()) return json(res, { error: 'חסר תאריך לאירוע' }, 400);
+
+  const rows = eventBoard.normalizeRows(b.rows, ev ? ev.contractorDetails : []);
+  if (!ev) {
+    ev = { id: id('ev'), companyId: cid, source: 'board', confirmed: true,
+      invoiceStatus: 'pending', linkedDocs: [], employeeDetails: [], employees: [],
+      createdAt: new Date().toISOString() };
+    db.events = db.events || [];
+    db.events.push(ev);
+  }
+  ev.date = String(b.date).slice(0, 10); ev.dateRaw = ev.date;
+  ev.artist = String(b.artist || '').trim() || null;
+  ev.location = String(b.location || '').trim() || null;
+  ev.clientId = b.clientId || null;
+  ev.clientName = String(b.clientName || '').trim() || null;
+  ev.price = b.price != null && b.price !== '' ? Number(b.price) : null;   // מחיר ללקוח, ללא מע"מ
+  ev.boardNotes = String(b.notes || '').trim();
+  ev.contractorDetails = rows;
+  ev.contractors = [...new Set(rows.map(r => r.name).filter(Boolean))];
+  save(db);
+  json(res, { ok: true, id: ev.id, totals: eventBoard.eventTotals(ev) });
+});
+
+add('DELETE', /^\/api\/event-board\/([^/]+)$/, (req, res, params, q) => {
+  const db = load(), cid = reqCompany(q);
+  const ev = (db.events || []).find(e => e.id === params[0]);
+  if (!ev) return json(res, { error: 'האירוע לא נמצא' }, 404);
+  if (!ownedBy(ev, cid)) return wrongCompany(res, 'האירוע');
+  if ((ev.linkedDocs || []).length) return json(res, { error: 'לאירוע מקושרים מסמכים — יש לנתק אותם לפני המחיקה' }, 400);
+  db.events = db.events.filter(e => e.id !== ev.id);
+  save(db);
+  json(res, { ok: true });
 });
 
 // POST /api/events/:id/duplicate — שכפול אירוע כאירוע חדש "לאישור" (למשל חיוב לשני לקוחות שונים על אותו אירוע)
@@ -6834,7 +6891,7 @@ add('GET', /^\/api\/month-detail$/, (req, res, _p, q) => {
 // ================= התחברות והרשאות =================
 // הלשוניות שניתן להקצות למשתמש צפייה — חייב להתאים ל-TAB_LABELS ב-app.js, אחרת בחירה של המנהל
 // נמחקת בשקט בשמירה. 'business' (פרטי העסק) אינו כאן בכוונה — הוא להנהלה בלבד.
-const VALID_TABS = ['home', 'summary', 'events', 'quotes', 'clients', 'contractors', 'payroll', 'bank', 'vehicles'];
+const VALID_TABS = ['home', 'summary', 'events', 'eventsboard', 'quotes', 'clients', 'contractors', 'payroll', 'bank', 'vehicles'];
 const uid = () => id('usr');
 const cleanUsername = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
 

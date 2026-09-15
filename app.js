@@ -94,7 +94,7 @@ const api = (p) => {
   };
 })();
 
-const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', vehicles: '🚚 רכבי חברה', business: '🏢 פרטי העסק' };
+const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', eventsboard: '🎭 לוח אירועים', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', vehicles: '🚚 רכבי חברה', business: '🏢 פרטי העסק' };
 // לשוניות רלוונטיות לחברה מסוימת (לניהול הרשאות משתמשים) — נגזר מאותם כללים כמו applyCompanyTabs. "פרטי העסק" — הנהלה בלבד.
 function companyTabsFor(cid) {
   const isBpm = cid === 'co_bpm', isMoshe = cid === 'co_moshe';
@@ -102,6 +102,7 @@ function companyTabsFor(cid) {
   for (const k of Object.keys(TAB_LABELS)) {
     if (k === 'business') continue;
     if (['events', 'payroll'].includes(k)) { if (!isMoshe) out.push(k); continue; }
+    if (k === 'eventsboard') { if (isMoshe) out.push(k); continue; }   // לוח האירועים — משה בלבד
     out.push(k);   // כולל 'summary' — סיכום עסק זמין לכל החברות
   }
   return out;
@@ -284,6 +285,9 @@ function applyCompanyTabs() {
   if (isMoshe && MOSHE_HIDDEN_TABS.includes(state.tab)) goHome();
   // "סיכום עסק" — זמין לכל החברות (סיכום כל הקטגוריות/קבוצות: חודשי + שנתי), לפי הרשאות המשתמש
   document.querySelectorAll('.tab[data-tab="summary"]').forEach(t => { t.style.display = userAllows('summary') ? '' : 'none'; });
+  // "לוח אירועים" — משה בלבד. אצלו "אירועים ויומן" מוסתרת, וזה התחליף שלה.
+  document.querySelectorAll('.tab[data-tab="eventsboard"]').forEach(t => { t.style.display = (isMoshe && userAllows('eventsboard')) ? '' : 'none'; });
+  if (!isMoshe && state.tab === 'eventsboard') goHome();
 }
 
 // ---- ניהול משתמשים (מנהל בלבד) ----
@@ -449,7 +453,7 @@ window.gotoVehicles = () => { const t = document.querySelector('.tab[data-tab="v
 // על הכרטיסייה שכבר נפתחה — וזה נראה כאילו המסך "נתקע" על נתונים ישנים.
 const TAB_RENDERERS = { home: renderHome, summary: renderBusinessSummary, events: renderCombined, clients: renderClients,
   invoicing: renderCombined, quotes: renderQuotes, bank: renderBank, contractors: renderContractors,
-  payroll: renderPayroll, vehicles: renderVehicles, business: renderBusiness };
+  payroll: renderPayroll, vehicles: renderVehicles, eventsboard: renderEventsBoard, business: renderBusiness };
 let _renderGen = 0;
 const rgen = (c) => (c && c.dataset ? c.dataset.rgen : undefined);
 const rstale = (c, g) => rgen(c) !== g;
@@ -7231,6 +7235,297 @@ function vehWorst(v) {
   }
   return worst;
 }
+
+// ---- לוח אירועים (משה כורסיה) ----
+// 14 תפקידים קבועים לכל אירוע, ספק ומחיר לכל אחד, וסיכום הכנסות מול הוצאות
+// לפי חודש ולפי אירוע. השורות נשמרות באותו מבנה של "ספקים לתשלום", ולכן ספק
+// שנוסף כאן נכנס אוטומטית למעקב התשלומים ולהתאמות הבנק.
+const BOARD_ROLES = ['מנהלת הצגה', 'קלידן', 'מתופף', 'גיטריסט', 'בסיסט', 'סאונדמן', 'בקליינר',
+  'תאורן', 'פרומטר', 'הגברה', 'הסעה', 'חדר חזרות', 'קופה קטנה', 'הוצאות נוספות'];
+let _board = null, _boardEdit = null, _boardYear = null;
+
+const bRowInc = (r) => {
+  const ex = Number(r && r.priceExVat) || 0;
+  return r && r.vatExempt ? ex : Math.round(ex * (1 + VAT_RATE) * 100) / 100;
+};
+const bMonthName = (key) => {
+  const [y, m] = String(key).split('-');
+  return `${MONTHS_FULL[(+m) - 1] || m} ${y}`;
+};
+
+async function renderEventsBoard(c) {
+  const _g = rgen(c);
+  const year = _boardYear || new Date().getFullYear();
+  const r = await api(`/api/event-board?year=${year}`).catch(() => ({ error: 'שגיאת רשת' }));
+  if (rstale(c, _g)) return; // הכרטיסייה הוחלפה בזמן הטעינה — לא כותבים על החדשה
+  if (!r || r.error) {
+    c.innerHTML = `<div class="panel"><div class="warn-banner">${escapeHtml(String((r && r.error) || 'שגיאה'))}</div></div>`;
+    return;
+  }
+  _board = r;
+  const yrs = [...new Set([...(r.years || []), String(year)])].sort().reverse();
+  const t = r.totals || {};
+  const kpi = (lbl, val, color) => `<div class="card"><div class="label">${lbl}</div><div class="big" style="color:${color || 'var(--text)'}">${val}</div></div>`;
+  c.innerHTML = `
+    <div class="panel">
+      <div class="row-between">
+        <div><h2>🎭 לוח אירועים — ${year}</h2><span class="muted">הכנסות והוצאות לכל אירוע, מקובץ לפי חודשים</span></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select onchange="boardSetYear(this.value)" style="padding:6px 10px">${yrs.map(y => `<option value="${y}" ${String(y) === String(year) ? 'selected' : ''}>${y}</option>`).join('')}</select>
+          <button class="btn primary" onclick="openBoardEdit()">➕ הוספת אירוע</button>
+        </div>
+      </div>
+      <div class="cards" style="margin-top:14px">
+        ${kpi('אירועים', t.events || 0)}
+        ${kpi('הכנסות (ללא מע״מ)', money(t.incomeEx || 0), 'var(--accent2)')}
+        ${kpi('הוצאות (ללא מע״מ)', money(t.expenseEx || 0), 'var(--danger)')}
+        ${kpi('רווח', money(t.profitEx || 0), (t.profitEx || 0) >= 0 ? 'var(--accent2)' : 'var(--danger)')}
+      </div>
+    </div>
+    ${(r.months || []).length ? (r.months || []).map(boardMonthPanel).join('') : '<div class="panel"><div class="empty">אין אירועים בשנה הזו. לחץ "הוספת אירוע" כדי להתחיל.</div></div>'}`;
+}
+
+function boardMonthPanel(m) {
+  const rows = m.events.map(ev => {
+    const t = ev.totals || {};
+    const docs = (ev.linkedDocs || []).filter(d => !d.converted).length;
+    return `<tr style="cursor:pointer" onclick="openBoardView('${ev.id}')">
+      <td data-label="תאריך" style="white-space:nowrap">${ddmy(ev.date)}</td>
+      <td data-label="אירוע"><b>${escapeHtml(ev.artist || '—')}</b>${ev.location ? `<div class="muted" style="font-size:11.5px">${escapeHtml(ev.location)}</div>` : ''}</td>
+      <td data-label="לקוח">${escapeHtml(ev.clientName || '—')}</td>
+      <td data-label="הכנסה" style="text-align:left;white-space:nowrap;color:var(--accent2);font-weight:600">${money(t.incomeEx || 0)}</td>
+      <td data-label="הוצאות" style="text-align:left;white-space:nowrap;color:var(--danger)">${money(t.expenseEx || 0)}<div class="muted" style="font-size:10.5px">${t.filledRows || 0} שורות</div></td>
+      <td data-label="רווח" style="text-align:left;white-space:nowrap;font-weight:700;color:${(t.profitEx || 0) >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(t.profitEx || 0)}</td>
+      <td data-label="מסמכים" style="text-align:left;white-space:nowrap">${docs ? `<span class="tag invoiced">${docs}</span>` : '<span class="muted">—</span>'}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="panel">
+    <div class="row-between" style="margin-bottom:8px">
+      <h3 style="margin:0">${bMonthName(m.month)}</h3>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">
+        <span>הכנסות: <b style="color:var(--accent2)">${money(m.incomeEx)}</b></span>
+        <span>הוצאות: <b style="color:var(--danger)">${money(m.expenseEx)}</b></span>
+        <span>רווח: <b style="color:${m.profitEx >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(m.profitEx)}</b></span>
+      </div>
+    </div>
+    <table class="tbl cardify" style="width:100%">
+      <thead><tr><th>תאריך</th><th>אירוע</th><th>לקוח</th><th style="text-align:left">הכנסה</th><th style="text-align:left">הוצאות</th><th style="text-align:left">רווח</th><th style="text-align:left">מסמכים</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+window.boardSetYear = (y) => { _boardYear = y; renderEventsBoard($('#content')); };
+
+// חלונית הוספה/עריכה — קומפקטית, בגודל של הוספת רכב.
+window.openBoardEdit = async (id) => {
+  // רשימות הספקים והלקוחות נטענות פעם אחת — בלי זה שדות ההשלמה ריקים בפתיחה הראשונה
+  if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
+  if (!(_suppliers || []).length) { try { _suppliers = await api('/api/suppliers') || []; } catch { _suppliers = []; } }
+  const ev = id ? boardFind(id) : null;
+  const rows = BOARD_ROLES.map(role => {
+    const cur = ev && (ev.rows || []).find(r => r.role === role);
+    return { role, name: (cur && cur.name) || '', priceExVat: (cur && cur.priceExVat) || '',
+      vatExempt: !!(cur && cur.vatExempt), note: (cur && cur.note) || '', fixed: true };
+  });
+  const extras = ev ? (ev.rows || []).filter(r => !BOARD_ROLES.includes(r.role))
+    .map(r => ({ role: r.role, name: r.name || '', priceExVat: r.priceExVat || '', vatExempt: !!r.vatExempt, note: r.note || '', fixed: false })) : [];
+  _boardEdit = {
+    id: ev ? ev.id : null,
+    date: (ev && ev.date) || todayIso(),
+    artist: (ev && ev.artist) || '', location: (ev && ev.location) || '',
+    clientId: (ev && ev.clientId) || '', clientName: (ev && ev.clientName) || '',
+    price: (ev && ev.price != null) ? ev.price : '', notes: (ev && ev.notes) || '',
+    rows: [...rows, ...extras],
+  };
+  renderBoardEdit();
+};
+function boardFind(id) {
+  for (const m of ((_board && _board.months) || [])) { const e = m.events.find(x => x.id === id); if (e) return e; }
+  return null;
+}
+function boardEditSync() {
+  const e = _boardEdit; if (!e) return;
+  const g = (id) => document.getElementById(id);
+  e.date = g('bdDate')?.value || e.date;
+  e.artist = g('bdArtist')?.value ?? e.artist;
+  e.location = g('bdLoc')?.value ?? e.location;
+  e.clientName = g('bdClient')?.value ?? e.clientName;
+  e.price = g('bdPrice')?.value ?? e.price;
+  e.notes = g('bdNotes')?.value ?? e.notes;
+  document.querySelectorAll('#bdModal .bd-row').forEach((row, i) => {
+    const r = e.rows[i]; if (!r) return;
+    r.name = row.querySelector('.bd-sup')?.value ?? r.name;
+    r.priceExVat = row.querySelector('.bd-price')?.value ?? r.priceExVat;
+    r.vatExempt = row.querySelector('.bd-vat')?.checked ?? r.vatExempt;
+    r.note = row.querySelector('.bd-note')?.value ?? r.note;
+    if (!r.fixed) r.role = row.querySelector('.bd-role')?.value ?? r.role;
+  });
+}
+function renderBoardEdit() {
+  const e = _boardEdit; if (!e) return;
+  let m = document.getElementById('bdModal');
+  if (!m) { m = document.createElement('div'); m.id = 'bdModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.onclick = (x) => { if (x.target === m) m.classList.add('hidden'); };
+  const sup = (_suppliers || []).map(s => `<option value="${escAttr(s.name)}"></option>`).join('');
+  const totalEx = e.rows.reduce((a, r) => a + (Number(r.priceExVat) || 0), 0);
+  const totalInc = e.rows.reduce((a, r) => a + bRowInc(r), 0);
+  const income = Number(e.price) || 0;
+  const rowHtml = (r, i) => `<div class="bd-row" style="display:grid;grid-template-columns:110px 1fr 96px 62px 1fr 28px;gap:6px;align-items:center;padding:4px 0;border-top:1px solid var(--line)">
+    ${r.fixed ? `<span style="font-size:12.5px;font-weight:600">${escapeHtml(r.role)}</span>`
+      : `<input class="bd-role" value="${escAttr(r.role)}" placeholder="שם השורה" style="padding:4px 6px;font-size:12px"/>`}
+    <input class="bd-sup" list="bdSupList" value="${escAttr(r.name)}" placeholder="ספק" style="padding:4px 6px;font-size:12.5px"/>
+    <input class="bd-price" type="number" inputmode="decimal" value="${escAttr(String(r.priceExVat))}" placeholder="ללא מע״מ" oninput="boardRecalc()" style="padding:4px 6px;font-size:12.5px"/>
+    <label style="display:flex;gap:3px;align-items:center;font-size:11px;white-space:nowrap" title="עוסק פטור — המחיר שהוזן הוא הסופי, בלי תוספת מע״מ">
+      <input type="checkbox" class="bd-vat" ${r.vatExempt ? 'checked' : ''} onchange="boardRecalc()"/>פטור</label>
+    <input class="bd-note" value="${escAttr(r.note)}" placeholder="הערה" style="padding:4px 6px;font-size:12px"/>
+    ${r.fixed ? '<span></span>' : `<button class="btn ghost" style="padding:1px 6px;color:var(--danger)" onclick="boardDelRow(${i})" title="הסר שורה">✕</button>`}
+  </div>`;
+  m.innerHTML = `<div class="modal-card" style="width:min(860px,96vw);max-height:90vh;max-height:90dvh;overflow:auto">
+    <h3 style="margin:0 0 10px">${e.id ? 'עריכת אירוע' : 'הוספת אירוע'}</h3>
+    <datalist id="bdSupList">${sup}</datalist>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px">
+      <label style="font-size:12.5px">תאריך<input id="bdDate" type="date" value="${escAttr(e.date)}" style="width:100%;padding:6px 8px"/></label>
+      <label style="font-size:12.5px">שם האירוע<input id="bdArtist" value="${escAttr(e.artist)}" placeholder="למשל: בת מצווה" style="width:100%;padding:6px 8px"/></label>
+      <label style="font-size:12.5px">מיקום<input id="bdLoc" value="${escAttr(e.location)}" style="width:100%;padding:6px 8px"/></label>
+      <label style="font-size:12.5px">לקוח<input id="bdClient" list="bdClientList" value="${escAttr(e.clientName)}" style="width:100%;padding:6px 8px"/></label>
+      <label style="font-size:12.5px">מחיר ללקוח (ללא מע״מ)<input id="bdPrice" type="number" inputmode="decimal" value="${escAttr(String(e.price))}" oninput="boardRecalc()" style="width:100%;padding:6px 8px"/></label>
+    </div>
+    <datalist id="bdClientList">${(_evClients || []).map(c => `<option value="${escAttr(c.name)}"></option>`).join('')}</datalist>
+    <label style="font-size:12.5px;display:block;margin-top:8px">הערות לאירוע<input id="bdNotes" value="${escAttr(e.notes)}" style="width:100%;padding:6px 8px"/></label>
+    <div style="margin-top:12px;font-size:13px;font-weight:700">שורות הוצאה</div>
+    <div style="display:grid;grid-template-columns:110px 1fr 96px 62px 1fr 28px;gap:6px;font-size:11px;color:var(--muted);padding-bottom:2px">
+      <span>תפקיד</span><span>ספק</span><span>מחיר ללא מע״מ</span><span>פטור</span><span>הערה</span><span></span></div>
+    ${e.rows.map(rowHtml).join('')}
+    <button class="btn ghost" style="margin-top:8px;padding:3px 10px;font-size:12px" onclick="boardAddRow()">➕ הוספת שורה</button>
+    <div id="bdTotals" style="margin-top:12px;padding:9px 11px;background:var(--panel2);border-radius:8px;font-size:13px">
+      הוצאות: <b>${money(totalEx)}</b> ללא מע״מ · <b>${money(totalInc)}</b> כולל · הכנסה: <b style="color:var(--accent2)">${money(income)}</b> · רווח: <b style="color:${income - totalEx >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(income - totalEx)}</b>
+    </div>
+    <div id="bdStatus" style="font-size:13px;min-height:18px;margin-top:8px"></div>
+    <div class="modal-actions">
+      ${e.id ? `<button class="btn ghost" style="color:var(--danger)" onclick="boardDelete('${e.id}')">מחק אירוע</button>` : ''}
+      <button class="btn ghost" onclick="document.getElementById('bdModal').classList.add('hidden')">ביטול</button>
+      <button class="btn primary" onclick="boardSave(this)">${e.id ? 'שמור' : 'צור אירוע'}</button>
+    </div>
+  </div>`;
+}
+window.boardRecalc = () => {
+  boardEditSync();
+  const e = _boardEdit; if (!e) return;
+  const ex = e.rows.reduce((a, r) => a + (Number(r.priceExVat) || 0), 0);
+  const inc = e.rows.reduce((a, r) => a + bRowInc(r), 0);
+  const income = Number(e.price) || 0;
+  const box = document.getElementById('bdTotals');
+  if (box) box.innerHTML = `הוצאות: <b>${money(ex)}</b> ללא מע״מ · <b>${money(inc)}</b> כולל · הכנסה: <b style="color:var(--accent2)">${money(income)}</b> · רווח: <b style="color:${income - ex >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(income - ex)}</b>`;
+};
+window.boardAddRow = () => { boardEditSync(); _boardEdit.rows.push({ role: '', name: '', priceExVat: '', vatExempt: false, note: '', fixed: false }); renderBoardEdit(); };
+window.boardDelRow = (i) => { boardEditSync(); _boardEdit.rows.splice(i, 1); renderBoardEdit(); };
+window.boardSave = async (btn) => {
+  boardEditSync();
+  const e = _boardEdit;
+  const st = document.getElementById('bdStatus');
+  if (!e.date) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש לבחור תאריך.</span>'; return; }
+  if (btn) btn.disabled = true;
+  const body = { id: e.id, date: e.date, artist: e.artist, location: e.location, clientName: e.clientName,
+    clientId: e.clientId || null, price: e.price === '' ? null : Number(e.price), notes: e.notes,
+    rows: e.rows.map(r => ({ role: r.role, name: r.name, priceExVat: r.priceExVat === '' ? null : Number(r.priceExVat), vatExempt: !!r.vatExempt, note: r.note })) };
+  const r = await fetch('/api/event-board', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) btn.disabled = false;
+  if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || 'שמירה נכשלה'))}</span>`; return; }
+  document.getElementById('bdModal').classList.add('hidden');
+  renderEventsBoard($('#content'));
+};
+window.boardDelete = async (id) => {
+  if (!confirm('למחוק את האירוע וכל שורות ההוצאה שלו?')) return;
+  const r = await fetch(`/api/event-board/${id}`, { method: 'DELETE' }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || r.error) { const st = document.getElementById('bdStatus'); if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  document.getElementById('bdModal').classList.add('hidden');
+  renderEventsBoard($('#content'));
+};
+
+// חלונית צפייה מורחבת — הפירוט המלא של האירוע, המסמכים המקושרים והפקת חשבונית.
+window.openBoardView = (id) => {
+  const ev = boardFind(id); if (!ev) return;
+  let m = document.getElementById('bvModal');
+  if (!m) { m = document.createElement('div'); m.id = 'bvModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  m.onclick = (x) => { if (x.target === m) m.classList.add('hidden'); };
+  const t = ev.totals || {};
+  const filled = (ev.rows || []).filter(r => (Number(r.priceExVat) || 0) > 0);
+  const rows = filled.length ? filled.map(r => `<tr>
+      <td style="white-space:nowrap;font-weight:600">${escapeHtml(r.role)}</td>
+      <td>${escapeHtml(r.name || '—')}</td>
+      <td style="text-align:left;white-space:nowrap">${money(r.ex)}</td>
+      <td style="text-align:left;white-space:nowrap">${money(r.inc)}${r.vatExempt ? ' <span class="tag" style="background:#eef0fb;color:#5b6180;font-size:10px">פטור</span>' : ''}</td>
+      <td style="white-space:nowrap">${r.paid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33">שולם</span>' : '<span class="tag" style="background:#fff4e5;color:#a15c00">טרם שולם</span>'}</td>
+      <td class="muted" style="font-size:12px">${escapeHtml(r.note || '')}</td>
+    </tr>`).join('')
+    : '<tr><td colspan="6" class="muted" style="padding:10px">עדיין לא מולאו שורות הוצאה.</td></tr>';
+
+  const docs = (ev.linkedDocs || []).length ? (ev.linkedDocs || []).map(d => {
+    const nm = `${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.number != null ? ' #' + d.number : ''}`;
+    const state = d.credit ? '<span class="tag" style="background:#fde8e8;color:#b42318">זיכוי</span>'
+      : d.converted ? '<span class="tag" style="background:#eef0fb;color:#5b6180">הומר</span>'
+      : '<span class="tag invoiced">פעיל</span>';
+    const view = d.uploaded
+      ? `<button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="previewDoc('/api/files/${encodeURIComponent(d.id)}')">👁 צפייה</button>
+         <a class="btn ghost" style="padding:2px 9px;font-size:11.5px;text-decoration:none" href="/api/files/${encodeURIComponent(d.id)}" download target="_blank" rel="noopener">⬇ הורדה</a>`
+      : `<button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="previewLinkedDoc('${d.id}',this,'${ev.id}')">👁 צפייה</button>
+         <a class="btn ghost" style="padding:2px 9px;font-size:11.5px;text-decoration:none" href="/api/documents/${encodeURIComponent(d.id)}/download" download target="_blank" rel="noopener">⬇ הורדה</a>`;
+    return `<tr><td style="white-space:nowrap">${escapeHtml(nm)}</td><td>${state}</td><td style="text-align:left;white-space:nowrap">${view}</td></tr>`;
+  }).join('') : '<tr><td colspan="3" class="muted" style="padding:10px">עדיין לא הופק מסמך לאירוע הזה.</td></tr>';
+
+  m.innerHTML = `<div class="modal-card" style="width:min(1000px,97vw);max-height:92vh;max-height:92dvh;overflow:auto">
+    <div class="row-between" style="margin:0 0 4px">
+      <h3 style="margin:0">${escapeHtml(ev.artist || 'אירוע')}</h3>
+      <button class="btn ghost" style="padding:3px 11px;font-size:12.5px" onclick="document.getElementById('bvModal').classList.add('hidden');openBoardEdit('${ev.id}')">✏️ עריכה</button>
+    </div>
+    <div class="muted" style="font-size:12.5px;margin-bottom:12px">${ddmy(ev.date)}${ev.location ? ' · ' + escapeHtml(ev.location) : ''}${ev.clientName ? ' · ' + escapeHtml(ev.clientName) : ''}${ev.notes ? ' · ' + escapeHtml(ev.notes) : ''}</div>
+
+    <div class="cards" style="margin-bottom:14px">
+      <div class="card"><div class="label">הכנסה (ללא מע״מ)</div><div class="big" style="color:var(--accent2)">${money(t.incomeEx || 0)}</div><div class="muted" style="font-size:11px">כולל מע״מ ${money(t.incomeInc || 0)}</div></div>
+      <div class="card"><div class="label">הוצאות (ללא מע״מ)</div><div class="big" style="color:var(--danger)">${money(t.expenseEx || 0)}</div><div class="muted" style="font-size:11px">כולל מע״מ ${money(t.expenseInc || 0)}</div></div>
+      <div class="card"><div class="label">רווח</div><div class="big" style="color:${(t.profitEx || 0) >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(t.profitEx || 0)}</div><div class="muted" style="font-size:11px">${t.unpaidRows || 0} שורות טרם שולמו</div></div>
+    </div>
+
+    <div style="font-size:13px;font-weight:700;margin-bottom:4px">פירוט הוצאות</div>
+    <table class="tbl no-cardify" style="width:100%;font-size:12.5px">
+      <thead><tr><th>תפקיד</th><th>ספק</th><th style="text-align:left">ללא מע״מ</th><th style="text-align:left">כולל מע״מ</th><th>תשלום</th><th>הערה</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+
+    <div class="row-between" style="margin:16px 0 4px">
+      <div style="font-size:13px;font-weight:700">מסמכים ללקוח</div>
+      <button class="btn primary" style="padding:3px 11px;font-size:12.5px" onclick="boardIssueDoc('${ev.id}')">🧾 הפקת מסמך לאירוע</button>
+    </div>
+    <table class="tbl no-cardify" style="width:100%;font-size:12.5px">
+      <thead><tr><th>מסמך</th><th>מצב</th><th style="text-align:left"></th></tr></thead>
+      <tbody>${docs}</tbody>
+    </table>
+    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('bvModal').classList.add('hidden')">סגור</button></div>
+  </div>`;
+};
+
+// הפקת מסמך לאירוע — פותח את חלונית המסמך עם פרטי האירוע כבר מלאים.
+window.boardIssueDoc = async (id) => {
+  const ev = boardFind(id); if (!ev) return;
+  const bm = document.getElementById('bvModal'); if (bm) bm.classList.add('hidden');
+  const mm = document.getElementById('newQuoteModal') || (() => { const x = document.createElement('div'); x.id = 'newQuoteModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  mm.classList.remove('hidden');
+  mm.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
+  try { const cl = await api('/api/clients'); if (Array.isArray(cl) && cl.length) _evClients = cl; } catch { if (!_evClients) _evClients = []; }
+  const cli = (_evClients || []).find(c => (c.name || '').trim() === (ev.clientName || '').trim());
+  const subject = [ev.artist, ddmy(ev.date), ev.location].filter(Boolean).join(' - ');
+  _nq = {
+    type: 300, boardEventId: ev.id,
+    clientId: (cli && cli.id) || ev.clientId || '', clientName: ev.clientName || '',
+    date: todayIso(), subject, remarks: '', email: '', email2: '',
+    payTerms: { mode: 'default', text: '' }, sendEmail: false,
+    items: [{ description: subject || 'הופעה', quantity: 1, price: Number(ev.price) || 0 }],
+  };
+  renderNewQuote();
+};
 
 async function renderVehicles(c) {
   const _g = rgen(c);

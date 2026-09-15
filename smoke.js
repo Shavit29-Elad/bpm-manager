@@ -1210,7 +1210,7 @@ check('מעבר כרטיסייה — תשובה איטית של הקודמת ל�
 
   // כל רנדרר של לשונית — לכידה בראש הפונקציה והגנה לפני הכתיבה
   const renderers = ['renderHome', 'renderBusinessSummary', 'renderCombined', 'renderClients', 'renderQuotes',
-    'renderBank', 'renderContractors', 'renderPayroll', 'renderVehicles', 'renderBusiness'];
+    'renderBank', 'renderContractors', 'renderPayroll', 'renderVehicles', 'renderEventsBoard', 'renderBusiness'];
   const L = app.split('\n');
   for (const n of renderers) {
     const st = L.findIndex(l => new RegExp(`^(async )?function ${n}\\b`).test(l));
@@ -1888,6 +1888,68 @@ check('בורר תנאי התשלום נבנה ומופיע רק בהצעת מח
   const inits = app.split('\n').filter(l => l.includes('_nq = {'));
   const noType = inits.filter(l => !/type:/.test(l)).length;
   if (noType && !/Number\(e\.type \|\| 10\)/.test(cond || '')) throw new Error('יש אתחול בלי סוג והתנאי אינו מכסה אותו');
+  return true;
+});
+
+const boardMod = await import('./eventBoard.js');
+check('לוח האירועים — התפקידים זהים בשרת ובממשק', () => {
+  const ui = app.match(/const BOARD_ROLES = \[([\s\S]*?)\];/);
+  if (!ui) throw new Error('רשימת התפקידים לא נמצאה בממשק');
+  const uiRoles = [...ui[1].matchAll(/'([^']+)'/g)].map(m => m[1]);
+  const srvRoles = boardMod.BOARD_ROLES;
+  if (uiRoles.join('|') !== srvRoles.join('|')) throw new Error(`שרת: ${srvRoles.join(',')} · ממשק: ${uiRoles.join(',')}`);
+  if (srvRoles.length !== 14) throw new Error('מספר תפקידים: ' + srvRoles.length);
+  return true;
+});
+check('לוח האירועים — עוסק פטור אינו מנופח במע״מ', () => {
+  const reg = boardMod.rowTotals({ priceExVat: 1000 });
+  if (reg.inc !== 1180 || reg.vat !== 180) throw new Error('ספק רגיל: ' + JSON.stringify(reg));
+  const ex = boardMod.rowTotals({ priceExVat: 1000, vatExempt: true });
+  if (ex.inc !== 1000 || ex.vat !== 0) throw new Error('עוסק פטור: ' + JSON.stringify(ex));
+  if (boardMod.rowTotals({}).inc !== 0) throw new Error('שורה ריקה יצרה סכום');
+  return true;
+});
+check('לוח האירועים — סיכומי אירוע וחודש', () => {
+  const ev = { id: 'e1', date: '2026-10-08', artist: 'בת מצווה', price: 20000, contractorDetails: [
+    { role: 'קלידן', name: 'דני', priceExVat: 1500 },
+    { role: 'מתופף', name: 'רון', priceExVat: 1200, vatExempt: true },
+    { role: 'הסעה', name: '', priceExVat: null },
+    { role: 'צילום', name: 'סטודיו', priceExVat: 800 },
+  ] };
+  const t = boardMod.eventTotals(ev);
+  if (t.expenseEx !== 3500) throw new Error('הוצאה ללא מע״מ: ' + t.expenseEx);
+  if (t.expenseInc !== 3914) throw new Error('הוצאה כולל מע״מ: ' + t.expenseInc);  // 1500*1.18 + 1200 + 800*1.18
+  if (t.profitEx !== 16500) throw new Error('רווח: ' + t.profitEx);
+  if (t.filledRows !== 3) throw new Error('שורות מלאות: ' + t.filledRows);
+  const rows = boardMod.boardRows(ev);
+  if (rows.fixed.length !== 14) throw new Error('תפקידים קבועים: ' + rows.fixed.length);
+  if (rows.extras.length !== 1 || rows.extras[0].role !== 'צילום') throw new Error('שורה חופשית לא זוהתה');
+  const b = boardMod.boardByMonth([ev], '2026');
+  if (b.months.length !== 1 || b.months[0].month !== '2026-10') throw new Error('קיבוץ לחודשים נכשל');
+  if (b.totals.profitEx !== 16500) throw new Error('סיכום שנתי: ' + JSON.stringify(b.totals));
+  if (boardMod.boardByMonth([ev], '2025').months.length) throw new Error('סינון שנה לא עבד');
+  return true;
+});
+check('לוח האירועים — עריכה אינה מוחקת מעקב תשלום קיים', () => {
+  // השורות נשמרות ב-contractorDetails, ולכן עריכה חייבת לשמר את שדות המעקב
+  // (שולם, שיוך לחשבונית) — אחרת כל עריכה מאפסת את מעקב התשלומים לספק.
+  const prev = [{ role: 'קלידן', name: 'דני', priceExVat: 1500, amount: 1770, paid: true, paidPayableId: 'pay1', paidSource: 'manual' }];
+  const out = boardMod.normalizeRows([{ role: 'קלידן', name: 'דני', priceExVat: 1600 }], prev);
+  if (out.length !== 1) throw new Error('שורות: ' + out.length);
+  if (!out[0].paid || out[0].paidPayableId !== 'pay1') throw new Error('מעקב התשלום נמחק');
+  if (out[0].amount !== 1888) throw new Error('הסכום לא עודכן: ' + out[0].amount);
+  // שורה ריקה לגמרי אינה נשמרת
+  if (boardMod.normalizeRows([{ role: 'בסיסט', name: '', priceExVat: null, note: '' }]).length) throw new Error('שורה ריקה נשמרה');
+  // שורה עם הערה בלבד כן נשמרת
+  if (!boardMod.normalizeRows([{ role: 'בסיסט', name: '', priceExVat: null, note: 'בהמתנה' }]).length) throw new Error('הערה בלבד לא נשמרה');
+  return true;
+});
+check('לוח האירועים — מוצג למשה בלבד', () => {
+  const fn = app.slice(app.indexOf('function companyTabsFor'), app.indexOf('const currentCompanyName'));
+  if (!/k === 'eventsboard'.*isMoshe/s.test(fn)) throw new Error('הלשונית אינה מוגבלת למשה');
+  const apply = app.slice(app.indexOf('function applyCompanyTabs'), app.indexOf('// ---- ניהול משתמשים'));
+  if (!/data-tab="eventsboard".*isMoshe/s.test(apply)) throw new Error('הלשונית אינה מוסתרת לשאר החברות');
+  if (!/state\.tab === 'eventsboard'/.test(apply)) throw new Error('מעבר חברה משאיר את המשתמש בלשונית שאינה שלו');
   return true;
 });
 
