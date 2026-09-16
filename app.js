@@ -683,10 +683,18 @@ window.previewDoc = async (url, opts = {}) => {
   m.onclick = (e) => { if (e.target === m) closePreview(); };
   try {
     const r = await fetch(url);
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    // תשובת JSON אינה מסמך — היא הודעת שגיאה. בלי הבדיקה הזו ה-iframe הציג
+    // את גוף השגיאה כטקסט גולמי, ונראה כאילו הצפיין שבור.
+    if (!r.ok || ct.includes('application/json')) {
+      let msg = '';
+      try { const j = await r.json(); msg = (j && j.error) || ''; } catch { }
+      throw new Error(msg || `שגיאה ${r.status}`);
+    }
     const blob = await r.blob();
     _previewBlobUrl = URL.createObjectURL(blob);
     _pv.blobUrl = _previewBlobUrl;
-    _pv.type = (blob.type || r.headers.get('content-type') || '').toLowerCase();
+    _pv.type = (blob.type || ct || '').toLowerCase();
     renderPreviewBody();
   } catch (e) {
     // כתובת חיצונית (חשבונית ירוקה) נחסמת ב-CORS. אם יש מזהה מסמך, השרת שלנו
@@ -695,8 +703,12 @@ window.previewDoc = async (url, opts = {}) => {
       ? `/api/documents/${encodeURIComponent(opts.docId)}/download` : null;
     if (viaServer) { try { return await previewDoc(viaServer, { ...opts, fallbackUrl: url }); } catch { /* ממשיכים להודעה */ } }
     const open = opts.fallbackUrl || url;
+    const why = (e && e.message) ? escapeHtml(String(e.message)) : '';
     const cur = document.getElementById('docPreview');
-    if (cur) cur.innerHTML = previewShell(`<div class="empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px"><div>לא ניתן להציג את המסמך כאן.</div><a class="btn primary" href="${open}" target="_blank" rel="noopener" style="text-decoration:none">פתיחה בלשונית חדשה</a></div>`);
+    if (cur) cur.innerHTML = previewShell(`<div class="empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px">
+      <div>לא ניתן להציג את המסמך כאן.</div>
+      ${why ? `<div class="muted" style="font-size:13px">${why}</div>` : ''}
+      <a class="btn primary" href="${open}" target="_blank" rel="noopener" style="text-decoration:none">פתיחה בלשונית חדשה</a></div>`);
   }
 };
 window.closePreview = () => {
@@ -7605,6 +7617,7 @@ const bDocUrl = (d) => d.payableId ? `/api/supplier-payables/${d.payableId}/file
 let _bvOpen = {};   // אילו שורות פתוחות לפירוט, לפי אינדקס
 let _bvDoc = null;  // המסמך שמוצג כרגע בתוך החלונית (id) — צפייה בלי לצאת ממנה
 let _bvZoom = 0;    // 0 = התאמה לרוחב; אחרת אחוז תצוגה
+let _bvDocErr = null; // הסבר כשאין קובץ להציג — במקום להראות תשובת שגיאה גולמית
 let _bvWide = false; // הרחבת לוח הצפייה על חשבון הפירוט
 // צפיין ה-PDF של הדפדפן נפתח כברירת מחדל ב"התאם לעמוד", ובפאנל צר המסמך יוצא
 // זעיר. הפרמטרים בכתובת הם מה שהצפיין מקבל, ולכן הזום כאן חד ואמיתי ולא
@@ -7657,9 +7670,25 @@ window.bDocToggle = (idx) => {
 };
 // צפייה במסמך בתוך חלונית האירוע. קודם נפתחה חלונית נפרדת מעל, וההקשר של
 // האירוע נעלם. כאן המסמך נפתח מתחת לשורה שלו, באותו חלון.
-window.bDocShow = (docId) => {
-  _bvDoc = (_bvDoc === docId) ? null : docId;
-  const ev = _bvEvent; if (ev) openBoardView(ev.id, true);
+window.bDocShow = async (docId) => {
+  const closing = _bvDoc === docId;
+  _bvDoc = closing ? null : docId;
+  _bvDocErr = null;
+  const ev = _bvEvent; if (!ev) return;
+  openBoardView(ev.id, true);
+  if (closing) return;
+  // הוצאה שנרשמה בלי קובץ מחזירה JSON, וה-iframe היה מציג אותו כטקסט גולמי.
+  // בודקים לפני ההצגה, ומסבירים במקום להראות שגיאה.
+  const hit = bvFindDoc(ev, docId); if (!hit) return;
+  try {
+    const r = await fetch(bDocUrl(hit.doc));
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    if (!r.ok || ct.includes('application/json')) {
+      let msg = ''; try { const j = await r.json(); msg = (j && j.error) || ''; } catch { }
+      _bvDocErr = msg || `שגיאה ${r.status}`;
+      if (_bvDoc === docId) openBoardView(ev.id, true);
+    }
+  } catch { _bvDocErr = 'שגיאת רשת'; if (_bvDoc === docId) openBoardView(ev.id, true); }
 };
 
 window.bDocRemove = async (evId, idx, docId) => {
@@ -7789,7 +7818,7 @@ function bvFindDoc(ev, docId) {
 }
 window.openBoardView = (id, keepOpen) => {
   const ev = boardFind(id); if (!ev) return;
-  if (!keepOpen) { _bvOpen = {}; _bvDoc = null; _bvZoom = 0; _bvWide = false; }   // פתיחה חדשה — הכל מכווץ
+  if (!keepOpen) { _bvOpen = {}; _bvDoc = null; _bvDocErr = null; _bvZoom = 0; _bvWide = false; }   // פתיחה חדשה — הכל מכווץ
   _bvEvent = ev;
   let m = document.getElementById('bvModal');
   if (!m) { m = document.createElement('div'); m.id = 'bvModal'; m.className = 'modal'; document.body.appendChild(m); }
@@ -7841,7 +7870,13 @@ window.openBoardView = (id, keepOpen) => {
           ${zb('✕', `bDocShow('${shown.doc.id}')`, 'סגירה')}
         </div>
       </div>
-      <iframe src="${bDocUrl(shown.doc)}${bDocFrag()}" style="flex:1;min-height:66vh;width:100%;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+      ${_bvDocErr ? `<div class="empty" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;border:1px solid var(--line);border-radius:8px">
+          <div style="font-size:26px">📄</div>
+          <div style="font-weight:600">לא נשמר קובץ למסמך הזה</div>
+          <div class="muted" style="font-size:12.5px;max-width:320px;line-height:1.6">${escapeHtml(_bvDocErr)}<br>המסמך רשום במערכת (ספק, מספר וסכום) אבל הקובץ עצמו לא נשמר.</div>
+          <button class="btn primary" style="padding:4px 12px;font-size:12.5px" onclick="bDocUpload('${shown.row ? _bvEvent.id : ''}',${shown.row ? shown.row.index : -1})">📎 העלאת הקובץ</button>
+        </div>`
+      : `<iframe src="${bDocUrl(shown.doc)}${bDocFrag()}" style="flex:1;min-height:66vh;width:100%;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>`}
     </div>` : '';
   m.innerHTML = `<div class="modal-card bv-split" style="width:${shown ? 'min(1480px,98vw)' : 'min(1000px,97vw)'};max-height:92vh;max-height:92dvh;overflow:hidden;display:flex;gap:14px;align-items:stretch">
     ${side}

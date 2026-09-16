@@ -2373,6 +2373,28 @@ check('עמלות נוספות — שם, אחוז או סכום, וסכום גו
   return true;
 });
 
+check('מסמך בלי קובץ — הסבר ולא תשובת שגיאה גולמית', () => {
+  // הוצאה שנרשמה בלי קובץ מחזירה JSON. ה-iframe הציג אותו כטקסט, ונראה
+  // כאילו הצפיין שבור.
+  const pv = app.slice(app.indexOf('window.previewDoc = async'), app.indexOf('window.closePreview ='));
+  if (!/ct\.includes\('application\/json'\)/.test(pv)) throw new Error('הצפיין המשותף אינו מזהה תשובת שגיאה');
+  if (!/throw new Error\(msg/.test(pv)) throw new Error('השגיאה אינה מועברת להודעה');
+  if (!/e && e\.message/.test(pv)) throw new Error('סיבת השגיאה אינה מוצגת למשתמש');
+
+  const show = app.slice(app.indexOf('window.bDocShow = async'), app.indexOf('function bvRow('));
+  if (!/ct\.includes\('application\/json'\)/.test(show)) throw new Error('לוח האירועים אינו בודק לפני ההצגה');
+  if (!/_bvDocErr = msg/.test(show)) throw new Error('ההסבר אינו נשמר');
+  if (!/if \(closing\) return;/.test(show)) throw new Error('סגירה מפעילה בדיקה מיותרת');
+
+  const view = app.slice(app.indexOf('let _bvEvent = null;'), app.indexOf('// הפקת מסמך לאירוע'));
+  if (!/_bvDocErr \?/.test(view)) throw new Error('לוח הצד אינו מציג את ההסבר');
+  if (!/לא נשמר קובץ למסמך הזה/.test(view)) throw new Error('אין הסבר קריא');
+  if (!/bDocUpload\(/.test(view)) throw new Error('אין דרך להעלות את הקובץ החסר');
+  // פתיחה חדשה מאפסת את ההסבר, אחרת הוא נדבק למסמך הבא
+  if (!/_bvDocErr = null; _bvZoom = 0/.test(view)) throw new Error('ההסבר נדבק בין מסמכים');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
