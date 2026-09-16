@@ -6112,6 +6112,7 @@ add('GET', /^\/api\/diag\/doc-payloads$/, (req, res) => {
 // GET /api/diag/doc?number=  — למה מסמך מסוים אינו משפיע על סטטוס האירוע.
 // מחזיר את מה שהמערכת באמת רואה: האם המסמך מקושר לאירוע כלשהו, מה מצב שאר
 // המסמכים על אותו אירוע, ומה הפסיקה שנגזרת מהם. אבחון קריאה בלבד.
+const r2x = (n) => Math.round((Number(n) || 0) * 100) / 100;
 add('GET', /^\/api\/diag\/doc$/, async (req, res, _p, q) => {
   const db = load(), cid = reqCompany(q);
   const want = String(q.number || q.id || '').trim();
@@ -6130,7 +6131,8 @@ add('GET', /^\/api\/diag\/doc$/, async (req, res, _p, q) => {
       if (found) {
         let raw = null; try { raw = await greenInvoice.getDocument(found.id); } catch { }
         gi = { id: found.id, number: found.number, type: Number(found.type), date: found.date,
-          amount: found.amount, status: raw ? Number(raw.status) : null,
+          amount: found.amount, clientName: found.clientName || (raw && raw.client && raw.client.name) || '',
+          status: raw ? Number(raw.status) : null,
           linkedTo: raw ? greenInvoice.linkedIdsOf(raw).map(x => {
             const m = (all.docs || []).find(d => String(d.id) === String(x));
             return m ? { id: x, number: m.number, type: Number(m.type) } : { id: x };
@@ -6155,10 +6157,38 @@ add('GET', /^\/api\/diag\/doc$/, async (req, res, _p, q) => {
       payStatus: eventClientPaid(e, buildBankPaidMap(db, cid), null),
     });
   }
+  // מסמך שאינו מקושר לשום אירוע — מציעים את המועמדים הסבירים, לפי לקוח, סכום
+  // וקרבת תאריך. ההצעה היא עזר לשיוך ידני ולא שיוך אוטומטי: שיוך שגוי מזיז
+  // כסף לאירוע הלא נכון, ועדיף שהאדם יאשר.
+  const candidates = [];
+  if (gi && !hits.length && !related.length) {
+    const docDate = String(gi.date || '').slice(0, 10);
+    const dayGap = (a, b) => (!a || !b) ? 9999 : Math.abs((new Date(a) - new Date(b)) / 86400000);
+    for (const e of evs) {
+      const evDate = String(e.date || e.dateRaw || '').slice(0, 10);
+      const sameClient = sameClientName(e.clientName, (gi.clientName || ''));
+      const total = eventTotal(e);
+      const incVat = total * 1.18;
+      const amt = Math.abs(Number(gi.amount) || 0);
+      const amountClose = amt > 0 && total > 0 &&
+        (Math.abs(incVat - amt) <= Math.max(5, amt * 0.02) || Math.abs(total - amt) <= Math.max(5, amt * 0.02));
+      const gap = dayGap(evDate, docDate);
+      if (!amountClose && !(sameClient && gap <= 120)) continue;
+      const already = (e.linkedDocs || []).filter(d => [300, 305, 320, 400].includes(Number(d.type)) && !d.converted && !d.credit);
+      candidates.push({ eventId: e.id, date: evDate, artist: e.artist || '', client: e.clientName || '',
+        eventTotalExVat: r2x(total), eventTotalIncVat: r2x(incVat),
+        why: [amountClose ? 'סכום תואם' : null, sameClient ? 'אותו לקוח' : null, gap <= 30 ? 'תאריך קרוב' : null].filter(Boolean),
+        alreadyHasDocs: already.map(d => `${d.number ?? d.id} (${d.type})`),
+        score: (amountClose ? 2 : 0) + (sameClient ? 2 : 0) + (gap <= 30 ? 1 : 0) });
+    }
+    candidates.sort((a, b) => b.score - a.score || a.date.localeCompare(b.date));
+  }
   json(res, {
     ok: true, companyId: cid, looking: want,
     foundInGreenInvoice: gi,
     linkedToEvents: hits.length,
+    candidateEvents: candidates.slice(0, 8),
+    howToLink: candidates.length ? 'לשונית אירועים ← האירוע ← 🔗 שייך מסמכים' : null,
     verdict: !gi ? 'המסמך לא נמצא בחשבונית ירוקה בטווח שנסרק'
       : hits.length ? 'המסמך מקושר לאירוע — ראה payStatus'
       : related.length ? 'המסמך אינו מקושר לאירוע. מסמך המקור שלו כן — צריך לשייך אותו'
