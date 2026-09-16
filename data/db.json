@@ -1,0 +1,390 @@
+{
+  "companies": [
+    {
+      "id": "co_bpm",
+      "name": "בי פי אם הגברה ותאורה בע\"מ",
+      "active": true,
+      "accounting": "greenInvoice"
+    },
+    {
+      "id": "co_moshe",
+      "name": "משה כורסיה בע\"מ",
+      "active": false,
+      "accounting": "greenInvoice"
+    },
+    {
+      "id": "co_ofek",
+      "name": "אופק ידעי הגברה ותאורה",
+      "active": false,
+      "accounting": "greenInvoice"
+    }
+  ],
+  "events": [
+    {
+      "id": "ev_7df270873fe4",
+      "companyId": "co_moshe",
+      "source": "board",
+      "confirmed": true,
+      "invoiceStatus": "pending",
+      "linkedDocs": [],
+      "employeeDetails": [],
+      "employees": [],
+      "createdAt": "2026-09-16T12:40:38.396Z",
+      "date": "2026-10-08",
+      "dateRaw": "2026-10-08",
+      "artist": "בת מצווה",
+      "location": null,
+      "clientId": null,
+      "clientName": null,
+      "price": 20000,
+      "commissionPct": null,
+      "extraCommissions": [
+        {
+          "name": "הפקות אורן",
+          "pct": 5,
+          "amount": null
+        },
+        {
+          "name": "מפיק",
+          "pct": null,
+          "amount": 800
+        }
+      ],
+      "boardNotes": "",
+      "contractorDetails": [
+        {
+          "role": "קלידן",
+          "name": "דני",
+          "priceExVat": 1500,
+          "vatExempt": false,
+          "priceIncVat": false,
+          "note": "",
+          "amount": 1770,
+          "supplierId": null,
+          "docs": []
+        }
+      ],
+      "contractors": [
+        "דני"
+      ]
+    }
+  ],
+  "employees": [],
+  "contractors": [],
+  "invoices": [],
+  "oldInvoices": [],
+  "bankTx": [],
+  "txGroups": [
+    {
+      "id": "txg_music",
+      "companyId": "co_moshe",
+      "name": "מוזיקה",
+      "key": "music",
+      "builtin": true
+    },
+    {
+      "id": "txg_digital",
+      "companyId": "co_moshe",
+      "name": "דיגיטל",
+      "key": "digital",
+      "builtin": true
+    },
+    {
+      "id": "txg_operating",
+      "companyId": "co_moshe",
+      "name": "הוצאות שוטפות",
+      "key": "operating",
+      "builtin": true
+    },
+    {
+      "id": "txg_other",
+      "companyId": "co_moshe",
+      "name": "אחר",
+      "key": "other",
+      "builtin": true
+    },
+    {
+      "id": "txg_co_bpm_income_biz",
+      "companyId": "co_bpm",
+      "name": "הכנסות עסק",
+      "key": "income_biz",
+      "kind": "income",
+      "builtin": true,
+      "isDefaultIncome": true
+    },
+    {
+      "id": "txg_co_bpm_income_refund",
+      "companyId": "co_bpm",
+      "name": "החזר",
+      "key": "income_refund",
+      "kind": "income",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_bpm_exp_suppliers",
+      "companyId": "co_bpm",
+      "name": "ספקים",
+      "key": "exp_suppliers",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_bpm_exp_equipment",
+      "companyId": "co_bpm",
+      "name": "ציוד",
+      "key": "exp_equipment",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_bpm_exp_vehicles",
+      "companyId": "co_bpm",
+      "name": "רכבים",
+      "key": "exp_vehicles",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_bpm_exp_loan",
+      "companyId": "co_bpm",
+      "name": "הלוואה",
+      "key": "exp_loan",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_bpm_exp_bankfees",
+      "companyId": "co_bpm",
+      "name": "עמלות בנקים",
+      "key": "exp_bankfees",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_bpm_exp_legal",
+      "companyId": "co_bpm",
+      "name": "עו״ד",
+      "key": "exp_legal",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_ofek_income_biz",
+      "companyId": "co_ofek",
+      "name": "הכנסות עסק",
+      "key": "income_biz",
+      "kind": "income",
+      "builtin": true,
+      "isDefaultIncome": true
+    },
+    {
+      "id": "txg_co_ofek_income_refund",
+      "companyId": "co_ofek",
+      "name": "החזר",
+      "key": "income_refund",
+      "kind": "income",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_ofek_exp_suppliers",
+      "companyId": "co_ofek",
+      "name": "ספקים",
+      "key": "exp_suppliers",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_ofek_exp_equipment",
+      "companyId": "co_ofek",
+      "name": "ציוד",
+      "key": "exp_equipment",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_ofek_exp_vehicles",
+      "companyId": "co_ofek",
+      "name": "רכבים",
+      "key": "exp_vehicles",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_ofek_exp_loan",
+      "companyId": "co_ofek",
+      "name": "הלוואה",
+      "key": "exp_loan",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_ofek_exp_bankfees",
+      "companyId": "co_ofek",
+      "name": "עמלות בנקים",
+      "key": "exp_bankfees",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    },
+    {
+      "id": "txg_co_ofek_exp_legal",
+      "companyId": "co_ofek",
+      "name": "עו״ד",
+      "key": "exp_legal",
+      "kind": "expense",
+      "builtin": true,
+      "isDefaultIncome": false
+    }
+  ],
+  "txGroupRules": [
+    {
+      "id": "txr_gali",
+      "companyId": "co_moshe",
+      "name": "גלי בראון ייצוג וניהול סושיאל בע״מ",
+      "groupId": "txg_digital"
+    }
+  ],
+  "fixedExpenses": [],
+  "assets": [],
+  "chats": {},
+  "memory": {},
+  "users": [
+    {
+      "id": "usr_08c166461c26",
+      "username": "bodek",
+      "salt": "90426103e1d013506df37bc64afdeaf5",
+      "hash": "c58079b9943eeebb244694d24eb86ea3b10f5e7a0d96d18941c45d5fb6e387c1435f68f425f1a4ca9fa6649d6642cf3778f3afe771dff34d685ca5c0fa712854",
+      "role": "admin",
+      "tabs": [],
+      "companies": [],
+      "createdAt": "2026-09-16T12:40:38.390Z"
+    }
+  ],
+  "sessions": {
+    "6f735ff1c71cc3d673500746fc3b86b4bfbef3c5f64e70d88e2d22e37c082875": {
+      "userId": "usr_08c166461c26",
+      "exp": 1792154438390
+    }
+  },
+  "requests": [],
+  "expenseNotes": {},
+  "artistClientMap": [
+    {
+      "artist": "ששון שאולוב",
+      "clientName": "אבי גואטה הפקות בע״מ"
+    },
+    {
+      "artist": "נסרין",
+      "clientName": "א.מ הפקות מוסיקה בע״מ - נסרין"
+    },
+    {
+      "artist": "אגם בוחבוט",
+      "clientName": "גאגא בוקינג בע״מ"
+    },
+    {
+      "artist": "שרית חדד",
+      "clientName": "כספית ייצוג והפקת אומנים ואירועים בעמ - שרית"
+    },
+    {
+      "artist": "היוצרים",
+      "clientName": "סיטי הפקות (ת.ס) בע"
+    },
+    {
+      "artist": "קובי פרץ",
+      "clientName": "ליאל הפקות בע״מ"
+    },
+    {
+      "artist": "אושר כהן",
+      "clientName": "א.מ הפקות מוסיקה בע״מ - אושר"
+    },
+    {
+      "artist": "עדן בן זקן",
+      "clientName": "שרית הפקות בע״מ"
+    },
+    {
+      "artist": "הפרויקט",
+      "clientName": "סינגולד בע״מ",
+      "companyId": "co_ofek"
+    },
+    {
+      "artist": "הפרוייקט של רביבו",
+      "clientName": "סינגולד בע״מ",
+      "companyId": "co_ofek"
+    },
+    {
+      "artist": "מאור אדרי",
+      "clientName": "מאור אדרי הפקות בע״מ",
+      "companyId": "co_ofek"
+    },
+    {
+      "artist": "טומי",
+      "clientName": "טומי לי הגברה ותאורה בע״מ",
+      "companyId": "co_ofek"
+    },
+    {
+      "artist": "Bpm",
+      "clientName": "בי פי אם הגברה ותאורה בע״מ",
+      "companyId": "co_ofek"
+    },
+    {
+      "artist": "בי פי אם",
+      "clientName": "בי פי אם הגברה ותאורה בע״מ",
+      "companyId": "co_ofek"
+    },
+    {
+      "artist": "איציק ריקן",
+      "clientName": "איציק ריקן",
+      "companyId": "co_ofek"
+    },
+    {
+      "artist": "נועם חורב",
+      "clientName": "הליקון כנען בע״מ",
+      "companyId": "co_ofek"
+    },
+    {
+      "artist": "אריאל אזולאי",
+      "clientName": "אודם קישורים עסקיים בע״מ",
+      "companyId": "co_ofek"
+    },
+    {
+      "artist": "נטלי פרץ",
+      "clientName": "פרץ נטלי",
+      "companyId": "co_ofek"
+    },
+    {
+      "artist": "יניב בן משיח",
+      "clientName": "יניב בן משיח הפקות בע״מ",
+      "companyId": "co_ofek"
+    }
+  ],
+  "_ofekArtistMapSeededV1": true,
+  "followupBackfill": {
+    "co_bpm": {
+      "version": 8,
+      "at": "2026-09-16T12:40:44.818Z",
+      "skipped": "לא מחובר"
+    },
+    "co_moshe": {
+      "version": 8,
+      "at": "2026-09-16T12:40:44.818Z",
+      "skipped": "לא מחובר"
+    },
+    "co_ofek": {
+      "version": 8,
+      "at": "2026-09-16T12:40:44.818Z",
+      "skipped": "לא מחובר"
+    }
+  }
+}

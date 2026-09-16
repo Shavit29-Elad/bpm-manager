@@ -2313,8 +2313,8 @@ check('לוח האירועים — עמלה 15% והתשלום שנשאר למש
   if (boardMod.commissionPctOf({ commissionPct: -5 }) !== 0) throw new Error('אחוז שלילי לא נחסם');
 
   // הממשק מחשב זהה לשרת, אחרת החלונית מראה סכום אחד והשרת שומר אחר
-  const uiSrc = app.slice(app.indexOf('function bdCommPct('), app.indexOf('function boardEditSync('));
-  const ui = new Function(`const money=(n)=>String(n);\n${uiSrc}\nreturn bdCommPct;`)();
+  const uiSrc = app.slice(app.indexOf('function bdCommPct('), app.indexOf('function bdIncomeLine('));
+  const ui = new Function(`${uiSrc}\nreturn bdCommPct;`)();
   for (const v of ['', null, 15, 10, 0, 'abc']) {
     const got = ui({ commissionPct: v }), want = boardMod.commissionPctOf({ commissionPct: v });
     if (got !== want) throw new Error(`אחוז ${String(v)}: ממשק ${got} שרת ${want}`);
@@ -2335,6 +2335,41 @@ check('הפקת מסמך מהלוח — על הסכום שאחרי העמלה', 
   if (!/\(Number\(ev\.price\) \|\| 0\)/.test(src)) throw new Error('אין נפילה למחיר כשאין סיכום');
   // החיווי באמת מוצג בחלונית
   if (!/e\.boardNote \?/.test(app)) throw new Error('החיווי לא מוצג בחלונית המסמך');
+  return true;
+});
+
+check('עמלות נוספות — שם, אחוז או סכום, וסכום גובר על אחוז', () => {
+  const ev = { price: 20000, extraCommissions: [{ name: 'הפקות אורן', pct: 5 }, { name: 'מפיק', amount: 800 }] };
+  const t = boardMod.eventTotals(ev);
+  if (t.commissions.length !== 3) throw new Error('מספר עמלות: ' + t.commissions.length);
+  if (t.commissions[0].amount !== 3000 || !t.commissions[0].primary) throw new Error('עמלת ברירת המחדל: ' + JSON.stringify(t.commissions[0]));
+  if (t.commissions[1].amount !== 1000 || t.commissions[1].pct !== 5) throw new Error('עמלה באחוז: ' + JSON.stringify(t.commissions[1]));
+  if (t.commissions[2].amount !== 800 || t.commissions[2].pct !== null) throw new Error('עמלה בסכום: ' + JSON.stringify(t.commissions[2]));
+  if (t.commissionEx !== 4800 || t.incomeEx !== 15200) throw new Error('סיכום: ' + JSON.stringify([t.commissionEx, t.incomeEx]));
+
+  // סכום גובר על אחוז כששניהם הוזנו
+  const both = boardMod.eventTotals({ price: 10000, extraCommissions: [{ name: 'x', pct: 50, amount: 300 }] });
+  if (both.commissions[1].amount !== 300) throw new Error('הסכום לא גבר על האחוז: ' + both.commissions[1].amount);
+  // שורה ריקה אינה נספרת
+  if (boardMod.eventTotals({ price: 1000, extraCommissions: [{ name: '', pct: '', amount: '' }] }).commissions.length !== 1)
+    throw new Error('שורה ריקה נספרה');
+  // עמלות מעל המחיר — תשלום אפס ולא שלילי, עם דגל
+  const over = boardMod.eventTotals({ price: 1000, extraCommissions: [{ name: 'x', amount: 5000 }] });
+  if (over.incomeEx !== 0 || !over.commissionOver) throw new Error('חריגה: ' + JSON.stringify([over.incomeEx, over.commissionOver]));
+
+  // הממשק מחשב זהה לשרת
+  const uiSrc = app.slice(app.indexOf('function bdCommPct('), app.indexOf('function bdIncomeLine('));
+  const ui = new Function(`${uiSrc}\nreturn bdCommList;`)();
+  for (const fixture of [ev, { price: 10000, extraCommissions: [{ name: 'x', pct: 50, amount: 300 }] }, { price: 500 }]) {
+    const a = ui(fixture).map(c => c.amount).join(',');
+    const b = boardMod.commissionsOf(fixture).map(c => c.amount).join(',');
+    if (a !== b) throw new Error(`ממשק ${a} · שרת ${b}`);
+  }
+  // והשרת שומר אותן
+  const srv = fs.readFileSync('server.js', 'utf8');
+  if (!/ev\.extraCommissions = /.test(srv)) throw new Error('השרת אינו שומר עמלות נוספות');
+  if (!/\.slice\(0, 10\)/.test(srv.slice(srv.indexOf('ev.extraCommissions = '), srv.indexOf('ev.extraCommissions = ') + 700)))
+    throw new Error('אין גבול למספר העמלות');
   return true;
 });
 

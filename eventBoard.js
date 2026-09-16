@@ -98,6 +98,29 @@ export function commissionPctOf(ev) {
   return Math.min(100, Math.max(0, Number(v)));
 }
 
+// כל העמלות של האירוע כרשימה אחת: הראשונה היא עמלת ברירת המחדל (אחוז),
+// ואחריה עמלות נוספות שהוזנו ידנית — לכל אחת שם ואחוז או סכום קבוע.
+// סכום קבוע גובר על אחוז, כי מי שהזין אותו התכוון למספר מדויק.
+export function commissionsOf(ev, clientPriceEx) {
+  const price = num(clientPriceEx != null ? clientPriceEx : (ev && ev.price));
+  const calc = (c) => {
+    const amt = (c.amount === '' || c.amount == null || isNaN(Number(c.amount))) ? null : Number(c.amount);
+    if (amt != null) return { pct: null, amount: r2(Math.abs(amt)) };
+    const pct = Math.min(100, Math.max(0, num(c.pct)));
+    return { pct, amount: r2(price * pct / 100) };
+  };
+  const out = [];
+  const firstPct = commissionPctOf(ev);
+  out.push({ name: 'שורה ראשונה', primary: true, ...calc({ pct: firstPct }) });
+  for (const c of (Array.isArray(ev && ev.extraCommissions) ? ev.extraCommissions : [])) {
+    const name = String((c && c.name) || '').trim();
+    const t = calc(c || {});
+    if (!name && !t.amount) continue;            // שורה ריקה — לא נספרת
+    out.push({ name: name || 'עמלה נוספת', primary: false, ...t });
+  }
+  return out;
+}
+
 export function eventTotals(ev) {
   const rows = boardRows(ev).all.filter(r => r.ex > 0);
   const expenseEx = r2(rows.reduce((s, r) => s + r.ex, 0));
@@ -105,12 +128,15 @@ export function eventTotals(ev) {
   // מחיר ללקוח → עמלה → מה שנשאר. ההכנסה של משה היא מה שנשאר אחרי העמלה,
   // ולכן היא זו שנכנסת לרווח ולסיכומי החודש — לא המחיר המלא ללקוח.
   const clientPriceEx = r2(num(ev && ev.price));
+  const commissions = commissionsOf(ev, clientPriceEx);
   const commissionPct = commissionPctOf(ev);
-  const commissionEx = r2(clientPriceEx * commissionPct / 100);
-  const incomeEx = r2(clientPriceEx - commissionEx);
+  const commissionEx = r2(commissions.reduce((a, c) => a + c.amount, 0));
+  // העמלות לא יכולות לבלוע יותר מהמחיר — תשלום שלילי אינו מצב אמיתי
+  const incomeEx = r2(Math.max(0, clientPriceEx - commissionEx));
   return {
     clientPriceEx, clientPriceInc: r2(clientPriceEx * (1 + VAT_RATE)),
-    commissionPct, commissionEx,
+    commissions, commissionPct, commissionEx,
+    commissionOver: commissionEx > clientPriceEx,
     incomeEx, incomeInc: r2(incomeEx * (1 + VAT_RATE)),
     expenseEx, expenseInc,
     profitEx: r2(incomeEx - expenseEx),
@@ -133,7 +159,9 @@ export function boardByMonth(events, year, payablesById) {
     const t = eventTotals(ev);
     g.events.push({ id: ev.id, date: iso, artist: ev.artist || '', location: ev.location || '',
       clientId: ev.clientId || null, clientName: ev.clientName || '',
-      price: ev.price ?? null, commissionPct: commissionPctOf(ev), notes: ev.boardNotes || '',
+      price: ev.price ?? null, commissionPct: commissionPctOf(ev),
+      extraCommissions: Array.isArray(ev.extraCommissions) ? ev.extraCommissions : [],
+      notes: ev.boardNotes || '',
       linkedDocs: (ev.linkedDocs || []).map(d => ({ id: d.id, number: d.number ?? null, type: Number(d.type),
         uploaded: !!d.uploaded, converted: !!d.converted, credit: !!(d.credit || Number(d.type) === 330) })),
       rows: boardRows(ev, payablesById).all, totals: t });
@@ -186,4 +214,4 @@ export function normalizeRows(rows, prev = []) {
   return out;
 }
 
-export default { VAT_RATE, BOARD_ROLES, DEFAULT_COMMISSION_PCT, commissionPctOf, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, normDocType, rowDocs, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
+export default { VAT_RATE, BOARD_ROLES, DEFAULT_COMMISSION_PCT, commissionPctOf, commissionsOf, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, normDocType, rowDocs, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
