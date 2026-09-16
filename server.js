@@ -6308,6 +6308,57 @@ add('GET', /^\/api\/diag\/doc$/, async (req, res, _p, q) => {
   });
 });
 
+// GET /api/diag/payable?number=  או ?id=  — כל רשומות ההוצאה של אותו מסמך,
+// מקורות הקובץ שלהן, ואילו שורות אירוע מצביעות לכל אחת. אבחון קריאה בלבד.
+add('GET', /^\/api\/diag\/payable$/, async (req, res, _p, q) => {
+  const db = load(), cid = reqCompany(q);
+  const num = String(q.number || '').trim();
+  const pid = String(q.id || '').trim();
+  if (!num && !pid) return json(res, { error: 'נדרש number או id' }, 400);
+  const all = db.supplierPayables || [];
+  const match = all.filter(p => (pid && String(p.id) === pid) || (num && String(p.number || '').trim() === num));
+
+  const rows = [];
+  for (const e of (db.events || [])) {
+    (e.contractorDetails || []).forEach((c, i) => {
+      if (!c) return;
+      const ref = String(c.paidPayableId || '');
+      const inDocs = (c.docs || []).map(d => String(d.payableId || '')).filter(Boolean);
+      if (!match.some(p => String(p.id) === ref || inDocs.includes(String(p.id)))) return;
+      rows.push({ companyId: e.companyId || null, eventId: e.id, date: e.date || e.dateRaw, artist: e.artist || '',
+        rowIndex: i, role: c.role || null, supplier: c.name || '', paidPayableId: c.paidPayableId || null,
+        paidInvoice: c.paidInvoice ?? null, docsPayableIds: inDocs });
+    });
+  }
+
+  const out = [];
+  for (const p of match) {
+    let giUrl = null, giFields = null, giErr = null;
+    if (p.giExpenseId && giEnabled(p.companyId || cid) && greenInvoice.haveCredentials()) {
+      try {
+        const e = await greenInvoice.getExpense(p.giExpenseId);
+        giUrl = expenseFileUrl(e) ? 'נמצאה כתובת' : null;
+        if (!giUrl && e && typeof e === 'object') giFields = Object.keys(e);
+      } catch (e) { giErr = e.message; }
+    }
+    let localOk = null;
+    if (p.localFileId) { try { const f = await getFile(p.localFileId); localOk = !!(f && f.data); } catch { localOk = false; } }
+    out.push({ id: p.id, companyId: p.companyId || null, supplierName: p.supplierName, number: p.number,
+      date: p.date, amount: p.amount, documentType: p.documentType,
+      sources: { localFileId: p.localFileId || null, localFileFound: localOk, giExpenseId: p.giExpenseId || null, draftId: p.draftId || null },
+      greenInvoice: { fileUrl: giUrl, fieldsWhenMissing: giFields, error: giErr },
+      servesFile: !!(localOk || giUrl || p.draftId) });
+  }
+  json(res, {
+    ok: true, companyId: cid, looking: pid || num,
+    payables: out, duplicates: out.length > 1,
+    referencedByRows: rows,
+    verdict: !out.length ? 'לא נמצאה רשומת הוצאה עם המספר/מזהה הזה'
+      : out.some(x => x.servesFile) ? (out.every(x => x.servesFile) ? 'לכל הרשומות יש קובץ' : 'יש כפילות — רק לחלק מהרשומות יש קובץ')
+      : 'לאף רשומה אין קובץ שניתן להגיש',
+  });
+});
+
 // GET /api/clients — רשימת לקוחות (fresh=1 מרענן מחשבונית ירוקה)
 add('GET', /^\/api\/clients$/, async (req, res, _p, q) => {
   if (q.fresh) greenInvoice.clearDataCache();
