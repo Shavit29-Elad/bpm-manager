@@ -6109,6 +6109,64 @@ add('GET', /^\/api\/diag\/doc-payloads$/, (req, res) => {
   json(res, { total: items.length, weEverAskedToSend: items.some(i => i.weAskedToSend), items });
 });
 
+// GET /api/diag/doc?number=  — למה מסמך מסוים אינו משפיע על סטטוס האירוע.
+// מחזיר את מה שהמערכת באמת רואה: האם המסמך מקושר לאירוע כלשהו, מה מצב שאר
+// המסמכים על אותו אירוע, ומה הפסיקה שנגזרת מהם. אבחון קריאה בלבד.
+add('GET', /^\/api\/diag\/doc$/, async (req, res, _p, q) => {
+  const db = load(), cid = reqCompany(q);
+  const want = String(q.number || q.id || '').trim();
+  if (!want) return json(res, { error: 'נדרש number או id' }, 400);
+  const evs = (db.events || []).filter(e => ownedBy(e, cid));
+  const hits = evs.filter(e => (e.linkedDocs || []).some(d => d && (String(d.id) === want || String(d.number) === want)));
+
+  // מה חשבונית ירוקה יודעת על המסמך, ולמי הוא מקושר
+  let gi = null;
+  if (giEnabled(cid) && greenInvoice.haveCredentials()) {
+    try {
+      const all = await greenInvoice.incomeForRange(
+        shiftISODays(new Date().toISOString().slice(0, 10), -540),
+        shiftISODays(new Date().toISOString().slice(0, 10), 240), [10, 300, 305, 320, 330, 400]);
+      const found = (all.docs || []).find(d => String(d.number) === want || String(d.id) === want);
+      if (found) {
+        let raw = null; try { raw = await greenInvoice.getDocument(found.id); } catch { }
+        gi = { id: found.id, number: found.number, type: Number(found.type), date: found.date,
+          amount: found.amount, status: raw ? Number(raw.status) : null,
+          linkedTo: raw ? greenInvoice.linkedIdsOf(raw).map(x => {
+            const m = (all.docs || []).find(d => String(d.id) === String(x));
+            return m ? { id: x, number: m.number, type: Number(m.type) } : { id: x };
+          }) : [] };
+      }
+    } catch (e) { gi = { error: e.message }; }
+  }
+
+  // האירועים שהמסמך שאליו הוא מקושר יושב עליהם
+  const related = [];
+  for (const e of evs) {
+    const ld = (e.linkedDocs || []);
+    const direct = ld.some(d => String(d.id) === want || String(d.number) === want);
+    const viaSource = gi && (gi.linkedTo || []).some(x => ld.some(d => String(d.id) === String(x.id) || String(d.number) === String(x.number)));
+    if (!direct && !viaSource) continue;
+    related.push({
+      eventId: e.id, date: e.date || e.dateRaw, artist: e.artist, client: e.clientName,
+      why: direct ? 'המסמך עצמו מקושר' : 'מסמך המקור שלו מקושר',
+      invoiceStatus: e.invoiceStatus || null, invoiceNumber: e.invoiceNumber || null,
+      linkedDocs: ld.map(d => ({ number: d.number ?? null, type: Number(d.type), uploaded: !!d.uploaded,
+        converted: !!d.converted, credited: !!d.credited, credit: !!d.credit })),
+      payStatus: eventClientPaid(e, buildBankPaidMap(db, cid), null),
+    });
+  }
+  json(res, {
+    ok: true, companyId: cid, looking: want,
+    foundInGreenInvoice: gi,
+    linkedToEvents: hits.length,
+    verdict: !gi ? 'המסמך לא נמצא בחשבונית ירוקה בטווח שנסרק'
+      : hits.length ? 'המסמך מקושר לאירוע — ראה payStatus'
+      : related.length ? 'המסמך אינו מקושר לאירוע. מסמך המקור שלו כן — צריך לשייך אותו'
+      : 'המסמך אינו מקושר לשום אירוע, וגם לא מסמך המקור שלו',
+    related,
+  });
+});
+
 // GET /api/clients — רשימת לקוחות (fresh=1 מרענן מחשבונית ירוקה)
 add('GET', /^\/api\/clients$/, async (req, res, _p, q) => {
   if (q.fresh) greenInvoice.clearDataCache();
