@@ -2499,6 +2499,22 @@ check('הפקת מסמך מהלוח — בחירת סוג, וקישור לאיר
   return true;
 });
 
+check('כפתורי פעולה בחלונית — נשברים לשורה במקום להיחתך', () => {
+  // בעורך מסמך המשך עם פאנל מסמך מקור, שלושת הכפתורים דרשו כמעט בדיוק את
+  // רוחב הטור. כל הבדל קטן בעיבוד הגופן דחף את כפתור ההפקה מחוץ לתצוגה,
+  // ונשאר רק "ביטול".
+  const rule = css.slice(css.indexOf('.modal-actions{'), css.indexOf('.modal-actions{') + 200);
+  if (!/flex-wrap:\s*wrap/.test(rule)) throw new Error('שורת הפעולות אינה נשברת לשורה');
+  // הכלל חייב להיות גלובלי ולא רק בפלאפון
+  const mobileStart = css.indexOf('@media (max-width: 640px)');
+  if (css.indexOf('.modal-actions{') > mobileStart) throw new Error('הכלל נמצא רק בתוך מדיה של פלאפון');
+  // ופאנל המקור אינו בולע את הטור
+  const der = app.slice(app.indexOf('const srcPane = (e.linked'), app.indexOf('const srcPane = (e.linked') + 200);
+  const m = der.match(/flex:0 0 (\d+)%/);
+  if (!m || Number(m[1]) > 42) throw new Error('פאנל המקור רחב מדי: ' + (m && m[1]));
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

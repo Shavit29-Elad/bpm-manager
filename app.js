@@ -1804,7 +1804,7 @@ function renderDeriveEditor() {
   const srcBody = e.srcBlobUrl
     ? (e.srcIsImage ? `<img src="${e.srcBlobUrl}" style="max-width:100%;max-height:100%;object-fit:contain">` : `<iframe src="${e.srcBlobUrl}#toolbar=1" style="flex:1;width:100%;border:none;background:#fff"></iframe>`)
     : `<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען מסמך מקור…</div>`;
-  const srcPane = (e.linked && e.srcUrl) ? `<div style="flex:0 0 44%;min-width:0;display:flex;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
+  const srcPane = (e.linked && e.srcUrl) ? `<div style="flex:0 0 40%;min-width:0;display:flex;flex-direction:column;border-inline-start:1px solid var(--line);padding-inline-start:12px">
       <div class="row-between" style="margin-bottom:6px"><b style="font-size:13px">מסמך מקור${e.srcLabel ? ' — ' + escapeHtml(e.srcLabel) : ''}</b>
         <a href="${e.srcUrl}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none">פתח ↗</a></div>
       <div id="derSrcBody" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:62vh;min-height:62dvh;border:1px solid var(--line);border-radius:8px;background:#fff">${srcBody}</div>
@@ -1863,7 +1863,7 @@ function renderDeriveEditor() {
     <div id="derEditStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">ביטול</button>
-      <button class="btn primary" onclick="derPreviewPdf(this)">👁 תצוגה מקדימה מעוצבת</button>
+      <button class="btn primary" onclick="derPreviewPdf(this)">👁 תצוגה מקדימה</button>
       <button class="btn success" id="derConfirmBtn" onclick="derConfirm()">✓ הפק ${typeName}</button>
     </div>
     </div>

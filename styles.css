@@ -199,7 +199,10 @@ tbody tr:last-child td{border-bottom:none}
 .modal.hidden{display:none}
 .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:26px;width:min(560px,92vw);box-shadow:var(--shadow-lg)}
 .modal-card textarea{width:100%;margin:12px 0}
-.modal-actions{display:flex;justify-content:flex-end;gap:10px}
+/* flex-wrap בכל הרוחבים: בחלונית עם שני טורים (עורך + מסמך מקור) שלושת
+   הכפתורים דורשים כמעט בדיוק את רוחב הטור, וכל הבדל קטן בעיבוד הגופן דחף
+   את כפתור ההפקה מחוץ לתצוגה. שורה שנייה עדיפה על כפתור שלא רואים. */
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
 /* חלונית גבוהה (לוח האירועים: 14 שורות תפקיד ועוד) דוחפת את כפתורי השמירה
    מתחת לקצה המסך גם במחשב. בפלאפון יש כלל דביק כללי; כאן הוא מוחל גם ברוחב
    מלא, כי המשתמש לא יודע שהחלונית נגללת ופשוט לא מוצא את "שמור". */
