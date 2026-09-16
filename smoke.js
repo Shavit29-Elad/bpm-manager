@@ -2474,6 +2474,31 @@ check('כתובת שנטענת ישירות נושאת companyId', () => {
   return true;
 });
 
+check('הפקת מסמך מהלוח — בחירת סוג, וקישור לאירוע', () => {
+  // הסוג היה קבוע על חשבון עסקה, והמסמך שנוצר לא נקשר לאירוע — ולכן האירוע
+  // המשיך להיראות כאילו לא הופקה עליו חשבונית.
+  const issue = app.slice(app.indexOf('window.boardIssueDoc ='), app.indexOf('window.boardIssueDoc =') + 2200);
+  if (!/boardEventId: ev\.id/.test(issue)) throw new Error('מזהה האירוע אינו נשמר בחלונית');
+
+  // בורר הסוג מוצג רק כשהחלונית נפתחה מהלוח
+  const rq = app.slice(app.indexOf('function renderNewQuote()'), app.indexOf('function renderNewQuote()') + 4000);
+  if (!/e\.boardEventId \?/.test(rq)) throw new Error('בורר הסוג אינו מותנה בפתיחה מהלוח');
+  if (!/\[10, 300, 305, 320\]/.test(rq)) throw new Error('רשימת הסוגים אינה מלאה');
+  if (!/nqSetType\(this\.value\)/.test(rq)) throw new Error('הבורר אינו מחליף סוג');
+
+  // החלפת סוג שומרת את שאר השדות
+  const setType = app.slice(app.indexOf('window.nqSetType ='), app.indexOf('window.nqSetPayTerms ='));
+  if (!/nqSync\(\)/.test(setType)) throw new Error('החלפת סוג מאבדת את מה שהוזן');
+
+  // שני מסלולי היצירה מקשרים לאירוע
+  const links = (app.match(/\/api\/invoicing\/link'/g) || []).length;
+  if (links < 2) throw new Error('רק ' + links + ' מסלולי יצירה מקשרים לאירוע');
+  const create = app.slice(app.indexOf('window.createNewQuote'), app.indexOf('window.createNewQuote') + 6000);
+  if (!/eventIds: \[e\.boardEventId\]/.test(create)) throw new Error('הקישור אינו משתמש במזהה האירוע');
+  if (!/type: Number\(e\.type\)/.test(create)) throw new Error('סוג המסמך אינו מועבר לקישור');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

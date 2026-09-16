@@ -4540,6 +4540,10 @@ function renderNewQuote() {
   const titleTxt = isIncome ? `${DOC_TYPE_NAMES[e.type] || 'מסמך'} חדשה — מאפס` : (e.isDuplicate ? 'שכפול הצעת מחיר — ערוך ושמור כהצעה חדשה' : 'הצעת מחיר חדשה');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;max-height:92dvh;overflow:auto">
     <h3>${titleTxt}</h3>
+    ${e.boardEventId ? `<label style="font-size:12.5px;display:block;margin-bottom:8px">סוג המסמך
+      <select onchange="nqSetType(this.value)" style="width:100%;padding:6px 8px;margin-top:3px">
+        ${[10, 300, 305, 320].map(t => `<option value="${t}" ${Number(e.type) === t ? 'selected' : ''}>${DOC_TYPE_NAMES[t]}</option>`).join('')}
+      </select></label>` : ''}
     ${isIncome ? `<div class="muted" style="font-size:12px;margin:2px 0 6px">ייווצר ${DOC_TYPE_NAMES[e.type]} בחשבונית ירוקה, עם תקבול בהעברה בנקאית על מלוא הסכום בתאריך התנועה${e.bankTxId ? ' ויקושר לתנועת הבנק' : ''}.</div>` : ''}
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 4px">
       <label style="font-size:13px;flex:1;min-width:260px">לקוח <div style="display:flex;gap:6px;align-items:center;margin-top:3px"><input class="nq-client" list="nqClientList" value="${escAttr(selClient ? selClient.name : (e.clientName || ''))}" placeholder="הקלד שם לקוח לחיפוש…" autocomplete="off" oninput="nqClientChanged()" style="flex:1;padding:6px 8px"><datalist id="nqClientList">${clientOpts}</datalist><button type="button" class="btn ghost" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="openAddClientForQuote()">+ לקוח חדש</button></div></label>
@@ -4605,6 +4609,16 @@ window.createNewQuote = async (btn) => {
         await linkDocToBankTx(e.bankTxId, { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: +total.toFixed(2), url: r.doc.url || null }, (_derBankLink && _derBankLink.sourceId) || null);
         setTimeout(() => { document.getElementById('newQuoteModal').classList.add('hidden'); }, 900);
       } else {
+        // הופק מלוח האירועים — מקשרים את המסמך לאירוע. בלי זה האירוע ממשיך
+        // להיראות כאילו לא הופקה עליו חשבונית, וגם מסמך המשך שייגזר ממנו לא
+        // יידע לאיזה אירוע להיצמד.
+        if (e.boardEventId && r.doc) {
+          try {
+            await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ eventIds: [e.boardEventId], docs: [{ id: r.doc.id, number: r.doc.number, type: Number(e.type) }] }) });
+          } catch { /* המסמך נוצר — כישלון שיוך אינו מבטל אותו */ }
+          if (state.tab === 'eventsboard') { try { renderEventsBoard($('#content')); } catch { } }
+        }
         document.getElementById('newQuoteModal').classList.add('hidden');
         showDocReadyPopup(r.doc, docName); // חלונית צפייה/הורדה/שליחה
       }
@@ -4617,6 +4631,14 @@ window.createNewQuote = async (btn) => {
   if (btn) btn.disabled = true; if (st) st.innerHTML = '<span class="muted">יוצר הצעת מחיר…</span>';
   const body = { clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim(), email2: (e.email2 || '').trim(), paymentTerms: e.payTerms || null, skipDateValidation: !!e.skipSeq };
   const r = await fetch('/api/quotes/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  // הופקה מלוח האירועים — קישור לאירוע, כמו בשאר סוגי המסמכים
+  if (r && r.ok && e.boardEventId && r.doc) {
+    try {
+      await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventIds: [e.boardEventId], docs: [{ id: r.doc.id, number: r.doc.number, type: 10 }] }) });
+    } catch { /* ההצעה נוצרה — כישלון שיוך אינו מבטל אותה */ }
+    if (state.tab === 'eventsboard') { try { renderEventsBoard($('#content')); } catch { } }
+  }
   if (btn) btn.disabled = false;
   if (r.ok) { if (st) st.innerHTML = `<span style="color:var(--accent2)">✓ נוצרה הצעת מחיר #${r.doc?.number || ''}</span>`; document.getElementById('newQuoteModal').classList.add('hidden'); renderQuotes($('#content')); showDocReadyPopup(r.doc, 'הצעת מחיר'); }
   else if (st) st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
@@ -5416,6 +5438,14 @@ function renderLinkEvRows() {
   box.innerHTML = `<div style="border:1px solid var(--line);border-radius:10px;overflow:hidden">${rows}${linkedNote}</div><div class="muted" style="font-size:11.5px;margin-top:5px">מוצגים ${evs.length} אירועים${selCount ? ` · נבחרו ${selCount}` : ''}</div>`;
 }
 window.toggleLinkShowLinked = () => { if (!_linkPay) return; _linkPay.showLinked = !_linkPay.showLinked; renderLinkEvRows(); };
+// החלפת סוג המסמך מתוך החלונית — רלוונטי כשהיא נפתחה מלוח האירועים, שם הסוג
+// נקבע מראש. שאר השדות נשמרים כדי שלא צריך למלא הכול מחדש.
+window.nqSetType = (v) => {
+  if (!_nq) return;
+  nqSync();
+  _nq.type = Number(v) || 10;
+  renderNewQuote();
+};
 window.nqSetPayTerms = (v) => {
   if (!_nq) return;
   nqSync();
