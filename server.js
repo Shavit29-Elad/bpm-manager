@@ -6183,15 +6183,34 @@ add('GET', /^\/api\/diag\/doc$/, async (req, res, _p, q) => {
     }
     candidates.sort((a, b) => b.score - a.score || a.date.localeCompare(b.date));
   }
+  // אם לא נמצא כלום בחברה שנשלחה — סורקים את כל החברות ומדווחים היכן הוא כן
+  // יושב. בלי זה האבחון מחזיר "לא מקושר לכלום" גם כשהאירוע פשוט שייך לחברה
+  // אחרת, וזו מסקנה שגויה שמובילה לחיפוש במקום הלא נכון.
+  const elsewhere = [];
+  if (!hits.length && !related.length) {
+    const keys = new Set([want, ...(gi ? [String(gi.id), String(gi.number)] : []),
+      ...((gi && gi.linkedTo) || []).flatMap(x => [String(x.id), String(x.number)])].filter(Boolean));
+    for (const e of (db.events || [])) {
+      const owner = e.companyId || '(ללא חברה)';
+      if (owner === cid) continue;
+      const m = (e.linkedDocs || []).find(d => d && (keys.has(String(d.id)) || keys.has(String(d.number))));
+      if (!m) continue;
+      elsewhere.push({ companyId: owner, eventId: e.id, date: e.date || e.dateRaw, artist: e.artist || '',
+        client: e.clientName || '', matchedDoc: { number: m.number ?? null, type: Number(m.type) },
+        linkedDocs: (e.linkedDocs || []).map(d => ({ number: d.number ?? null, type: Number(d.type), converted: !!d.converted })) });
+    }
+  }
   json(res, {
     ok: true, companyId: cid, looking: want,
     foundInGreenInvoice: gi,
     linkedToEvents: hits.length,
+    foundUnderOtherCompany: elsewhere.slice(0, 5),
     candidateEvents: candidates.slice(0, 8),
     howToLink: candidates.length ? 'לשונית אירועים ← האירוע ← 🔗 שייך מסמכים' : null,
     verdict: !gi ? 'המסמך לא נמצא בחשבונית ירוקה בטווח שנסרק'
       : hits.length ? 'המסמך מקושר לאירוע — ראה payStatus'
       : related.length ? 'המסמך אינו מקושר לאירוע. מסמך המקור שלו כן — צריך לשייך אותו'
+      : elsewhere.length ? `האירוע קיים אבל תחת חברה אחרת (${[...new Set(elsewhere.map(x => x.companyId))].join(', ')}) — לכן החיפוש בחברה שנשלחה לא מצא אותו`
       : 'המסמך אינו מקושר לשום אירוע, וגם לא מסמך המקור שלו',
     related,
   });
