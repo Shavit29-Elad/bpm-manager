@@ -330,6 +330,9 @@ add('POST', /^\/api\/event-board$/, (req, res, _p, q, body) => {
   ev.clientId = b.clientId || null;
   ev.clientName = String(b.clientName || '').trim() || null;
   ev.price = b.price != null && b.price !== '' ? Number(b.price) : null;   // מחיר ללקוח, ללא מע"מ
+  // אחוז העמלה. 0 הוא ערך לגיטימי, ולכן ריק בלבד מחזיר לברירת המחדל.
+  ev.commissionPct = (b.commissionPct === '' || b.commissionPct == null || isNaN(Number(b.commissionPct)))
+    ? null : Math.min(100, Math.max(0, Number(b.commissionPct)));
   ev.boardNotes = String(b.notes || '').trim();
   ev.contractorDetails = rows;
   ev.contractors = [...new Set(rows.map(r => r.name).filter(Boolean))];

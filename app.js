@@ -7348,7 +7348,9 @@ async function renderEventsBoard(c) {
       </div>
       <div class="cards" style="margin-top:14px">
         ${kpi('אירועים', t.events || 0)}
-        ${kpi('הכנסות (ללא מע״מ)', money(t.incomeEx || 0), 'var(--accent2)')}
+        ${kpi('מחיר ללקוח', money(t.clientPriceEx || 0))}
+        ${kpi('עמלה', '−' + money(t.commissionEx || 0), 'var(--warn)')}
+        ${kpi('תשלום למשה (ללא מע״מ)', money(t.incomeEx || 0), 'var(--accent2)')}
         ${kpi('הוצאות (ללא מע״מ)', money(t.expenseEx || 0), 'var(--danger)')}
         ${kpi('רווח', money(t.profitEx || 0), (t.profitEx || 0) >= 0 ? 'var(--accent2)' : 'var(--danger)')}
       </div>
@@ -7364,7 +7366,8 @@ function boardMonthPanel(m) {
       <td data-label="תאריך" style="white-space:nowrap">${ddmy(ev.date)}</td>
       <td data-label="אירוע"><b>${escapeHtml(ev.artist || '—')}</b>${ev.location ? `<div class="muted" style="font-size:11.5px">${escapeHtml(ev.location)}</div>` : ''}</td>
       <td data-label="לקוח">${escapeHtml(ev.clientName || '—')}</td>
-      <td data-label="הכנסה" style="text-align:left;white-space:nowrap;color:var(--accent2);font-weight:600">${money(t.incomeEx || 0)}</td>
+      <td data-label="מחיר ללקוח" style="text-align:left;white-space:nowrap">${money(t.clientPriceEx || 0)}${t.commissionEx ? `<div class="muted" style="font-size:10.5px;color:var(--warn)">עמלה ${t.commissionPct}% · −${money(t.commissionEx)}</div>` : ''}</td>
+      <td data-label="תשלום למשה" style="text-align:left;white-space:nowrap;color:var(--accent2);font-weight:600">${money(t.incomeEx || 0)}</td>
       <td data-label="הוצאות" style="text-align:left;white-space:nowrap;color:var(--danger)">${money(t.expenseEx || 0)}<div class="muted" style="font-size:10.5px">${t.filledRows || 0} שורות</div></td>
       <td data-label="רווח" style="text-align:left;white-space:nowrap;font-weight:700;color:${(t.profitEx || 0) >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(t.profitEx || 0)}</td>
       <td data-label="מסמכים" style="text-align:left;white-space:nowrap">${docs ? `<span class="tag invoiced">${docs}</span>` : '<span class="muted">—</span>'}</td>
@@ -7374,13 +7377,15 @@ function boardMonthPanel(m) {
     <div class="row-between" style="margin-bottom:8px">
       <h3 style="margin:0">${bMonthName(m.month)}</h3>
       <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">
-        <span>הכנסות: <b style="color:var(--accent2)">${money(m.incomeEx)}</b></span>
+        <span>מחיר ללקוח: <b>${money(m.clientPriceEx || 0)}</b></span>
+        ${m.commissionEx ? `<span>עמלה: <b style="color:var(--warn)">−${money(m.commissionEx)}</b></span>` : ''}
+        <span>תשלום למשה: <b style="color:var(--accent2)">${money(m.incomeEx)}</b></span>
         <span>הוצאות: <b style="color:var(--danger)">${money(m.expenseEx)}</b></span>
         <span>רווח: <b style="color:${m.profitEx >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(m.profitEx)}</b></span>
       </div>
     </div>
     <table class="tbl cardify" style="width:100%">
-      <thead><tr><th>תאריך</th><th>אירוע</th><th>לקוח</th><th style="text-align:left">הכנסה</th><th style="text-align:left">הוצאות</th><th style="text-align:left">רווח</th><th style="text-align:left">מסמכים</th></tr></thead>
+      <thead><tr><th>תאריך</th><th>אירוע</th><th>לקוח</th><th style="text-align:left">מחיר ללקוח</th><th style="text-align:left">תשלום למשה</th><th style="text-align:left">הוצאות</th><th style="text-align:left">רווח</th><th style="text-align:left">מסמכים</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;
@@ -7408,7 +7413,7 @@ window.openBoardEdit = async (id) => {
     date: (ev && ev.date) || todayIso(),
     artist: (ev && ev.artist) || '', location: (ev && ev.location) || '',
     clientId: (ev && ev.clientId) || '', clientName: (ev && ev.clientName) || '',
-    price: (ev && ev.price != null) ? ev.price : '', notes: (ev && ev.notes) || '',
+    price: (ev && ev.price != null) ? ev.price : '', commissionPct: (ev && ev.commissionPct != null) ? ev.commissionPct : '', notes: (ev && ev.notes) || '',
     rows: [...rows, ...extras],
   };
   renderBoardEdit();
@@ -7417,6 +7422,19 @@ function boardFind(id) {
   for (const m of ((_board && _board.months) || [])) { const e = m.events.find(x => x.id === id); if (e) return e; }
   return null;
 }
+// מחיר ללקוח → עמלה → תשלום למשה. השורה האחרונה היא ההכנסה בפועל, וממנה
+// נגזר הרווח, ולכן היא מוצגת כאן ולא רק מחושבת מאחורי הקלעים.
+function bdCommPct(e) {
+  const v = e && e.commissionPct;
+  return (v === '' || v == null || isNaN(Number(v))) ? 15 : Math.min(100, Math.max(0, Number(v)));
+}
+function bdIncomeLine(e) {
+  const price = Number(e.price) || 0, pct = bdCommPct(e);
+  const comm = Math.round(price * pct / 100 * 100) / 100;
+  return `מחיר ללקוח: <b>${money(price)}</b> · עמלה — שורה ראשונה (${pct}%): <b style="color:var(--warn)">−${money(comm)}</b>`
+    + ` · תשלום — משה כורסיה: <b style="color:var(--accent2)">${money(price - comm)}</b>`;
+}
+
 function boardEditSync() {
   const e = _boardEdit; if (!e) return;
   const g = (id) => document.getElementById(id);
@@ -7425,6 +7443,7 @@ function boardEditSync() {
   e.location = g('bdLoc')?.value ?? e.location;
   e.clientName = g('bdClient')?.value ?? e.clientName;
   e.price = g('bdPrice')?.value ?? e.price;
+  e.commissionPct = g('bdComm')?.value ?? e.commissionPct;
   e.notes = g('bdNotes')?.value ?? e.notes;
   document.querySelectorAll('#bdModal .bd-row').forEach((row, i) => {
     const r = e.rows[i]; if (!r) return;
@@ -7446,7 +7465,7 @@ function renderBoardEdit() {
   const sup = (Array.isArray(_suppliers) ? _suppliers : []).map(s => `<option value="${escAttr(s.name)}"></option>`).join('');
   const totalEx = e.rows.reduce((a, r) => a + bRowEx(r), 0);
   const totalInc = e.rows.reduce((a, r) => a + bRowInc(r), 0);
-  const income = Number(e.price) || 0;
+  const income = (Number(e.price) || 0) * (1 - bdCommPct(e) / 100);
   const rowHtml = (r, i) => `<div class="bd-row" style="display:grid;grid-template-columns:104px 1fr 92px 56px 76px 1fr 28px;gap:6px;align-items:center;padding:4px 0;border-top:1px solid var(--line)">
     ${r.fixed ? `<span style="font-size:12.5px;font-weight:600">${escapeHtml(r.role)}</span>`
       : `<input class="bd-role" value="${escAttr(r.role)}" placeholder="שם השורה" style="padding:4px 6px;font-size:12px"/>`}
@@ -7469,7 +7488,9 @@ function renderBoardEdit() {
       <label style="font-size:12.5px">מיקום<input id="bdLoc" value="${escAttr(e.location)}" style="width:100%;padding:6px 8px"/></label>
       <label style="font-size:12.5px">לקוח<input id="bdClient" list="bdClientList" value="${escAttr(e.clientName)}" style="width:100%;padding:6px 8px"/></label>
       <label style="font-size:12.5px">מחיר ללקוח (ללא מע״מ)<input id="bdPrice" type="number" inputmode="decimal" value="${escAttr(String(e.price))}" oninput="boardRecalc()" style="width:100%;padding:6px 8px"/></label>
+      <label style="font-size:12.5px">עמלה — שורה ראשונה (%)<input id="bdComm" type="number" inputmode="decimal" value="${escAttr(String(e.commissionPct))}" placeholder="15" oninput="boardRecalc()" style="width:100%;padding:6px 8px"/></label>
     </div>
+    <div id="bdIncome" style="margin-top:8px;padding:8px 11px;background:var(--panel2);border-radius:8px;font-size:12.5px">${bdIncomeLine(e)}</div>
     <datalist id="bdClientList">${(Array.isArray(_evClients) ? _evClients : []).map(c => `<option value="${escAttr(c.name)}"></option>`).join('')}</datalist>
     <label style="font-size:12.5px;display:block;margin-top:8px">הערות לאירוע<input id="bdNotes" value="${escAttr(e.notes)}" style="width:100%;padding:6px 8px"/></label>
     <div style="margin-top:12px;font-size:13px;font-weight:700">שורות הוצאה</div>
@@ -7494,7 +7515,9 @@ window.boardRecalc = () => {
   const e = _boardEdit; if (!e) return;
   const ex = e.rows.reduce((a, r) => a + bRowEx(r), 0);
   const inc = e.rows.reduce((a, r) => a + bRowInc(r), 0);
-  const income = Number(e.price) || 0;
+  const income = (Number(e.price) || 0) * (1 - bdCommPct(e) / 100);
+  const incBox = document.getElementById('bdIncome');
+  if (incBox) incBox.innerHTML = bdIncomeLine(e);
   const box = document.getElementById('bdTotals');
   if (box) box.innerHTML = `הוצאות: <b>${money(ex)}</b> ללא מע״מ · <b>${money(inc)}</b> כולל · הכנסה: <b style="color:var(--accent2)">${money(income)}</b> · רווח: <b style="color:${income - ex >= 0 ? 'var(--accent2)' : 'var(--danger)'}">${money(income - ex)}</b>`;
 };
@@ -7507,7 +7530,8 @@ window.boardSave = async (btn) => {
   if (!e.date) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש לבחור תאריך.</span>'; return; }
   if (btn) btn.disabled = true;
   const body = { id: e.id, date: e.date, artist: e.artist, location: e.location, clientName: e.clientName,
-    clientId: e.clientId || null, price: e.price === '' ? null : Number(e.price), notes: e.notes,
+    clientId: e.clientId || null, price: e.price === '' ? null : Number(e.price),
+    commissionPct: e.commissionPct === '' ? null : Number(e.commissionPct), notes: e.notes,
     rows: e.rows.map(r => ({ role: r.role, name: r.name, priceExVat: r.priceExVat === '' ? null : Number(r.priceExVat), vatExempt: !!r.vatExempt, priceIncVat: !!r.priceIncVat, note: r.note })) };
   const r = await fetch('/api/event-board', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
@@ -7780,6 +7804,12 @@ window.openBoardView = (id, keepOpen) => {
     </div>
     <div class="muted" style="font-size:12.5px;margin-bottom:12px">${ddmy(ev.date)}${ev.location ? ' · ' + escapeHtml(ev.location) : ''}${ev.clientName ? ' · ' + escapeHtml(ev.clientName) : ''}${ev.notes ? ' · ' + escapeHtml(ev.notes) : ''}</div>
 
+    <div style="margin-bottom:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:13px;line-height:1.9">
+      <div class="row-between"><span>מחיר ללקוח (ללא מע״מ)</span><b>${money(t.clientPriceEx || 0)}</b></div>
+      <div class="row-between"><span>עמלה — שורה ראשונה (${t.commissionPct != null ? t.commissionPct : 15}%)</span><b style="color:var(--warn)">−${money(t.commissionEx || 0)}</b></div>
+      <div class="row-between" style="border-top:1px solid var(--line);margin-top:4px;padding-top:4px">
+        <span style="font-weight:600">תשלום — משה כורסיה</span><b style="color:var(--accent2)">${money(t.incomeEx || 0)}</b></div>
+    </div>
     <div class="cards" style="margin-bottom:14px">
       <div class="card"><div class="label">הכנסה (ללא מע״מ)</div><div class="big" style="color:var(--accent2)">${money(t.incomeEx || 0)}</div><div class="muted" style="font-size:11px">כולל מע״מ ${money(t.incomeInc || 0)}</div></div>
       <div class="card"><div class="label">הוצאות (ללא מע״מ)</div><div class="big" style="color:var(--danger)">${money(t.expenseEx || 0)}</div><div class="muted" style="font-size:11px">כולל מע״מ ${money(t.expenseInc || 0)}</div></div>

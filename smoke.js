@@ -1913,14 +1913,19 @@ check('לוח האירועים — סיכומי אירוע וחודש', () => {
   const t = boardMod.eventTotals(ev);
   if (t.expenseEx !== 3500) throw new Error('הוצאה ללא מע״מ: ' + t.expenseEx);
   if (t.expenseInc !== 3914) throw new Error('הוצאה כולל מע״מ: ' + t.expenseInc);  // 1500*1.18 + 1200 + 800*1.18
-  if (t.profitEx !== 16500) throw new Error('רווח: ' + t.profitEx);
+  // ההכנסה היא מה שנשאר אחרי עמלת 15%: 20000 − 3000 = 17000, ומזה ההוצאות
+  if (t.clientPriceEx !== 20000) throw new Error('מחיר ללקוח: ' + t.clientPriceEx);
+  if (t.commissionPct !== 15 || t.commissionEx !== 3000) throw new Error('עמלה: ' + JSON.stringify([t.commissionPct, t.commissionEx]));
+  if (t.incomeEx !== 17000) throw new Error('תשלום למשה: ' + t.incomeEx);
+  if (t.profitEx !== 13500) throw new Error('רווח: ' + t.profitEx);
   if (t.filledRows !== 3) throw new Error('שורות מלאות: ' + t.filledRows);
   const rows = boardMod.boardRows(ev);
   if (rows.fixed.length !== 14) throw new Error('תפקידים קבועים: ' + rows.fixed.length);
   if (rows.extras.length !== 1 || rows.extras[0].role !== 'צילום') throw new Error('שורה חופשית לא זוהתה');
   const b = boardMod.boardByMonth([ev], '2026');
   if (b.months.length !== 1 || b.months[0].month !== '2026-10') throw new Error('קיבוץ לחודשים נכשל');
-  if (b.totals.profitEx !== 16500) throw new Error('סיכום שנתי: ' + JSON.stringify(b.totals));
+  if (b.totals.profitEx !== 13500) throw new Error('סיכום שנתי: ' + JSON.stringify(b.totals));
+  if (b.totals.commissionEx !== 3000) throw new Error('העמלה לא נצברת לחודש: ' + b.totals.commissionEx);
   if (boardMod.boardByMonth([ev], '2025').months.length) throw new Error('סינון שנה לא עבד');
   return true;
 });
@@ -2286,6 +2291,37 @@ check('מסמך המשך נצמד גם לאירוע שחויב במסלול יש
     (r, c) => !r.companyId || r.companyId === c, [10, 300], [300, 305, 320]);
   const got = cand({ events: [{ id: 'legacy', companyId: 'co_ofek', linkedDocs: [], invoiceId: 'gi-1', invoiceNumber: 1, invoiceType: 300 }] }, 'co_ofek');
   if (!got.length) throw new Error('אירוע עם שדות ישנים אינו מועמד לתיקון');
+  return true;
+});
+
+check('לוח האירועים — עמלה 15% והתשלום שנשאר למשה', () => {
+  const ev = { price: 20000, contractorDetails: [] };
+  const d = boardMod.eventTotals(ev);
+  if (d.commissionPct !== 15 || d.commissionEx !== 3000 || d.incomeEx !== 17000)
+    throw new Error('ברירת מחדל: ' + JSON.stringify(d));
+  // אחוז אחר לאירוע בודד
+  const ten = boardMod.eventTotals({ ...ev, commissionPct: 10 });
+  if (ten.commissionEx !== 2000 || ten.incomeEx !== 18000) throw new Error('אחוז מותאם: ' + JSON.stringify(ten));
+  // אפס הוא ערך לגיטימי ולא "לא הוגדר"
+  const zero = boardMod.eventTotals({ ...ev, commissionPct: 0 });
+  if (zero.commissionEx !== 0 || zero.incomeEx !== 20000) throw new Error('עמלה אפס: ' + JSON.stringify(zero));
+  // ריק חוזר לברירת המחדל
+  for (const v of ['', null, undefined, 'abc']) {
+    if (boardMod.commissionPctOf({ commissionPct: v }) !== 15) throw new Error('ערך ריק לא חזר ל-15: ' + String(v));
+  }
+  if (boardMod.commissionPctOf({ commissionPct: 150 }) !== 100) throw new Error('אחוז מעל 100 לא נחסם');
+  if (boardMod.commissionPctOf({ commissionPct: -5 }) !== 0) throw new Error('אחוז שלילי לא נחסם');
+
+  // הממשק מחשב זהה לשרת, אחרת החלונית מראה סכום אחד והשרת שומר אחר
+  const uiSrc = app.slice(app.indexOf('function bdCommPct('), app.indexOf('function boardEditSync('));
+  const ui = new Function(`const money=(n)=>String(n);\n${uiSrc}\nreturn bdCommPct;`)();
+  for (const v of ['', null, 15, 10, 0, 'abc']) {
+    const got = ui({ commissionPct: v }), want = boardMod.commissionPctOf({ commissionPct: v });
+    if (got !== want) throw new Error(`אחוז ${String(v)}: ממשק ${got} שרת ${want}`);
+  }
+  // התוויות שביקש המשתמש
+  if (!/עמלה — שורה ראשונה/.test(app)) throw new Error('חסרה התווית "עמלה — שורה ראשונה"');
+  if (!/תשלום — משה כורסיה/.test(app)) throw new Error('חסרה התווית "תשלום — משה כורסיה"');
   return true;
 });
 

@@ -89,12 +89,28 @@ export function boardRows(ev, payablesById) {
 // סיכום אירוע: הכנסה (המחיר ללקוח, ללא מע"מ), הוצאות (סכום השורות) ורווח.
 // ההוצאה נמדדת כולל מע"מ — זה הכסף שיוצא בפועל — ולצדה גם ללא מע"מ, למי
 // שמסתכל על הרווח לפני החזר התשומות.
+export const DEFAULT_COMMISSION_PCT = 15;
+// אחוז העמלה של האירוע. 15% כברירת מחדל, וניתן לשנות לאירוע בודד. 0 הוא ערך
+// לגיטימי (אירוע בלי עמלה), ולכן הבדיקה היא על "הוגדר" ולא על "שונה מאפס".
+export function commissionPctOf(ev) {
+  const v = ev && ev.commissionPct;
+  if (v === '' || v == null || isNaN(Number(v))) return DEFAULT_COMMISSION_PCT;
+  return Math.min(100, Math.max(0, Number(v)));
+}
+
 export function eventTotals(ev) {
   const rows = boardRows(ev).all.filter(r => r.ex > 0);
   const expenseEx = r2(rows.reduce((s, r) => s + r.ex, 0));
   const expenseInc = r2(rows.reduce((s, r) => s + r.inc, 0));
-  const incomeEx = r2(num(ev && ev.price));
+  // מחיר ללקוח → עמלה → מה שנשאר. ההכנסה של משה היא מה שנשאר אחרי העמלה,
+  // ולכן היא זו שנכנסת לרווח ולסיכומי החודש — לא המחיר המלא ללקוח.
+  const clientPriceEx = r2(num(ev && ev.price));
+  const commissionPct = commissionPctOf(ev);
+  const commissionEx = r2(clientPriceEx * commissionPct / 100);
+  const incomeEx = r2(clientPriceEx - commissionEx);
   return {
+    clientPriceEx, clientPriceInc: r2(clientPriceEx * (1 + VAT_RATE)),
+    commissionPct, commissionEx,
     incomeEx, incomeInc: r2(incomeEx * (1 + VAT_RATE)),
     expenseEx, expenseInc,
     profitEx: r2(incomeEx - expenseEx),
@@ -112,15 +128,17 @@ export function boardByMonth(events, year, payablesById) {
     if (!iso) continue;
     if (y && iso.slice(0, 4) !== y) continue;
     const key = iso.slice(0, 7);
-    if (!byMonth.has(key)) byMonth.set(key, { month: key, events: [], incomeEx: 0, expenseEx: 0, expenseInc: 0, profitEx: 0 });
+    if (!byMonth.has(key)) byMonth.set(key, { month: key, events: [], clientPriceEx: 0, commissionEx: 0, incomeEx: 0, expenseEx: 0, expenseInc: 0, profitEx: 0 });
     const g = byMonth.get(key);
     const t = eventTotals(ev);
     g.events.push({ id: ev.id, date: iso, artist: ev.artist || '', location: ev.location || '',
       clientId: ev.clientId || null, clientName: ev.clientName || '',
-      price: ev.price ?? null, notes: ev.boardNotes || '',
+      price: ev.price ?? null, commissionPct: commissionPctOf(ev), notes: ev.boardNotes || '',
       linkedDocs: (ev.linkedDocs || []).map(d => ({ id: d.id, number: d.number ?? null, type: Number(d.type),
         uploaded: !!d.uploaded, converted: !!d.converted, credit: !!(d.credit || Number(d.type) === 330) })),
       rows: boardRows(ev, payablesById).all, totals: t });
+    g.clientPriceEx = r2(g.clientPriceEx + t.clientPriceEx);
+    g.commissionEx = r2(g.commissionEx + t.commissionEx);
     g.incomeEx = r2(g.incomeEx + t.incomeEx);
     g.expenseEx = r2(g.expenseEx + t.expenseEx);
     g.expenseInc = r2(g.expenseInc + t.expenseInc);
@@ -129,10 +147,11 @@ export function boardByMonth(events, year, payablesById) {
   const months = [...byMonth.values()].sort((a, b) => b.month.localeCompare(a.month));
   for (const m of months) m.events.sort((a, b) => String(a.date).localeCompare(String(b.date)));
   const totals = months.reduce((acc, m) => ({
+    clientPriceEx: r2(acc.clientPriceEx + m.clientPriceEx), commissionEx: r2(acc.commissionEx + m.commissionEx),
     incomeEx: r2(acc.incomeEx + m.incomeEx), expenseEx: r2(acc.expenseEx + m.expenseEx),
     expenseInc: r2(acc.expenseInc + m.expenseInc), profitEx: r2(acc.profitEx + m.profitEx),
     events: acc.events + m.events.length,
-  }), { incomeEx: 0, expenseEx: 0, expenseInc: 0, profitEx: 0, events: 0 });
+  }), { clientPriceEx: 0, commissionEx: 0, incomeEx: 0, expenseEx: 0, expenseInc: 0, profitEx: 0, events: 0 });
   return { months, totals };
 }
 
@@ -167,4 +186,4 @@ export function normalizeRows(rows, prev = []) {
   return out;
 }
 
-export default { VAT_RATE, BOARD_ROLES, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, normDocType, rowDocs, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
+export default { VAT_RATE, BOARD_ROLES, DEFAULT_COMMISSION_PCT, commissionPctOf, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, normDocType, rowDocs, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
