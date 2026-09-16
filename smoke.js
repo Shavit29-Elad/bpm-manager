@@ -2452,6 +2452,27 @@ check('כתובת קובץ של הוצאה — כל צורות השדה, ולא 
   return true;
 });
 
+check('כתובת שנטענת ישירות נושאת companyId', () => {
+  // העטיפה שמזריקה companyId עוטפת את fetch בלבד. כתובת שנטענת ב-iframe או
+  // בקישור הורדה עוקפת אותה, והשרת נופל לחברת ברירת המחדל — ומחפש את ההוצאה
+  // של חברה אחת בחשבון של אחרת. כך אותו מסמך נפתח במסך אחד ולא באחר.
+  const src = app.slice(app.indexOf('const bDocUrl ='), app.indexOf('let _bvOpen'));
+  const fn = new Function('state', `${src}\nreturn bDocUrl;`)({ company: 'co_moshe' });
+  const a = fn({ payableId: 'pay_1' });
+  if (!/companyId=co_moshe/.test(a)) throw new Error('הוצאה בלי companyId: ' + a);
+  if (!/^\/api\/supplier-payables\/pay_1\/file\?/.test(a)) throw new Error('כתובת שגויה: ' + a);
+  const b = fn({ fileId: 'f 1' });
+  if (!/companyId=co_moshe/.test(b)) throw new Error('קובץ בלי companyId: ' + b);
+  if (!/f%201/.test(b)) throw new Error('מזהה הקובץ אינו מקודד: ' + b);
+  // בלי חברה נבחרת — לא מוסיפים פרמטר ריק
+  const none = new Function('state', `${src}\nreturn bDocUrl;`)({ company: '' })({ payableId: 'p' });
+  if (/companyId/.test(none)) throw new Error('נוסף companyId ריק: ' + none);
+  // הפרגמנט של הזום מגיע אחרי ה-query, אחרת הוא בולע אותו
+  const view = app.slice(app.indexOf('let _bvEvent = null;'), app.indexOf('// הפקת מסמך לאירוע'));
+  if (!/bDocUrl\(shown\.doc\)\}\$\{bDocFrag\(\)\}/.test(view)) throw new Error('סדר ה-query והפרגמנט שגוי');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

@@ -7613,7 +7613,13 @@ window.boardDelete = async (id) => {
 // ממנה — כדי שאפשר יהיה לראות מה מקושר בלי לאבד את ההקשר.
 const SUP_DOC_NAMES = { 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה' };
 const supDocTypes = (r) => (r && r.vatExempt) ? [400] : [300, 305, 320];
-const bDocUrl = (d) => d.payableId ? `/api/supplier-payables/${d.payableId}/file` : `/api/files/${encodeURIComponent(d.fileId)}`;
+// חשוב: הכתובת נטענת ישירות ב-iframe ובקישור הורדה, ולא דרך fetch. העטיפה
+// שמזריקה companyId עובדת רק על fetch, ולכן בלי הוספה מפורשת כאן השרת נופל
+// לחברת ברירת המחדל ומחפש את ההוצאה של משה בחשבון של חברה אחרת.
+const bDocUrl = (d) => {
+  const base = d.payableId ? `/api/supplier-payables/${d.payableId}/file` : `/api/files/${encodeURIComponent(d.fileId)}`;
+  return state.company ? `${base}?companyId=${encodeURIComponent(state.company)}` : base;
+};
 let _bvOpen = {};   // אילו שורות פתוחות לפירוט, לפי אינדקס
 let _bvDoc = null;  // המסמך שמוצג כרגע בתוך החלונית (id) — צפייה בלי לצאת ממנה
 let _bvZoom = 0;    // 0 = התאמה לרוחב; אחרת אחוז תצוגה
