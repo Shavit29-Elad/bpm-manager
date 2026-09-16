@@ -302,14 +302,22 @@ add('GET', /^\/api\/event-board$/, (req, res, _p, q) => {
   // איתור חוזר לפי ספק ומספר מסמך, למקרה שהמזהה השמור על השורה מצביע להוצאה
   // שכבר לא קיימת. בלי זה הקובץ נפתח במסך הספקים ולא נפתח כאן, עם אותו מסמך.
   const normName = (x) => String(x || '').replace(/בע["'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
-  const findPayable = (row) => {
+  // האם לרשומה יש בכלל מקור קובץ. רשומה בלי אף אחד מהשלושה לא תוכל להגיש דבר.
+  const hasFileSrc = (p) => !!(p && (p.localFileId || p.giExpenseId || p.draftId));
+  const findPayable = (row, current) => {
+    // רשומה קיימת שיש לה קובץ — אין מה לחפש
+    if (current && hasFileSrc(current)) return null;
     const num = row && row.paidInvoice != null ? String(row.paidInvoice).trim() : '';
     const nm = normName(row && row.name);
     if (!num && !nm) return null;
-    const byBoth = num && nm ? mine.find(p => String(p.number || '').trim() === num && normName(p.supplierName) === nm) : null;
-    const byNum = num ? mine.find(p => String(p.number || '').trim() === num) : null;
-    const byName = nm ? mine.find(p => normName(p.supplierName) === nm) : null;
-    return byBoth || byNum || byName || null;
+    const same = mine.filter(p => (num && String(p.number || '').trim() === num) || (!num && nm && normName(p.supplierName) === nm));
+    const exact = same.filter(p => !nm || normName(p.supplierName) === nm);
+    // מעדיפים התאמה מדויקת עם קובץ, ואז כל התאמה עם קובץ. עותק מקומי קודם
+    // לקובץ שיושב בחשבונית ירוקה, כי הוא נגיש גם בלי חיבור פעיל.
+    const rank = (p) => (p.localFileId ? 3 : p.draftId ? 2 : p.giExpenseId ? 1 : 0);
+    const best = [...exact, ...same].filter(hasFileSrc).sort((a, b) => rank(b) - rank(a))[0];
+    if (best && (!current || String(best.id) !== String(current.id))) return best;
+    return current ? null : (exact[0] || same[0] || null);
   };
   const out = eventBoard.boardByMonth(evs, year, payablesById, findPayable);
   const years = [...new Set(evs.map(e => String(e.date || e.dateRaw || '').slice(0, 4)).filter(Boolean))].sort().reverse();

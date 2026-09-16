@@ -2395,29 +2395,34 @@ check('מסמך בלי קובץ — הסבר ולא תשובת שגיאה גול
   return true;
 });
 
-check('שיוך שמצביע להוצאה שנמחקה — מאותר מחדש לפי ספק ומספר', () => {
-  // המזהה השמור על השורה עלול להצביע להוצאה שכבר לא קיימת. במסך הספקים הקובץ
-  // נפתח כי שם משתמשים במזהה העדכני; בלוח הוא נכשל עם "אין קובץ".
-  const cur = { id: 'pay_new', supplierName: 'פיש סאונד', documentType: 305, number: '50032', date: '2026-09-10', amount: 2950 };
-  const byId = new Map([['pay_new', cur]]);
-  const row = { name: 'פיש סאונד', paidPayableId: 'pay_old_deleted', paidInvoice: '50032' };
-  const find = (r) => (String(r.paidInvoice) === '50032' ? cur : null);
-
-  const without = boardMod.rowDocs(row, byId);
-  if (without[0].payableId !== 'pay_old_deleted') throw new Error('בלי איתור חוזר, המזהה הישן משתנה מעצמו');
-
-  const withFind = boardMod.rowDocs(row, byId, find);
-  if (withFind[0].payableId !== 'pay_new') throw new Error('לא אותר מחדש: ' + withFind[0].payableId);
-  if (!withFind[0].relinked) throw new Error('האיתור החוזר אינו מסומן');
-  if (withFind[0].type !== 305 || withFind[0].number !== '50032') throw new Error('הפרטים לא נלקחו מההוצאה שאותרה');
-  // מזהה תקין — לא נוגעים בו
-  const ok = boardMod.rowDocs({ name: 'פיש סאונד', paidPayableId: 'pay_new', paidInvoice: '50032' }, byId, find);
-  if (ok[0].payableId !== 'pay_new' || ok[0].relinked) throw new Error('מזהה תקין שונה שלא לצורך');
-
-  // האיתור בשרת מנסה שלושה מסלולים ולא נעצר בראשון
+check('הוצאה כפולה — נבחרת זו שיש לה קובץ', () => {
+  // אותו מסמך נפתח במסך הספקים ולא נפתח בלוח. הסיבה: שתי רשומות הוצאה לאותו
+  // מסמך, והשורה מצביעה לזו שאין לה קובץ.
   const srv = fs.readFileSync('server.js', 'utf8');
-  const fp = srv.slice(srv.indexOf('const findPayable = (row) =>'), srv.indexOf('const out = eventBoard.boardByMonth'));
-  for (const k of ['byBoth', 'byNum', 'byName']) if (!fp.includes(k)) throw new Error('חסר מסלול איתור: ' + k);
+  const i = srv.indexOf('const hasFileSrc =');
+  const src = srv.slice(i, srv.indexOf('const out = eventBoard.boardByMonth'));
+  const mine = [
+    { id: 'pay_nofile', supplierName: 'פיש סאונד', number: '50032' },
+    { id: 'pay_withfile', supplierName: 'פיש סאונד', number: '50032', localFileId: 'f1' },
+    { id: 'pay_gi', supplierName: 'אחר', number: '777', giExpenseId: 'g1' },
+  ];
+  const normName = (x) => String(x || '').replace(/בע["'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
+  const find = new Function('mine', 'normName', `${src}\nreturn findPayable;`)(mine, normName);
+  const row = { name: 'פיש סאונד', paidInvoice: '50032' };
+
+  const better = find(row, mine[0]);
+  if (!better || better.id !== 'pay_withfile') throw new Error('לא נבחרה הרשומה עם הקובץ: ' + (better && better.id));
+  if (find(row, mine[1])) throw new Error('רשומה שיש לה קובץ הוחלפה שלא לצורך');
+  const missing = find(row, null);
+  if (!missing || missing.id !== 'pay_withfile') throw new Error('רשומה חסרה לא אותרה מחדש');
+  // ספק שאין לו כפילות — לא מומצאת התאמה
+  if (find({ name: 'לא קיים', paidInvoice: '' }, null)) throw new Error('נבחרה רשומה בלי בסיס');
+
+  // והצד השני מפעיל את החיפוש גם כשהרשומה קיימת
+  const eb = fs.readFileSync('eventBoard.js', 'utf8');
+  const rd = eb.slice(eb.indexOf('export function rowDocs'), eb.indexOf('export function boardRows'));
+  if (/if \(!p && typeof findPayable/.test(rd)) throw new Error('החיפוש רץ רק כשהרשומה חסרה');
+  if (!/findPayable\(d, p\)/.test(rd)) throw new Error('הרשומה הנוכחית אינה מועברת לבחירה');
   return true;
 });
 

@@ -58,10 +58,14 @@ export function rowDocs(d, payablesById, findPayable) {
   const pid = d && d.paidPayableId;
   if (pid && !docs.some(x => String(x.payableId) === String(pid))) {
     let p = payablesById && payablesById.get ? payablesById.get(String(pid)) : null;
-    // המזהה השמור עלול להצביע להוצאה שכבר לא קיימת (נמחקה ונקלטה מחדש). במסך
-    // הספקים הקובץ נפתח כי שם משתמשים במזהה העדכני; כאן הוא נכשל. מאתרים את
-    // ההוצאה מחדש לפי ספק ומספר מסמך, ומשתמשים במזהה שבאמת מגיש את הקובץ.
-    if (!p && typeof findPayable === 'function') p = findPayable(d) || null;
+    // שתי סיבות לחפש הוצאה אחרת לאותו מסמך:
+    //   1. המזהה השמור מצביע לרשומה שכבר לא קיימת (נמחקה ונקלטה מחדש).
+    //   2. הרשומה קיימת אבל אין לה קובץ, בעוד שלרשומה כפולה של אותו מסמך כן יש.
+    // המקרה השני הוא מה שגרם לכך שאותו מסמך נפתח במסך הספקים ולא נפתח בלוח.
+    if (typeof findPayable === 'function') {
+      const better = findPayable(d, p);
+      if (better) p = better;
+    }
     const useId = (p && p.id) ? String(p.id) : String(pid);
     docs.push({
       id: 'pay:' + pid, payableId: useId, fileId: null, relinked: useId !== String(pid),
