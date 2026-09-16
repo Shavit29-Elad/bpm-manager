@@ -2515,6 +2515,26 @@ check('כפתורי פעולה בחלונית — נשברים לשורה במק
   return true;
 });
 
+check('עורך מסמך המשך — כפתורי ההפקה נעוצים ותמיד על המסך', () => {
+  // דווח שנשאר רק "ביטול". הכפתורים היו בתחתית תוכן נגלל, ולכן כל מצב שדחף
+  // אותם מתחת לקיפול הסתיר אותם בלי שום רמז שהם קיימים.
+  const der = app.slice(app.indexOf('function renderDeriveEditor'), app.indexOf('window.derPreviewPdf'));
+  if (!/class="modal-card tall-form"/.test(der)) throw new Error('החלונית אינה מסומנת כגבוהה');
+  if (!/<div class="tall-body">/.test(der)) throw new Error('אין אזור גלילה נפרד מהכפתורים');
+  // הכפתורים מחוץ לאזור הגלילה
+  const bodyEnd = der.indexOf('</div></div></div>');
+  const actionsAt = der.indexOf('<div class="modal-actions">');
+  if (bodyEnd < 0 || actionsAt < 0 || actionsAt < bodyEnd) throw new Error('שורת הפעולות בתוך אזור הגלילה');
+  for (const b of ['derConfirmBtn', 'derPreviewPdf', 'ביטול']) {
+    if (!der.slice(actionsAt).includes(b)) throw new Error('חסר כפתור: ' + b);
+  }
+  // תגיות מאוזנות — רמה נוספת כאן הייתה מפילה את כל החלונית
+  const tpl = der.slice(der.indexOf('m.innerHTML = `'), der.indexOf('m.onclick'));
+  const o = (tpl.match(/<div\b/g) || []).length, c = (tpl.match(/<\/div>/g) || []).length;
+  if (o !== c) throw new Error(`div לא מאוזן בעורך: ${o} נפתחו, ${c} נסגרו`);
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

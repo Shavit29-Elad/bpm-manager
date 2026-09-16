@@ -1809,7 +1809,8 @@ function renderDeriveEditor() {
         <a href="${e.srcUrl}" target="_blank" rel="noopener" class="btn ghost" style="padding:2px 9px;font-size:11px;text-decoration:none">פתח ↗</a></div>
       <div id="derSrcBody" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:62vh;min-height:62dvh;border:1px solid var(--line);border-radius:8px;background:#fff">${srcBody}</div>
     </div>` : '';
-  m.innerHTML = `<div class="modal-card" style="width:${srcPane ? 'min(1160px,97vw)' : 'min(720px,96vw)'};max-height:92vh;max-height:92dvh;overflow:auto">
+  m.innerHTML = `<div class="modal-card tall-form" style="width:${srcPane ? 'min(1160px,97vw)' : 'min(720px,96vw)'}">
+    <div class="tall-body">
     <div style="display:flex;gap:14px;align-items:stretch">
     ${srcPane}
     <div style="flex:1;min-width:0">
@@ -1861,12 +1862,11 @@ function renderDeriveEditor() {
       </div>
     </div>
     <div id="derEditStatus" style="font-size:13px;min-height:18px;margin-top:10px"></div>
+    </div></div></div>
     <div class="modal-actions">
       <button class="btn ghost" onclick="document.getElementById('derModal').classList.add('hidden')">ביטול</button>
       <button class="btn primary" onclick="derPreviewPdf(this)">👁 תצוגה מקדימה</button>
       <button class="btn success" id="derConfirmBtn" onclick="derConfirm()">✓ הפק ${typeName}</button>
-    </div>
-    </div>
     </div>
   </div>`;
   m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
