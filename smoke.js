@@ -2257,6 +2257,38 @@ check('סדר החלוניות — חלונית שנפתחת מתוך אחרת �
   return true;
 });
 
+check('מסמך המשך נצמד גם לאירוע שחויב במסלול ישן', () => {
+  // אירוע שחויב בעבר נושא את המסמך ב-invoiceId/invoiceNumber בלבד, ו-linkedDocs
+  // שלו ריק. המסך מציג אותו כמחויב, אבל התאמה לפי linkedDocs בלבד פספסה אותו,
+  // ולכן מסמך המשך שהופק ממנו לא נצמד לשום אירוע.
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const src = srv.slice(srv.indexOf('function linkFollowupToEvents'), srv.indexOf('function followupRemarks'));
+  const fn = new Function('ownedBy', `${src}\nreturn linkFollowupToEvents;`)((r, c) => !r.companyId || r.companyId === c);
+
+  const db = { events: [
+    { id: 'legacy', companyId: 'co_ofek', linkedDocs: [], invoiceId: 'gi-10200', invoiceNumber: 10200, invoiceType: 300, invoiceStatus: 'invoiced' },
+    { id: 'modern', companyId: 'co_ofek', linkedDocs: [{ id: 'gi-999', number: 999, type: 300 }] },
+    { id: 'other',  companyId: 'co_bpm',  linkedDocs: [], invoiceId: 'gi-10200', invoiceNumber: 10200, invoiceType: 300 },
+  ] };
+  const ok = fn(db, 'co_ofek', new Set(['gi-10200', '10200']), { id: 'gi-30266', number: 30266 }, 320);
+  if (!ok) throw new Error('לא סומן שינוי');
+  const ev = db.events[0];
+  if (!ev.linkedDocs.some(d => d.id === 'gi-30266')) throw new Error('מסמך ההמשך לא נוסף לאירוע');
+  if (!ev.linkedDocs.some(d => String(d.number) === '10200' && d.converted)) throw new Error('המקור מהשדות הישנים לא הועבר לרשימה');
+  if (ev.invoiceNumber !== 30266) throw new Error('האירוע לא עודכן למסמך החדש: ' + ev.invoiceNumber);
+  if (ev.clientPaid !== true) throw new Error('מס-קבלה אינה סוגרת את האירוע');
+  if (db.events[1].linkedDocs.length !== 1) throw new Error('אירוע שאינו קשור שונה');
+  if (db.events[2].linkedDocs.length) throw new Error('זליגה: אירוע של חברה אחרת קושר');
+
+  // התיקון הרטרואקטיבי מזהה גם אותם
+  const bc = srv.slice(srv.indexOf('function backfillCandidates'), srv.indexOf('async function runFollowupBackfill'));
+  const cand = new Function('ownedBy', 'FOLLOWUP_SRC_TYPES', 'FOLLOWUP_DERIVED_TYPES', `${bc}\nreturn backfillCandidates;`)(
+    (r, c) => !r.companyId || r.companyId === c, [10, 300], [300, 305, 320]);
+  const got = cand({ events: [{ id: 'legacy', companyId: 'co_ofek', linkedDocs: [], invoiceId: 'gi-1', invoiceNumber: 1, invoiceType: 300 }] }, 'co_ofek');
+  if (!got.length) throw new Error('אירוע עם שדות ישנים אינו מועמד לתיקון');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

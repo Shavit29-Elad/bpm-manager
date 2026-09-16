@@ -2480,7 +2480,15 @@ function linkFollowupToEvents(db, cid, sourceKeys, doc, type) {
   for (const ev of (db.events || [])) {
     if (!ownedBy(ev, cid)) continue;
     const ld = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
-    if (!ld.some(d => keys.has(String(d.id)) || keys.has(String(d.number)))) continue;
+    // אירוע שחויב במסלול ישן נושא את המסמך בשדות invoiceId/invoiceNumber בלבד,
+    // ו-linkedDocs שלו ריק. התאמה לפי linkedDocs בלבד פספסה אותו לגמרי, ולכן
+    // מסמך המשך שהופק ממנו לא נצמד לשום אירוע.
+    const viaLegacy = keys.has(String(ev.invoiceId || '')) || keys.has(String(ev.invoiceNumber || ''));
+    if (!viaLegacy && !ld.some(d => keys.has(String(d.id)) || keys.has(String(d.number)))) continue;
+    // המקור מהשדות הישנים מועבר לרשימה, אחרת הוא נעלם כשהחדש תופס את מקומו
+    if (viaLegacy && !ld.some(d => String(d.id) === String(ev.invoiceId) || String(d.number) === String(ev.invoiceNumber))) {
+      ld.push({ id: ev.invoiceId || null, number: ev.invoiceNumber ?? null, type: Number(ev.invoiceType) || null, uploaded: false, converted: true });
+    }
     for (const d of ld) if (keys.has(String(d.id)) || keys.has(String(d.number))) d.converted = true;
     if (!ld.some(d => String(d.id) === String(doc.id))) ld.push({ id: doc.id, number: doc.number, type, uploaded: false });
     ev.linkedDocs = ld.slice(0, 12);
@@ -3569,7 +3577,7 @@ async function resolveConvertedInvoice(db, cid, proforma, income) {
 // מסמך המקור. התוצאה: אירוע שהוצאה עליו חשבונית נראה כאילו אין לו חיוב.
 // התיקון קדימה נעשה בקוד; כאן נסרקים המסמכים שכבר הופקו. הסריקה רק מוסיפה
 // קישורים — היא לעולם לא מוחקת ולא משנה מסמך קיים.
-const BACKFILL_VERSION = 7;
+const BACKFILL_VERSION = 8;
 const FOLLOWUP_SRC_TYPES = [10, 300];        // מקור אפשרי: הצעת מחיר או חשבון עסקה
 const FOLLOWUP_DERIVED_TYPES = [300, 305, 320];
 
@@ -3577,7 +3585,12 @@ function backfillCandidates(db, cid) {
   const out = [];
   for (const ev of (db.events || [])) {
     if (!ownedBy(ev, cid)) continue;
-    const ld = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+    let ld = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+    // אירוע שחויב במסלול ישן נושא את המסמך בשדות invoiceId/invoiceNumber בלבד.
+    // בלי זה הוא לא נחשב מועמד כלל, והמסמך שנגזר ממנו נשאר מנותק לנצח.
+    if (!ld.length && ev.invoiceId && FOLLOWUP_SRC_TYPES.includes(Number(ev.invoiceType))) {
+      ld = [{ id: ev.invoiceId, number: ev.invoiceNumber ?? null, type: Number(ev.invoiceType) }];
+    }
     if (!ld.length) continue;
     for (const d of ld) {
       if (!d || d.converted || d.credited || d.credit || d.uploaded) continue;
@@ -6175,10 +6188,12 @@ add('GET', /^\/api\/diag\/doc$/, async (req, res, _p, q) => {
       const gap = dayGap(evDate, docDate);
       if (!amountClose && !(sameClient && gap <= 120)) continue;
       const already = (e.linkedDocs || []).filter(d => [300, 305, 320, 400].includes(Number(d.type)) && !d.converted && !d.credit);
+      // השדות הישנים נספרים גם הם, אחרת אירוע שמוצג כמחויב נראה כאן ריק
+      const legacy = (!already.length && e.invoiceId) ? [`${e.invoiceNumber ?? e.invoiceId} (${e.invoiceType}) — משדה ישן`] : [];
       candidates.push({ eventId: e.id, date: evDate, artist: e.artist || '', client: e.clientName || '',
         eventTotalExVat: r2x(total), eventTotalIncVat: r2x(incVat),
         why: [amountClose ? 'סכום תואם' : null, sameClient ? 'אותו לקוח' : null, gap <= 30 ? 'תאריך קרוב' : null].filter(Boolean),
-        alreadyHasDocs: already.map(d => `${d.number ?? d.id} (${d.type})`),
+        alreadyHasDocs: [...already.map(d => `${d.number ?? d.id} (${d.type})`), ...legacy],
         score: (amountClose ? 2 : 0) + (sameClient ? 2 : 0) + (gap <= 30 ? 1 : 0) });
     }
     candidates.sort((a, b) => b.score - a.score || a.date.localeCompare(b.date));
