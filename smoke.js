@@ -1274,6 +1274,7 @@ check('חלוניות הפירוט של דף הבית נבנות בלי שגיא
     const money=(n)=>String(n);
     const escapeHtml=(x)=>String(x==null?'':x);
     const DOC_TYPE_SHORT = { 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 330: 'זיכוי' };
+    const state = { company: 'co_moshe' };
     let captured = '';
     const document = { getElementById: () => null, createElement: () => ({ classList:{add(){},remove(){}}, style:{}, set innerHTML(v){ captured = v; }, get innerHTML(){ return captured; } }), body:{ appendChild(){} } };
     const window = {}; const topZ = () => '300';
@@ -1994,7 +1995,7 @@ check('מסמכי ספק — עריכת שורה אינה מוחקת מסמכי�
 check('מסמכי ספק — לוח הצפייה נבנה ומציג את מה שמקושר', () => {
   const src = app.slice(app.indexOf('const SUP_DOC_NAMES ='), app.indexOf('window.bDocToggle'));
   const fns = new Function(`const escapeHtml=(x)=>String(x==null?'':x), money=(n)=>String(n), ddmy=(d)=>String(d||'');
-    const window = {}; const openBoardView = () => {};
+    const window = {}; const openBoardView = () => {}; const state = { company: 'co_moshe' };
 \n${src}\nreturn { bDocChips, bDocPanel };`)();
   const ev = { id: 'e1' };
   const licensed = { index: 0, role: 'קלידן', name: 'דני', vatExempt: false,
@@ -2107,7 +2108,7 @@ check('חלונית האירוע נבנית תקין גם עם מסמך פתוח
     let __h='';
     const document = { getElementById: () => null, body:{ appendChild(){} },
       createElement: () => ({ classList:{add(){},remove(){}}, style:{}, set innerHTML(v){ __h=v; }, get innerHTML(){ return __h; } }) };
-    const window = {};
+    const window = {}; const state = { company: 'co_moshe' };
     const boardFind = () => ev;
   `;
   const ev = { id: 'e1', date: '2026-10-08', artist: 'רידינג 3', clientName: 'לקוח', notes: '',
