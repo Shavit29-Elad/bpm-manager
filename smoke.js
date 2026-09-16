@@ -2535,6 +2535,17 @@ check('עורך מסמך המשך — כפתורי ההפקה נעוצים ות�
   return true;
 });
 
+check('מצב צפייה — חלונית בלי כפתורי פעולה מסבירה למה', () => {
+  // משתמש צפייה מקבל display:none על כל כפתורי הפעולה. בחלונית זה הותיר את
+  // "ביטול" לבדו, ונראה כאילו הכפתור להפקה נעלם מתקלה.
+  const rule = css.slice(css.indexOf('.viewer-mode .btn.primary'), css.indexOf('.viewer-mode .btn.primary') + 700);
+  if (!/\.viewer-mode \.modal-actions::before/.test(rule)) throw new Error('אין חיווי בחלונית במצב צפייה');
+  if (!/מצב צפייה/.test(rule)) throw new Error('החיווי אינו מסביר שמדובר בהרשאה');
+  // המחלקה נקבעת לפי התפקיד ולא לפי משהו אחר
+  if (!/classList\.toggle\('viewer-mode', !isAdmin\)/.test(app)) throw new Error('מצב הצפייה אינו נגזר מהתפקיד');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
