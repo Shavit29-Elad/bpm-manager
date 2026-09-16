@@ -2174,6 +2174,25 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/detail$/, async (req, res, param
   json(res, { ok: true, description: p.description || '', remarks: '', classification: '', rows: [], ocrTexts: [], hasFile: !!(p.giExpenseId || p.draftId || p.localFileId) });
 });
 
+// כתובת הקובץ של הוצאה. חשבונית ירוקה אינה עקבית בשם השדה בין סוגי רשומות
+// (בדיוק כמו linkedDocuments מול linkedDocumentIds), ולכן נבדקים כל השמות
+// המוכרים ולא רק url. מחרוזת, אובייקט שפות, או מערך קבצים — הכול נתמך.
+function expenseFileUrl(e) {
+  if (!e || typeof e !== 'object') return null;
+  const pick = (v) => {
+    if (!v) return null;
+    if (typeof v === 'string') return /^https?:\/\//i.test(v) ? v : null;
+    if (Array.isArray(v)) { for (const x of v) { const u = pick(x); if (u) return u; } return null; }
+    if (typeof v === 'object') return pick(v.he) || pick(v.origin) || pick(v.pdf) || pick(v.url) || pick(v.link) || pick(v.path);
+    return null;
+  };
+  for (const k of ['url', 'file', 'fileUrl', 'files', 'document', 'documents', 'attachment', 'attachments', 'image', 'images', 'links']) {
+    const u = pick(e[k]);
+    if (u) return u;
+  }
+  return null;
+}
+
 // GET /api/supplier-payables/:id/file — צפייה/הורדה של קובץ החשבונית (מההוצאה בחשבונית ירוקה או מהטיוטה)
 add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params) => {
   try {
@@ -2199,7 +2218,22 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params)
     let fileUrl = null;
     // מזהה ההוצאה ב-GI: מה-payable אם קיים, אחרת המזהה עצמו (fallback להתאמות בנק ישנות)
     const giExpId = (p && p.giExpenseId) || (!p ? params[0] : null);
-    if (giExpId) { try { const e = await greenInvoice.getExpense(giExpId); fileUrl = (e?.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e?.url === 'string' ? e.url : null); } catch { } }
+    let expFields = null, expErr = null;
+    if (giExpId) {
+      try {
+        const e = await greenInvoice.getExpense(giExpId);
+        fileUrl = expenseFileUrl(e);
+        // כשלא נמצאה כתובת — רושמים אילו שדות ההוצאה באמת מחזירה. זה בדיוק מה
+        // שחשף בעבר ש-linkedDocuments נקרא אחרת ממה שהקוד חיפש.
+        if (!fileUrl && e && typeof e === 'object') {
+          expFields = Object.keys(e);
+          const linky = expFields.filter(k => /url|file|doc|attach|link|image|pdf/i.test(k))
+            .map(k => `${k}=${JSON.stringify(e[k])}`.slice(0, 160));
+          console.log(`הוצאה ללא כתובת קובץ (${giExpId}): שדות=[${expFields.join(',')}]`);
+          if (linky.length) console.log(`  שדות שנראים כקובץ: ${linky.join(' | ')}`);
+        }
+      } catch (e) { expErr = e.message; }
+    }
     if (!fileUrl && p && p.draftId) { try { const d = await greenInvoice.getExpenseDraft(p.draftId); fileUrl = d?.url || null; } catch { } }
     if (!fileUrl) {
       // הודעה מדויקת במקום "אין קובץ": ההבדל בין הוצאה שנרשמה בלי צרופה לבין
@@ -2210,7 +2244,8 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params)
             : p.giExpenseId ? 'ההוצאה קיימת בחשבונית ירוקה אך אין לה קובץ מצורף'
               : 'אין קובץ זמין למסמך זה');
       return json(res, { error: why, payableId: params[0],
-        has: p ? { localFileId: !!p.localFileId, giExpenseId: !!p.giExpenseId, draftId: !!p.draftId } : null }, 404);
+        has: p ? { localFileId: !!p.localFileId, giExpenseId: !!p.giExpenseId, draftId: !!p.draftId } : null,
+        expenseFields: expFields, expenseError: expErr }, 404);
     }
     const r = await fetch(fileUrl, { redirect: 'follow' });
     if (!r.ok) return json(res, { error: `שגיאה בטעינת הקובץ: ${r.status}` }, 502);

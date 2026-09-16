@@ -2421,6 +2421,32 @@ check('שיוך שמצביע להוצאה שנמחקה — מאותר מחדש �
   return true;
 });
 
+check('כתובת קובץ של הוצאה — כל צורות השדה, ולא רק url', () => {
+  // חשבונית ירוקה אינה עקבית בשם השדה בין סוגי רשומות. קריאה של url בלבד
+  // החזירה "אין קובץ" גם כשהקובץ קיים תחת שם אחר.
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const src = srv.slice(srv.indexOf('function expenseFileUrl'), srv.indexOf('// GET /api/supplier-payables/:id/file'));
+  const f = new Function(`${src}\nreturn expenseFileUrl;`)();
+  const cases = [
+    [{ url: 'https://a/b.pdf' }, 'https://a/b.pdf'],
+    [{ url: { he: 'https://x/he.pdf' } }, 'https://x/he.pdf'],
+    [{ file: 'https://y/f.pdf' }, 'https://y/f.pdf'],
+    [{ files: [{ url: 'https://z/1.pdf' }] }, 'https://z/1.pdf'],
+    [{ attachments: ['https://w/a.jpg'] }, 'https://w/a.jpg'],
+    [{ documents: [{ link: 'https://q/d.pdf' }] }, 'https://q/d.pdf'],
+    [{ url: '' }, null], [{ url: 'לא-כתובת' }, null], [{}, null], [null, null],
+  ];
+  for (const [input, want] of cases) {
+    const got = f(input);
+    if (got !== want) throw new Error(`${JSON.stringify(input)} → ${got} במקום ${want}`);
+  }
+  // וכשלא נמצאה כתובת, נרשם מה ההוצאה באמת החזירה
+  const route = srv.slice(srv.indexOf("add('GET', /^\\/api\\/supplier-payables\\/([^/]+)\\/file$/"));
+  if (!/Object\.keys\(e\)/.test(route.slice(0, 2500))) throw new Error('שדות ההוצאה אינם נרשמים כשאין כתובת');
+  if (!/expenseFields/.test(route.slice(0, 3000))) throw new Error('השדות אינם מוחזרים בתשובה');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
