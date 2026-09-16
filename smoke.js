@@ -2325,6 +2325,19 @@ check('לוח האירועים — עמלה 15% והתשלום שנשאר למש
   return true;
 });
 
+check('הפקת מסמך מהלוח — על הסכום שאחרי העמלה', () => {
+  // המסמך ללקוח נבנה מהמחיר המלא, ולכן כלל גם את חלקו של גורם אחר.
+  const src = app.slice(app.indexOf('window.boardIssueDoc ='), app.indexOf('window.boardIssueDoc =') + 2200);
+  if (/price: Number\(ev\.price\) \|\| 0/.test(src)) throw new Error('המסמך עדיין נבנה מהמחיר המלא');
+  if (!/t\.incomeEx/.test(src)) throw new Error('המסמך אינו משתמש בסכום שאחרי העמלה');
+  if (!/boardNote/.test(src)) throw new Error('אין חיווי על איזה סכום המסמך יוצא');
+  // נפילה לאחור כשאין סיכום — עדיף מסמך על המחיר מאשר מסמך על אפס
+  if (!/\(Number\(ev\.price\) \|\| 0\)/.test(src)) throw new Error('אין נפילה למחיר כשאין סיכום');
+  // החיווי באמת מוצג בחלונית
+  if (!/e\.boardNote \?/.test(app)) throw new Error('החיווי לא מוצג בחלונית המסמך');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

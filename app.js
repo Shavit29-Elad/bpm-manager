@@ -4542,6 +4542,7 @@ function renderNewQuote() {
     ${discountBoxHtml(e, 'nq')}
     <div id="nqTotals" style="margin-top:10px;font-size:14px"></div>
     <label style="font-size:13px;display:block;margin-top:10px">הערה בתחתית (לא חובה) <input class="nq-remarks" value="${escAttr(e.remarks)}" style="width:100%;padding:6px 8px;margin-top:3px"></label>
+    ${e.boardNote ? `<div class="muted" style="font-size:12px;margin-top:8px;padding:7px 10px;background:var(--panel2);border-radius:8px">ℹ️ ${escapeHtml(e.boardNote)}</div>` : ''}
     ${PAY_TERMS_DOCS.has(Number(e.type || 10)) ? payTermsBlock(e.payTerms, 'nq') : ''}
     <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:10px"><input type="checkbox" class="nq-sendemail" ${e.sendEmail ? 'checked' : ''}> שלח את ההצעה ללקוח במייל</label>
     <input class="nq-email" type="email" dir="ltr" value="${escAttr(email)}" placeholder="mail@example.com" style="width:100%;padding:6px 8px;margin-top:6px">
@@ -7843,14 +7844,21 @@ window.boardIssueDoc = async (id) => {
   mm.classList.remove('hidden');
   mm.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
   try { const cl = await api('/api/clients'); if (Array.isArray(cl) && cl.length) _evClients = cl; } catch { if (!_evClients) _evClients = []; }
-  const cli = (_evClients || []).find(c => (c.name || '').trim() === (ev.clientName || '').trim());
+  const cli = (Array.isArray(_evClients) ? _evClients : []).find(c => (c.name || '').trim() === (ev.clientName || '').trim());
   const subject = [ev.artist, ddmy(ev.date), ev.location].filter(Boolean).join(' - ');
+  // הסכום ללקוח הוא מה שנשאר אחרי העמלה — אותו מספר שמוצג כ"תשלום — משה
+  // כורסיה". החשבונית על המחיר המלא הייתה כוללת גם את חלקו של גורם אחר.
+  const t = ev.totals || {};
+  const amount = t.incomeEx != null ? Number(t.incomeEx) : (Number(ev.price) || 0);
   _nq = {
     type: 300, boardEventId: ev.id,
     clientId: (cli && cli.id) || ev.clientId || '', clientName: ev.clientName || '',
     date: todayIso(), subject, remarks: '', email: '', email2: '',
     payTerms: { mode: 'default', text: '' }, sendEmail: false,
-    items: [{ description: subject || 'הופעה', quantity: 1, price: Number(ev.price) || 0 }],
+    boardNote: (t.commissionEx > 0)
+      ? `הסכום הוא לאחר עמלה של ${t.commissionPct}% (${money(t.commissionEx)}) מתוך ${money(t.clientPriceEx)}.`
+      : '',
+    items: [{ description: subject || 'הופעה', quantity: 1, price: amount }],
   };
   renderNewQuote();
 };
