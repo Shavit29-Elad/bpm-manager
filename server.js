@@ -297,9 +297,21 @@ add('GET', /^\/api\/event-board$/, (req, res, _p, q) => {
   const year = String(q.year || new Date().getFullYear());
   const evs = (db.events || []).filter(e => ownedBy(e, cid));
   // מפת ההוצאות — כדי שגם שיוך שנעשה ממסך הספקים יופיע בלוח עם סוג ומספר
-  const payablesById = new Map((db.supplierPayables || [])
-    .filter(p => (p.companyId || giCompanyId()) === cid).map(p => [String(p.id), p]));
-  const out = eventBoard.boardByMonth(evs, year, payablesById);
+  const mine = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid);
+  const payablesById = new Map(mine.map(p => [String(p.id), p]));
+  // איתור חוזר לפי ספק ומספר מסמך, למקרה שהמזהה השמור על השורה מצביע להוצאה
+  // שכבר לא קיימת. בלי זה הקובץ נפתח במסך הספקים ולא נפתח כאן, עם אותו מסמך.
+  const normName = (x) => String(x || '').replace(/בע["'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
+  const findPayable = (row) => {
+    const num = row && row.paidInvoice != null ? String(row.paidInvoice).trim() : '';
+    const nm = normName(row && row.name);
+    if (!num && !nm) return null;
+    const byBoth = num && nm ? mine.find(p => String(p.number || '').trim() === num && normName(p.supplierName) === nm) : null;
+    const byNum = num ? mine.find(p => String(p.number || '').trim() === num) : null;
+    const byName = nm ? mine.find(p => normName(p.supplierName) === nm) : null;
+    return byBoth || byNum || byName || null;
+  };
+  const out = eventBoard.boardByMonth(evs, year, payablesById, findPayable);
   const years = [...new Set(evs.map(e => String(e.date || e.dateRaw || '').slice(0, 4)).filter(Boolean))].sort().reverse();
   json(res, { ok: true, year, years, roles: eventBoard.BOARD_ROLES, vatRate: eventBoard.VAT_RATE, ...out });
 });
@@ -2169,16 +2181,18 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params)
     // המזהה יכול להיות payable מקומי, או ישירות מזהה הוצאה בחשבונית ירוקה (התאמות בנק ישנות שמרו את מזהה ההוצאה)
     const p = (db.supplierPayables || []).find(x => x.id === params[0]);
     // עותק מקומי (הוצאת אופק / חשבון עסקה פנימי) — מוגש ישירות, גם ללא חיבור לחשבונית ירוקה
+    let whyLocal = null;
     if (p && p.localFileId) {
       try {
         const f = await getFile(p.localFileId);
+        if (!f || !f.data) whyLocal = 'הקובץ מקושר להוצאה אך לא נמצא באחסון';
         if (f && f.data) {
           let ct = f.mime || 'application/pdf';
           if (/image\/jpg/i.test(ct)) ct = 'image/jpeg';
           res.writeHead(200, { 'Content-Type': ct, 'Content-Disposition': 'inline', 'Cache-Control': 'private, max-age=300' });
           return res.end(Buffer.from(f.data, 'base64'));
         }
-      } catch { }
+      } catch (e) { whyLocal = 'שליפת הקובץ מהאחסון נכשלה: ' + e.message; }
     }
     // עבור קובץ מחשבונית ירוקה (הוצאה/טיוטה) — נדרש חיבור פעיל
     if (!greenInvoice.haveCredentials()) return json(res, { error: 'אין קובץ מקומי למסמך זה, וחשבונית ירוקה אינה מחוברת' }, 400);
@@ -2187,7 +2201,17 @@ add('GET', /^\/api\/supplier-payables\/([^/]+)\/file$/, async (req, res, params)
     const giExpId = (p && p.giExpenseId) || (!p ? params[0] : null);
     if (giExpId) { try { const e = await greenInvoice.getExpense(giExpId); fileUrl = (e?.url && (e.url.he || e.url.origin || e.url.pdf)) || (typeof e?.url === 'string' ? e.url : null); } catch { } }
     if (!fileUrl && p && p.draftId) { try { const d = await greenInvoice.getExpenseDraft(p.draftId); fileUrl = d?.url || null; } catch { } }
-    if (!fileUrl) return json(res, { error: 'אין קובץ למסמך זה' }, 404);
+    if (!fileUrl) {
+      // הודעה מדויקת במקום "אין קובץ": ההבדל בין הוצאה שנרשמה בלי צרופה לבין
+      // קובץ שקיים אך לא נמצא הוא ההבדל בין "להעלות" לבין "לתקן".
+      const why = whyLocal
+        || (!p ? 'לא נמצאה הוצאה עם המזהה הזה'
+          : (!p.localFileId && !p.giExpenseId && !p.draftId) ? 'ההוצאה נרשמה בלי קובץ מצורף — יש רק ספק, מספר וסכום'
+            : p.giExpenseId ? 'ההוצאה קיימת בחשבונית ירוקה אך אין לה קובץ מצורף'
+              : 'אין קובץ זמין למסמך זה');
+      return json(res, { error: why, payableId: params[0],
+        has: p ? { localFileId: !!p.localFileId, giExpenseId: !!p.giExpenseId, draftId: !!p.draftId } : null }, 404);
+    }
     const r = await fetch(fileUrl, { redirect: 'follow' });
     if (!r.ok) return json(res, { error: `שגיאה בטעינת הקובץ: ${r.status}` }, 502);
     let ct = r.headers.get('content-type') || '';

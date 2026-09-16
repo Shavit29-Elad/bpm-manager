@@ -53,13 +53,18 @@ export function rowTotals(row) {
 // מסמכי השורה. שיוך שנעשה ממסך "ספקים לתשלום" נשמר ב-paidPayableId ולא ברשימת
 // המסמכים של הלוח, ולכן מסמך ששויך שם לא נראה כאן בכלל. שני המנגנונים מאוחדים
 // לרשימה אחת, וההוצאה עצמה מספקת את הסוג והמספר להצגה.
-export function rowDocs(d, payablesById) {
+export function rowDocs(d, payablesById, findPayable) {
   const docs = Array.isArray(d && d.docs) ? d.docs.slice() : [];
   const pid = d && d.paidPayableId;
   if (pid && !docs.some(x => String(x.payableId) === String(pid))) {
-    const p = payablesById && payablesById.get ? payablesById.get(String(pid)) : null;
+    let p = payablesById && payablesById.get ? payablesById.get(String(pid)) : null;
+    // המזהה השמור עלול להצביע להוצאה שכבר לא קיימת (נמחקה ונקלטה מחדש). במסך
+    // הספקים הקובץ נפתח כי שם משתמשים במזהה העדכני; כאן הוא נכשל. מאתרים את
+    // ההוצאה מחדש לפי ספק ומספר מסמך, ומשתמשים במזהה שבאמת מגיש את הקובץ.
+    if (!p && typeof findPayable === 'function') p = findPayable(d) || null;
+    const useId = (p && p.id) ? String(p.id) : String(pid);
     docs.push({
-      id: 'pay:' + pid, payableId: String(pid), fileId: null,
+      id: 'pay:' + pid, payableId: useId, fileId: null, relinked: useId !== String(pid),
       type: p ? normDocType(p.documentType) : null,
       number: (p && p.number) || (d && d.paidInvoice) || null,
       date: (p && p.date) || null,
@@ -71,13 +76,13 @@ export function rowDocs(d, payablesById) {
 }
 
 // שורות הלוח של אירוע: התפקידים הקבועים תמיד, ואחריהם שורות חופשיות שנוספו.
-export function boardRows(ev, payablesById) {
+export function boardRows(ev, payablesById, findPayable) {
   const details = Array.isArray(ev && ev.contractorDetails) ? ev.contractorDetails : [];
   const byRole = new Map();
   const extras = [];
   details.forEach((d, index) => {
     const role = String((d && d.role) || '').trim();
-    const row = { ...d, index, role, docs: rowDocs(d, payablesById), ...rowTotals(d) };
+    const row = { ...d, index, role, docs: rowDocs(d, payablesById, findPayable), ...rowTotals(d) };
     if (isFixedRole(role) && !byRole.has(role)) byRole.set(role, row);
     else if (role) extras.push(row);
   });
@@ -146,7 +151,7 @@ export function eventTotals(ev) {
 }
 
 // קיבוץ לפי חודש, מהחדש לישן. כל חודש נושא את סיכומיו ואת האירועים שבו.
-export function boardByMonth(events, year, payablesById) {
+export function boardByMonth(events, year, payablesById, findPayable) {
   const y = String(year || '').trim();
   const byMonth = new Map();
   for (const ev of (events || [])) {
@@ -164,7 +169,7 @@ export function boardByMonth(events, year, payablesById) {
       notes: ev.boardNotes || '',
       linkedDocs: (ev.linkedDocs || []).map(d => ({ id: d.id, number: d.number ?? null, type: Number(d.type),
         uploaded: !!d.uploaded, converted: !!d.converted, credit: !!(d.credit || Number(d.type) === 330) })),
-      rows: boardRows(ev, payablesById).all, totals: t });
+      rows: boardRows(ev, payablesById, findPayable).all, totals: t });
     g.clientPriceEx = r2(g.clientPriceEx + t.clientPriceEx);
     g.commissionEx = r2(g.commissionEx + t.commissionEx);
     g.incomeEx = r2(g.incomeEx + t.incomeEx);

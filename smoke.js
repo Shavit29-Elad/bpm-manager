@@ -2395,6 +2395,32 @@ check('מסמך בלי קובץ — הסבר ולא תשובת שגיאה גול
   return true;
 });
 
+check('שיוך שמצביע להוצאה שנמחקה — מאותר מחדש לפי ספק ומספר', () => {
+  // המזהה השמור על השורה עלול להצביע להוצאה שכבר לא קיימת. במסך הספקים הקובץ
+  // נפתח כי שם משתמשים במזהה העדכני; בלוח הוא נכשל עם "אין קובץ".
+  const cur = { id: 'pay_new', supplierName: 'פיש סאונד', documentType: 305, number: '50032', date: '2026-09-10', amount: 2950 };
+  const byId = new Map([['pay_new', cur]]);
+  const row = { name: 'פיש סאונד', paidPayableId: 'pay_old_deleted', paidInvoice: '50032' };
+  const find = (r) => (String(r.paidInvoice) === '50032' ? cur : null);
+
+  const without = boardMod.rowDocs(row, byId);
+  if (without[0].payableId !== 'pay_old_deleted') throw new Error('בלי איתור חוזר, המזהה הישן משתנה מעצמו');
+
+  const withFind = boardMod.rowDocs(row, byId, find);
+  if (withFind[0].payableId !== 'pay_new') throw new Error('לא אותר מחדש: ' + withFind[0].payableId);
+  if (!withFind[0].relinked) throw new Error('האיתור החוזר אינו מסומן');
+  if (withFind[0].type !== 305 || withFind[0].number !== '50032') throw new Error('הפרטים לא נלקחו מההוצאה שאותרה');
+  // מזהה תקין — לא נוגעים בו
+  const ok = boardMod.rowDocs({ name: 'פיש סאונד', paidPayableId: 'pay_new', paidInvoice: '50032' }, byId, find);
+  if (ok[0].payableId !== 'pay_new' || ok[0].relinked) throw new Error('מזהה תקין שונה שלא לצורך');
+
+  // האיתור בשרת מנסה שלושה מסלולים ולא נעצר בראשון
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const fp = srv.slice(srv.indexOf('const findPayable = (row) =>'), srv.indexOf('const out = eventBoard.boardByMonth'));
+  for (const k of ['byBoth', 'byNum', 'byName']) if (!fp.includes(k)) throw new Error('חסר מסלול איתור: ' + k);
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
