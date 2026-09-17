@@ -2583,6 +2583,52 @@ check('פרטי בנק נשמרים ללקוח ומוצעים בפעם הבאה'
   return true;
 });
 
+check('עמלות — הסרת השורה הראשונה ובחירת בסיס החישוב', () => {
+  const rows = [{ role: 'קלידן', name: 'א', priceExVat: 2000 }, { role: 'מתופף', name: 'ב', priceExVat: 3000 }];
+  const base = { price: 20000, contractorDetails: rows };   // הוצאות 5,000
+
+  // ברירת מחדל — בדיוק כמו קודם: 15% מהמחיר ללקוח
+  const d = boardMod.eventTotals(base);
+  if (d.commissionEx !== 3000 || d.incomeEx !== 17000) throw new Error('ברירת המחדל השתנתה: ' + JSON.stringify(d));
+
+  // בסיס "אחרי ההוצאות": 15% מ-15,000
+  const net = boardMod.eventTotals({ ...base, commissionBase: 'net' });
+  if (net.commissionEx !== 2250 || net.incomeEx !== 17750) throw new Error('בסיס אחרי הוצאות: ' + JSON.stringify(net));
+
+  // הסרה — הפיכה, ואינה משנה את ברירת המחדל
+  const off = boardMod.eventTotals({ ...base, commissionOff: true });
+  if (off.commissionEx !== 0 || off.incomeEx !== 20000) throw new Error('ההסרה לא עבדה');
+  if (off.commissions.length) throw new Error('שורת העמלה נותרה ברשימה');
+  if (boardMod.eventTotals({ ...base, commissionOff: false }).commissionEx !== 3000) throw new Error('ההחזרה לא עובדת');
+  if (boardMod.DEFAULT_COMMISSION_PCT !== 15) throw new Error('ברירת המחדל במערכת השתנתה');
+
+  // עמלה נוספת עם בסיס משלה
+  const mix = boardMod.eventTotals({ ...base, commissionOff: true, extraCommissions: [{ name: 'מפיק', pct: 10, base: 'net' }] });
+  if (mix.commissionEx !== 1500) throw new Error('עמלה נוספת אחרי הוצאות: ' + mix.commissionEx);
+  if (mix.commissions[0].base !== 'net') throw new Error('הבסיס אינו מוחזר לתצוגה');
+
+  // סכום קבוע אינו מושפע מהבסיס
+  for (const b of ['client', 'net']) {
+    const f = boardMod.eventTotals({ ...base, commissionOff: true, extraCommissions: [{ name: 'x', amount: 700, base: b }] });
+    if (f.commissionEx !== 700) throw new Error('סכום קבוע הושפע מהבסיס');
+  }
+  // הוצאות גדולות מהמחיר — הבסיס לא יורד מתחת לאפס
+  const neg = boardMod.eventTotals({ price: 1000, commissionBase: 'net', contractorDetails: [{ role: 'x', name: 'y', priceExVat: 5000 }] });
+  if (neg.commissionEx !== 0) throw new Error('בסיס שלילי יצר עמלה: ' + neg.commissionEx);
+
+  // הממשק מחשב זהה לשרת
+  const uiSrc = app.slice(app.indexOf('const BD_BASES ='), app.indexOf('function bdIncomeLine('));
+  const ui = new Function(`const bRowEx=(r)=>Number(r.ex)||0; const bdCommPct=(e)=>{const v=e&&e.commissionPct; return (v===''||v==null||isNaN(Number(v)))?15:Math.min(100,Math.max(0,Number(v)));};\n${uiSrc}\nreturn bdCommList;`)();
+  for (const fx of [base, { ...base, commissionBase: 'net' }, { ...base, commissionOff: true }]) {
+    const e = { price: fx.price, commissionPct: fx.commissionPct, commissionOff: fx.commissionOff,
+      commissionBase: fx.commissionBase, extraCommissions: [], rows: rows.map(r => ({ ex: r.priceExVat })) };
+    const a = ui(e).reduce((x, c) => x + c.amount, 0);
+    const b = boardMod.eventTotals(fx).commissionEx;
+    if (Math.abs(a - b) > 0.01) throw new Error(`ממשק ${a} · שרת ${b}`);
+  }
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

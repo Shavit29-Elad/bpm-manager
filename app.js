@@ -7493,16 +7493,23 @@ function bdCommPct(e) {
   return (v === '' || v == null || isNaN(Number(v))) ? 15 : Math.min(100, Math.max(0, Number(v)));
 }
 // זהה ל-commissionsOf שבשרת: סכום קבוע גובר על אחוז.
+const BD_BASES = { client: 'מהמחיר ללקוח', net: 'אחרי ההוצאות' };
+const bdBaseOf = (c) => (c && c.base === 'net') ? 'net' : 'client';
+const bdExpenseEx = (e) => (e.rows || []).reduce((a, r) => a + bRowEx(r), 0);
 function bdCommList(e) {
   const price = Number(e.price) || 0;
+  const exp = bdExpenseEx(e);
   const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const baseAmt = (b) => (b === 'net' ? Math.max(0, r2(price - exp)) : price);
   const calc = (c) => {
+    const base = bdBaseOf(c);
     const amt = (c.amount === '' || c.amount == null || isNaN(Number(c.amount))) ? null : Math.abs(Number(c.amount));
-    if (amt != null) return { pct: null, amount: r2(amt) };
+    if (amt != null) return { base, pct: null, amount: r2(amt) };
     const pct = Math.min(100, Math.max(0, Number(c.pct) || 0));
-    return { pct, amount: r2(price * pct / 100) };
+    return { base, pct, amount: r2(baseAmt(base) * pct / 100) };
   };
-  const out = [{ name: 'שורה ראשונה', primary: true, ...calc({ pct: bdCommPct(e) }) }];
+  const out = [];
+  if (!e.commissionOff) out.push({ name: 'שורה ראשונה', primary: true, ...calc({ pct: bdCommPct(e), base: e.commissionBase }) });
   for (const c of (e.extraCommissions || [])) {
     const name = String(c.name || '').trim();
     const t = calc(c);
@@ -7516,7 +7523,7 @@ function bdIncomeLine(e) {
   const list = bdCommList(e);
   const total = list.reduce((a, c) => a + c.amount, 0);
   const left = Math.max(0, price - total);
-  const rows = list.map(c => `<div class="row-between"><span>עמלה — ${escapeHtml(c.name)}${c.pct != null ? ` (${c.pct}%)` : ''}</span><b style="color:var(--warn)">−${money(c.amount)}</b></div>`).join('');
+  const rows = list.map(c => `<div class="row-between"><span>עמלה — ${escapeHtml(c.name)}${c.pct != null ? ` (${c.pct}% ${BD_BASES[c.base]})` : ''}</span><b style="color:var(--warn)">−${money(c.amount)}</b></div>`).join('');
   return `<div class="row-between"><span>מחיר ללקוח</span><b>${money(price)}</b></div>${rows}
     <div class="row-between" style="border-top:1px solid var(--line);margin-top:4px;padding-top:4px">
       <span style="font-weight:600">תשלום — משה כורסיה</span><b style="color:var(--accent2)">${money(left)}</b></div>
@@ -7524,16 +7531,22 @@ function bdIncomeLine(e) {
 }
 
 function bdExtrasHtml(e) {
-  const rows = (e.extraCommissions || []).map((c, i) => `<div class="bd-comm" style="display:grid;grid-template-columns:1fr 84px 84px 28px;gap:6px;align-items:center;margin-top:5px">
+  const rows = (e.extraCommissions || []).map((c, i) => `<div class="bd-comm" style="display:grid;grid-template-columns:1fr 72px 78px 1fr 28px;gap:6px;align-items:center;margin-top:5px">
     <input class="bdc-name" value="${escAttr(c.name || '')}" placeholder="חברת הפקה / מפיק" style="padding:5px 7px;font-size:12.5px"/>
     <input class="bdc-pct" type="number" inputmode="decimal" value="${escAttr(String(c.pct ?? ''))}" placeholder="אחוז" oninput="boardRecalc()" style="padding:5px 7px;font-size:12.5px"/>
     <input class="bdc-amt" type="number" inputmode="decimal" value="${escAttr(String(c.amount ?? ''))}" placeholder="₪ סכום" oninput="boardRecalc()" style="padding:5px 7px;font-size:12.5px"/>
+    <select class="bdc-base" onchange="boardRecalc()" style="padding:5px 7px;font-size:12.5px">
+      ${Object.entries(BD_BASES).map(([v, l]) => `<option value="${v}" ${bdBaseOf(c) === v ? 'selected' : ''}>${l}</option>`).join('')}
+    </select>
     <button class="btn ghost" style="padding:1px 6px;color:var(--danger)" onclick="bdDelComm(${i})" title="הסר עמלה">✕</button>
   </div>`).join('');
   return `${rows}
     <div class="muted" style="font-size:11px;margin-top:4px">${(e.extraCommissions || []).length ? 'מילוי סכום גובר על האחוז.' : ''}</div>
     <button class="btn ghost" style="margin-top:5px;padding:3px 10px;font-size:12px" onclick="bdAddComm()">➕ הוספת עמלה</button>`;
 }
+// הסרה והחזרה של עמלת השורה הראשונה — לאירוע הזה בלבד. ברירת המחדל במערכת
+// נשארת 15%, וההסרה הפיכה בלחיצה.
+window.bdPrimaryComm = (on) => { boardEditSync(); _boardEdit.commissionOff = !on; renderBoardEdit(); };
 window.bdAddComm = () => { boardEditSync(); _boardEdit.extraCommissions = _boardEdit.extraCommissions || []; _boardEdit.extraCommissions.push({ name: '', pct: '', amount: '' }); renderBoardEdit(); };
 window.bdDelComm = (i) => { boardEditSync(); _boardEdit.extraCommissions.splice(i, 1); renderBoardEdit(); };
 
@@ -7546,11 +7559,13 @@ function boardEditSync() {
   e.clientName = g('bdClient')?.value ?? e.clientName;
   e.price = g('bdPrice')?.value ?? e.price;
   e.commissionPct = g('bdComm')?.value ?? e.commissionPct;
+  e.commissionBase = g('bdCommBase')?.value ?? e.commissionBase;
   document.querySelectorAll('#bdModal .bd-comm').forEach((row, i) => {
     const c = (e.extraCommissions || [])[i]; if (!c) return;
     c.name = row.querySelector('.bdc-name')?.value ?? c.name;
     c.pct = row.querySelector('.bdc-pct')?.value ?? c.pct;
     c.amount = row.querySelector('.bdc-amt')?.value ?? c.amount;
+    c.base = row.querySelector('.bdc-base')?.value ?? c.base;
   });
   e.notes = g('bdNotes')?.value ?? e.notes;
   document.querySelectorAll('#bdModal .bd-row').forEach((row, i) => {
@@ -7596,7 +7611,19 @@ function renderBoardEdit() {
       <label style="font-size:12.5px">מיקום<input id="bdLoc" value="${escAttr(e.location)}" style="width:100%;padding:6px 8px"/></label>
       <label style="font-size:12.5px">לקוח<input id="bdClient" list="bdClientList" value="${escAttr(e.clientName)}" style="width:100%;padding:6px 8px"/></label>
       <label style="font-size:12.5px">מחיר ללקוח (ללא מע״מ)<input id="bdPrice" type="number" inputmode="decimal" value="${escAttr(String(e.price))}" oninput="boardRecalc()" style="width:100%;padding:6px 8px"/></label>
-      <label style="font-size:12.5px">עמלה — שורה ראשונה (%)<input id="bdComm" type="number" inputmode="decimal" value="${escAttr(String(e.commissionPct))}" placeholder="15" oninput="boardRecalc()" style="width:100%;padding:6px 8px"/></label>
+    </div>
+    <div style="margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px">
+      ${e.commissionOff
+        ? `<div class="row-between" style="font-size:12.5px"><span class="muted">עמלת שורה ראשונה הוסרה מהאירוע הזה</span>
+             <button class="btn ghost" style="padding:2px 10px;font-size:12px" onclick="bdPrimaryComm(1)">➕ החזר עמלת שורה ראשונה</button></div>`
+        : `<div style="display:grid;grid-template-columns:1fr 84px 1fr 28px;gap:6px;align-items:center">
+             <span style="font-size:12.5px;font-weight:600">עמלה — שורה ראשונה</span>
+             <input id="bdComm" type="number" inputmode="decimal" value="${escAttr(String(e.commissionPct))}" placeholder="15" oninput="boardRecalc()" style="padding:5px 7px;font-size:12.5px"/>
+             <select id="bdCommBase" onchange="boardRecalc()" style="padding:5px 7px;font-size:12.5px">
+               ${Object.entries(BD_BASES).map(([v, l]) => `<option value="${v}" ${bdBaseOf(e.commissionBase ? { base: e.commissionBase } : {}) === v ? 'selected' : ''}>${l}</option>`).join('')}
+             </select>
+             <button class="btn ghost" style="padding:1px 6px;color:var(--danger)" onclick="bdPrimaryComm(0)" title="הסר את עמלת השורה הראשונה מהאירוע הזה">✕</button>
+           </div>`}
     </div>
     <div id="bdIncome" style="margin-top:8px;padding:8px 11px;background:var(--panel2);border-radius:8px;font-size:12.5px;line-height:1.85">${bdIncomeLine(e)}</div>
     <div id="bdExtras">${bdExtrasHtml(e)}</div>
@@ -7641,7 +7668,8 @@ window.boardSave = async (btn) => {
   const body = { id: e.id, date: e.date, artist: e.artist, location: e.location, clientName: e.clientName,
     clientId: e.clientId || null, price: e.price === '' ? null : Number(e.price),
     commissionPct: e.commissionPct === '' ? null : Number(e.commissionPct),
-    extraCommissions: (e.extraCommissions || []).map(c => ({ name: c.name, pct: c.pct, amount: c.amount })), notes: e.notes,
+    commissionOff: !!e.commissionOff, commissionBase: e.commissionBase || 'client',
+    extraCommissions: (e.extraCommissions || []).map(c => ({ name: c.name, pct: c.pct, amount: c.amount, base: c.base })), notes: e.notes,
     rows: e.rows.map(r => ({ role: r.role, name: r.name, priceExVat: r.priceExVat === '' ? null : Number(r.priceExVat), vatExempt: !!r.vatExempt, priceIncVat: !!r.priceIncVat, note: r.note })) };
   const r = await fetch('/api/event-board', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
@@ -7945,7 +7973,7 @@ window.openBoardView = (id, keepOpen) => {
 
     <div style="margin-bottom:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:13px;line-height:1.9">
       <div class="row-between"><span>מחיר ללקוח (ללא מע״מ)</span><b>${money(t.clientPriceEx || 0)}</b></div>
-      ${(t.commissions || []).map(c => `<div class="row-between"><span>עמלה — ${escapeHtml(c.name)}${c.pct != null ? ` (${c.pct}%)` : ''}</span><b style="color:var(--warn)">−${money(c.amount)}</b></div>`).join('')}
+      ${(t.commissions || []).map(c => `<div class="row-between"><span>עמלה — ${escapeHtml(c.name)}${c.pct != null ? ` (${c.pct}%${c.base === 'net' ? ' אחרי ההוצאות' : ''})` : ''}</span><b style="color:var(--warn)">−${money(c.amount)}</b></div>`).join('')}
       ${(t.commissions || []).length > 1 ? `<div class="row-between muted" style="font-size:12px"><span>סה״כ עמלות</span><span>−${money(t.commissionEx || 0)}</span></div>` : ''}
       <div class="row-between" style="border-top:1px solid var(--line);margin-top:4px;padding-top:4px">
         <span style="font-weight:600">תשלום — משה כורסיה</span><b style="color:var(--accent2)">${money(t.incomeEx || 0)}</b></div>

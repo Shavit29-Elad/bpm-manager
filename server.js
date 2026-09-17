@@ -353,12 +353,16 @@ add('POST', /^\/api\/event-board$/, (req, res, _p, q, body) => {
   // אחוז העמלה. 0 הוא ערך לגיטימי, ולכן ריק בלבד מחזיר לברירת המחדל.
   ev.commissionPct = (b.commissionPct === '' || b.commissionPct == null || isNaN(Number(b.commissionPct)))
     ? null : Math.min(100, Math.max(0, Number(b.commissionPct)));
+  // הסרת עמלת השורה הראשונה — לאירוע הזה בלבד, והפיכה. ברירת המחדל במערכת
+  // לא משתנה. בסיס החישוב: המחיר ללקוח, או מה שנשאר אחרי כל ההוצאות.
+  ev.commissionOff = b.commissionOff === true;
+  ev.commissionBase = b.commissionBase === 'net' ? 'net' : 'client';
   // עמלות נוספות — שם ואחוז או סכום. שורה בלי שם ובלי ערך אינה נשמרת.
   ev.extraCommissions = (Array.isArray(b.extraCommissions) ? b.extraCommissions : []).map(c => {
     const name = String((c && c.name) || '').trim();
     const amt = (c && c.amount !== '' && c.amount != null && !isNaN(Number(c.amount))) ? Math.abs(Number(c.amount)) : null;
     const pct = (c && c.pct !== '' && c.pct != null && !isNaN(Number(c.pct))) ? Math.min(100, Math.max(0, Number(c.pct))) : null;
-    return { name, pct: amt != null ? null : pct, amount: amt };
+    return { name, pct: amt != null ? null : pct, amount: amt, base: (c && c.base === 'net') ? 'net' : 'client' };
   }).filter(c => c.name || c.amount != null || c.pct != null).slice(0, 10);
   ev.boardNotes = String(b.notes || '').trim();
   ev.contractorDetails = rows;

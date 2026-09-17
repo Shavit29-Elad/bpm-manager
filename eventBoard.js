@@ -110,17 +110,27 @@ export function commissionPctOf(ev) {
 // כל העמלות של האירוע כרשימה אחת: הראשונה היא עמלת ברירת המחדל (אחוז),
 // ואחריה עמלות נוספות שהוזנו ידנית — לכל אחת שם ואחוז או סכום קבוע.
 // סכום קבוע גובר על אחוז, כי מי שהזין אותו התכוון למספר מדויק.
-export function commissionsOf(ev, clientPriceEx) {
+// בסיס החישוב של עמלה: המחיר שנמכר ללקוח, או מה שנשאר ממנו אחרי כל ההוצאות
+// (נגנים, טכנאים, לוגיסטיקה). ההוצאות אינן תלויות בעמלות, ולכן אין כאן מעגל.
+export const COMMISSION_BASES = { client: 'מהמחיר ללקוח', net: 'אחרי ההוצאות' };
+export const baseOf = (c) => (c && c.base === 'net') ? 'net' : 'client';
+
+export function commissionsOf(ev, clientPriceEx, expenseEx) {
   const price = num(clientPriceEx != null ? clientPriceEx : (ev && ev.price));
+  const exp = num(expenseEx != null ? expenseEx : eventExpenseEx(ev));
+  const baseAmt = (b) => (b === 'net' ? Math.max(0, r2(price - exp)) : price);
   const calc = (c) => {
+    const base = baseOf(c);
     const amt = (c.amount === '' || c.amount == null || isNaN(Number(c.amount))) ? null : Number(c.amount);
-    if (amt != null) return { pct: null, amount: r2(Math.abs(amt)) };
+    if (amt != null) return { base, pct: null, amount: r2(Math.abs(amt)) };
     const pct = Math.min(100, Math.max(0, num(c.pct)));
-    return { pct, amount: r2(price * pct / 100) };
+    return { base, pct, amount: r2(baseAmt(base) * pct / 100) };
   };
   const out = [];
-  const firstPct = commissionPctOf(ev);
-  out.push({ name: 'שורה ראשונה', primary: true, ...calc({ pct: firstPct }) });
+  // עמלת השורה הראשונה ניתנת להסרה — יש אירועים בלי עמלה כזו בכלל
+  if (!(ev && ev.commissionOff)) {
+    out.push({ name: 'שורה ראשונה', primary: true, ...calc({ pct: commissionPctOf(ev), base: ev && ev.commissionBase }) });
+  }
   for (const c of (Array.isArray(ev && ev.extraCommissions) ? ev.extraCommissions : [])) {
     const name = String((c && c.name) || '').trim();
     const t = calc(c || {});
@@ -130,6 +140,11 @@ export function commissionsOf(ev, clientPriceEx) {
   return out;
 }
 
+// סכום ההוצאות של האירוע, ללא מע"מ. מחושב בנפרד כי העמלות עשויות להישען עליו.
+export function eventExpenseEx(ev) {
+  return r2(boardRows(ev).all.filter(r => r.ex > 0).reduce((s, r) => s + r.ex, 0));
+}
+
 export function eventTotals(ev) {
   const rows = boardRows(ev).all.filter(r => r.ex > 0);
   const expenseEx = r2(rows.reduce((s, r) => s + r.ex, 0));
@@ -137,7 +152,7 @@ export function eventTotals(ev) {
   // מחיר ללקוח → עמלה → מה שנשאר. ההכנסה של משה היא מה שנשאר אחרי העמלה,
   // ולכן היא זו שנכנסת לרווח ולסיכומי החודש — לא המחיר המלא ללקוח.
   const clientPriceEx = r2(num(ev && ev.price));
-  const commissions = commissionsOf(ev, clientPriceEx);
+  const commissions = commissionsOf(ev, clientPriceEx, expenseEx);
   const commissionPct = commissionPctOf(ev);
   const commissionEx = r2(commissions.reduce((a, c) => a + c.amount, 0));
   // העמלות לא יכולות לבלוע יותר מהמחיר — תשלום שלילי אינו מצב אמיתי
@@ -169,6 +184,7 @@ export function boardByMonth(events, year, payablesById, findPayable) {
     g.events.push({ id: ev.id, date: iso, artist: ev.artist || '', location: ev.location || '',
       clientId: ev.clientId || null, clientName: ev.clientName || '',
       price: ev.price ?? null, commissionPct: commissionPctOf(ev),
+      commissionOff: !!ev.commissionOff, commissionBase: baseOf({ base: ev.commissionBase }),
       extraCommissions: Array.isArray(ev.extraCommissions) ? ev.extraCommissions : [],
       notes: ev.boardNotes || '',
       linkedDocs: (ev.linkedDocs || []).map(d => ({ id: d.id, number: d.number ?? null, type: Number(d.type),
@@ -223,4 +239,4 @@ export function normalizeRows(rows, prev = []) {
   return out;
 }
 
-export default { VAT_RATE, BOARD_ROLES, DEFAULT_COMMISSION_PCT, commissionPctOf, commissionsOf, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, normDocType, rowDocs, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
+export default { VAT_RATE, BOARD_ROLES, DEFAULT_COMMISSION_PCT, COMMISSION_BASES, baseOf, commissionPctOf, commissionsOf, eventExpenseEx, isFixedRole, SUP_DOC_NAMES, supDocTypesFor, normDocType, rowDocs, rowTotals, boardRows, eventTotals, boardByMonth, normalizeRows };
