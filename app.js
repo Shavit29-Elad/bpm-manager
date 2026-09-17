@@ -1661,6 +1661,25 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
   if (!_derEdit.items.length) _derEdit.items.push({ description: '', quantity: 1, price: 0 });
   // תקבולים: אם הגיע סכום שהתקבל בבנק — נבנה תקבול העברה בנקאית, ובניכוי מס במקור נוסיף שורת ניכוי
   if (needsPay) {
+    // פרטי הבנק האחרונים של הלקוח — מוצעים כברירת מחדל וניתנים לשינוי.
+    // נטענים ברקע כדי לא לעכב את פתיחת העורך.
+    const cn = _derEdit.clientName || (r.client && r.client.name) || '';
+    const cidq = (r.client && r.client.id) ? `clientId=${encodeURIComponent(r.client.id)}` : '';
+    api(`/api/client-bank?${cidq}&clientName=${encodeURIComponent(cn)}`)
+      .then(b => {
+        if (!b || !b.bank || !_derEdit) return;
+        let changed = false;
+        for (const pay of (_derEdit.payments || [])) {
+          if (![2, 4].includes(Number(pay.type))) continue;
+          for (const k of ['bankName', 'bankBranch', 'bankAccount']) {
+            if (!String(pay[k] || '').trim() && b.bank[k]) { pay[k] = b.bank[k]; changed = true; }
+          }
+        }
+        if (changed && document.getElementById('derModal') && !document.getElementById('derModal').classList.contains('hidden')) {
+          _derEdit.bankSuggested = true;
+          renderDeriveEditor();
+        }
+      }).catch(() => { });
     if (opts.bankReceived != null) {
       const total = derTotals().total;
       const recv = Math.min(Number(opts.bankReceived) || 0, total);
@@ -1795,6 +1814,7 @@ function renderDeriveEditor() {
         <input class="der-pbank" list="ilBanks" value="${escAttr(p.bankName || '')}" placeholder="בנק (בחר/חפש)" style="padding:6px 8px">
         <input class="der-pbranch" value="${escAttr(p.bankBranch || '')}" placeholder="סניף" style="padding:6px 8px">
         <input class="der-paccount" value="${escAttr(p.bankAccount || '')}" placeholder="מספר חשבון" style="padding:6px 8px">
+        ${(e.bankSuggested && i === 0) ? '<div style="grid-column:1/-1;font-size:11px;color:var(--muted);margin-top:1px">פרטי הבנק הושלמו מהפעם הקודמת של הלקוח — ניתן לשנות</div>' : ''}
         ${isCheque ? `<input class="der-pcheque" value="${escAttr(p.chequeNum || '')}" placeholder="מס' צ'ק *" style="padding:6px 8px">` : ''}
       </div>` : ''}
     </div>`;

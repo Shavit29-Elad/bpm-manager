@@ -1250,6 +1250,8 @@ add('POST', /^\/api\/events\/([^/]+)\/create-followup$/, async (req, res, params
       }).filter(p => Math.abs(p.price) > 0);
     }
     const doc = await createDocFwd(opts);
+    // פרטי הבנק שהוזנו נשמרים ללקוח ומוצעים בפעם הבאה (events/create-followup)
+    try { const _d = load(); if (rememberClientBank(_d, reqCompany(_q || {}, body), (src && src.client) || null, opts.payment)) save(_d); } catch { }
     // קישור המסמך החדש (חשבונית ירוקה) לאירוע + סימון המסמך הישן שממנו נגזר כ"הומר" (יורד מחשבוניות פתוחות)
     const merged = Array.isArray(ev.linkedDocs) ? ev.linkedDocs.slice() : [];
     merged.push({ id: doc.id, number: doc.number, type, uploaded: false });
@@ -1407,6 +1409,8 @@ add('POST', /^\/api\/documents\/create$/, async (req, res, _p, _q, body) => {
     }
     applyPaymentTerms(opts, body);   // תנאי תשלום שנבחרו למסמך הזה
     const doc = await createDocFwd(opts);
+    // פרטי הבנק שהוזנו נשמרים ללקוח ומוצעים בפעם הבאה (documents/create)
+    try { const _d = load(); if (rememberClientBank(_d, reqCompany(_q || {}, body), body.clientId ? { id: body.clientId } : { name: body.clientName }, opts.payment)) save(_d); } catch { }
     let mail = null;
     if (body.sendEmail) mail = await mailDocToClient(_q.companyId || giCompanyId(), doc,
       [body.email, body.email2], { type, clientName: body.clientName || '' });
@@ -3320,6 +3324,8 @@ add('POST', /^\/api\/documents\/([^/]+)\/derive$/, async (req, res, params, _q, 
     }
     applyPaymentTerms(opts, body);   // תנאי תשלום שנבחרו למסמך הזה
     const doc = await createDocFwd(opts);
+    // פרטי הבנק שהוזנו נשמרים ללקוח ומוצעים בפעם הבאה (derive)
+    try { const _d = load(); if (rememberClientBank(_d, reqCompany(_q || {}, body), (src && src.client) || { name: (src && src.clientName) || '' }, opts.payment)) save(_d); } catch { }
     // שליחה ללקוח מצדנו, אם התבקשה בחלונית. חשבונית ירוקה אינה שולחת.
     // שיוך לאירועים של המסמך המקורי. עד עכשיו המסלול הזה יצר את המסמך ולא נגע
     // באירועים, ולכן חשבונית שהופקה כהמשך להצעת מחיר לא הופיעה על האירוע שלה.
@@ -3444,6 +3450,8 @@ add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) =>
     if (type === 320 && !(opts.payment && opts.payment.length)) return json(res, { error: 'חשבונית מס-קבלה מחייבת פירוט תקבול (סכום ואמצעי תשלום).' }, 400);
     // השליחה מצדנו בלבד (mailDocToClient) — חשבונית ירוקה אינה שולחת ללקוח.
     const doc = await createDocFwd(opts);
+    // פרטי הבנק שהוזנו נשמרים ללקוח ומוצעים בפעם הבאה (consolidate)
+    try { const _d = load(); if (rememberClientBank(_d, reqCompany(_q || {}, body), (srcDocs && srcDocs[0] && srcDocs[0].client) || { name: (srcDocs && srcDocs[0] && srcDocs[0].clientName) || '' }, opts.payment)) save(_d); } catch { }
     // סימון אירועים מקושרים למקורות שנסגרו — עדכון למסמך המסכם החדש
     try {
       const db = load();
@@ -6357,6 +6365,43 @@ add('GET', /^\/api\/diag\/payable$/, async (req, res, _p, q) => {
       : out.some(x => x.servesFile) ? (out.every(x => x.servesFile) ? 'לכל הרשומות יש קובץ' : 'יש כפילות — רק לחלק מהרשומות יש קובץ')
       : 'לאף רשומה אין קובץ שניתן להגיש',
   });
+});
+
+// ── פרטי בנק שנשמרים לכל לקוח ────────────────────────────────────────────
+// בקבלה ובמס-קבלה מזינים בנק, סניף וחשבון. הם חוזרים על עצמם אצל אותו לקוח,
+// ולכן נשמרים אחרי הפקה מוצלחת ומוצעים בפעם הבאה. מוצעים בלבד — מה שמוזן
+// בפועל תמיד גובר, כי לקוח יכול לשלם מחשבון אחר.
+const clientBankKey = (client) => {
+  const id = client && (client.id || client.clientId);
+  if (id) return 'id:' + String(id).trim();
+  const nm = String((client && (client.name || client.clientName)) || '').trim();
+  return nm ? 'nm:' + nm : null;
+};
+function rememberClientBank(db, cid, client, payment) {
+  const key = clientBankKey(client);
+  if (!key || !Array.isArray(payment)) return false;
+  // סוג 4 = העברה בנקאית, 2 = צ'ק. רק מהם נשמרים פרטי בנק.
+  const row = payment.find(p => p && [2, 4].includes(Number(p.type)) && (p.bankName || p.bankBranch || p.bankAccount));
+  if (!row) return false;
+  db.clientBank = db.clientBank || {};
+  db.clientBank[cid] = db.clientBank[cid] || {};
+  db.clientBank[cid][key] = {
+    bankName: String(row.bankName || '').trim() || null,
+    bankBranch: String(row.bankBranch || '').trim() || null,
+    bankAccount: String(row.bankAccount || '').trim() || null,
+    at: new Date().toISOString(),
+  };
+  return true;
+}
+
+// GET /api/client-bank?clientId=&clientName= — פרטי הבנק האחרונים של הלקוח
+add('GET', /^\/api\/client-bank$/, (req, res, _p, q) => {
+  const db = load(), cid = reqCompany(q);
+  const byId = clientBankKey({ id: q.clientId });
+  const byName = clientBankKey({ name: q.clientName });
+  const tbl = (db.clientBank || {})[cid] || {};
+  const hit = (byId && tbl[byId]) || (byName && tbl[byName]) || null;
+  json(res, { ok: true, bank: hit || null });
 });
 
 // GET /api/clients — רשימת לקוחות (fresh=1 מרענן מחשבונית ירוקה)

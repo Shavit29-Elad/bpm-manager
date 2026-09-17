@@ -2546,6 +2546,43 @@ check('מצב צפייה — חלונית בלי כפתורי פעולה מסב�
   return true;
 });
 
+check('פרטי בנק נשמרים ללקוח ומוצעים בפעם הבאה', () => {
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const src = srv.slice(srv.indexOf('const clientBankKey ='), srv.indexOf('// GET /api/client-bank'));
+  const f = new Function(`${src}\nreturn { clientBankKey, rememberClientBank };`)();
+  const pay = [{ type: 4, price: 100, bankName: 'מזרחי', bankBranch: '550', bankAccount: '345488' }];
+
+  const db = {};
+  if (!f.rememberClientBank(db, 'co_moshe', { id: 'c1', name: 'מועצה' }, pay)) throw new Error('לא נשמר');
+  const saved = db.clientBank.co_moshe['id:c1'];
+  if (saved.bankAccount !== '345488' || saved.bankBranch !== '550') throw new Error('נשמר חלקית: ' + JSON.stringify(saved));
+  // מזהה קודם לשם, כדי ששינוי שם לקוח לא ינתק את ההיסטוריה
+  if (f.clientBankKey({ id: 'c1', name: 'אחר' }) !== 'id:c1') throw new Error('השם גובר על המזהה');
+  if (f.clientBankKey({ name: 'רק שם' }) !== 'nm:רק שם') throw new Error('נפילה לשם לא עובדת');
+  if (f.clientBankKey({}) !== null) throw new Error('לקוח ריק קיבל מפתח');
+
+  // רק העברה בנקאית וצ'ק, ורק כשיש פרטים
+  if (f.rememberClientBank({}, 'c', { id: 'x' }, [{ type: 1, price: 5 }])) throw new Error('מזומן נשמר');
+  if (f.rememberClientBank({}, 'c', { id: 'x' }, [{ type: 4, price: 5 }])) throw new Error('תקבול בלי פרטים נשמר');
+  if (f.rememberClientBank({}, 'c', { id: 'x' }, null)) throw new Error('בלי תקבולים נשמר');
+
+  // בידוד בין חברות
+  const db2 = {};
+  f.rememberClientBank(db2, 'co_bpm', { id: 'c1' }, pay);
+  if (db2.clientBank.co_moshe) throw new Error('נשמר לחברה הלא נכונה');
+
+  // השמירה מופעלת בכל מסלול שמקבל תקבולים
+  const calls = (srv.match(/rememberClientBank\(_d/g) || []).length;
+  if (calls < 4) throw new Error('רק ' + calls + ' מסלולי הפקה שומרים פרטי בנק');
+
+  // ההצעה ממלאת רק שדות ריקים — מה שהוזן ידנית גובר
+  const fill = app.slice(app.indexOf('// פרטי הבנק האחרונים של הלקוח'), app.indexOf('if (opts.bankReceived != null)'));
+  if (!/!String\(pay\[k\] \|\| ''\)\.trim\(\)/.test(fill)) throw new Error('ההצעה דורסת ערכים שהוזנו');
+  if (!/\[2, 4\]\.includes\(Number\(pay\.type\)\)/.test(fill)) throw new Error('ההצעה חלה גם על סוגי תקבול שאינם בנק');
+  if (!/bankSuggested/.test(app)) throw new Error('אין חיווי שהפרטים הושלמו אוטומטית');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
