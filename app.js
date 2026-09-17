@@ -8051,32 +8051,87 @@ window.bDocUpSave = async (btn) => {
   await boardReloadInto(u.evId);
 };
 
+// שיוך מסמך ספק להוצאה קיימת. קודם הרשימה סוננה לפי שם הספק ולפי סוגי המסמך
+// המותרים, בלי חיפוש ובלי הסבר — ומסמך שנרשם בשם מעט שונה, או בסוג שאינו
+// מתאים לסוג העוסק, פשוט "לא נמצא". כאן מוצג הכול, עם סימון מה מותר ולמה.
+let _bdl = null;
 window.bDocLink = async (evId, idx) => {
-  const st = document.getElementById('bDocStatus' + idx);
-  if (st) st.innerHTML = '<span class="muted">טוען הוצאות…</span>';
-  const r = await api(`/api/event-board/${evId}/row/${idx}/candidates`).catch(() => ({ error: 'שגיאת רשת' }));
-  if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
-  if (!(r.items || []).length) {
-    if (st) st.innerHTML = '<span class="muted">לא נמצאו הוצאות מתאימות לספק הזה. אפשר להעלות קובץ.</span>';
-    return;
-  }
-  const opts = r.items.map(p => `<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;padding:5px 7px;border-top:1px solid var(--line)">
-      <input type="radio" name="bdocpick" value="${p.id}"/>
-      <span style="flex:1">${escapeHtml(SUP_DOC_NAMES[p.documentType] || '')}${p.number ? ' #' + escapeHtml(String(p.number)) : ''} · ${escapeHtml(p.supplierName || '')}</span>
-      <span class="muted" style="white-space:nowrap">${p.date ? ddmy(p.date) : ''}</span>
-      <span style="white-space:nowrap;font-weight:600">${money(p.amount)}</span></label>`).join('');
-  if (st) st.innerHTML = `<div style="border:1px solid var(--line);border-radius:8px;margin-top:4px">${opts}</div>
-    <div style="margin-top:6px"><button class="btn primary" style="padding:2px 10px;font-size:11.5px" onclick="bDocLinkConfirm('${evId}',${idx})">שייך</button></div>`;
+  const row = bvRow(idx);
+  _bdl = { evId, idx, q: '', items: null, supplier: row.name || '', allowed: supDocTypes(row), vatExempt: !!row.vatExempt };
+  renderBdLink();
+  await bdLinkFetch();
 };
-window.bDocLinkConfirm = async (evId, idx) => {
-  const sel = document.querySelector('input[name="bdocpick"]:checked');
-  const st = document.getElementById('bDocStatus' + idx);
-  if (!sel) { if (st) st.innerHTML = '<span style="color:var(--danger)">לא נבחר מסמך.</span>'; return; }
-  // הסוג נקבע מההוצאה עצמה בשרת — אין צורך ואין טעם לשלוח אותו מכאן
-  const r = await fetch(`/api/event-board/${evId}/row/${idx}/doc`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+let _bdlT = null;
+window.bdLinkSearch = (v) => {
+  if (!_bdl) return;
+  _bdl.q = v; renderBdLink();
+  clearTimeout(_bdlT); _bdlT = setTimeout(() => bdLinkFetch(), 280);
+};
+window.bdLinkAll = () => { if (!_bdl) { return; } _bdl.supplier = ''; bdLinkFetch(); };
+async function bdLinkFetch() {
+  const st = _bdl; if (!st) return;
+  const q = (st.q || '').trim();
+  st.loading = true; renderBdLink();
+  const r = await api(`/api/event-board/expenses?supplier=${encodeURIComponent(q ? '' : (st.supplier || ''))}&q=${encodeURIComponent(q)}`)
+    .catch(() => ({ error: 'שגיאת רשת' }));
+  if (_bdl !== st) return;
+  st.items = (r && r.items) || []; st.total = r && r.totalForCompany; st.err = r && r.error; st.loading = false;
+  renderBdLink();
+}
+function renderBdLink() {
+  const st = _bdl; if (!st) return;
+  let m = document.getElementById('bdLinkModal');
+  if (!m) { m = document.createElement('div'); m.id = 'bdLinkModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.style.zIndex = topZ(330, m);
+  m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  const q = (st.q || '').trim();
+  const list = st.items || [];
+  const ok = (x) => st.allowed.includes(Number(x.documentType));
+  const allowedTxt = st.allowed.map(t => SUP_DOC_NAMES[t]).join(' / ');
+  const body = (st.items === null || st.loading)
+    ? '<div class="empty">טוען הוצאות…</div>'
+    : (!list.length
+      ? `<div class="empty">${q ? `לא נמצאה הוצאה שתואמת "${escapeHtml(q)}".` : `לא נמצאו הוצאות של ${escapeHtml(st.supplier || 'הספק')}. נסה חיפוש או הצג את כל הספקים.`}</div>`
+      : `<div style="max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:8px">
+        ${list.map(x => `<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:7px 9px;border-top:1px solid var(--line);${ok(x) ? '' : 'opacity:.55'}">
+          <input type="radio" name="bdlpick" value="${escAttr(x.id)}" ${ok(x) ? '' : 'disabled'}/>
+          <span style="flex:1;min-width:0"><b>${escapeHtml(x.supplierName || '—')}</b>
+            <span class="muted">· ${escapeHtml(SUP_DOC_NAMES[x.documentType] || 'מסמך')}${x.number ? ' #' + escapeHtml(String(x.number)) : ''}${x.date ? ' · ' + ddmy(x.date) : ''}</span>
+            ${ok(x) ? '' : `<div style="font-size:11px;color:var(--warn)">סוג שאינו מתאים ל${st.vatExempt ? 'עוסק פטור' : 'עוסק מורשה'} — מותר: ${escapeHtml(allowedTxt)}</div>`}</span>
+          ${x.linked ? '<span class="tag" style="background:#fff4e5;color:#a15c00;font-size:10px;white-space:nowrap">כבר משויך</span>' : ''}
+          ${x.hasFile ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33;font-size:10px">קובץ</span>' : ''}
+          <span style="white-space:nowrap;font-weight:600">${money(x.amount)}</span></label>`).join('')}
+      </div>`);
+  m.innerHTML = `<div class="modal-card" style="width:min(680px,95vw)">
+    <h3 style="margin:0 0 3px">🔗 שיוך מהוצאות המערכת</h3>
+    <div class="muted" style="font-size:12.5px;margin-bottom:9px">${escapeHtml(st.supplier || 'כל הספקים')} · ${st.vatExempt ? 'עוסק פטור' : 'עוסק מורשה'} — ניתן לשייך ${escapeHtml(allowedTxt)}${q ? ` · חיפוש בכל ${st.total != null ? st.total + ' ' : ''}ההוצאות` : ''}${list.length ? ` · ${list.length} תוצאות` : ''}</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input id="bdlQ" value="${escAttr(st.q)}" oninput="bdLinkSearch(this.value)" placeholder="חיפוש בכל ההוצאות — ספק, מספר, תיאור, תאריך או סכום" style="flex:1;padding:6px 9px"/>
+      ${st.supplier ? '<button class="btn ghost" style="padding:4px 11px;font-size:12px;white-space:nowrap" onclick="bdLinkAll()">כל הספקים</button>' : ''}
+    </div>
+    ${st.err ? `<div class="warn-banner">${escapeHtml(String(st.err))}</div>` : body}
+    <div id="bdlStatus" style="font-size:12px;min-height:15px;margin-top:5px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="document.getElementById('bdLinkModal').classList.add('hidden')">ביטול</button>
+      <button class="btn ghost" onclick="document.getElementById('bdLinkModal').classList.add('hidden');bDocUpload('${st.evId}',${st.idx})">📎 העלאת קובץ במקום</button>
+      <button class="btn primary" onclick="bdLinkConfirm()">שייך</button>
+    </div>
+  </div>`;
+  const inp = document.getElementById('bdlQ');
+  if (inp && st.q) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+}
+window.bdLinkConfirm = async () => {
+  const st = _bdl; if (!st) return;
+  const sel = document.querySelector('input[name="bdlpick"]:checked');
+  const sb = document.getElementById('bdlStatus');
+  if (!sel) { if (sb) sb.innerHTML = '<span style="color:var(--danger)">לא נבחר מסמך.</span>'; return; }
+  if (sb) sb.innerHTML = '<span class="muted">משייך…</span>';
+  const r = await fetch(`/api/event-board/${st.evId}/row/${st.idx}/doc`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ payableId: sel.value }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
-  if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
-  await boardReloadInto(evId);
+  if (!r || r.error) { if (sb) sb.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  document.getElementById('bdLinkModal').classList.add('hidden');
+  await boardReloadInto(st.evId);
 };
 function bvRow(idx) {
   const ev = _bvEvent; if (!ev) return {};

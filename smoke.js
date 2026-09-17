@@ -2828,6 +2828,24 @@ check('חיפוש הוצאות — רץ בשרת על כל הרשומות, לא 
   return true;
 });
 
+check('שיוך מסמך ספק — מציג הכול עם סיבה, ולא "לא נמצאו הוצאות"', () => {
+  // הרשימה סוננה לפי שם הספק ולפי סוגי המסמך המותרים, בלי חיפוש ובלי הסבר.
+  // מסמך בסוג שאינו מתאים לסוג העוסק פשוט "לא נמצא", ולא היה רמז למה.
+  const src = app.slice(app.indexOf('window.bDocLink = async'), app.indexOf('window.bdLinkConfirm'));
+  if (!/api\(`\/api\/event-board\/expenses\?/.test(src)) throw new Error('אינו משתמש בראוט עם החיפוש');
+  if (!/bdLinkSearch/.test(src)) throw new Error('אין חיפוש');
+  if (!/setTimeout\(\(\) => bdLinkFetch\(\), 280\)/.test(src)) throw new Error('החיפוש בלי השהיה');
+  // מסמך שאינו מתאים מוצג ומנוטרל, עם הסבר — במקום להיעלם
+  if (!/סוג שאינו מתאים ל/.test(src)) throw new Error('אין הסבר למסמך שאינו מתאים');
+  if (!/\$\{ok\(x\) \? '' : 'disabled'\}/.test(src)) throw new Error('מסמך שאינו מתאים אינו מנוטרל');
+  if (!/ניתן לשייך/.test(src)) throw new Error('לא מוצג אילו סוגים מותרים');
+  // מוצע גם מוצא: העלאת קובץ
+  if (!/bDocUpload\(/.test(src)) throw new Error('אין מוצא כשאין מסמך מתאים');
+  // ומיקוד החיפוש נשמר
+  if (!/inp\.focus\(\)/.test(src)) throw new Error('המיקוד אובד וההקלדה נקטעת');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
