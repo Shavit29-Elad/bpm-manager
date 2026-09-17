@@ -7427,6 +7427,15 @@ async function renderEventsBoard(c) {
   renderBoardSelBar();
 }
 
+// שני כפתורי הפעולה על הבחירה, בכותרת כל חודש. אותו תנאי בדיוק כמו בסרגל,
+// כי שניהם נגזרים מ-boardSelState.
+function boardSelBtns() {
+  const st = boardSelState();
+  const b = (label, act, ok, why) => `<button class="btn ghost" style="padding:2px 10px;font-size:12px;margin-inline-start:4px;vertical-align:middle${ok ? '' : ';opacity:.45'}" ${ok ? `onclick="${act}"` : 'disabled'} title="${escAttr(ok ? `${st.n} אירועים נבחרו` : why)}">${label}${ok ? ` (${st.n})` : ''}</button>`;
+  return b('📄 דוח לנבחרים', 'boardSelectedReport(this)', st.canReport, st.why)
+    + b('🧾 מסמך משותף', 'boardIssueMulti(this)', st.canMerge, st.why);
+}
+
 function boardMonthPanel(m) {
   const rows = m.events.map(ev => {
     const t = ev.totals || {};
@@ -7449,7 +7458,7 @@ function boardMonthPanel(m) {
     <div class="row-between" style="margin-bottom:8px">
       <h3 style="margin:0">${bMonthName(m.month)}
         <button class="btn ghost" style="padding:2px 10px;font-size:12px;margin-inline-start:8px;vertical-align:middle" onclick="boardMonthReport('${m.month}',this)">📄 דוח חודשי</button>
-        <button class="btn ghost" style="padding:2px 10px;font-size:12px;margin-inline-start:4px;vertical-align:middle${_boardSel.size >= 2 ? '' : ';opacity:.45'}" onclick="boardSelectedReport(this)" ${_boardSel.size >= 2 ? '' : 'disabled'} title="${_boardSel.size >= 2 ? `דוח על ${_boardSel.size} האירועים שסימנת` : 'סמן שני אירועים או יותר בתיבות הסימון'}">📄 דוח לנבחרים${_boardSel.size >= 2 ? ` (${_boardSel.size})` : ''}</button></h3>
+        ${boardSelBtns()}</h3>
       <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">
         <span>מחיר ללקוח: <b>${money(m.clientPriceEx || 0)}</b></span>
         ${m.commissionEx ? `<span>עמלה: <b style="color:var(--warn)">−${money(m.commissionEx)}</b></span>` : ''}
@@ -7470,6 +7479,22 @@ window.boardSetYear = (y) => { _boardYear = y; _boardSel.clear(); renderEventsBo
 // מסמך אחד יכול לכסות כמה אירועים של אותו לקוח. שורה לכל אירוע, כדי שהלקוח
 // יראה על מה הוא משלם, והמסמך נקשר לכל האירועים — אחרת חלקם יישארו כלא מחויבים.
 let _boardSel = new Set();
+// מצב הבחירה — נגזר במקום אחד ומשמש גם את הסרגל העליון וגם את כותרות החודשים,
+// כדי ששני המקומות לא יציגו תנאים שונים לאותה פעולה.
+function boardSelState() {
+  const evs = boardSelEvents();
+  const names = [...new Set(evs.map(e => (e.clientName || '').trim()))];
+  const sameClient = names.length === 1 && !!names[0];
+  return {
+    n: evs.length, evs, names, sameClient,
+    clientName: sameClient ? names[0] : '',
+    total: evs.reduce((a, e) => a + (Number((e.totals || {}).incomeEx) || 0), 0),
+    canMerge: evs.length >= 2 && sameClient,
+    canReport: evs.length >= 2,
+    why: evs.length < 2 ? 'סמן שני אירועים או יותר בתיבות הסימון'
+      : (!sameClient ? `אי אפשר לאחד — לקוחות שונים (${names.filter(Boolean).join(', ') || 'ללא לקוח'})` : ''),
+  };
+}
 const boardSelEvents = () => {
   const out = [];
   for (const m of ((_board && _board.months) || [])) for (const e of m.events) if (_boardSel.has(e.id)) out.push(e);
@@ -7483,21 +7508,16 @@ window.boardToggleSel = (id, on) => {
 window.boardClearSel = () => { _boardSel.clear(); renderEventsBoard($('#content')); };
 function renderBoardSelBar() {
   const box = document.getElementById('boardSelBar'); if (!box) return;
-  const evs = boardSelEvents();
-  if (evs.length < 2) { box.innerHTML = ''; return; }
-  const names = [...new Set(evs.map(e => (e.clientName || '').trim()))];
-  const same = names.length === 1 && names[0];
-  const total = evs.reduce((a, e) => a + (Number((e.totals || {}).incomeEx) || 0), 0);
+  const st = boardSelState();
+  if (st.n < 2) { box.innerHTML = ''; return; }
   box.innerHTML = `<div class="panel" style="position:sticky;top:6px;z-index:30;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 13px;border:1px solid var(--accent)">
-    <b style="font-size:13.5px">${evs.length} אירועים נבחרו</b>
-    ${same
-      ? `<span class="muted" style="font-size:12.5px">${escapeHtml(names[0])} · סה״כ ${money(total)} ללא מע״מ</span>
-         <span style="flex:1"></span>
-         <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="boardSelectedReport(this)">📄 דוח לנבחרים</button>
-         <button class="btn primary" style="padding:4px 12px;font-size:12.5px" onclick="boardIssueMulti(this)">🧾 הפקת מסמך משותף</button>`
-      : `<span style="color:var(--danger);font-size:12.5px">אי אפשר לאחד חשבונית — האירועים שייכים ללקוחות שונים (${escapeHtml(names.filter(Boolean).join(', ') || 'ללא לקוח')})</span>
-         <span style="flex:1"></span>
-         <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="boardSelectedReport(this)">📄 דוח לנבחרים</button>`}
+    <b style="font-size:13.5px">${st.n} אירועים נבחרו</b>
+    ${st.sameClient
+      ? `<span class="muted" style="font-size:12.5px">${escapeHtml(st.clientName)} · סה״כ ${money(st.total)} ללא מע״מ</span>`
+      : `<span style="color:var(--danger);font-size:12.5px">${escapeHtml(st.why)}</span>`}
+    <span style="flex:1"></span>
+    <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="boardSelectedReport(this)">📄 דוח לנבחרים</button>
+    ${st.canMerge ? `<button class="btn primary" style="padding:4px 12px;font-size:12.5px" onclick="boardIssueMulti(this)">🧾 הפקת מסמך משותף</button>` : ''}
     <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="boardClearSel()">נקה בחירה</button>
   </div>`;
 }

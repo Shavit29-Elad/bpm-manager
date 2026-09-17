@@ -2759,9 +2759,48 @@ check('השלמת שורה מהוצאות המערכת — ספק, סכום וש
   if (!/a\.linked === b\.linked/.test(route)) throw new Error('מה שלא שויך אינו מופיע ראשון');
 
   // כפתור הדוח לנבחרים קיים בכותרת כל חודש
-  const mp = app.slice(app.indexOf('function boardMonthPanel'), app.indexOf('window.boardSetYear'));
+  const mp = app.slice(app.indexOf('function boardSelBtns'), app.indexOf('window.boardSetYear'));
   if (!/boardSelectedReport\(this\)/.test(mp)) throw new Error('אין כפתור דוח לנבחרים בכותרת החודש');
-  if (!/_boardSel\.size >= 2 \? '' : 'disabled'/.test(mp)) throw new Error('הכפתור אינו מנוטרל בלי בחירה');
+  if (!/boardIssueMulti\(this\)/.test(mp)) throw new Error('אין כפתור מסמך משותף בכותרת החודש');
+  if (!/boardSelBtns\(\)/.test(app.slice(app.indexOf('function boardMonthPanel'), app.indexOf('window.boardSetYear'))))
+    throw new Error('הכפתורים אינם מוצגים בכותרת החודש');
+  return true;
+});
+
+check('פעולות הבחירה — אותו תנאי בסרגל ובכותרות החודשים', () => {
+  // שני מקומות שמציעים את אותה פעולה חייבים להיגזר מאותו מצב, אחרת אחד יאפשר
+  // מה שהשני חוסם.
+  const src = app.slice(app.indexOf('function boardSelState()'), app.indexOf('window.boardToggleSel'));
+  const st = new Function('months', 'sel', `
+    let _board = { months };
+    let _boardSel = new Set(sel);
+    ${src}
+    return boardSelState();`);
+  const months = [{ month: '2026-10', events: [
+    { id: 'a', clientName: 'לקוח א', totals: { incomeEx: 1000 } },
+    { id: 'b', clientName: 'לקוח א', totals: { incomeEx: 2000 } },
+    { id: 'c', clientName: 'לקוח ב', totals: { incomeEx: 500 } },
+  ] }];
+  const one = st(months, ['a']);
+  if (one.canReport || one.canMerge) throw new Error('אירוע בודד מאפשר פעולה');
+  if (!/סמן שני אירועים/.test(one.why)) throw new Error('אין הסבר לאירוע בודד');
+
+  const same = st(months, ['a', 'b']);
+  if (!same.canMerge || !same.canReport) throw new Error('אותו לקוח — שתי הפעולות אמורות להיות פתוחות');
+  if (same.total !== 3000 || same.clientName !== 'לקוח א') throw new Error('סיכום שגוי: ' + JSON.stringify(same));
+
+  const diff = st(months, ['a', 'c']);
+  if (diff.canMerge) throw new Error('לקוחות שונים — איחוד אמור להיחסם');
+  if (!diff.canReport) throw new Error('לקוחות שונים — דוח עדיין אמור להיות אפשרי');
+  if (!/לקוחות שונים/.test(diff.why)) throw new Error('אין הסבר ללקוחות שונים');
+
+  // שני המקומות נשענים על אותה פונקציה
+  const bar = app.slice(app.indexOf('function renderBoardSelBar'), app.indexOf('window.boardIssueMulti'));
+  const btns = app.slice(app.indexOf('function boardSelBtns'), app.indexOf('function boardMonthPanel'));
+  for (const [blk, what] of [[bar, 'הסרגל'], [btns, 'כותרת החודש']]) {
+    if (!/boardSelState\(\)/.test(blk)) throw new Error(what + ' אינו נגזר מהמצב המשותף');
+  }
+  if (/names\.length === 1/.test(bar)) throw new Error('הסרגל מחשב את התנאי בעצמו');
   return true;
 });
 
