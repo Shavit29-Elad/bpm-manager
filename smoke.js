@@ -2639,7 +2639,7 @@ check('דוחות לוח האירועים — לאירוע ולחודש, נבנ�
     const MONTHS_FULL=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
     const bMonthName=(k)=>{const [y,m]=String(k).split('-');return MONTHS_FULL[(+m)-1]+' '+y;};
   `;
-  const fns = new Function(`${stubs}\n${src}\nreturn { boardEventReportHtml, boardMonthReportHtml };`)();
+  const fns = new Function(`${stubs}\n${src}\nreturn { boardEventReportHtml, boardMonthReportHtml, boardGroupReportHtml };`)();
   const ev = { id: 'e1', date: '2026-10-08', artist: 'בת מצווה', location: 'האחוזה', clientName: 'לקוח', notes: 'הערה',
     linkedDocs: [{ id: 'd1', number: 40468, type: 300 }],
     rows: [{ role: 'קלידן', name: 'דני', priceExVat: 1500, ex: 1500, inc: 1770, paid: false, note: 'מקדמה',
@@ -2667,8 +2667,20 @@ check('דוחות לוח האירועים — לאירוע ולחודש, נבנ�
   if (!/1,770/.test(rep)) throw new Error('סכום הספק אינו מופיע');
   if (!/✓ שולם/.test(rep)) throw new Error('ספק ששולם אינו מסומן');
   // חודש ריק אינו מפיל את הדוח
-  const empty = fns.boardMonthReportHtml({ month: '2026-11', clientPriceEx: 0, commissionEx: 0, incomeEx: 0, expenseEx: 0, profitEx: 0, events: [] });
+  const empty = fns.boardMonthReportHtml({ month: '2026-11', events: [] });
   if (!/אין ספקים בחודש זה/.test(empty)) throw new Error('חודש ריק אינו מטופל');
+
+  // דוח לאירועים שנבחרו — אותו מקור, ולכן אותם מספרים
+  const two = { ...ev, id: 'e2', artist: 'חתונה', totals: { ...ev.totals, clientPriceEx: 10000, commissionEx: 1500, incomeEx: 8500, expenseEx: 900, profitEx: 7600 } };
+  const grp = fns.boardGroupReportHtml('דוח אירועים נבחרים', '2 אירועים', [ev, two]);
+  if (!/דוח אירועים נבחרים/.test(grp)) throw new Error('כותרת הדוח הקבוצתי שגויה');
+  if (!/30,000/.test(grp)) throw new Error('המחיר אינו מסוכם על פני האירועים');   // 20000 + 10000
+  if (!/25,500/.test(grp)) throw new Error('התשלום אינו מסוכם');                   // 17000 + 8500
+  if (!/21,900/.test(grp)) throw new Error('הרווח אינו מסוכם');                    // 14300 + 7600
+  if (!/חתונה/.test(grp) || !/בת מצווה/.test(grp)) throw new Error('לא כל האירועים בטבלה');
+  // הסיכומים נגזרים מהאירועים, ולכן דוח חודשי על אותם אירועים זהה
+  const asMonth = fns.boardMonthReportHtml({ month: '2026-10', events: [ev, two] });
+  for (const n of ['30,000', '25,500', '21,900']) if (!asMonth.includes(n)) throw new Error('דוח חודשי ודוח נבחרים התפצלו: ' + n);
   return true;
 });
 

@@ -7492,9 +7492,11 @@ function renderBoardSelBar() {
     ${same
       ? `<span class="muted" style="font-size:12.5px">${escapeHtml(names[0])} · סה״כ ${money(total)} ללא מע״מ</span>
          <span style="flex:1"></span>
+         <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="boardSelectedReport(this)">📄 דוח לנבחרים</button>
          <button class="btn primary" style="padding:4px 12px;font-size:12.5px" onclick="boardIssueMulti(this)">🧾 הפקת מסמך משותף</button>`
-      : `<span style="color:var(--danger);font-size:12.5px">אי אפשר לאחד — האירועים שייכים ללקוחות שונים (${escapeHtml(names.filter(Boolean).join(', ') || 'ללא לקוח')})</span>
-         <span style="flex:1"></span>`}
+      : `<span style="color:var(--danger);font-size:12.5px">אי אפשר לאחד חשבונית — האירועים שייכים ללקוחות שונים (${escapeHtml(names.filter(Boolean).join(', ') || 'ללא לקוח')})</span>
+         <span style="flex:1"></span>
+         <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="boardSelectedReport(this)">📄 דוח לנבחרים</button>`}
     <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="boardClearSel()">נקה בחירה</button>
   </div>`;
 }
@@ -8021,7 +8023,16 @@ function boardEventReportHtml(ev) {
 }
 
 function boardMonthReportHtml(m) {
-  const evs = m.events || [];
+  return boardGroupReportHtml('דוח חודשי — ' + bMonthName(m.month), `${(m.events || []).length} אירועים`, m.events || []);
+}
+
+// דוח קבוצתי — משמש גם לחודש שלם וגם לאירועים שנבחרו. הסיכומים נגזרים
+// מהאירועים עצמם ולא מסיכום שהוכן מראש, כדי ששני המסלולים לא יתפצלו.
+function boardGroupReportHtml(title, sub, events) {
+  const evs = events || [];
+  const sum = (f) => Math.round(evs.reduce((a, e) => a + (Number(f(e.totals || {})) || 0), 0) * 100) / 100;
+  const m = { clientPriceEx: sum(t => t.clientPriceEx), commissionEx: sum(t => t.commissionEx),
+    incomeEx: sum(t => t.incomeEx), expenseEx: sum(t => t.expenseEx), profitEx: sum(t => t.profitEx) };
   const rows = evs.map(ev => {
     const t = ev.totals || {};
     return `<tr>
@@ -8049,7 +8060,7 @@ function boardMonthReportHtml(m) {
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(g.ex)}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(g.inc)}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:${g.open ? '#b45309' : '#0a7d33'}">${g.open ? _repMoney(g.open) : '✓ שולם'}</td></tr>`).join('');
-  return `${_repHead('דוח חודשי — ' + bMonthName(m.month), `${evs.length} אירועים`)}
+  return `${_repHead(title, sub)}
     <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">
       ${_repRow('מחיר ללקוח (ללא מע״מ)', _repMoney(m.clientPriceEx))}
       ${m.commissionEx ? _repRow('סה״כ עמלות', '−' + _repMoney(m.commissionEx), { color: '#b45309' }) : ''}
@@ -8094,6 +8105,16 @@ async function _boardPdf(html, filename, btn) {
 window.boardEventReport = (id, btn) => {
   const ev = boardFind(id); if (!ev) return;
   _boardPdf(boardEventReportHtml(ev), `דוח אירוע - ${(ev.artist || 'אירוע').replace(/[\\/:*?"<>|]/g, '-')} - ${ddmy(ev.date)}.pdf`, btn);
+};
+window.boardSelectedReport = (btn) => {
+  const evs = boardSelEvents();
+  if (evs.length < 2) return;
+  const sorted = evs.slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const names = [...new Set(sorted.map(e => (e.clientName || '').trim()).filter(Boolean))];
+  const sub = `${sorted.length} אירועים · ${ddmy(sorted[0].date)}–${ddmy(sorted[sorted.length - 1].date)}`
+    + (names.length === 1 ? ` · ${names[0]}` : '');
+  _boardPdf(boardGroupReportHtml('דוח אירועים נבחרים', sub, sorted),
+    `דוח אירועים נבחרים - ${ddmy(sorted[0].date)}.pdf`, btn);
 };
 window.boardMonthReport = (month, btn) => {
   const m = ((_board && _board.months) || []).find(x => x.month === month); if (!m) return;
