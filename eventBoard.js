@@ -232,6 +232,9 @@ export function normalizeRows(rows, prev = []) {
       note: String((r && r.note) || '').trim(),
       amount: t.inc,                      // הסכום שמשולם בפועל — עליו עובד מעקב הספקים
       supplierId: (r && r.supplierId) || old.supplierId || null,
+      // שיוך להוצאה קיימת שנבחרה בעריכה. ריק אינו מנתק שיוך שכבר קיים.
+      paidPayableId: (r && r.payableId) ? String(r.payableId) : (old.paidPayableId || null),
+      paidInvoice: (r && r.payableNumber != null && String(r.payableNumber) !== '') ? String(r.payableNumber) : (old.paidInvoice || null),
       docs: Array.isArray(old.docs) ? old.docs : [],   // מסמכי הספק — נשמרים בעריכה
 
     });

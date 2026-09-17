@@ -2731,6 +2731,40 @@ check('איחוד אירועים לחשבונית אחת — אותו לקוח �
   return true;
 });
 
+check('השלמת שורה מהוצאות המערכת — ספק, סכום ושיוך', () => {
+  // הסכומים הוזנו ידנית גם כשההוצאה כבר קיימת במערכת, ואז אותו מספר הוקלד
+  // פעמיים ויכול להיות שונה בשני המקומות.
+  const src = app.slice(app.indexOf('window.bdPickConfirm ='), app.indexOf('window.bdPickConfirm =') + 1400);
+  if (!/amountExcludeVat/.test(src)) throw new Error('הסכום אינו נלקח ללא מע״מ');
+  if (!/row\.payableId = x\.id/.test(src)) throw new Error('ההוצאה אינה מקושרת לשורה');
+  // הוצאה בלי הפרדת מע"מ = עוסק פטור
+  if (!/row\.vatExempt = true/.test(src)) throw new Error('הוצאה בלי מע״מ אינה מסומנת כפטור');
+
+  // הנרמול בשרת שומר את השיוך ואינו מנתק קיים כשלא נשלח
+  const eb = fs.readFileSync('eventBoard.js', 'utf8');
+  const nr = eb.slice(eb.indexOf('export function normalizeRows'), eb.length);
+  if (!/paidPayableId: \(r && r\.payableId\) \? String\(r\.payableId\) : \(old\.paidPayableId \|\| null\)/.test(nr))
+    throw new Error('השיוך אינו נשמר, או שריק מנתק שיוך קיים');
+  const prev = [{ role: 'סאונדמן', name: 'א', priceExVat: 100, paidPayableId: 'pay_old' }];
+  const keep = boardMod.normalizeRows([{ role: 'סאונדמן', name: 'א', priceExVat: 120 }], prev);
+  if (keep[0].paidPayableId !== 'pay_old') throw new Error('עריכה בלי בחירה ניתקה שיוך קיים');
+  const set = boardMod.normalizeRows([{ role: 'סאונדמן', name: 'א', priceExVat: 120, payableId: 'pay_new', payableNumber: '77' }], prev);
+  if (set[0].paidPayableId !== 'pay_new' || set[0].paidInvoice !== '77') throw new Error('בחירה חדשה לא נשמרה');
+
+  // הראוט מסנן לפי חברה ומסמן מה כבר משויך
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const route = srv.slice(srv.indexOf("add('GET', /^\\/api\\/event-board\\/expenses$/"), srv.indexOf("// POST /api/event-board —"));
+  if (!/\(p\.companyId \|\| giCompanyId\(\)\) === cid/.test(route)) throw new Error('אין סינון לפי חברה');
+  if (!/linked: used\.has/.test(route)) throw new Error('אין סימון להוצאה שכבר שויכה');
+  if (!/a\.linked === b\.linked/.test(route)) throw new Error('מה שלא שויך אינו מופיע ראשון');
+
+  // כפתור הדוח לנבחרים קיים בכותרת כל חודש
+  const mp = app.slice(app.indexOf('function boardMonthPanel'), app.indexOf('window.boardSetYear'));
+  if (!/boardSelectedReport\(this\)/.test(mp)) throw new Error('אין כפתור דוח לנבחרים בכותרת החודש');
+  if (!/_boardSel\.size >= 2 \? '' : 'disabled'/.test(mp)) throw new Error('הכפתור אינו מנוטרל בלי בחירה');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

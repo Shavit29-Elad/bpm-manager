@@ -324,6 +324,36 @@ add('GET', /^\/api\/event-board$/, (req, res, _p, q) => {
   json(res, { ok: true, year, years, roles: eventBoard.BOARD_ROLES, vatRate: eventBoard.VAT_RATE, ...out });
 });
 
+// GET /api/event-board/expenses?supplier=&q= — הוצאות ספק קיימות במערכת,
+// להשלמת שורה בלוח. מסודרות כך שמה שעדיין לא שויך לשום אירוע מופיע ראשון.
+add('GET', /^\/api\/event-board\/expenses$/, (req, res, _p, q) => {
+  const db = load(), cid = reqCompany(q);
+  const norm = (x) => String(x || '').replace(/בע["\'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
+  const want = norm(q.supplier);
+  const term = String(q.q || '').trim().toLowerCase();
+  // אילו הוצאות כבר משויכות לשורת אירוע כלשהי
+  const used = new Set();
+  for (const e of (db.events || [])) {
+    if (!ownedBy(e, cid)) continue;
+    for (const c of (e.contractorDetails || [])) {
+      if (c && c.paidPayableId) used.add(String(c.paidPayableId));
+      for (const d of ((c && c.docs) || [])) if (d && d.payableId) used.add(String(d.payableId));
+    }
+  }
+  const items = (db.supplierPayables || [])
+    .filter(p => (p.companyId || giCompanyId()) === cid)
+    .filter(p => !want || norm(p.supplierName).includes(want) || want.includes(norm(p.supplierName)))
+    .filter(p => !term || [p.supplierName, p.number, p.description].some(x => String(x || '').toLowerCase().includes(term)))
+    .map(p => ({ id: p.id, supplierName: p.supplierName || '', number: p.number || null, date: p.date || null,
+      documentType: eventBoard.normDocType(p.documentType),
+      amount: Number(p.amount) || 0, amountExcludeVat: Number(p.amountExcludeVat) || 0,
+      description: p.description || '', paid: !!p.paid,
+      hasFile: !!(p.localFileId || p.giExpenseId || p.draftId), linked: used.has(String(p.id)) }))
+    .sort((a, b) => (a.linked === b.linked ? String(b.date || '').localeCompare(String(a.date || '')) : (a.linked ? 1 : -1)))
+    .slice(0, 80);
+  json(res, { ok: true, names: eventBoard.SUP_DOC_NAMES, items });
+});
+
 // POST /api/event-board — יצירה או עדכון של אירוע בלוח.
 // השורות נשמרות ב-contractorDetails, אותו מבנה שבו משתמשים מסך הספקים
 // והתאמות הבנק, כדי ששורה שנוספת כאן תיכנס למעקב התשלומים הקיים.
