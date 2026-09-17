@@ -340,18 +340,22 @@ add('GET', /^\/api\/event-board\/expenses$/, (req, res, _p, q) => {
       for (const d of ((c && c.docs) || [])) if (d && d.payableId) used.add(String(d.payableId));
     }
   }
+  // כשמחפשים — החיפוש גובר על סינון הספק. אחרת אי אפשר להגיע למסמך שנרשם
+  // תחת שם ספק מעט שונה, וזו בדיוק הסיבה לחפש. גם התקרה עולה בחיפוש.
   const items = (db.supplierPayables || [])
     .filter(p => (p.companyId || giCompanyId()) === cid)
-    .filter(p => !want || norm(p.supplierName).includes(want) || want.includes(norm(p.supplierName)))
-    .filter(p => !term || [p.supplierName, p.number, p.description].some(x => String(x || '').toLowerCase().includes(term)))
+    .filter(p => term ? true : (!want || norm(p.supplierName).includes(want) || want.includes(norm(p.supplierName))))
+    .filter(p => !term || [p.supplierName, p.number, p.description, p.date, String(p.amount)]
+      .some(x => String(x || '').toLowerCase().includes(term)))
     .map(p => ({ id: p.id, supplierName: p.supplierName || '', number: p.number || null, date: p.date || null,
       documentType: eventBoard.normDocType(p.documentType),
       amount: Number(p.amount) || 0, amountExcludeVat: Number(p.amountExcludeVat) || 0,
       description: p.description || '', paid: !!p.paid,
       hasFile: !!(p.localFileId || p.giExpenseId || p.draftId), linked: used.has(String(p.id)) }))
     .sort((a, b) => (a.linked === b.linked ? String(b.date || '').localeCompare(String(a.date || '')) : (a.linked ? 1 : -1)))
-    .slice(0, 80);
-  json(res, { ok: true, names: eventBoard.SUP_DOC_NAMES, items });
+    .slice(0, term ? 200 : 80);
+  const totalForCompany = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid).length;
+  json(res, { ok: true, names: eventBoard.SUP_DOC_NAMES, items, totalForCompany, searchedAll: !!term });
 });
 
 // POST /api/event-board — יצירה או עדכון של אירוע בלוח.

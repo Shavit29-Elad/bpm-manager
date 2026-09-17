@@ -7637,18 +7637,36 @@ window.bdPickExpense = async (i) => {
   const row = (_boardEdit.rows || [])[i]; if (!row) return;
   _bdPick = { i, q: '', items: null, supplier: row.name || '' };
   renderBdPick();
-  const r = await api(`/api/event-board/expenses?supplier=${encodeURIComponent(row.name || '')}`).catch(() => ({ error: 'שגיאת רשת' }));
-  _bdPick.items = (r && r.items) || [];
-  _bdPick.err = r && r.error;
-  renderBdPick();
+  await bdPickFetch();
 };
-window.bdPickSearch = (v) => { if (!_bdPick) return; _bdPick.q = v; renderBdPick(); };
+let _bdPickT = null;
+// החיפוש רץ בשרת ולא על הרשימה שכבר נטענה. קודם הוא סינן רק את 80 הראשונות,
+// ולכן מסמך ישן יותר פשוט לא היה ניתן למציאה.
+window.bdPickSearch = (v) => {
+  if (!_bdPick) return;
+  _bdPick.q = v;
+  renderBdPick();
+  clearTimeout(_bdPickT);
+  _bdPickT = setTimeout(() => bdPickFetch(), 280);
+};
+async function bdPickFetch() {
+  const st = _bdPick; if (!st) return;
+  const q = (st.q || '').trim();
+  st.loading = true; renderBdPick();
+  const url = `/api/event-board/expenses?supplier=${encodeURIComponent(q ? '' : (st.supplier || ''))}&q=${encodeURIComponent(q)}`;
+  const r = await api(url).catch(() => ({ error: 'שגיאת רשת' }));
+  if (_bdPick !== st) return;                  // נפתח בורר אחר בינתיים
+  st.items = (r && r.items) || [];
+  st.total = r && r.totalForCompany;
+  st.searchedAll = !!(r && r.searchedAll);
+  st.err = r && r.error;
+  st.loading = false;
+  renderBdPick();
+}
 window.bdPickAll = async () => {
   if (!_bdPick) return;
-  _bdPick.supplier = ''; _bdPick.items = null; renderBdPick();
-  const r = await api('/api/event-board/expenses').catch(() => ({ error: 'שגיאת רשת' }));
-  _bdPick.items = (r && r.items) || []; _bdPick.err = r && r.error;
-  renderBdPick();
+  _bdPick.supplier = ''; _bdPick.items = null;
+  await bdPickFetch();
 };
 function renderBdPick() {
   const st = _bdPick; if (!st) return;
@@ -7658,12 +7676,12 @@ function renderBdPick() {
   m.classList.remove('hidden');
   m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
   const row = (_boardEdit.rows || [])[st.i] || {};
-  const q = (st.q || '').trim().toLowerCase();
-  const list = (st.items || []).filter(x => !q || [x.supplierName, x.number, x.description].some(v => String(v || '').toLowerCase().includes(q)));
-  const body = st.items === null
+  const q = (st.q || '').trim();
+  const list = st.items || [];
+  const body = (st.items === null || st.loading)
     ? '<div class="empty">טוען הוצאות…</div>'
     : (!list.length
-      ? `<div class="empty">${st.supplier ? `לא נמצאו הוצאות של ${escapeHtml(st.supplier)}.` : 'לא נמצאו הוצאות.'}</div>`
+      ? `<div class="empty">${q ? `לא נמצאה הוצאה שתואמת "${escapeHtml(q)}".` : (st.supplier ? `לא נמצאו הוצאות של ${escapeHtml(st.supplier)}. נסה חיפוש או "הצג את כל הספקים".` : 'לא נמצאו הוצאות.')}</div>`
       : `<div style="max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:8px">
         ${list.map(x => `<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:7px 9px;border-top:1px solid var(--line);${x.linked ? 'opacity:.6' : ''}">
           <input type="radio" name="bdpick" value="${escAttr(x.id)}"/>
@@ -7676,9 +7694,9 @@ function renderBdPick() {
       </div>`);
   m.innerHTML = `<div class="modal-card" style="width:min(680px,95vw)">
     <h3 style="margin:0 0 3px">🔗 בחירה מהוצאות המערכת</h3>
-    <div class="muted" style="font-size:12.5px;margin-bottom:9px">${escapeHtml(row.role || '')}${st.supplier ? ` · מסונן לפי ${escapeHtml(st.supplier)}` : ' · כל הספקים'}</div>
+    <div class="muted" style="font-size:12.5px;margin-bottom:9px">${escapeHtml(row.role || '')}${q ? ` · חיפוש בכל ${st.total != null ? st.total + ' ' : ''}ההוצאות` : (st.supplier ? ` · מסונן לפי ${escapeHtml(st.supplier)}` : ' · כל הספקים')}${list.length ? ` · ${list.length} תוצאות` : ''}</div>
     <div style="display:flex;gap:8px;margin-bottom:8px">
-      <input value="${escAttr(st.q)}" oninput="bdPickSearch(this.value)" placeholder="חיפוש לפי ספק, מספר או תיאור" style="flex:1;padding:6px 9px"/>
+      <input id="bdPickQ" value="${escAttr(st.q)}" oninput="bdPickSearch(this.value)" placeholder="חיפוש בכל ההוצאות — ספק, מספר, תיאור, תאריך או סכום" style="flex:1;padding:6px 9px"/>
       ${st.supplier ? '<button class="btn ghost" style="padding:4px 11px;font-size:12px;white-space:nowrap" onclick="bdPickAll()">הצג את כל הספקים</button>' : ''}
     </div>
     ${st.err ? `<div class="warn-banner">${escapeHtml(String(st.err))}</div>` : body}
@@ -7687,6 +7705,9 @@ function renderBdPick() {
       <button class="btn primary" onclick="bdPickConfirm()">בחר והשלם שורה</button>
     </div>
   </div>`;
+  // הרינדור מחליף את השדה; בלי החזרת המיקוד החיפוש נקטע אחרי כל תו
+  const inp = document.getElementById('bdPickQ');
+  if (inp && st.q) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
 }
 window.bdPickConfirm = () => {
   const st = _bdPick; if (!st) return;

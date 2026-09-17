@@ -2804,6 +2804,30 @@ check('פעולות הבחירה — אותו תנאי בסרגל ובכותרו
   return true;
 });
 
+check('חיפוש הוצאות — רץ בשרת על כל הרשומות, לא על רשימה חתוכה', () => {
+  // החיפוש סינן את 80 הרשומות שכבר נטענו, ולכן מסמך ישן יותר לא היה ניתן
+  // למציאה כלל — וזו בדיוק הסיבה לחפש.
+  const ui = app.slice(app.indexOf('window.bdPickSearch ='), app.indexOf('function renderBdPick'));
+  if (!/bdPickFetch\(\)/.test(ui)) throw new Error('החיפוש אינו פונה לשרת');
+  if (!/setTimeout/.test(ui)) throw new Error('אין השהיה — כל תו ישלח בקשה');
+  const render = app.slice(app.indexOf('function renderBdPick'), app.indexOf('window.bdPickConfirm'));
+  if (/\.filter\(x => !q/.test(render)) throw new Error('עדיין מסנן מקומית על רשימה חתוכה');
+  if (!/bdPickQ/.test(render)) throw new Error('שדה החיפוש בלי מזהה');
+  if (!/inp\.focus\(\)/.test(render)) throw new Error('המיקוד אובד והקלדה נקטעת');
+
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const route = srv.slice(srv.indexOf("add('GET', /^\\/api\\/event-board\\/expenses$/"), srv.indexOf("// POST /api/event-board —"));
+  // חיפוש גובר על סינון הספק
+  if (!/term \? true :/.test(route)) throw new Error('החיפוש אינו גובר על סינון הספק');
+  // ותקרה גבוהה יותר בחיפוש
+  if (!/slice\(0, term \? 200 : 80\)/.test(route)) throw new Error('תקרת החיפוש זהה לתקרת הרשימה');
+  // שדות החיפוש כוללים תאריך וסכום
+  for (const f of ['p.description', 'p.date', 'String(p.amount)']) {
+    if (!route.includes(f)) throw new Error('החיפוש אינו כולל: ' + f);
+  }
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);
