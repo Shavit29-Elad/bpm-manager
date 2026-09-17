@@ -2629,6 +2629,49 @@ check('עמלות — הסרת השורה הראשונה ובחירת בסיס �
   return true;
 });
 
+check('דוחות לוח האירועים — לאירוע ולחודש, נבנים בלי שגיאת ריצה', () => {
+  const src = app.slice(app.indexOf('const _repMoney ='), app.indexOf('async function _boardPdf'));
+  const stubs = `
+    const escapeHtml=(x)=>String(x==null?'':x), ddmy=(d)=>String(d||''), todayIso=()=>'2026-09-17';
+    const currentCompanyName=()=>'משה כורסיה';
+    const SUP_DOC_NAMES={300:'חשבון עסקה',305:'חשבונית מס',320:'חשבונית מס-קבלה',400:'קבלה'};
+    const SHORT_BILL={10:'הצעה',300:'עסקה',305:'מס',320:'מס-קבלה',400:'קבלה',330:'זיכוי'};
+    const MONTHS_FULL=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+    const bMonthName=(k)=>{const [y,m]=String(k).split('-');return MONTHS_FULL[(+m)-1]+' '+y;};
+  `;
+  const fns = new Function(`${stubs}\n${src}\nreturn { boardEventReportHtml, boardMonthReportHtml };`)();
+  const ev = { id: 'e1', date: '2026-10-08', artist: 'בת מצווה', location: 'האחוזה', clientName: 'לקוח', notes: 'הערה',
+    linkedDocs: [{ id: 'd1', number: 40468, type: 300 }],
+    rows: [{ role: 'קלידן', name: 'דני', priceExVat: 1500, ex: 1500, inc: 1770, paid: false, note: 'מקדמה',
+             docs: [{ type: 305, number: '50032' }] },
+           { role: 'מתופף', name: 'רון', priceExVat: 1200, ex: 1200, inc: 1200, vatExempt: true, paid: true, docs: [] }],
+    totals: { clientPriceEx: 20000, commissionEx: 3000, incomeEx: 17000, expenseEx: 2700, expenseInc: 2970,
+      profitEx: 14300, unpaidRows: 1, commissions: [{ name: 'שורה ראשונה', pct: 15, base: 'client', amount: 3000 }] } };
+
+  const one = fns.boardEventReportHtml(ev);
+  for (const [pat, what] of [[/בת מצווה/, 'שם האירוע'], [/20,000/, 'מחיר ללקוח'], [/שורה ראשונה/, 'העמלה'],
+      [/17,000/, 'תשלום למשה'], [/14,300/, 'רווח'], [/דני/, 'ספק'], [/50032/, 'מסמך ספק'], [/40468/, 'מסמך ללקוח'],
+      [/פטור/, 'סימון עוסק פטור'], [/טרם שולם/, 'סטטוס תשלום']]) {
+    if (!pat.test(one)) throw new Error('חסר בדוח האירוע: ' + what);
+  }
+  const o = (one.match(/<t(able|r|d|h|body|head|foot)\b/g) || []).length;
+  if (!o) throw new Error('דוח האירוע ריק');
+
+  const m = { month: '2026-10', clientPriceEx: 20000, commissionEx: 3000, incomeEx: 17000, expenseEx: 2700, profitEx: 14300, events: [ev] };
+  const rep = fns.boardMonthReportHtml(m);
+  for (const [pat, what] of [[/אוקטובר 2026/, 'שם החודש'], [/ריכוז ספקים/, 'ריכוז הספקים'],
+      [/דני/, 'ספק ברשימה'], [/רון/, 'ספק שני'], [/1 אירועים|1 אירוע/, 'מספר האירועים']]) {
+    if (!pat.test(rep)) throw new Error('חסר בדוח החודשי: ' + what);
+  }
+  // ריכוז הספקים מסכם נכון: דני 1,770 פתוח, רון שולם
+  if (!/1,770/.test(rep)) throw new Error('סכום הספק אינו מופיע');
+  if (!/✓ שולם/.test(rep)) throw new Error('ספק ששולם אינו מסומן');
+  // חודש ריק אינו מפיל את הדוח
+  const empty = fns.boardMonthReportHtml({ month: '2026-11', clientPriceEx: 0, commissionEx: 0, incomeEx: 0, expenseEx: 0, profitEx: 0, events: [] });
+  if (!/אין ספקים בחודש זה/.test(empty)) throw new Error('חודש ריק אינו מטופל');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

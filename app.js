@@ -7438,7 +7438,8 @@ function boardMonthPanel(m) {
   }).join('');
   return `<div class="panel">
     <div class="row-between" style="margin-bottom:8px">
-      <h3 style="margin:0">${bMonthName(m.month)}</h3>
+      <h3 style="margin:0">${bMonthName(m.month)}
+        <button class="btn ghost" style="padding:2px 10px;font-size:12px;margin-inline-start:8px;vertical-align:middle" onclick="boardMonthReport('${m.month}',this)">📄 דוח חודשי</button></h3>
       <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">
         <span>מחיר ללקוח: <b>${money(m.clientPriceEx || 0)}</b></span>
         ${m.commissionEx ? `<span>עמלה: <b style="color:var(--warn)">−${money(m.commissionEx)}</b></span>` : ''}
@@ -7890,6 +7891,142 @@ async function boardReloadInto(evId) {
   const c = $('#content'); if (c && state.tab === 'eventsboard') renderEventsBoard(c);
 }
 
+// ===== דוחות לוח האירועים (משה) — לאירוע בודד ולחודש שלם =====
+// נבנים מאותם נתונים שהמסך מציג, ולכן אין סיכון שהדוח יראה מספר אחר.
+const _repMoney = (n) => '₪' + (Number(n) || 0).toLocaleString('he-IL', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const _repHead = (title, sub) => `<div style="border-bottom:2px solid #4338ca;padding-bottom:10px;margin-bottom:14px">
+  <div style="font-size:22px;font-weight:800;color:#1c2333">${escapeHtml(title)}</div>
+  <div style="font-size:13px;color:#6b7488;margin-top:3px">${escapeHtml(sub)}</div>
+  <div style="font-size:11px;color:#9aa1b5;margin-top:2px">${escapeHtml(currentCompanyName())} · הופק ${ddmy(todayIso())}</div></div>`;
+const _repRow = (l, v, opt = {}) => `<tr>
+  <td style="padding:5px 8px;border-bottom:1px solid #edeff7;${opt.bold ? 'font-weight:700' : ''}">${l}</td>
+  <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;${opt.bold ? 'font-weight:700;' : ''}${opt.color ? `color:${opt.color}` : ''}">${v}</td></tr>`;
+
+function boardEventReportHtml(ev) {
+  const t = ev.totals || {};
+  const rows = (ev.rows || []).filter(r => (Number(r.priceExVat) || 0) > 0);
+  const expRows = rows.length ? rows.map(r => `<tr>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;font-weight:600">${escapeHtml(r.role)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7">${escapeHtml(r.name || '—')}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(r.ex)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(r.inc)}${r.vatExempt ? ' <span style="font-size:10px;color:#6b7488">פטור</span>' : ''}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;white-space:nowrap">${r.paid ? 'שולם' : 'טרם שולם'}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;font-size:11px;color:#6b7488">${escapeHtml(r.note || '')}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;font-size:11px">${(r.docs || []).map(d => `${SUP_DOC_NAMES[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''}`).join(', ') || '—'}</td>
+    </tr>`).join('')
+    : '<tr><td colspan="7" style="padding:10px;color:#6b7488">לא מולאו שורות הוצאה.</td></tr>';
+  const comm = (t.commissions || []).map(c =>
+    _repRow(`עמלה — ${escapeHtml(c.name)}${c.pct != null ? ` (${c.pct}%${c.base === 'net' ? ' אחרי ההוצאות' : ''})` : ''}`, '−' + _repMoney(c.amount), { color: '#b45309' })).join('');
+  const docs = (ev.linkedDocs || []).length
+    ? (ev.linkedDocs || []).map(d => `<span style="display:inline-block;border:1px solid #d8dced;border-radius:6px;padding:2px 8px;margin:0 0 4px 4px;font-size:12px">${SHORT_BILL[Number(d.type)] || 'מסמך'}${d.number != null ? ' #' + d.number : ''}${d.converted ? ' (הומר)' : ''}${d.credit ? ' (זיכוי)' : ''}</span>`).join('')
+    : '<span style="color:#6b7488;font-size:12px">לא הופק מסמך ללקוח</span>';
+  return `${_repHead(ev.artist || 'אירוע', [ddmy(ev.date), ev.location, ev.clientName].filter(Boolean).join(' · '))}
+    ${ev.notes ? `<div style="font-size:12.5px;color:#6b7488;margin-bottom:10px">${escapeHtml(ev.notes)}</div>` : ''}
+    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">
+      ${_repRow('מחיר ללקוח (ללא מע״מ)', _repMoney(t.clientPriceEx))}
+      ${comm}
+      ${_repRow('תשלום — משה כורסיה', _repMoney(t.incomeEx), { bold: true, color: '#0a7d33' })}
+      ${_repRow('סה״כ הוצאות (ללא מע״מ)', '−' + _repMoney(t.expenseEx), { color: '#b42318' })}
+      ${_repRow('רווח', _repMoney(t.profitEx), { bold: true, color: (t.profitEx || 0) >= 0 ? '#0a7d33' : '#b42318' })}
+    </table>
+    <div style="font-size:14px;font-weight:700;margin:0 0 6px">פירוט הוצאות</div>
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:16px">
+      <thead><tr style="background:#eef0fb">
+        <th style="padding:6px 8px;text-align:right">תפקיד</th><th style="padding:6px 8px;text-align:right">ספק</th>
+        <th style="padding:6px 8px;text-align:left">ללא מע״מ</th><th style="padding:6px 8px;text-align:left">כולל מע״מ</th>
+        <th style="padding:6px 8px;text-align:right">תשלום</th><th style="padding:6px 8px;text-align:right">הערה</th>
+        <th style="padding:6px 8px;text-align:right">מסמכים</th></tr></thead>
+      <tbody>${expRows}</tbody>
+      <tfoot><tr style="font-weight:700;background:#f7f8fc">
+        <td colspan="2" style="padding:6px 8px">סה״כ</td>
+        <td style="padding:6px 8px;text-align:left">${_repMoney(t.expenseEx)}</td>
+        <td style="padding:6px 8px;text-align:left">${_repMoney(t.expenseInc)}</td>
+        <td colspan="3"></td></tr></tfoot>
+    </table>
+    <div style="font-size:14px;font-weight:700;margin:0 0 6px">מסמכים ללקוח</div>
+    <div>${docs}</div>`;
+}
+
+function boardMonthReportHtml(m) {
+  const evs = m.events || [];
+  const rows = evs.map(ev => {
+    const t = ev.totals || {};
+    return `<tr>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;white-space:nowrap">${ddmy(ev.date)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7">${escapeHtml(ev.artist || '')}${ev.location ? `<div style="font-size:11px;color:#6b7488">${escapeHtml(ev.location)}</div>` : ''}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7">${escapeHtml(ev.clientName || '—')}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(t.clientPriceEx)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#b45309">−${_repMoney(t.commissionEx)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#0a7d33">${_repMoney(t.incomeEx)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#b42318">${_repMoney(t.expenseEx)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;font-weight:700">${_repMoney(t.profitEx)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:center;white-space:nowrap">${(t.unpaidRows || 0) ? `${t.unpaidRows} טרם שולמו` : '✓'}</td></tr>`;
+  }).join('');
+  // ריכוז ספקים: כמה כל אחד מקבל בחודש, וכמה מזה טרם שולם
+  const bySup = new Map();
+  for (const ev of evs) for (const r of (ev.rows || [])) {
+    const ex = Number(r.ex) || 0; if (!ex || !r.name) continue;
+    const g = bySup.get(r.name) || { name: r.name, ex: 0, inc: 0, open: 0, n: 0 };
+    g.ex += ex; g.inc += Number(r.inc) || 0; g.n++; if (!r.paid) g.open += Number(r.inc) || 0;
+    bySup.set(r.name, g);
+  }
+  const sup = [...bySup.values()].sort((a, b) => b.inc - a.inc).map(g => `<tr>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7">${escapeHtml(g.name)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:center">${g.n}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(g.ex)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(g.inc)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:${g.open ? '#b45309' : '#0a7d33'}">${g.open ? _repMoney(g.open) : '✓ שולם'}</td></tr>`).join('');
+  return `${_repHead('דוח חודשי — ' + bMonthName(m.month), `${evs.length} אירועים`)}
+    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">
+      ${_repRow('מחיר ללקוח (ללא מע״מ)', _repMoney(m.clientPriceEx))}
+      ${m.commissionEx ? _repRow('סה״כ עמלות', '−' + _repMoney(m.commissionEx), { color: '#b45309' }) : ''}
+      ${_repRow('תשלום — משה כורסיה', _repMoney(m.incomeEx), { bold: true, color: '#0a7d33' })}
+      ${_repRow('סה״כ הוצאות (ללא מע״מ)', '−' + _repMoney(m.expenseEx), { color: '#b42318' })}
+      ${_repRow('רווח', _repMoney(m.profitEx), { bold: true, color: m.profitEx >= 0 ? '#0a7d33' : '#b42318' })}
+    </table>
+    <div style="font-size:14px;font-weight:700;margin:0 0 6px">אירועי החודש</div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
+      <thead><tr style="background:#eef0fb">
+        <th style="padding:6px 8px;text-align:right">תאריך</th><th style="padding:6px 8px;text-align:right">אירוע</th>
+        <th style="padding:6px 8px;text-align:right">לקוח</th><th style="padding:6px 8px;text-align:left">מחיר</th>
+        <th style="padding:6px 8px;text-align:left">עמלות</th><th style="padding:6px 8px;text-align:left">תשלום</th>
+        <th style="padding:6px 8px;text-align:left">הוצאות</th><th style="padding:6px 8px;text-align:left">רווח</th>
+        <th style="padding:6px 8px;text-align:center">ספקים</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="font-size:14px;font-weight:700;margin:0 0 6px">ריכוז ספקים</div>
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+      <thead><tr style="background:#eef0fb">
+        <th style="padding:6px 8px;text-align:right">ספק</th><th style="padding:6px 8px;text-align:center">אירועים</th>
+        <th style="padding:6px 8px;text-align:left">ללא מע״מ</th><th style="padding:6px 8px;text-align:left">כולל מע״מ</th>
+        <th style="padding:6px 8px;text-align:left">טרם שולם</th></tr></thead>
+      <tbody>${sup || '<tr><td colspan="5" style="padding:10px;color:#6b7488">אין ספקים בחודש זה.</td></tr>'}</tbody>
+    </table>`;
+}
+
+async function _boardPdf(html, filename, btn) {
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'מכין דוח…'; }
+  try {
+    const blob = await _htmlToPdfBlob(html);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  } catch (e) {
+    alert('הפקת הדוח נכשלה: ' + (e && e.message ? e.message : ''));
+  } finally { if (btn) { btn.disabled = false; btn.textContent = orig; } }
+}
+window.boardEventReport = (id, btn) => {
+  const ev = boardFind(id); if (!ev) return;
+  _boardPdf(boardEventReportHtml(ev), `דוח אירוע - ${(ev.artist || 'אירוע').replace(/[\\/:*?"<>|]/g, '-')} - ${ddmy(ev.date)}.pdf`, btn);
+};
+window.boardMonthReport = (month, btn) => {
+  const m = ((_board && _board.months) || []).find(x => x.month === month); if (!m) return;
+  _boardPdf(boardMonthReportHtml(m), `דוח חודשי - ${bMonthName(month)}.pdf`, btn);
+};
+
 // חלונית צפייה מורחבת — הפירוט המלא של האירוע, המסמכים המקושרים והפקת חשבונית.
 let _bvEvent = null;
 // המסמך שמוצג כרגע בלוח הצד, מאותר מכל שורות האירוע
@@ -7967,7 +8104,10 @@ window.openBoardView = (id, keepOpen) => {
     <div style="flex:1;min-width:0;overflow:auto">
     <div class="row-between" style="margin:0 0 4px">
       <h3 style="margin:0">${escapeHtml(ev.artist || 'אירוע')}</h3>
-      <button class="btn ghost" style="padding:3px 11px;font-size:12.5px" onclick="document.getElementById('bvModal').classList.add('hidden');openBoardEdit('${ev.id}')">✏️ עריכה</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn ghost" style="padding:3px 11px;font-size:12.5px" onclick="boardEventReport('${ev.id}',this)">📄 דוח אירוע</button>
+        <button class="btn ghost" style="padding:3px 11px;font-size:12.5px" onclick="document.getElementById('bvModal').classList.add('hidden');openBoardEdit('${ev.id}')">✏️ עריכה</button>
+      </div>
     </div>
     <div class="muted" style="font-size:12.5px;margin-bottom:12px">${ddmy(ev.date)}${ev.location ? ' · ' + escapeHtml(ev.location) : ''}${ev.clientName ? ' · ' + escapeHtml(ev.clientName) : ''}${ev.notes ? ' · ' + escapeHtml(ev.notes) : ''}</div>
 
