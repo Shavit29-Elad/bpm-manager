@@ -2482,7 +2482,7 @@ check('הפקת מסמך מהלוח — בחירת סוג, וקישור לאיר
 
   // בורר הסוג מוצג רק כשהחלונית נפתחה מהלוח
   const rq = app.slice(app.indexOf('function renderNewQuote()'), app.indexOf('function renderNewQuote()') + 4000);
-  if (!/e\.boardEventId \?/.test(rq)) throw new Error('בורר הסוג אינו מותנה בפתיחה מהלוח');
+  if (!/\(e\.boardEventId \|\| e\.boardEventIds\) \?/.test(rq)) throw new Error('בורר הסוג אינו מותנה בפתיחה מהלוח');
   if (!/\[10, 300, 305, 320\]/.test(rq)) throw new Error('רשימת הסוגים אינה מלאה');
   if (!/nqSetType\(this\.value\)/.test(rq)) throw new Error('הבורר אינו מחליף סוג');
 
@@ -2494,7 +2494,7 @@ check('הפקת מסמך מהלוח — בחירת סוג, וקישור לאיר
   const links = (app.match(/\/api\/invoicing\/link'/g) || []).length;
   if (links < 2) throw new Error('רק ' + links + ' מסלולי יצירה מקשרים לאירוע');
   const create = app.slice(app.indexOf('window.createNewQuote'), app.indexOf('window.createNewQuote') + 6000);
-  if (!/eventIds: \[e\.boardEventId\]/.test(create)) throw new Error('הקישור אינו משתמש במזהה האירוע');
+  if (!/eventIds: _evIds/.test(create) && !/eventIds: _qIds/.test(create)) throw new Error('הקישור אינו משתמש במזהי האירועים');
   if (!/type: Number\(e\.type\)/.test(create)) throw new Error('סוג המסמך אינו מועבר לקישור');
   return true;
 });
@@ -2669,6 +2669,53 @@ check('דוחות לוח האירועים — לאירוע ולחודש, נבנ�
   // חודש ריק אינו מפיל את הדוח
   const empty = fns.boardMonthReportHtml({ month: '2026-11', clientPriceEx: 0, commissionEx: 0, incomeEx: 0, expenseEx: 0, profitEx: 0, events: [] });
   if (!/אין ספקים בחודש זה/.test(empty)) throw new Error('חודש ריק אינו מטופל');
+  return true;
+});
+
+check('איחוד אירועים לחשבונית אחת — אותו לקוח בלבד', () => {
+  const src = app.slice(app.indexOf('let _boardSel = new Set();'), app.indexOf('window.boardIssueMulti'));
+  let html = '';
+  const stubs = `
+    const escapeHtml=(x)=>String(x==null?'':x), money=(n)=>'₪'+n;
+    let __h='';
+    const document = { getElementById: () => ({ set innerHTML(v){ __h=v; }, get innerHTML(){ return __h; } }) };
+    const $ = () => null;
+    const renderEventsBoard = () => {};
+    const window = {};
+  `;
+  const mk = (months, sel) => new Function('months', 'sel', `${stubs}
+    let _board = { months };
+    ${src}
+    _boardSel = new Set(sel);
+    renderBoardSelBar();
+    return __h;`)(months, sel);
+
+  const months = [{ month: '2026-10', events: [
+    { id: 'a', clientName: 'לקוח א', totals: { incomeEx: 1000 } },
+    { id: 'b', clientName: 'לקוח א', totals: { incomeEx: 2000 } },
+    { id: 'c', clientName: 'לקוח ב', totals: { incomeEx: 500 } },
+  ] }];
+
+  if (mk(months, ['a'])) throw new Error('סרגל הוצג על אירוע בודד');
+  const same = mk(months, ['a', 'b']);
+  if (!/2 אירועים נבחרו/.test(same)) throw new Error('אין מונה בחירה');
+  if (!/₪3000/.test(same)) throw new Error('הסכום אינו מסוכם: ' + same.slice(0, 200));
+  if (!/boardIssueMulti/.test(same)) throw new Error('אין כפתור הפקה משותפת');
+
+  const diff = mk(months, ['a', 'c']);
+  if (/boardIssueMulti/.test(diff)) throw new Error('לקוחות שונים — הכפתור לא אמור להופיע');
+  if (!/לקוחות שונים/.test(diff)) throw new Error('אין הסבר למה אי אפשר לאחד');
+
+  // ההפקה בונה שורה לכל אירוע ומקשרת לכולם
+  const iss = app.slice(app.indexOf('window.boardIssueMulti'), app.indexOf('window.boardIssueMulti') + 2000);
+  if (!/boardEventIds: sorted\.map/.test(iss)) throw new Error('לא נשמרים כל מזהי האירועים');
+  if (!/items: items/.test(iss) && !/items,/.test(iss)) throw new Error('אין שורה לכל אירוע');
+  if (!/names\.length !== 1/.test(iss)) throw new Error('אין אכיפת אותו לקוח בהפקה');
+  if (!/t\.incomeEx != null/.test(iss)) throw new Error('הסכום אינו לאחר עמלות');
+
+  const create = app.slice(app.indexOf('window.createNewQuote'), app.indexOf('window.createNewQuote') + 7000);
+  if (!/eventIds: _evIds/.test(create)) throw new Error('הקישור אינו כולל את כל האירועים');
+  if (!/e\.boardEventIds \|\| \(e\.boardEventId/.test(create)) throw new Error('אין תאימות לאירוע בודד');
   return true;
 });
 

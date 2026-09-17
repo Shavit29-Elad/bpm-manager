@@ -4560,7 +4560,7 @@ function renderNewQuote() {
   const titleTxt = isIncome ? `${DOC_TYPE_NAMES[e.type] || 'מסמך'} חדשה — מאפס` : (e.isDuplicate ? 'שכפול הצעת מחיר — ערוך ושמור כהצעה חדשה' : 'הצעת מחיר חדשה');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw);max-height:92vh;max-height:92dvh;overflow:auto">
     <h3>${titleTxt}</h3>
-    ${e.boardEventId ? `<label style="font-size:12.5px;display:block;margin-bottom:8px">סוג המסמך
+    ${(e.boardEventId || e.boardEventIds) ? `<label style="font-size:12.5px;display:block;margin-bottom:8px">סוג המסמך
       <select onchange="nqSetType(this.value)" style="width:100%;padding:6px 8px;margin-top:3px">
         ${[10, 300, 305, 320].map(t => `<option value="${t}" ${Number(e.type) === t ? 'selected' : ''}>${DOC_TYPE_NAMES[t]}</option>`).join('')}
       </select></label>` : ''}
@@ -4632,11 +4632,13 @@ window.createNewQuote = async (btn) => {
         // הופק מלוח האירועים — מקשרים את המסמך לאירוע. בלי זה האירוע ממשיך
         // להיראות כאילו לא הופקה עליו חשבונית, וגם מסמך המשך שייגזר ממנו לא
         // יידע לאיזה אירוע להיצמד.
-        if (e.boardEventId && r.doc) {
+        const _evIds = e.boardEventIds || (e.boardEventId ? [e.boardEventId] : []);
+        if (_evIds.length && r.doc) {
           try {
             await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ eventIds: [e.boardEventId], docs: [{ id: r.doc.id, number: r.doc.number, type: Number(e.type) }] }) });
+              body: JSON.stringify({ eventIds: _evIds, docs: [{ id: r.doc.id, number: r.doc.number, type: Number(e.type) }] }) });
           } catch { /* המסמך נוצר — כישלון שיוך אינו מבטל אותו */ }
+          if (typeof _boardSel !== 'undefined') _boardSel.clear();
           if (state.tab === 'eventsboard') { try { renderEventsBoard($('#content')); } catch { } }
         }
         document.getElementById('newQuoteModal').classList.add('hidden');
@@ -4652,11 +4654,13 @@ window.createNewQuote = async (btn) => {
   const body = { clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, subject: e.subject, remarks: e.remarks, sendEmail: !!e.sendEmail, email: e.email.trim(), email2: (e.email2 || '').trim(), paymentTerms: e.payTerms || null, skipDateValidation: !!e.skipSeq };
   const r = await fetch('/api/quotes/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   // הופקה מלוח האירועים — קישור לאירוע, כמו בשאר סוגי המסמכים
-  if (r && r.ok && e.boardEventId && r.doc) {
+  const _qIds = e.boardEventIds || (e.boardEventId ? [e.boardEventId] : []);
+  if (r && r.ok && _qIds.length && r.doc) {
     try {
       await fetch('/api/invoicing/link', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ eventIds: [e.boardEventId], docs: [{ id: r.doc.id, number: r.doc.number, type: 10 }] }) });
+        body: JSON.stringify({ eventIds: _qIds, docs: [{ id: r.doc.id, number: r.doc.number, type: 10 }] }) });
     } catch { /* ההצעה נוצרה — כישלון שיוך אינו מבטל אותה */ }
+    if (typeof _boardSel !== 'undefined') _boardSel.clear();
     if (state.tab === 'eventsboard') { try { renderEventsBoard($('#content')); } catch { } }
   }
   if (btn) btn.disabled = false;
@@ -7418,14 +7422,19 @@ async function renderEventsBoard(c) {
         ${kpi('רווח', money(t.profitEx || 0), (t.profitEx || 0) >= 0 ? 'var(--accent2)' : 'var(--danger)')}
       </div>
     </div>
+    <div id="boardSelBar"></div>
     ${(r.months || []).length ? (r.months || []).map(boardMonthPanel).join('') : '<div class="panel"><div class="empty">אין אירועים בשנה הזו. לחץ "הוספת אירוע" כדי להתחיל.</div></div>'}`;
+  renderBoardSelBar();
 }
 
 function boardMonthPanel(m) {
   const rows = m.events.map(ev => {
     const t = ev.totals || {};
     const docs = (ev.linkedDocs || []).filter(d => !d.converted).length;
-    return `<tr style="cursor:pointer" onclick="openBoardView('${ev.id}')">
+    const selOn = _boardSel.has(ev.id);
+    return `<tr style="cursor:pointer${selOn ? ';background:#f0f7ff' : ''}" onclick="openBoardView('${ev.id}')">
+      <td data-label="בחר" style="width:30px" onclick="event.stopPropagation()">
+        <input type="checkbox" ${selOn ? 'checked' : ''} onchange="boardToggleSel('${ev.id}',this.checked)" title="בחירה לאיחוד חשבונית"/></td>
       <td data-label="תאריך" style="white-space:nowrap">${ddmy(ev.date)}</td>
       <td data-label="אירוע"><b>${escapeHtml(ev.artist || '—')}</b>${ev.location ? `<div class="muted" style="font-size:11.5px">${escapeHtml(ev.location)}</div>` : ''}</td>
       <td data-label="לקוח">${escapeHtml(ev.clientName || '—')}</td>
@@ -7449,12 +7458,76 @@ function boardMonthPanel(m) {
       </div>
     </div>
     <table class="tbl cardify" style="width:100%">
-      <thead><tr><th>תאריך</th><th>אירוע</th><th>לקוח</th><th style="text-align:left">מחיר ללקוח</th><th style="text-align:left">תשלום למשה</th><th style="text-align:left">הוצאות</th><th style="text-align:left">רווח</th><th style="text-align:left">מסמכים</th></tr></thead>
+      <thead><tr><th></th><th>תאריך</th><th>אירוע</th><th>לקוח</th><th style="text-align:left">מחיר ללקוח</th><th style="text-align:left">תשלום למשה</th><th style="text-align:left">הוצאות</th><th style="text-align:left">רווח</th><th style="text-align:left">מסמכים</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;
 }
-window.boardSetYear = (y) => { _boardYear = y; renderEventsBoard($('#content')); };
+window.boardSetYear = (y) => { _boardYear = y; _boardSel.clear(); renderEventsBoard($('#content')); };
+
+// ── איחוד אירועים לחשבונית אחת ──────────────────────────────────────
+// מסמך אחד יכול לכסות כמה אירועים של אותו לקוח. שורה לכל אירוע, כדי שהלקוח
+// יראה על מה הוא משלם, והמסמך נקשר לכל האירועים — אחרת חלקם יישארו כלא מחויבים.
+let _boardSel = new Set();
+const boardSelEvents = () => {
+  const out = [];
+  for (const m of ((_board && _board.months) || [])) for (const e of m.events) if (_boardSel.has(e.id)) out.push(e);
+  return out;
+};
+window.boardToggleSel = (id, on) => {
+  if (on) _boardSel.add(id); else _boardSel.delete(id);
+  renderBoardSelBar();
+  const c = $('#content'); if (c) renderEventsBoard(c);
+};
+window.boardClearSel = () => { _boardSel.clear(); renderEventsBoard($('#content')); };
+function renderBoardSelBar() {
+  const box = document.getElementById('boardSelBar'); if (!box) return;
+  const evs = boardSelEvents();
+  if (evs.length < 2) { box.innerHTML = ''; return; }
+  const names = [...new Set(evs.map(e => (e.clientName || '').trim()))];
+  const same = names.length === 1 && names[0];
+  const total = evs.reduce((a, e) => a + (Number((e.totals || {}).incomeEx) || 0), 0);
+  box.innerHTML = `<div class="panel" style="position:sticky;top:6px;z-index:30;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 13px;border:1px solid var(--accent)">
+    <b style="font-size:13.5px">${evs.length} אירועים נבחרו</b>
+    ${same
+      ? `<span class="muted" style="font-size:12.5px">${escapeHtml(names[0])} · סה״כ ${money(total)} ללא מע״מ</span>
+         <span style="flex:1"></span>
+         <button class="btn primary" style="padding:4px 12px;font-size:12.5px" onclick="boardIssueMulti(this)">🧾 הפקת מסמך משותף</button>`
+      : `<span style="color:var(--danger);font-size:12.5px">אי אפשר לאחד — האירועים שייכים ללקוחות שונים (${escapeHtml(names.filter(Boolean).join(', ') || 'ללא לקוח')})</span>
+         <span style="flex:1"></span>`}
+    <button class="btn ghost" style="padding:4px 12px;font-size:12.5px" onclick="boardClearSel()">נקה בחירה</button>
+  </div>`;
+}
+window.boardIssueMulti = async (btn) => {
+  const evs = boardSelEvents();
+  if (evs.length < 2) return;
+  const names = [...new Set(evs.map(e => (e.clientName || '').trim()))];
+  if (names.length !== 1 || !names[0]) { alert('כל האירועים חייבים להיות של אותו לקוח.'); return; }
+  if (btn) btn.disabled = true;
+  // יצירת החלונית לפני הרינדור — renderNewQuote מצפה שהיא כבר קיימת ובלעדיה נופל
+  const mm = document.getElementById('newQuoteModal') || (() => { const x = document.createElement('div'); x.id = 'newQuoteModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
+  mm.classList.remove('hidden');
+  mm.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען לקוחות…</div></div>`;
+  if (!Array.isArray(_evClients)) { try { _evClients = (await api('/api/clients')) || []; } catch { _evClients = []; } }
+  if (btn) btn.disabled = false;
+  const cli = (Array.isArray(_evClients) ? _evClients : []).find(c => (c.name || '').trim() === names[0]);
+  const sorted = evs.slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const items = sorted.map(e => {
+    const t = e.totals || {};
+    return { description: [e.artist, ddmy(e.date), e.location].filter(Boolean).join(' - ') || 'אירוע',
+      quantity: 1, price: t.incomeEx != null ? Number(t.incomeEx) : (Number(e.price) || 0) };
+  });
+  const anyComm = sorted.some(e => (e.totals || {}).commissionEx > 0);
+  _nq = {
+    type: 300, boardEventIds: sorted.map(e => e.id),
+    clientId: (cli && cli.id) || sorted[0].clientId || '', clientName: names[0],
+    date: todayIso(), subject: `${sorted.length} אירועים · ${ddmy(sorted[0].date)}–${ddmy(sorted[sorted.length - 1].date)}`,
+    remarks: '', email: '', email2: '', payTerms: { mode: 'default', text: '' }, sendEmail: false,
+    boardNote: anyComm ? 'הסכומים הם לאחר ניכוי העמלות של כל אירוע.' : '',
+    items,
+  };
+  renderNewQuote();
+};
 
 // חלונית הוספה/עריכה — קומפקטית, בגודל של הוספת רכב.
 window.openBoardEdit = async (id) => {
