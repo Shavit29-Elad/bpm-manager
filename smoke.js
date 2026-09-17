@@ -807,6 +807,44 @@ check('סגירת הצעות מחיר שחויבו — רק כשיש חשבונ�
   return true;
 });
 
+// חשבון עסקה שחשבונית המס שלו הופקה ישירות בחשבונית ירוקה נשאר פתוח שם לנצח
+// (linkedDocumentIds נקבע ביצירה בלבד). הרשימה חייבת להיקרא מחשבונית ירוקה עצמה —
+// הדגל converted שלנו נקבע גם מזיהוי לתצוגה, וסגירה על סמכו תסגור מסמכים חיים.
+check('סגירת חשבונות עסקה שחויבו — לפי הסטטוס בחשבונית ירוקה, ורק באישור', async () => {
+  const src = srv.match(/async function staleProformas\(cid\) \{[\s\S]*?\n\}/);
+  if (!src) throw new Error('staleProformas לא נמצאה');
+  const mk = (open, events) => new Function('greenInvoice', 'load', 'ownedBy',
+    src[0] + '; return staleProformas;')(
+    { openDocuments: async () => open }, () => ({ events }), () => true);
+  const P = { id: 'p', type: 300, number: '10195', amount: 18880, clientName: 'פאזל' };
+  const openP = [P];
+  const ev = (docs) => [{ id: 'e', companyId: 'c', linkedDocs: docs }];
+  const run = (open, docs) => mk(open, ev(docs))('c');
+
+  if ((await run(openP, [{ id: 'p', type: 300, number: '10195', converted: true }, { id: 'i', type: 320, number: 30268 }])).length !== 1)
+    throw new Error('חשבון עסקה פתוח בחשבונית ירוקה לא זוהה — הדגל converted שלנו הסתיר אותו');
+  if ((await run([], [{ id: 'p', type: 300 }, { id: 'i', type: 320 }])).length)
+    throw new Error('נסגר חשבון עסקה שכבר סגור בחשבונית ירוקה');
+  if ((await run(openP, [{ id: 'p', type: 300, number: '10195' }])).length)
+    throw new Error('חשבון עסקה שטרם חויב נסגר — לא תוכל להפיק ממנו חשבונית');
+  if ((await run(openP, [{ id: 'p', type: 300 }, { id: 'i', type: 320, credited: true }])).length)
+    throw new Error('חשבונית שזוכתה נחשבת חיוב פעיל');
+  // התאמה לפי מספר כשהמזהה על האירוע שונה (מסמך שנקלט במסלול ישן)
+  if ((await run(openP, [{ id: 'other', type: 300, number: '10195' }, { id: 'i', type: 305 }])).length !== 1)
+    throw new Error('התאמה לפי מספר מסמך לא עבדה');
+
+  const i = srv.indexOf("add('POST', /^\\/api\\/stale-proformas\\/close$/");
+  if (i < 0) throw new Error('ראוט הסגירה לא נמצא');
+  const close = srv.slice(i, srv.indexOf('\n});', i));
+  if (!/b\.confirm !== true/.test(close)) throw new Error('סגירה בלי אישור מפורש');
+  // בלי ניקוי המטמון openDocuments מחזיר את אותה רשימה, remaining לא יורד והלולאה בפרונט תיתקע
+  if (!/clearDataCache\(\)/.test(close)) throw new Error('המטמון לא מנוקה — הלולאה לא תתקדם');
+  if (!/ownedBy/.test(src[0])) throw new Error('הסגירה עוברת על אירועים של חברות אחרות');
+  for (const fn of ['loadStaleProformas', 'runCloseStaleProformas'])
+    if (!app.includes(`window.${fn} =`)) throw new Error(`${fn} חסרה בפרונט`);
+  return true;
+});
+
 check('הפקת חשבונית מאירועים מקשרת את הצעת המחיר', () => {
   const i = srv.indexOf("add('POST', /^\\/api\\/invoicing\\/generate$/");
   if (i < 0) throw new Error('ראוט ההפקה לא נמצא');

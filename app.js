@@ -8860,6 +8860,14 @@ async function renderBusiness(c) {
         <div id="staleQuotes" style="margin-top:8px;font-size:13px"></div>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <b style="font-size:13.5px">🧾 חשבונות עסקה שחויבו ונשארו פתוחים</b>
+        <div class="muted" style="font-size:12px;margin:3px 0 8px">חשבון עסקה נסגר בחשבונית ירוקה רק אם חשבונית המס/מס-קבלה הופקה כמסמך המשך שלו. כשהמסמך הופק ישירות בחשבונית ירוקה, חשבון העסקה נשאר פתוח שם — גם כשאצלנו האירוע כבר מחויב ושולם. קישור בדיעבד אינו אפשרי, אבל אפשר לסגור אותם. נסגרים רק כאלה שעל האירוע שלהם כבר יש חשבונית מס/מס-קבלה.</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn ghost" onclick="loadStaleProformas(this)">בדוק כמה נשארו פתוחים</button>
+        </div>
+        <div id="staleProformas" style="margin-top:8px;font-size:13px"></div>
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
         <b style="font-size:13.5px">🔄 העברת הוצאות שנשמרו מקומית לחשבונית ירוקה</b>
         <div class="muted" style="font-size:12px;margin:3px 0 8px">הוצאות שנקלטו כשהחברה לא נוצרה בחשבונית ירוקה נשמרו כרשומה מקומית בלבד. כאן אפשר להעביר אותן לשם — יצירת מסמכים אמיתיים, כולל צירוף הקובץ השמור.</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -9210,6 +9218,53 @@ window.runCloseStaleQuotes = async (btn) => {
   btn.disabled = false; btn.textContent = 'סגור אותן בחשבונית ירוקה';
   const bad = problems.length ? `<div style="margin-top:6px;color:var(--danger)">${problems.length} נכשלו: ${problems.slice(0, 5).map(x => escapeHtml(`#${x.quoteNumber}: ${x.error}`)).join(' · ')}</div>` : '';
   out.innerHTML = `<span style="color:var(--accent2)">✓ נסגרו ${done} הצעות מחיר.</span>${bad}`;
+  clearApiCache();
+};
+
+// חשבונות עסקה שנשארו פתוחים בחשבונית ירוקה אף שהאירוע שלהם כבר חויב.
+// הרשימה נקראת מחשבונית ירוקה עצמה, ולכן מוצג בה רק מה שבאמת פתוח שם.
+window.loadStaleProformas = async (btn) => {
+  const box = document.getElementById('staleProformas'); if (!box) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'בודק…'; }
+  const r = await api('/api/stale-proformas').catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) { btn.disabled = false; btn.textContent = 'בדוק כמה נשארו פתוחים'; }
+  if (!r || r.error) { box.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  if (!r.total) { box.innerHTML = `<span style="color:var(--accent2)">✓ אין חשבונות עסקה שחויבו ונשארו פתוחים.</span>`; return; }
+  const TYPE_HE = { 305: 'חשבונית מס', 320: 'מס-קבלה' };
+  const rows = (r.items || []).slice(0, 12).map(it =>
+    `<div style="font-size:12.5px;padding:3px 0;border-top:1px solid var(--line)">
+      עסקה #${escapeHtml(String(it.proformaNumber || '—'))} · ${escapeHtml(it.clientName || '')}${it.artist ? ' · ' + escapeHtml(it.artist) : ''}
+      ${it.proformaAmount != null ? `<span class="muted"> · ${escapeHtml(money(it.proformaAmount))}</span>` : ''}
+      <span class="muted">← חויבה ב-${escapeHtml(TYPE_HE[it.invoiceType] || '')} ${escapeHtml(String(it.invoiceNumber || ''))}</span>
+    </div>`).join('');
+  box.innerHTML = `<div style="border:1px solid var(--line);border-radius:12px;padding:12px">
+    <div><b>${r.total}</b> חשבונות עסקה חויבו ועדיין פתוחים בחשבונית ירוקה</div>
+    ${rows}${r.total > 12 ? `<div class="muted" style="font-size:12px;padding-top:4px">…ועוד ${r.total - 12}</div>` : ''}
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn primary" onclick="runCloseStaleProformas(this)">סגור אותם בחשבונית ירוקה</button>
+      <span class="muted" style="font-size:12px">רץ באצוות</span>
+    </div>
+    <div id="staleProfProgress" style="margin-top:8px;font-size:12.5px"></div>
+  </div>`;
+};
+
+window.runCloseStaleProformas = async (btn) => {
+  const out = document.getElementById('staleProfProgress');
+  if (!confirm('לסגור בחשבונית ירוקה את חשבונות העסקה שכבר חויבו?\n\nחשבון עסקה סגור אינו מאפשר יותר מסמכי המשך ממנו.\nנסגרים רק כאלה שעל האירוע שלהם כבר קיימת חשבונית מס/מס-קבלה.')) return;
+  btn.disabled = true; btn.textContent = 'סוגר…';
+  let done = 0; const problems = [];
+  for (let round = 0; round < 40; round++) {
+    const r = await fetch('/api/stale-proformas/close', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true, limit: 15 }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    if (!r || !r.ok) { out.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || 'הסגירה נכשלה'))}</span>`; break; }
+    done += r.closed;
+    problems.push(...(r.results || []).filter(x => x.error));
+    out.innerHTML = `<span class="muted">נסגרו ${done} · נותרו ${r.remaining == null ? '?' : r.remaining}…</span>`;
+    if (!r.remaining || !r.processed) break;
+  }
+  btn.disabled = false; btn.textContent = 'סגור אותם בחשבונית ירוקה';
+  const bad = problems.length ? `<div style="margin-top:6px;color:var(--danger)">${problems.length} נכשלו: ${problems.slice(0, 5).map(x => escapeHtml(`#${x.proformaNumber}: ${x.error}`)).join(' · ')}</div>` : '';
+  out.innerHTML = `<span style="color:var(--accent2)">✓ נסגרו ${done} חשבונות עסקה.</span>${bad}`;
   clearApiCache();
 };
 

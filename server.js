@@ -4469,6 +4469,84 @@ add('POST', /^\/api\/stale-quotes\/close$/, async (req, res, _p, q, body) => {
   json(res, { ok: true, processed: results.length, closed: ok, remaining, results });
 });
 
+// ---- חשבונות עסקה שחויבו ונשארו פתוחים ----
+// חשבון עסקה (300) נסגר בחשבונית ירוקה רק אם מסמך ההמשך נוצר עם קישור אליו
+// (linkedDocumentIds נקבע ביצירה בלבד — אי אפשר לקשר בדיעבד). חשבונית מס/מס-קבלה
+// שהופקה ישירות בחשבונית ירוקה, או לפני שההפקה מהמערכת התחילה לקשר, משאירה את
+// חשבון העסקה פתוח לנצח — גם כשאצלנו האירוע כבר מסומן כמחויב ושולם.
+// המקור לרשימה הוא חשבונית ירוקה עצמה (openDocuments) ולא הדגל converted שלנו:
+// הדגל נקבע גם מזיהוי לתצוגה, ואינו מעיד על הסטטוס בחשבונית ירוקה.
+async function staleProformas(cid) {
+  const byId = new Map(), byNum = new Map();
+  for (const p of (await greenInvoice.openDocuments() || [])) {
+    if (Number(p.type) !== 300) continue;
+    byId.set(String(p.id), p);
+    if (p.number != null) byNum.set(String(p.number), p);
+  }
+  if (!byId.size) return [];
+  const db = load(), out = [], seen = new Set();
+  for (const ev of (db.events || [])) {
+    if (!ownedBy(ev, cid)) continue;
+    const docs = Array.isArray(ev.linkedDocs) ? ev.linkedDocs : [];
+    // חשבונית אמיתית על אותו אירוע = החיוב כבר בוצע. בלעדיה חשבון העסקה חייב להישאר פתוח.
+    const inv = docs.find(d => [305, 320].includes(Number(d.type)) && !d.credited && !d.credit);
+    if (!inv) continue;
+    for (const d of docs) {
+      if (Number(d.type) !== 300) continue;
+      const p = byId.get(String(d.id)) || (d.number != null ? byNum.get(String(d.number)) : null);
+      if (!p || seen.has(String(p.id))) continue;
+      seen.add(String(p.id));
+      out.push({ eventId: ev.id, date: ev.date || ev.dateRaw || null, artist: ev.artist || '',
+        clientName: ev.clientName || p.clientName || '', proformaId: String(p.id),
+        proformaNumber: p.number ?? null, proformaAmount: p.amount ?? null,
+        invoiceNumber: inv.number ?? null, invoiceType: Number(inv.type) });
+    }
+  }
+  return out;
+}
+
+add('GET', /^\/api\/stale-proformas$/, async (req, res, _p, q) => {
+  const cid = reqCompany(q);
+  if (!(giEnabled(cid) && greenInvoice.haveCredentials())) return json(res, { total: 0, items: [], error: 'חשבונית ירוקה אינה מחוברת לחברה זו' });
+  try {
+    const list = await staleProformas(cid);
+    json(res, { total: list.length, items: list.slice(0, 200) });
+  } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// POST /api/stale-proformas/close — סוגר אותם בחשבונית ירוקה. דורש אישור מפורש.
+add('POST', /^\/api\/stale-proformas\/close$/, async (req, res, _p, q, body) => {
+  const b = body || {}, cid = reqCompany(q, b);
+  if (b.confirm !== true) return json(res, { error: 'נדרש אישור מפורש (confirm)' }, 400);
+  if (!(giEnabled(cid) && greenInvoice.haveCredentials())) return json(res, { error: 'חשבונית ירוקה אינה מחוברת לחברה זו' }, 400);
+  const limit = Math.min(Math.max(Number(b.limit) || 20, 1), 100);
+  let batch;
+  try { batch = (await staleProformas(cid)).slice(0, limit); }
+  catch (e) { return json(res, { error: e.message }, 500); }
+  const markConverted = (it) => {
+    const db = load();
+    const ev = (db.events || []).find(e => e.id === it.eventId);
+    if (!ev) return;
+    for (const d of (ev.linkedDocs || [])) if (String(d.id) === it.proformaId) d.converted = true;
+    save(db);
+  };
+  const results = [];
+  for (const it of batch) {
+    try { await greenInvoice.closeDocument(it.proformaId); markConverted(it); results.push({ proformaNumber: it.proformaNumber, ok: true }); }
+    catch (e) {
+      // כבר סגור בחשבונית ירוקה — מסמנים אצלנו ולא מדווחים ככישלון
+      if (/:\s*(400|404|409)\b/.test(e.message || '')) { markConverted(it); results.push({ proformaNumber: it.proformaNumber, alreadyClosed: true }); }
+      else results.push({ proformaNumber: it.proformaNumber, error: e.message });
+    }
+  }
+  greenInvoice.clearDataCache();               // בלי זה openDocuments יחזיר את אותה רשימה מהמטמון והלולאה לא תתקדם
+  let remaining = null;
+  try { remaining = (await staleProformas(cid)).length; } catch { /* לא קריטי לתשובה */ }
+  const ok = results.filter(r => r.ok || r.alreadyClosed).length;
+  console.log(`[stale-proformas] ${cid}: נסגרו ${ok}/${results.length} · נותרו ${remaining}`);
+  json(res, { ok: true, processed: results.length, closed: ok, remaining, results });
+});
+
 // ---- העברת רשומות מקומיות לחשבונית ירוקה ----
 // חברה שלא הייתה מחוברת ל-GI שמרה הוצאות כרשומה מקומית בלבד. אחרי חיבור,
 // אלה צריכות לעבור לשם. זו יצירת מסמכים חשבונאיים אמיתיים, ולכן:
