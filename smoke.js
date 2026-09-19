@@ -2722,6 +2722,57 @@ check('דוחות לוח האירועים — לאירוע ולחודש, נבנ�
   return true;
 });
 
+// הדוח החודשי בלשונית האירועים (BPM/אופק) — שונה מזה של לוח משה: אין עמלות,
+// ההוצאה היא תשלומי קבלנים, והסטטוס נגזר מ-evPayState (שרואה גם התאמת בנק).
+check('דוח אירועים חודשי — נבנה, מסכם נכון, ומחובר לכפתור בכותרת החודש', () => {
+  const helpers = app.slice(app.indexOf('const _repMoney ='), app.indexOf('function boardEventReportHtml'));
+  const src = app.slice(app.indexOf('const EV_PAY_LABEL ='), app.indexOf('window.evMonthReport ='));
+  const stubs = `
+    const escapeHtml=(x)=>String(x==null?'':x), ddmy=(d)=>String(d||''), todayIso=()=>'2026-09-19';
+    const currentCompanyName=()=>'BPM', VAT_RATE=0.18;
+    const MONTHS_HE=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+    const monthKeyLabel=(k)=>{const [y,m]=String(k).split('-');return MONTHS_HE[(+m)-1]+' '+y;};
+    const SHORT_BILL={10:'הצעה',300:'עסקה',305:'מס',320:'מס-קבלה',400:'קבלה',330:'זיכוי'};
+    const evGross=(e)=>Number(e.price)||0;
+    const activeLinkedDocs=(e)=>(e.linkedDocs||[]).filter(d=>!d.credited&&!d.credit&&!d.converted);
+    const evPayState=(e)=>e._state;
+  `;
+  const build = new Function(`${stubs}\n${helpers}\n${src}\nreturn evMonthReportHtml;`)();
+  const ev = (o) => ({ date: '2026-10-08', artist: 'זמר', location: 'אולם', clientName: 'לקוח', price: 10000,
+    employees: ['דנה'], contractorDetails: [{ name: 'סאונד בע״מ', amount: 2000, paid: false }],
+    linkedDocs: [{ type: 320, number: 30268 }], _state: 'green', ...o });
+
+  const rep = build('2026-10', 'approved', [ev(), ev({ artist: 'זמרת', price: 5000, _state: 'red', linkedDocs: [],
+    contractorDetails: [{ name: 'סאונד בע״מ', amount: 500, paid: true }] })]);
+  for (const [pat, what] of [[/אוקטובר 2026/, 'שם החודש'], [/אירועים מאושרים/, 'סוג הרשימה'],
+      [/15,000/, 'סה״כ הכנסה'], [/17,700/, 'כולל מע״מ'], [/2,500/, 'תשלומי קבלנים'],
+      [/12,500/, 'סה״כ לאחר קבלנים'], [/מצב החיוב/, 'פילוח מצב החיוב'], [/שולם/, 'סטטוס ששולם'],
+      [/ללא חשבונית/, 'סטטוס ללא חשבונית'], [/ריכוז קבלנים/, 'ריכוז הקבלנים'],
+      [/סאונד/, 'שם הקבלן'], [/מס-קבלה #30268/, 'מסמך החיוב'], [/דנה/, 'עובד']]) {
+    if (!pat.test(rep)) throw new Error('חסר בדוח: ' + what);
+  }
+  // הפילוח מפריד בין המצבים: 10,000 שולם מול 5,000 ללא חשבונית
+  const st = rep.slice(rep.indexOf('מצב החיוב'), rep.indexOf('אירועי החודש'));
+  if (!/10,000/.test(st) || !/5,000/.test(st)) throw new Error('הפילוח לפי מצב חיוב אינו מסכם נכון');
+  // קבלן שחלק מהתשלומים שלו טרם שולמו — רק החלק הפתוח נספר
+  const sup = rep.slice(rep.indexOf('ריכוז קבלנים'));
+  if (!/2,500/.test(sup)) throw new Error('סה״כ הקבלן שגוי');
+  if (!/2,000/.test(sup)) throw new Error('החלק שטרם שולם אצל הקבלן שגוי');
+  // חודש ללא קבלנים/עובדים לא מפיל את הדוח ולא מדפיס טבלאות ריקות
+  const bare = build('2026-11', 'pending', [{ date: '2026-11-02', artist: 'א', price: 1000, _state: 'yellow' }]);
+  if (!/אירועים לאישור/.test(bare)) throw new Error('רשימת הלאישור אינה מסומנת');
+  if (/ריכוז קבלנים/.test(bare)) throw new Error('נדפסה טבלת קבלנים ריקה');
+  if (!/נובמבר 2026/.test(bare)) throw new Error('חודש בלי קבלנים נשבר');
+
+  // הכפתור בכותרת החודש קיים, בשני המצבים, ומחוץ ל-onclick שמקפל את החודש
+  const grp = app.slice(app.indexOf('function eventsByMonthHtml'), app.indexOf('function hebPhon'));
+  if (!/onclick="evMonthReport\('\$\{mode\}'/.test(grp)) throw new Error('כפתור הדוח חסר בכותרת החודש');
+  if (!/_evMonthGroups\[_evmKey\(mode, k\)\] = list/.test(grp)) throw new Error('אירועי החודש לא נשמרים לדוח');
+  const head = grp.slice(grp.indexOf('<div class="row-between"'), grp.indexOf('</div>\n        <span'));
+  if (head.indexOf('evMonthReport') < head.indexOf('</h3>')) throw new Error('הכפתור בתוך הכותרת — לחיצה עליו תקפל את החודש');
+  return true;
+});
+
 check('איחוד אירועים לחשבונית אחת — אותו לקוח בלבד', () => {
   const src = app.slice(app.indexOf('let _boardSel = new Set();'), app.indexOf('window.boardIssueMulti'));
   let html = '';
