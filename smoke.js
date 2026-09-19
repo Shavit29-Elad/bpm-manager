@@ -2722,9 +2722,9 @@ check('דוחות לוח האירועים — לאירוע ולחודש, נבנ�
   return true;
 });
 
-// הדוח החודשי בלשונית האירועים (BPM/אופק) — שונה מזה של לוח משה: אין עמלות,
-// ההוצאה היא תשלומי קבלנים, והסטטוס נגזר מ-evPayState (שרואה גם התאמת בנק).
-check('דוח אירועים חודשי — נבנה, מסכם נכון, ומחובר לכפתור בכותרת החודש', () => {
+// הדוח החודשי בלשונית האירועים (BPM/אופק) — פירוט לכל אירוע בלבד, בלי סיכומים
+// חודשיים. ההוצאה היא תשלומי קבלנים ועלות עובדים, והסטטוס נגזר מ-evPayState.
+check('דוח אירועים חודשי — פירוט לכל אירוע, ומחובר לכפתור בכותרת החודש', () => {
   const helpers = app.slice(app.indexOf('const _repMoney ='), app.indexOf('function boardEventReportHtml'));
   const src = app.slice(app.indexOf('const evShiftTotal ='), app.indexOf('window.evMonthReport ='));
   const stubs = `
@@ -2752,38 +2752,37 @@ check('דוח אירועים חודשי — נבנה, מסכם נכון, ומח�
 
   const rep = build('2026-10', 'approved', [ev(), second], shifts);
   for (const [pat, what] of [[/אוקטובר 2026/, 'שם החודש'], [/אירועים מאושרים/, 'סוג הרשימה'],
-      [/15,000/, 'סה״כ הכנסה'], [/17,700/, 'כולל מע״מ'], [/2,500/, 'תשלומי קבלנים'],
-      [/מצב החיוב/, 'פילוח מצב החיוב'], [/ללא חשבונית/, 'סטטוס ללא חשבונית'],
-      [/פירוט לכל אירוע/, 'סעיף הפירוט'], [/סאונד/, 'שם הקבלן'], [/מס-קבלה #30268/, 'מסמך החיוב'],
+      [/סאונד/, 'שם הקבלן'], [/מס-קבלה #30268/, 'מסמך החיוב'],
       [/דנה/, 'עובד'], [/יומית וחצי/, 'תווית היומית'], [/הגיעה מוקדם/, 'הערת המשמרת'],
-      [/>עלות עובדים</, 'סיכום עלות העובדים'], [/התאמת בנק/, 'מקור התשלום לקבלן']]) {
+      [/התאמת בנק/, 'מקור התשלום לקבלן']]) {
     if (!pat.test(rep)) throw new Error('חסר בדוח: ' + what);
   }
-  // הפילוח מפריד בין המצבים: 10,000 שולם מול 5,000 ללא חשבונית
-  const st = rep.slice(rep.indexOf('מצב החיוב'), rep.indexOf('אירועי החודש'));
-  if (!/10,000/.test(st) || !/5,000/.test(st)) throw new Error('הפילוח לפי מצב חיוב אינו מסכם נכון');
-  // הפירוט הוא לכל אירוע בנפרד — שני כרטיסים, כל אחד עם הקבלנים והעובדים שלו
-  const det = rep.slice(rep.indexOf('פירוט לכל אירוע'));
-  if ((det.match(/קבלנים \/ ספקים/g) || []).length !== 2) throw new Error('הפירוט אינו נפרד לכל אירוע');
-  if (!/אין עובדים באירוע זה/.test(det)) throw new Error('אירוע בלי עובדים אינו מסומן ככזה');
+  // אין סיכומים חודשיים — הדוח הוא פירוט לאירועים בלבד
+  for (const [pat, what] of [[/מצב החיוב/, 'פילוח מצב חיוב'], [/אירועי החודש/, 'טבלת סיכום חודשית'],
+      [/ריכוז קבלנים/, 'ריכוז קבלנים'], [/>עלות עובדים</, 'שורת סיכום עלות עובדים'],
+      [/סה״כ לאחר קבלנים/, 'שורת סיכום חודשית']]) {
+    if (pat.test(rep)) throw new Error('נשאר סיכום כללי בדוח: ' + what);
+  }
+  // כרטיס נפרד לכל אירוע, כל אחד עם הקבלנים והעובדים שלו
+  if ((rep.match(/class="pdf-keep"/g) || []).length !== 2) throw new Error('הפירוט אינו כרטיס נפרד לכל אירוע');
+  if ((rep.match(/קבלנים \/ ספקים/g) || []).length !== 2) throw new Error('חסרה טבלת קבלנים באחד האירועים');
+  if (!/אין עובדים באירוע זה/.test(rep)) throw new Error('אירוע בלי עובדים אינו מסומן ככזה');
   // הפירוק של יומית וחצי מגיע מהשכר ולא מחושב מחדש: 800 + 400 + 50 + 30 = 1,280
-  if (!/1,280/.test(det)) throw new Error('סה״כ המשמרת שגוי');
-  if (!/טרם שולם/.test(det) || !/✓ שולם/.test(det)) throw new Error('סטטוס התשלום לקבלן חסר בפירוט');
+  if (!/1,280/.test(rep)) throw new Error('סה״כ המשמרת שגוי');
+  if (!/טרם שולם/.test(rep) || !/✓ שולם/.test(rep)) throw new Error('סטטוס התשלום לקבלן חסר בפירוט');
   // "נותר" מוריד גם קבלנים וגם עובדים: 10,000 − 2,000 − 1,280 = 6,720
-  if (!/6,720/.test(det)) throw new Error('השורה התחתונה של האירוע אינה מורידה את עלות העובדים');
-  // בלי נתוני שכר הדוח עדיין יוצא — עם העובדים, בלי הסכומים ובלי עמודת העובדים
+  if (!/6,720/.test(rep)) throw new Error('השורה התחתונה של האירוע אינה מורידה את עלות העובדים');
+  // בלי נתוני שכר הדוח עדיין יוצא — עם העובדים, בלי הסכומים
   const noPay = build('2026-10', 'approved', [ev()], null);
   if (!/דנה/.test(noPay)) throw new Error('בלי שכר העובד נעלם לגמרי');
-  if (/>עלות עובדים</.test(noPay)) throw new Error('בלי שכר מוצגת עלות עובדים שאינה ידועה');
   if (!/ללא עלות עובדים/.test(noPay)) throw new Error('חסר חיווי שעלות העובדים אינה כלולה');
   // פירוק התמחור מופיע לכל אירוע, ורק הרכיבים שמולאו
   const led = build('2026-10', 'approved', [ev({ priceLighting: 1200, ledPricePerMeter: 300, ledMeters: 4 })], shifts);
   if (!/תאורה/.test(led) || !/מסך לד \(4מ׳\)/.test(led)) throw new Error('פירוק התמחור חסר');
   if (/סאונד <b>/.test(led)) throw new Error('רכיב תמחור ריק נדפס');
-  // חודש ללא קבלנים/עובדים לא מפיל את הדוח ולא מדפיס טבלאות ריקות
+  // אירוע בלי קבלנים/עובדים לא מפיל את הדוח
   const bare = build('2026-11', 'pending', [{ id: 'e9', date: '2026-11-02', artist: 'א', price: 1000, _state: 'yellow' }], new Map());
   if (!/אירועים לאישור/.test(bare)) throw new Error('רשימת הלאישור אינה מסומנת');
-  if (/ריכוז קבלנים/.test(bare)) throw new Error('נדפסה טבלת קבלנים ריקה');
   if (!/אין קבלנים באירוע זה/.test(bare)) throw new Error('אירוע בלי קבלנים אינו מסומן ככזה');
   if (!/נובמבר 2026/.test(bare)) throw new Error('חודש בלי קבלנים נשבר');
 
@@ -2793,6 +2792,43 @@ check('דוח אירועים חודשי — נבנה, מסכם נכון, ומח�
   if (!/_evMonthGroups\[_evmKey\(mode, k\)\] = list/.test(grp)) throw new Error('אירועי החודש לא נשמרים לדוח');
   const head = grp.slice(grp.indexOf('<div class="row-between"'), grp.indexOf('</div>\n        <span'));
   if (head.indexOf('evMonthReport') < head.indexOf('</h3>')) throw new Error('הכפתור בתוך הכותרת — לחיצה עליו תקפל את החודש');
+  return true;
+});
+
+// חיתוך העמודים ב-PDF: html2canvas מרנדר הכל לתמונה אחת שנחתכת לפי גובה עמוד,
+// ולכן כרטיס אירוע היה נחתך באמצע. עכשיו שבירה שנופלת בתוך גוש .pdf-keep
+// מקצרת את העמוד, והגוש כולו יורד לעמוד הבא.
+check('PDF — כרטיס אירוע אינו נחתך בין שני עמודים', () => {
+  const src = app.slice(app.indexOf('async function _htmlToPdfBlob'), app.indexOf('function _blobToBase64'));
+  if (!/querySelectorAll\('\.pdf-keep'\)/.test(src)) throw new Error('הגושים לא נאספים לפני הרינדור');
+  if (!/getBoundingClientRect/.test(src)) throw new Error('הגושים לא נמדדים');
+
+  // משחזרים את לוגיקת החיתוך בלבד, ומריצים אותה על גושים בגדלים שונים
+  const loop = src.match(/const pagePx = [\s\S]*?\n    \}/);
+  if (!loop) throw new Error('לולאת חיתוך העמודים לא נמצאה');
+  const body = loop[0]
+    .replace(/const c2 = document[\s\S]*?pdf\.addImage\([^;]*;/, 'out.push({ start: sPos, h: sliceH });')
+    .replace(/if \(!first\) pdf\.addPage\(\);/, '');
+  const run = (canvasH, keep, pageH = 1000, scale = 1) =>
+    new Function('canvas', 'keep', 'pageH', 'scale', `const out=[];\n${body}\nreturn out;`)(
+      { height: canvasH }, keep, pageH, scale);
+
+  // גוש שמתחיל ב-900 ומסתיים ב-1400 — השבירה ב-1000 נופלת בתוכו
+  const pages = run(2000, [{ start: 900, end: 1400 }]);
+  if (pages[0].h !== 900) throw new Error('העמוד לא קוצר — הכרטיס עדיין נחתך');
+  if (pages[1].start !== 900) throw new Error('העמוד הבא אינו מתחיל בתחילת הכרטיס');
+  const covered = pages.reduce((a, p) => a + p.h, 0);
+  if (covered !== 2000) throw new Error('החיתוך איבד או שכפל תוכן: ' + covered);
+
+  // גוש שגבוה מעמוד שלם אין לאן להוריד — נחתך, ובלבד שלא ייווצרו עמודים ריקים
+  const tall = run(3000, [{ start: 500, end: 2800 }]);
+  if (tall[0].h !== 1000) throw new Error('גוש ענק גרם לקיצור עמוד מיותר');
+  if (tall.some(p => p.h <= 0)) throw new Error('נוצר עמוד ריק');
+  if (tall.reduce((a, p) => a + p.h, 0) !== 3000) throw new Error('תוכן אבד בגוש ענק');
+
+  // בלי גושים כלל — התנהגות רגילה, עמודים מלאים
+  const plain = run(2500, []);
+  if (plain.length !== 3 || plain[0].h !== 1000) throw new Error('החיתוך הרגיל השתנה');
   return true;
 });
 
