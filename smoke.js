@@ -2726,42 +2726,65 @@ check('דוחות לוח האירועים — לאירוע ולחודש, נבנ�
 // ההוצאה היא תשלומי קבלנים, והסטטוס נגזר מ-evPayState (שרואה גם התאמת בנק).
 check('דוח אירועים חודשי — נבנה, מסכם נכון, ומחובר לכפתור בכותרת החודש', () => {
   const helpers = app.slice(app.indexOf('const _repMoney ='), app.indexOf('function boardEventReportHtml'));
-  const src = app.slice(app.indexOf('const EV_PAY_LABEL ='), app.indexOf('window.evMonthReport ='));
+  const src = app.slice(app.indexOf('const evShiftTotal ='), app.indexOf('window.evMonthReport ='));
   const stubs = `
     const escapeHtml=(x)=>String(x==null?'':x), ddmy=(d)=>String(d||''), todayIso=()=>'2026-09-19';
     const currentCompanyName=()=>'BPM', VAT_RATE=0.18;
     const MONTHS_HE=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
     const monthKeyLabel=(k)=>{const [y,m]=String(k).split('-');return MONTHS_HE[(+m)-1]+' '+y;};
     const SHORT_BILL={10:'הצעה',300:'עסקה',305:'מס',320:'מס-קבלה',400:'קבלה',330:'זיכוי'};
-    const evGross=(e)=>Number(e.price)||0;
+    const EV_PAY_LABEL={green:'שולם',yellow:'ממתין לתשלום',red:'ללא חשבונית',none:'ללא חיוב'};
+    const EV_PAY_COLOR={green:'#0a7d33',yellow:'#b45309',red:'#b42318',none:'#6b7488'};
+    const evLedQty=(e)=>(Number(e.ledMeters)||0)||((Number(e.ledPricePerMeter)||0)?1:0);
+    const evGross=(e)=>(Number(e.price)||0)+(Number(e.priceLighting)||0)+((Number(e.ledPricePerMeter)||0)*evLedQty(e));
     const activeLinkedDocs=(e)=>(e.linkedDocs||[]).filter(d=>!d.credited&&!d.credit&&!d.converted);
     const evPayState=(e)=>e._state;
   `;
   const build = new Function(`${stubs}\n${helpers}\n${src}\nreturn evMonthReportHtml;`)();
-  const ev = (o) => ({ date: '2026-10-08', artist: 'זמר', location: 'אולם', clientName: 'לקוח', price: 10000,
-    employees: ['דנה'], contractorDetails: [{ name: 'סאונד בע״מ', amount: 2000, paid: false }],
+  const ev = (o) => ({ id: 'e1', date: '2026-10-08', artist: 'זמר', location: 'אולם', clientName: 'לקוח', price: 10000,
+    employees: ['דנה'], employeeDetails: [{ name: 'דנה', factor: 1.5, note: 'הגיעה מוקדם' }],
+    contractorDetails: [{ name: 'סאונד בע״מ', amount: 2000, paid: false }],
     linkedDocs: [{ type: 320, number: 30268 }], _state: 'green', ...o });
+  const second = ev({ id: 'e2', artist: 'זמרת', price: 5000, _state: 'red', linkedDocs: [], employees: [], employeeDetails: [],
+    contractorDetails: [{ name: 'סאונד בע״מ', amount: 500, paid: true, paidSource: 'bank' }] });
+  // משמרות כפי שהן חוזרות מ-/api/payroll: יומית וחצי מפורקת לתשלום + בונוס
+  const shifts = new Map([['e1', [{ name: 'דנה', base: 800, bonus: 400, food: 50, travel: 30, factor: 1.5, factorLabel: 'יומית וחצי', note: 'הגיעה מוקדם' }]]]);
 
-  const rep = build('2026-10', 'approved', [ev(), ev({ artist: 'זמרת', price: 5000, _state: 'red', linkedDocs: [],
-    contractorDetails: [{ name: 'סאונד בע״מ', amount: 500, paid: true }] })]);
+  const rep = build('2026-10', 'approved', [ev(), second], shifts);
   for (const [pat, what] of [[/אוקטובר 2026/, 'שם החודש'], [/אירועים מאושרים/, 'סוג הרשימה'],
       [/15,000/, 'סה״כ הכנסה'], [/17,700/, 'כולל מע״מ'], [/2,500/, 'תשלומי קבלנים'],
-      [/12,500/, 'סה״כ לאחר קבלנים'], [/מצב החיוב/, 'פילוח מצב החיוב'], [/שולם/, 'סטטוס ששולם'],
-      [/ללא חשבונית/, 'סטטוס ללא חשבונית'], [/ריכוז קבלנים/, 'ריכוז הקבלנים'],
-      [/סאונד/, 'שם הקבלן'], [/מס-קבלה #30268/, 'מסמך החיוב'], [/דנה/, 'עובד']]) {
+      [/מצב החיוב/, 'פילוח מצב החיוב'], [/ללא חשבונית/, 'סטטוס ללא חשבונית'],
+      [/פירוט לכל אירוע/, 'סעיף הפירוט'], [/סאונד/, 'שם הקבלן'], [/מס-קבלה #30268/, 'מסמך החיוב'],
+      [/דנה/, 'עובד'], [/יומית וחצי/, 'תווית היומית'], [/הגיעה מוקדם/, 'הערת המשמרת'],
+      [/>עלות עובדים</, 'סיכום עלות העובדים'], [/התאמת בנק/, 'מקור התשלום לקבלן']]) {
     if (!pat.test(rep)) throw new Error('חסר בדוח: ' + what);
   }
   // הפילוח מפריד בין המצבים: 10,000 שולם מול 5,000 ללא חשבונית
   const st = rep.slice(rep.indexOf('מצב החיוב'), rep.indexOf('אירועי החודש'));
   if (!/10,000/.test(st) || !/5,000/.test(st)) throw new Error('הפילוח לפי מצב חיוב אינו מסכם נכון');
-  // קבלן שחלק מהתשלומים שלו טרם שולמו — רק החלק הפתוח נספר
-  const sup = rep.slice(rep.indexOf('ריכוז קבלנים'));
-  if (!/2,500/.test(sup)) throw new Error('סה״כ הקבלן שגוי');
-  if (!/2,000/.test(sup)) throw new Error('החלק שטרם שולם אצל הקבלן שגוי');
+  // הפירוט הוא לכל אירוע בנפרד — שני כרטיסים, כל אחד עם הקבלנים והעובדים שלו
+  const det = rep.slice(rep.indexOf('פירוט לכל אירוע'));
+  if ((det.match(/קבלנים \/ ספקים/g) || []).length !== 2) throw new Error('הפירוט אינו נפרד לכל אירוע');
+  if (!/אין עובדים באירוע זה/.test(det)) throw new Error('אירוע בלי עובדים אינו מסומן ככזה');
+  // הפירוק של יומית וחצי מגיע מהשכר ולא מחושב מחדש: 800 + 400 + 50 + 30 = 1,280
+  if (!/1,280/.test(det)) throw new Error('סה״כ המשמרת שגוי');
+  if (!/טרם שולם/.test(det) || !/✓ שולם/.test(det)) throw new Error('סטטוס התשלום לקבלן חסר בפירוט');
+  // "נותר" מוריד גם קבלנים וגם עובדים: 10,000 − 2,000 − 1,280 = 6,720
+  if (!/6,720/.test(det)) throw new Error('השורה התחתונה של האירוע אינה מורידה את עלות העובדים');
+  // בלי נתוני שכר הדוח עדיין יוצא — עם העובדים, בלי הסכומים ובלי עמודת העובדים
+  const noPay = build('2026-10', 'approved', [ev()], null);
+  if (!/דנה/.test(noPay)) throw new Error('בלי שכר העובד נעלם לגמרי');
+  if (/>עלות עובדים</.test(noPay)) throw new Error('בלי שכר מוצגת עלות עובדים שאינה ידועה');
+  if (!/ללא עלות עובדים/.test(noPay)) throw new Error('חסר חיווי שעלות העובדים אינה כלולה');
+  // פירוק התמחור מופיע לכל אירוע, ורק הרכיבים שמולאו
+  const led = build('2026-10', 'approved', [ev({ priceLighting: 1200, ledPricePerMeter: 300, ledMeters: 4 })], shifts);
+  if (!/תאורה/.test(led) || !/מסך לד \(4מ׳\)/.test(led)) throw new Error('פירוק התמחור חסר');
+  if (/סאונד <b>/.test(led)) throw new Error('רכיב תמחור ריק נדפס');
   // חודש ללא קבלנים/עובדים לא מפיל את הדוח ולא מדפיס טבלאות ריקות
-  const bare = build('2026-11', 'pending', [{ date: '2026-11-02', artist: 'א', price: 1000, _state: 'yellow' }]);
+  const bare = build('2026-11', 'pending', [{ id: 'e9', date: '2026-11-02', artist: 'א', price: 1000, _state: 'yellow' }], new Map());
   if (!/אירועים לאישור/.test(bare)) throw new Error('רשימת הלאישור אינה מסומנת');
   if (/ריכוז קבלנים/.test(bare)) throw new Error('נדפסה טבלת קבלנים ריקה');
+  if (!/אין קבלנים באירוע זה/.test(bare)) throw new Error('אירוע בלי קבלנים אינו מסומן ככזה');
   if (!/נובמבר 2026/.test(bare)) throw new Error('חודש בלי קבלנים נשבר');
 
   // הכפתור בכותרת החודש קיים, בשני המצבים, ומחוץ ל-onclick שמקפל את החודש

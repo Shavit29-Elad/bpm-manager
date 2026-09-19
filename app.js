@@ -8314,12 +8314,21 @@ window.boardMonthReport = (month, btn) => {
 // לבדם — הוא רואה גם התאמת בנק ומסמך שנסגר בחשבונית ירוקה.
 const EV_PAY_LABEL = { green: 'שולם', yellow: 'ממתין לתשלום', red: 'ללא חשבונית', none: 'ללא חיוב' };
 const EV_PAY_COLOR = { green: '#0a7d33', yellow: '#b45309', red: '#b42318', none: '#6b7488' };
-function evMonthReportHtml(monthKey, mode, events) {
+// עלות העובדים אינה שמורה על האירוע — התעריף היומי יושב בכרטיס העובד, והפירוק
+// לתשלום/בונוס נעשה ב-payroll.js. לכן הדוח מושך את המשמרות מ-/api/payroll
+// ומשתמש באותם מספרים שמופיעים במסך השכר, במקום לחשב אותם מחדש כאן.
+const evShiftTotal = (s) => (Number(s.base) || 0) + (Number(s.bonus) || 0) + (Number(s.food) || 0) + (Number(s.travel) || 0);
+const EV_FACTOR_LABEL = { 0.5: 'חצי יומית', 1: 'יומית', 1.5: 'יומית וחצי', 2: 'יומית כפולה' };
+function evMonthReportHtml(monthKey, mode, events, shiftsByEvent) {
   const evs = (events || []).slice().sort((a, b) => String(a.date || a.dateRaw || '').localeCompare(String(b.date || b.dateRaw || '')));
   const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
   const ctrOf = (e) => (e.contractorDetails || []).reduce((t, c) => t + (Number(c.amount) || 0), 0);
+  const shiftsOf = (e) => (shiftsByEvent && shiftsByEvent.get(e.id)) || [];
+  const havePay = Boolean(shiftsByEvent);
+  const empOf = (e) => shiftsOf(e).reduce((t, s) => t + evShiftTotal(s), 0);
   const gross = r2(evs.reduce((s, e) => s + evGross(e), 0));
   const ctrCost = r2(evs.reduce((s, e) => s + ctrOf(e), 0));
+  const empCost = r2(evs.reduce((s, e) => s + empOf(e), 0));
   const withVat = r2(gross * (1 + VAT_RATE));
 
   // פילוח לפי מצב החיוב — כמה אירועים וכמה כסף בכל מצב
@@ -8330,7 +8339,7 @@ function evMonthReportHtml(monthKey, mode, events) {
       _repMoney(r2(byState[st].sum)), { color: EV_PAY_COLOR[st] })).join('');
 
   const rows = evs.map(e => {
-    const g = evGross(e), ctr = ctrOf(e), st = evPayState(e);
+    const g = evGross(e), ctr = ctrOf(e), emp = empOf(e), st = evPayState(e);
     const docs = activeLinkedDocs(e).map(d => `${SHORT_BILL[Number(d.type)] || 'מסמך'}${d.number != null ? ' #' + d.number : ''}`).join(', ');
     return `<tr>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;white-space:nowrap">${ddmy(e.date || e.dateRaw)}</td>
@@ -8339,10 +8348,82 @@ function evMonthReportHtml(monthKey, mode, events) {
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(g)}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(r2(g * (1 + VAT_RATE)))}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#b42318">${ctr ? '−' + _repMoney(ctr) : '—'}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;font-weight:700">${_repMoney(r2(g - ctr))}</td>
+      ${havePay ? `<td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#b42318">${emp ? '−' + _repMoney(emp) : '—'}</td>` : ''}
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;font-weight:700">${_repMoney(r2(g - ctr - emp))}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;font-size:11px">${escapeHtml(docs) || '—'}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;white-space:nowrap;color:${EV_PAY_COLOR[st]}">${EV_PAY_LABEL[st]}</td></tr>`;
-  }).join('') || '<tr><td colspan="9" style="padding:10px;color:#6b7488">אין אירועים בחודש זה.</td></tr>';
+  }).join('') || `<tr><td colspan="${havePay ? 10 : 9}" style="padding:10px;color:#6b7488">אין אירועים בחודש זה.</td></tr>`;
+
+  // ---- פירוט מלא לכל אירוע ----
+  // זה גוף הדוח: לכל אירוע בנפרד — מתוך מה מורכב המחיר, מי הקבלנים וכמה מהם
+  // כבר שולמו, אילו עובדים עבדו ובכמה, אילו מסמכים הופקו, ומה נשאר בשורה התחתונה.
+  const cell = (v, extra = '') => `<td style="padding:4px 8px;border-bottom:1px solid #edeff7;${extra}">${v}</td>`;
+  const mini = (title, head, body) => `<div style="margin-top:8px">
+    <div style="font-size:11.5px;font-weight:700;color:#4338ca;margin-bottom:3px">${title}</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+      <thead><tr style="background:#f2f3fb">${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+
+  const details = evs.map(e => {
+    const g = evGross(e), ctr = ctrOf(e), st = evPayState(e);
+    const shifts = shiftsOf(e), emp = empOf(e);
+    // מתוך מה מורכב המחיר — רק הרכיבים שמולאו
+    const parts = [['הופעה', e.price], ['תאורה', e.priceLighting], ['סאונד', e.priceSound], ['בקליין', e.priceBackline],
+      [`מסך לד${evLedQty(e) ? ` (${evLedQty(e)}מ׳)` : ''}`, (Number(e.ledPricePerMeter) || 0) * evLedQty(e)], ['תוספות', e.priceExtras]]
+      .filter(([, v]) => Number(v) > 0)
+      .map(([l, v]) => `<span style="display:inline-block;border:1px solid #d8dced;border-radius:6px;padding:1px 7px;margin:0 0 3px 4px;font-size:11px">${l} <b>${_repMoney(v)}</b></span>`).join('')
+      || '<span style="color:#6b7488;font-size:11px">לא הוזן תמחור</span>';
+
+    const ctrRows = (e.contractorDetails || []).filter(c => (c.name || '').trim()).map(c => {
+      const paid = Boolean(c.paid);
+      const how = paid ? (c.paidSource === 'manual' ? 'סומן ידנית' : c.paidSource === 'bank' ? 'התאמת בנק' : '') : '';
+      return `<tr>${cell(escapeHtml(c.name))}${cell(_repMoney(c.amount), 'text-align:left;white-space:nowrap')}
+        ${cell(`<span style="color:${paid ? '#0a7d33' : '#b45309'}">${paid ? '✓ שולם' : 'טרם שולם'}</span>${how ? `<span style="color:#6b7488"> · ${how}</span>` : ''}`, 'white-space:nowrap')}
+        ${cell(escapeHtml((c.paidInvoice && String(c.paidInvoice)) || ''), 'font-size:11px;color:#6b7488')}</tr>`;
+    }).join('');
+
+    const empRows = (havePay ? shifts.map(s => {
+      const lbl = s.factorLabel || EV_FACTOR_LABEL[Number(s.factor)] || (s.factor != null ? `×${s.factor}` : '');
+      return `<tr>${cell(escapeHtml(s.name))}${cell(escapeHtml(lbl), 'white-space:nowrap;color:#6b7488')}
+        ${cell(_repMoney(s.base), 'text-align:left;white-space:nowrap')}${cell(s.bonus ? _repMoney(s.bonus) : '—', 'text-align:left;white-space:nowrap')}
+        ${cell(s.food ? _repMoney(s.food) : '—', 'text-align:left;white-space:nowrap')}${cell(s.travel ? _repMoney(s.travel) : '—', 'text-align:left;white-space:nowrap')}
+        ${cell(_repMoney(evShiftTotal(s)), 'text-align:left;white-space:nowrap;font-weight:700')}
+        ${cell(escapeHtml(s.note || ''), 'font-size:11px;color:#6b7488')}</tr>`;
+    }).join('')
+      // בלי נתוני שכר (למשל משתמש צפייה) — לפחות מי עבד ובאיזו יומית, בלי סכומים
+      : (e.employeeDetails || []).filter(w => (w.name || '').trim()).map(w =>
+        `<tr>${cell(escapeHtml(w.name))}${cell(escapeHtml(EV_FACTOR_LABEL[Number(w.factor)] || ''), 'white-space:nowrap;color:#6b7488')}
+        ${cell('—', 'text-align:left')}${cell(w.bonus ? _repMoney(w.bonus) : '—', 'text-align:left;white-space:nowrap')}
+        ${cell(w.food ? _repMoney(w.food) : '—', 'text-align:left;white-space:nowrap')}${cell(w.travel ? _repMoney(w.travel) : '—', 'text-align:left;white-space:nowrap')}
+        ${cell('—', 'text-align:left')}${cell(escapeHtml(w.note || ''), 'font-size:11px;color:#6b7488')}</tr>`).join('')) ;
+
+    const docs = (e.linkedDocs || []).length
+      ? (e.linkedDocs || []).map(d => `<span style="display:inline-block;border:1px solid #d8dced;border-radius:6px;padding:1px 7px;margin:0 0 3px 4px;font-size:11px${d.converted || d.credited || d.credit ? ';color:#6b7488' : ''}">${SHORT_BILL[Number(d.type)] || 'מסמך'}${d.number != null ? ' #' + d.number : ''}${d.converted ? ' (הומר)' : ''}${d.credit ? ' (זיכוי)' : ''}${d.credited ? ' (זוכה)' : ''}</span>`).join('')
+      : '<span style="color:#6b7488;font-size:11px">לא הופק מסמך</span>';
+
+    return `<div style="border:1px solid #d8dced;border-radius:8px;padding:10px 12px;margin-bottom:10px;page-break-inside:avoid">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;border-bottom:1px solid #edeff7;padding-bottom:6px">
+        <div><b style="font-size:13.5px">${ddmy(e.date || e.dateRaw)} · ${escapeHtml(e.artist || 'אירוע')}</b>
+          <div style="font-size:11.5px;color:#6b7488">${[e.location, e.clientName].filter(Boolean).map(escapeHtml).join(' · ') || '—'}</div></div>
+        <div style="text-align:left"><b style="font-size:13.5px">${_repMoney(g)}</b> <span style="font-size:11px;color:#6b7488">ללא מע״מ</span>
+          <div style="font-size:11.5px;color:${EV_PAY_COLOR[st]}">${EV_PAY_LABEL[st]} · כולל מע״מ ${_repMoney(r2(g * (1 + VAT_RATE)))}</div></div>
+      </div>
+      <div style="margin-top:7px">${parts}</div>
+      ${ctrRows ? mini('קבלנים / ספקים',
+        `<th style="padding:4px 8px;text-align:right">שם</th><th style="padding:4px 8px;text-align:left">סכום</th><th style="padding:4px 8px;text-align:right">תשלום</th><th style="padding:4px 8px;text-align:right">חשבונית</th>`,
+        ctrRows) : '<div style="margin-top:7px;font-size:11.5px;color:#6b7488">אין קבלנים באירוע זה.</div>'}
+      ${empRows ? mini('עובדים',
+        `<th style="padding:4px 8px;text-align:right">שם</th><th style="padding:4px 8px;text-align:right">יומית</th><th style="padding:4px 8px;text-align:left">תשלום</th><th style="padding:4px 8px;text-align:left">בונוס</th><th style="padding:4px 8px;text-align:left">אוכל</th><th style="padding:4px 8px;text-align:left">נסיעות</th><th style="padding:4px 8px;text-align:left">סה״כ</th><th style="padding:4px 8px;text-align:right">הערה</th>`,
+        empRows) : '<div style="margin-top:7px;font-size:11.5px;color:#6b7488">אין עובדים באירוע זה.</div>'}
+      <div style="margin-top:8px"><span style="font-size:11.5px;font-weight:700;color:#4338ca">מסמכי חיוב</span> ${docs}</div>
+      <div style="margin-top:8px;padding-top:6px;border-top:1px solid #edeff7;font-size:12px">
+        הכנסה <b>${_repMoney(g)}</b>
+        ${ctr ? ` · קבלנים <b style="color:#b42318">−${_repMoney(ctr)}</b>` : ''}
+        ${(havePay && emp) ? ` · עובדים <b style="color:#b42318">−${_repMoney(emp)}</b>` : ''}
+        · נותר <b style="color:${(g - ctr - emp) >= 0 ? '#0a7d33' : '#b42318'}">${_repMoney(r2(g - ctr - emp))}</b>
+        ${havePay ? '' : '<span style="color:#6b7488"> · ללא עלות עובדים</span>'}
+      </div>
+    </div>`;
+  }).join('');
 
   // ריכוז קבלנים: כמה כל אחד מקבל בחודש וכמה מזה טרם שולם
   const bySup = new Map();
@@ -8359,32 +8440,26 @@ function evMonthReportHtml(monthKey, mode, events) {
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(r2(g.sum))}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:${g.open ? '#b45309' : '#0a7d33'}">${g.open ? _repMoney(r2(g.open)) : '✓ שולם'}</td></tr>`).join('');
 
-  // ריכוז עובדים: כמה משמרות לכל אחד. בלי סכומים — תעריף העובד נשמר בשכר ולא על האירוע.
-  const byEmp = new Map();
-  for (const e of evs) for (const nm of (e.employees || [])) {
-    const n = String(nm || '').trim(); if (!n) continue;
-    byEmp.set(n, (byEmp.get(n) || 0) + 1);
-  }
-  const emp = [...byEmp.entries()].sort((a, b) => b[1] - a[1])
-    .map(([n, cnt]) => `<span style="display:inline-block;border:1px solid #d8dced;border-radius:6px;padding:2px 8px;margin:0 0 4px 4px;font-size:12px">${escapeHtml(n)} <span style="color:#6b7488">· ${cnt}</span></span>`).join('');
-
   const sub = `${evs.length} אירועים · ${mode === 'pending' ? 'אירועים לאישור' : 'אירועים מאושרים'}`;
   return `${_repHead('דוח אירועים — ' + monthKeyLabel(monthKey), sub)}
     <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">
       ${_repRow('הכנסה (ללא מע״מ)', _repMoney(gross), { bold: true, color: '#0a7d33' })}
       ${_repRow('כולל מע״מ', _repMoney(withVat))}
       ${ctrCost ? _repRow('תשלומי קבלנים', '−' + _repMoney(ctrCost), { color: '#b42318' }) : ''}
-      ${ctrCost ? _repRow('סה״כ לאחר קבלנים', _repMoney(r2(gross - ctrCost)), { bold: true }) : ''}
+      ${(havePay && empCost) ? _repRow('עלות עובדים', '−' + _repMoney(empCost), { color: '#b42318' }) : ''}
+      ${(ctrCost || empCost) ? _repRow(havePay ? 'נותר אחרי קבלנים ועובדים' : 'סה״כ לאחר קבלנים',
+        _repMoney(r2(gross - ctrCost - empCost)), { bold: true }) : ''}
     </table>
     <div style="font-size:14px;font-weight:700;margin:0 0 6px">מצב החיוב</div>
     <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">${stateRows}</table>
     <div style="font-size:14px;font-weight:700;margin:0 0 6px">אירועי החודש</div>
-    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:18px">
       <thead><tr style="background:#eef0fb">
         <th style="padding:6px 8px;text-align:right">תאריך</th><th style="padding:6px 8px;text-align:right">זמר / מיקום</th>
         <th style="padding:6px 8px;text-align:right">לקוח</th><th style="padding:6px 8px;text-align:left">ללא מע״מ</th>
         <th style="padding:6px 8px;text-align:left">כולל מע״מ</th><th style="padding:6px 8px;text-align:left">קבלנים</th>
-        <th style="padding:6px 8px;text-align:left">נטו</th><th style="padding:6px 8px;text-align:right">מסמכים</th>
+        ${havePay ? '<th style="padding:6px 8px;text-align:left">עובדים</th>' : ''}
+        <th style="padding:6px 8px;text-align:left">נותר</th><th style="padding:6px 8px;text-align:right">מסמכים</th>
         <th style="padding:6px 8px;text-align:right">סטטוס</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr style="font-weight:700;background:#f7f8fc">
@@ -8392,22 +8467,43 @@ function evMonthReportHtml(monthKey, mode, events) {
         <td style="padding:6px 8px;text-align:left">${_repMoney(gross)}</td>
         <td style="padding:6px 8px;text-align:left">${_repMoney(withVat)}</td>
         <td style="padding:6px 8px;text-align:left">${ctrCost ? '−' + _repMoney(ctrCost) : '—'}</td>
-        <td style="padding:6px 8px;text-align:left">${_repMoney(r2(gross - ctrCost))}</td>
+        ${havePay ? `<td style="padding:6px 8px;text-align:left">${empCost ? '−' + _repMoney(empCost) : '—'}</td>` : ''}
+        <td style="padding:6px 8px;text-align:left">${_repMoney(r2(gross - ctrCost - empCost))}</td>
         <td colspan="2"></td></tr></tfoot>
     </table>
-    ${sup ? `<div style="font-size:14px;font-weight:700;margin:0 0 6px">ריכוז קבלנים</div>
+    <div style="font-size:14px;font-weight:700;margin:0 0 8px">פירוט לכל אירוע</div>
+    ${details || '<div style="color:#6b7488;font-size:12px">אין אירועים בחודש זה.</div>'}
+    ${sup ? `<div style="font-size:14px;font-weight:700;margin:14px 0 6px">נספח — ריכוז קבלנים לחודש</div>
     <table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:16px">
       <thead><tr style="background:#eef0fb">
         <th style="padding:6px 8px;text-align:right">קבלן</th><th style="padding:6px 8px;text-align:center">אירועים</th>
         <th style="padding:6px 8px;text-align:left">סה״כ</th><th style="padding:6px 8px;text-align:left">טרם שולם</th></tr></thead>
-      <tbody>${sup}</tbody></table>` : ''}
-    ${emp ? `<div style="font-size:14px;font-weight:700;margin:0 0 6px">עובדים בחודש</div><div>${emp}</div>` : ''}`;
+      <tbody>${sup}</tbody></table>` : ''}`;
 }
 
-window.evMonthReport = (mode, monthKey, btn) => {
+window.evMonthReport = async (mode, monthKey, btn) => {
   const list = _evMonthGroups[_evmKey(mode, monthKey)];
   if (!list || !list.length) return;
-  _boardPdf(evMonthReportHtml(monthKey, mode, list), `דוח אירועים - ${monthKeyLabel(monthKey)}.pdf`, btn);
+  // עלות העובדים מגיעה ממסך השכר, כדי שהדוח והשכר יראו אותם מספרים. אם השליפה
+  // נכשלת (למשל משתמש צפייה) — הדוח יוצא בלי הסכומים, ולא נכשל.
+  let shiftsByEvent = null;
+  if (/^\d{4}-\d{2}$/.test(String(monthKey))) {
+    if (btn) { btn.disabled = true; btn.textContent = 'מכין דוח…'; }
+    try {
+      const pay = await api(`/api/payroll?companyId=${state.company}&month=${monthKey}`);
+      if (Array.isArray(pay)) {
+        shiftsByEvent = new Map();
+        for (const emp of pay) for (const s of (emp.shifts || [])) {
+          if (!s.eventId) continue;
+          const arr = shiftsByEvent.get(s.eventId) || [];
+          arr.push({ ...s, name: emp.name });
+          shiftsByEvent.set(s.eventId, arr);
+        }
+      }
+    } catch { shiftsByEvent = null; }
+    if (btn) { btn.disabled = false; btn.textContent = '📄 דוח חודשי'; }
+  }
+  _boardPdf(evMonthReportHtml(monthKey, mode, list, shiftsByEvent), `דוח אירועים - ${monthKeyLabel(monthKey)}.pdf`, btn);
 };
 
 // חלונית צפייה מורחבת — הפירוט המלא של האירוע, המסמכים המקושרים והפקת חשבונית.
