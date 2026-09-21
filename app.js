@@ -10690,10 +10690,12 @@ window.openAgent = () => {
       <div><b style="font-size:15px">🤖 הסוכן</b>
         <div class="muted" style="font-size:11.5px">${escapeHtml(currentCompanyName())}${state.user && state.user.role !== 'admin' ? ' · קריאה בלבד' : ''}</div></div>
       <div style="display:flex;gap:6px">
+        <button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="agentMemory(this)">🧠 מה הוא למד</button>
         <button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="agentReset()">שיחה חדשה</button>
         <button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="document.getElementById('agentModal').classList.add('hidden')">✕</button>
       </div>
     </div>
+    <div id="agentMem" class="hidden" style="border-bottom:1px solid var(--line);background:var(--panel2,#f4f5fb);padding:10px 18px;max-height:34vh;overflow:auto"></div>
     <div id="agentLog" style="flex:1;overflow:auto;padding:14px 18px;min-height:220px"></div>
     <div style="padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px">
       <input id="agentIn" placeholder="מה יש לי בשבוע הבא?" style="flex:1;padding:9px 12px"
@@ -10707,6 +10709,46 @@ window.openAgent = () => {
 
 window.agentReset = () => { _agentMsgs = []; renderAgentLog(); };
 
+// ---- מה הסוכן למד ----
+// זיכרון שגוי משפיע על כל שיחה עתידית ואי אפשר לנחש למה הוא מתנהג מוזר.
+// לכן הכל גלוי כאן, וכל פריט ניתן למחיקה בלחיצה.
+const MEM_KIND_HE = { fact: 'עובדה', preference: 'העדפה', correction: 'תיקון' };
+const MEM_SRC_HE = { agent: 'נשמר בשיחה', reflect: 'נלמד מעצמו', user: 'הוספת ידנית' };
+
+window.agentMemory = async (btn) => {
+  const box = document.getElementById('agentMem'); if (!box) return;
+  if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  box.innerHTML = '<div class="muted" style="font-size:12.5px">טוען…</div>';
+  const r = await api('/api/agent/memory').catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || r.error) { box.innerHTML = `<span style="color:var(--danger);font-size:12.5px">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  const rows = (r.items || []).map(m => `<div style="display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:1px solid var(--line)">
+      <span style="font-size:10px;background:var(--line);border-radius:4px;padding:1px 6px;white-space:nowrap;margin-top:2px">${MEM_KIND_HE[m.kind] || 'עובדה'}</span>
+      <div style="flex:1;font-size:12.5px;line-height:1.55">${escapeHtml(m.text)}
+        <div class="muted" style="font-size:10.5px">${MEM_SRC_HE[m.source] || ''}</div></div>
+      <button class="btn ghost" style="padding:2px 8px;font-size:11px;color:var(--danger)" onclick="agentForget('${escAttr(m.id)}')">✕</button>
+    </div>`).join('');
+  box.innerHTML = `<div class="row-between" style="margin-bottom:4px">
+      <b style="font-size:12.5px">🧠 ${r.total} דברים שהוא יודע</b>
+      <button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="agentTeach()">+ למד אותו משהו</button></div>
+    ${rows || '<div class="muted" style="font-size:12.5px">עוד לא למד כלום. דבר איתו — הוא ילמד תוך כדי.</div>'}`;
+};
+
+window.agentForget = async (memId) => {
+  await fetch(`/api/agent/memory/${encodeURIComponent(memId)}?companyId=${encodeURIComponent(state.company)}`, { method: 'DELETE' }).catch(() => null);
+  const box = document.getElementById('agentMem'); if (box) box.classList.add('hidden');
+  window.agentMemory();
+};
+
+window.agentTeach = async () => {
+  const text = prompt('מה שיזכור לתמיד?\n\nלמשל: המחיר הסטנדרטי להגברה בחתונה הוא 12,000 ללא מע״מ');
+  if (!text || !text.trim()) return;
+  await fetch('/api/agent/memory', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ companyId: state.company, text: text.trim(), kind: 'fact' }) }).catch(() => null);
+  const box = document.getElementById('agentMem'); if (box) box.classList.add('hidden');
+  window.agentMemory();
+};
+
 // פתיחת מסמך מתוך השיחה — באותו צפיין של כל המערכת (זום, הגדלה, הורדה).
 // companyId מוזרק כי ה-iframe אינו עובר דרך העטיפה של fetch.
 window.agentOpenFile = (url, label) => {
@@ -10717,7 +10759,8 @@ window.agentOpenFile = (url, label) => {
 
 // תיאור קצר של הכלי שהופעל — כדי שתראה מה הוא עשה ולא רק מה הוא ענה
 const AGENT_TOOL_HE = { search_events: 'חיפש אירועים', event_details: 'פתח אירוע', open_documents: 'בדק מסמכים פתוחים',
-  find_client: 'חיפש לקוח', preview_quote: 'הכין תצוגה מקדימה', create_quote: 'הפיק הצעת מחיר', send_document: 'שלח מסמך במייל' };
+  find_client: 'חיפש לקוח', preview_quote: 'הכין תצוגה מקדימה', create_quote: 'הפיק הצעת מחיר',
+  send_document: 'שלח מסמך במייל', remember: 'שמר לזיכרון', forget: 'מחק מהזיכרון' };
 
 function renderAgentLog() {
   const box = document.getElementById('agentLog'); if (!box) return;

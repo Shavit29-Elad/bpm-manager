@@ -12,7 +12,7 @@
 //      לקריאה בלבד. מסמך מס (305/320) אינו נוצר כאן כלל — רק הצעת מחיר,
 //      שאינה מסמך מס וניתן לסגור אותה.
 
-import { load, companyEvents } from './store.js';
+import { load, save, id as newId, companyEvents } from './store.js';
 import { greenInvoice } from './greenInvoice.js';
 import { trackUsage } from './chat.js';
 import { invoiceItemsFromEvents, subjectForEvents } from './invoicing.js';
@@ -21,6 +21,73 @@ import { invoiceItemsFromEvents, subjectForEvents } from './invoicing.js';
 // שלא ייווצר import מעגלי: server.js מייבא את הקובץ הזה, לא להפך.
 let host = {};
 export function registerAgentHost(fns) { host = { ...host, ...fns }; }
+
+// ================= זיכרון =================
+// הסוכן אינו לומד מעצמו — Claude אינו מתאמן על השיחות, וכל שיחה מתחילה נקייה.
+// מה שהופך אותו למי שמכיר את העסק הוא הזיכרון כאן: עובדות והעדפות שנשמרות
+// במסד ונטענות להנחיות בכל שיחה. שתי דרכים להיכנס לזיכרון:
+//   · הסוכן קורא ל-remember תוך כדי שיחה (כשנאמר "תזכור ש..." או כשעלתה העדפה).
+//   · מעבר רפלקציה זול אחרי כל תור (learnFromTurn), שמחלץ מה שנלמד גם כשלא נאמר
+//     "תזכור" — זה מה שגורם לו להשתפר מעצם השימוש.
+// הכל גלוי למשתמש וניתן למחיקה. זיכרון שקרי גרוע מאין זיכרון.
+const MEM_MAX = 80;            // תקרה לחברה — מעבר לזה ההנחיות תופחות ומתומחרות בכל סיבוב
+const MEM_TEXT_MAX = 300;
+
+export function memoryOf(companyId) {
+  const all = load().agentMemory || {};
+  return [...(all[companyId] || []), ...(all.__all || [])];
+}
+
+function memWrite(companyId, fn) {
+  const db = load();
+  db.agentMemory = db.agentMemory || {};
+  const key = companyId || '__all';
+  db.agentMemory[key] = fn(db.agentMemory[key] || []);
+  save(db);
+  return db.agentMemory[key];
+}
+
+const memNorm = (s) => String(s || '').toLowerCase().replace(/["'׳״.,\-–—]/g, '').replace(/\s+/g, ' ').trim();
+
+// שמירה עם דדופ: פריט שדומה מאוד לקיים מחליף אותו במקום להצטבר לידו.
+// בלי זה תיקון חוזר על אותו נושא היה יוצר שני זיכרונות סותרים.
+export function rememberFact(companyId, { text, kind = 'fact', scope = 'company', source = 'agent' }) {
+  const t = String(text || '').trim().slice(0, MEM_TEXT_MAX);
+  if (t.length < 4) return { error: 'הזיכרון קצר מדי.' };
+  const key = scope === 'all' ? '__all' : companyId;
+  let saved = null, replaced = false;
+  memWrite(key, (list) => {
+    const n = memNorm(t);
+    const iSame = list.findIndex(m => memNorm(m.text) === n);
+    if (iSame >= 0) { list[iSame].at = new Date().toISOString(); saved = list[iSame]; replaced = true; return list; }
+    // אותו נושא בניסוח אחר: חפיפה גבוהה של מילים משמעותיות
+    const words = new Set(n.split(' ').filter(w => w.length > 2));
+    const iNear = list.findIndex(m => {
+      const w2 = new Set(memNorm(m.text).split(' ').filter(w => w.length > 2));
+      if (!words.size || !w2.size) return false;
+      let hit = 0; for (const w of words) if (w2.has(w)) hit++;
+      return hit / Math.max(words.size, w2.size) >= 0.75;
+    });
+    saved = { id: newId('mem'), text: t, kind, source, at: new Date().toISOString() };
+    if (iNear >= 0) { list[iNear] = saved; replaced = true; return list; }
+    list.push(saved);
+    return list.slice(-MEM_MAX);   // הישן ביותר נושר כשמתמלא
+  });
+  return { ok: true, id: saved && saved.id, replaced };
+}
+
+export function forgetFact(companyId, idOrText) {
+  const needle = memNorm(idOrText);
+  let removed = 0;
+  for (const key of [companyId, '__all']) {
+    memWrite(key, (list) => {
+      const keep = list.filter(m => m.id !== idOrText && !memNorm(m.text).includes(needle));
+      removed += list.length - keep.length;
+      return keep;
+    });
+  }
+  return removed ? { ok: true, removed } : { error: 'לא נמצא זיכרון מתאים.' };
+}
 
 const ymd = (d) => String(d || '').slice(0, 10);
 const num = (n) => (n == null || n === '' ? null : Number(n));
@@ -123,6 +190,28 @@ export const AGENT_TOOLS = [
     },
   },
   {
+    name: 'remember',
+    description: 'שמירת משהו לזיכרון הקבוע, כך שיהיה לך גם בשיחות הבאות. להשתמש כשהמשתמש אומר "תזכור ש...", כשהוא מתקן אותך, או כשעולה העדפה קבועה (מחיר סטנדרטי, ניסוח שהוא אוהב, לקוח שמתנהג אחרת). לשמור עובדה אחת קצרה וברורה בכל קריאה — לא סיכום של שיחה.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'העובדה, בניסוח שיהיה מובן גם בעוד חודש. למשל "המחיר הסטנדרטי להגברה בחתונה הוא 12,000 ללא מע״מ".' },
+        kind: { type: 'string', enum: ['fact', 'preference', 'correction'], description: 'fact = עובדה על העסק/לקוח. preference = איך הוא אוהב שתעבוד. correction = תיקון לטעות שעשית.' },
+        scope: { type: 'string', enum: ['company', 'all'], description: 'company = רק לעסק הנוכחי (ברירת מחדל). all = נכון לכל העסקים, למשל סגנון הדיבור שלו.' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'forget',
+    description: 'מחיקת פריט מהזיכרון הקבוע. להשתמש כשהמשתמש אומר "תשכח ש..." או כשמשהו שזכרת התברר כשגוי.',
+    input_schema: {
+      type: 'object',
+      properties: { match: { type: 'string', description: 'מזהה הזיכרון או טקסט שמופיע בו.' } },
+      required: ['match'],
+    },
+  },
+  {
     name: 'send_document',
     description: 'שליחת מסמך קיים במייל ללקוח, מתיבת הדואר של העסק. להשתמש רק אחרי שהמשתמש ביקש במפורש לשלוח.',
     input_schema: {
@@ -139,7 +228,9 @@ export const AGENT_TOOLS = [
 
 // preview_quote אינו כאן בכוונה: הוא אינו יוצר מסמך ואינו תופס מספר, ולכן
 // גם משתמש צפייה יכול לראות איך הצעה תיראה.
-const WRITE_TOOLS = new Set(['create_quote', 'send_document']);
+// remember/forget כן — הזיכרון משותף, ומשתמש צפייה שמלמד את הסוכן משנה את
+// ההתנהגות שלו אצל הבעלים.
+const WRITE_TOOLS = new Set(['create_quote', 'send_document', 'remember', 'forget']);
 
 // ---- מימוש הכלים ----
 // כל כלי מחזיר אובייקט שמוחזר למודל כ-JSON. שומרים אותם קטנים: כל טוקן מיותר
@@ -272,6 +363,15 @@ const EXEC = {
       date: built.opts.date, url: doc.url || null };
   },
 
+  async remember(a, { companyId }) {
+    const r = rememberFact(companyId, { text: a.text, kind: a.kind || 'fact', scope: a.scope === 'all' ? 'all' : 'company', source: 'agent' });
+    return r.error ? r : { ok: true, remembered: String(a.text).trim().slice(0, MEM_TEXT_MAX), updated: Boolean(r.replaced) };
+  },
+
+  async forget(a, { companyId }) {
+    return forgetFact(companyId, String(a.match || '').trim());
+  },
+
   async send_document(a, { companyId }) {
     if (!host.mailDocToClient) return { error: 'שליחת מייל אינה זמינה כרגע.' };
     // שולפים את המסמך כדי שנושא המייל יישא סוג ומספר. בלי זה הוא יוצא "מסמך" בלבד —
@@ -290,6 +390,15 @@ const EXEC = {
 
 // ---- הלולאה ----
 const MAX_ROUNDS = 8;   // גדר בטיחות: מודל שנתקע בלולאת כלים לא ישרוף תקציב
+
+const MEM_KIND_HE = { fact: 'עובדה', preference: 'העדפה', correction: 'תיקון' };
+function memoryBlock(companyId) {
+  const list = memoryOf(companyId);
+  if (!list.length) return '';
+  return `\n\n**מה שלמדת עד היום על העסק הזה ועל מי שאתה עובד אצלו.** זה גובר על
+הנחות כלליות, ואם משהו כאן סותר את מה שנראה לך הגיוני — מה שכאן נכון:
+${list.map(m => `· [${MEM_KIND_HE[m.kind] || 'עובדה'}] ${m.text}`).join('\n')}`;
+}
 
 function systemPrompt({ companyName, today, allowWrites }) {
   return `אתה העוזר האישי של בעל העסק "${companyName}" — חברת הפקות, הגברה ותאורה.
@@ -328,7 +437,13 @@ function systemPrompt({ companyName, today, allowWrites }) {
 · הצעת מחיר היא **ללא מע״מ** בשורות. אם הוא נקב בסכום "כולל מע״מ" — חלק ב-1.18 ואמור לו מה עשית.
 · אחרי הפקת מסמך, דווח מספר מסמך וסכום. אל תשלח ללקוח אלא אם ביקש במפורש.
 ${allowWrites ? '' : '· אתה במצב קריאה בלבד — אינך יכול להפיק או לשלוח מסמכים. אם הוא מבקש, אמור זאת.\n'}
-· חשבונית מס וחשבונית מס-קבלה אינן נוצרות דרכך. אם הוא מבקש — הפנה אותו לאתר.`;
+· חשבונית מס וחשבונית מס-קבלה אינן נוצרות דרכך. אם הוא מבקש — הפנה אותו לאתר.
+
+**תלמד תוך כדי עבודה.** אתה לא זוכר שיחות קודמות מלבד מה ששמור בזיכרון, ולכן
+הפעל remember בכל פעם שעולה משהו שיועיל לך גם בעוד חודש: מחיר סטנדרטי, איך הוא
+מנסח, מה לקוח מסוים דורש, טעות שעשית ואיך היא נראית נכון. אל תחכה ל"תזכור ש..." —
+אם הוא תיקן אותך, זה תיקון ששווה לשמור. עובדה אחת לכל קריאה, קצרה ומובנת.
+אל תשמור פרטים חד-פעמיים (סכום של אירוע מסוים, תאריך של בקשה אחת) — רק מה שחוזר.`;
 }
 
 // messages: [{role:'user'|'assistant', content:string}] — היסטוריית השיחה
@@ -341,7 +456,7 @@ export async function runAgent({ companyId, companyName, messages, allowWrites =
     companyName: companyName || companyId,
     today: new Date().toISOString().slice(0, 10),
     allowWrites,
-  });
+  }) + memoryBlock(companyId);
   // ההקשר הקבוע (הנחיות + הגדרות הכלים) חוזר זהה בכל סיבוב — שווה מטמון
   const sysBlocks = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
   const convo = messages.map(m => ({ role: m.role, content: m.content }));
@@ -387,4 +502,59 @@ export async function runAgent({ companyId, companyName, messages, allowWrites =
   return { reply: 'לא הצלחתי לסיים את הבקשה — היא דרשה יותר מדי צעדים. נסה לפרק אותה.', steps };
 }
 
-export default { runAgent, AGENT_TOOLS, registerAgentHost };
+// ================= רפלקציה: לימוד בלי שביקשו =================
+// הכלי remember תופס רק מה שהסוכן שם לב אליו תוך כדי תשובה. המעבר הזה רץ
+// *אחרי* שהתשובה כבר נשלחה, קורא את התור האחרון בעיניים של "מה למדנו כאן",
+// ושומר. זה מה שגורם לו להשתפר מעצם השימוש ולא רק כשאומרים לו "תזכור".
+//
+// שלוש בחירות מכוונות:
+//   · Haiku ולא Sonnet — זו משימת חילוץ קצרה שרצה בכל תור. פי 3 זול יותר.
+//   · רץ ברקע ולא חוסם את התשובה. כישלון שלו לא מורגש ואינו מפיל כלום.
+//   · שמרני בכוונה: עדיף להחמיץ לקח מלשמור זיכרון שגוי, כי זיכרון שגוי
+//     ישפיע על כל שיחה עתידית ואף אחד לא יבין למה.
+const REFLECT_SYSTEM = `אתה מחלץ לקחים משיחה בין בעל עסק (הפקות, הגברה ותאורה) לעוזר שלו.
+החזר JSON בלבד: {"learn":[{"text":"...","kind":"fact|preference|correction","scope":"company|all"}]}
+
+שמור רק מה שיעזור לעוזר **בשיחה אחרת, בעוד חודש**:
+· העדפה קבועה — איך הוא רוצה שדברים ייעשו, איך הוא מנסח, מה הוא לא אוהב.
+· עובדה שחוזרת — מחיר סטנדרטי, כינוי של לקוח, איך לקוח מסוים עובד, מי הקבלן הקבוע.
+· תיקון — העוזר טעה והמשתמש תיקן. שמור את הנוסח הנכון.
+
+אל תשמור:
+· פרט חד-פעמי (סכום של אירוע מסוים, תאריך של בקשה, מספר מסמך שהופק).
+· מה שכבר מופיע ברשימת "ידוע כבר" למטה.
+· ניחוש. אם לא נאמר במפורש — אל תשמור.
+· את תוכן השאלה או התשובה כסיכום. רק לקח.
+
+ברוב התורים אין מה ללמוד. במקרה כזה החזר {"learn":[]} — זו התשובה הנכונה והשכיחה.`;
+
+export async function learnFromTurn({ companyId, userText, assistantText }) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key || !userText || !assistantText) return { learned: [] };
+  const known = memoryOf(companyId).map(m => '· ' + m.text).join('\n') || '(ריק)';
+  const model = process.env.AGENT_REFLECT_MODEL || 'claude-haiku-4-5-20251001';
+  const prompt = `ידוע כבר:\n${known}\n\n---\nהמשתמש: ${String(userText).slice(0, 2000)}\nהעוזר: ${String(assistantText).slice(0, 2000)}`;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({ model, max_tokens: 400, system: REFLECT_SYSTEM, messages: [{ role: 'user', content: prompt }] }),
+  });
+  if (!res.ok) return { learned: [] };
+  const data = await res.json().catch(() => null);
+  if (!data) return { learned: [] };
+  trackUsage('agent-reflect', model, data.usage);
+  const text = (data.content || []).map(c => c.text).filter(Boolean).join('');
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return { learned: [] };
+  let parsed; try { parsed = JSON.parse(m[0]); } catch { return { learned: [] }; }
+  const learned = [];
+  for (const it of (parsed.learn || []).slice(0, 3)) {   // תקרה לתור: חילוץ שמתלהב לא יציף את הזיכרון
+    if (!it || !it.text) continue;
+    const r = rememberFact(companyId, { text: it.text, kind: it.kind || 'fact', scope: it.scope === 'all' ? 'all' : 'company', source: 'reflect' });
+    if (r.ok) learned.push(it.text);
+  }
+  if (learned.length) console.log(`[agent] ${companyId}: נלמדו ${learned.length} — ${learned.join(' | ').slice(0, 200)}`);
+  return { learned };
+}
+
+export default { runAgent, AGENT_TOOLS, registerAgentHost, learnFromTurn, memoryOf, rememberFact, forgetFact };

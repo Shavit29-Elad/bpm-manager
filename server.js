@@ -27,7 +27,7 @@ import { toAcceptable as toMailableDoc } from './pngPdf.js';
 import mailer from './mailer.js';
 import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
-import { runAgent, registerAgentHost } from './aiAgent.js';
+import { runAgent, registerAgentHost, learnFromTurn, memoryOf, rememberFact, forgetFact } from './aiAgent.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
 
@@ -4438,8 +4438,38 @@ add('POST', /^\/api\/agent\/chat$/, async (req, res, _p, q, body) => {
       if (o.previewUrl) links.push({ label: 'תצוגה מקדימה', url: o.previewUrl });
       else if (o.docId) links.push({ label: `הצעת מחיר #${o.number ?? ''}`.trim(), docId: String(o.docId) });
     }
-    json(res, { ok: true, reply: r.reply, links, steps: r.steps.map(s => ({ tool: s.tool, input: s.input })) });
+    const learnedNow = r.steps.filter(s => s.tool === 'remember' && s.output && s.output.ok).map(s => s.output.remembered);
+    json(res, { ok: true, reply: r.reply, links, learned: learnedNow,
+      steps: r.steps.map(s => ({ tool: s.tool, input: s.input })) });
+    // הלימוד רץ אחרי שהתשובה נשלחה — הוא לא מאט את הסוכן, וכישלון שלו אינו מורגש.
+    // רק למנהל: משתמש צפייה לא מלמד את הסוכן של הבעלים.
+    if (isAdmin) {
+      learnFromTurn({ companyId: cid, userText: clean[clean.length - 1].content, assistantText: r.reply })
+        .catch(e => console.log('[agent] רפלקציה נכשלה: ' + e.message));
+    }
   } catch (e) { json(res, { error: e.message }, 500); }
+});
+
+// GET /api/agent/memory — מה הסוכן למד. שקיפות מלאה: זיכרון שגוי משפיע על כל
+// שיחה עתידית, ולכן חייבת להיות דרך לראות ולמחוק.
+add('GET', /^\/api\/agent\/memory$/, (req, res, _p, q) => {
+  const cid = reqCompany(q);
+  const list = memoryOf(cid).slice().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  json(res, { total: list.length, items: list });
+});
+
+add('POST', /^\/api\/agent\/memory$/, (req, res, _p, q, body) => {
+  const b = body || {}, cid = reqCompany(q, b);
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+  const r = rememberFact(cid, { text: b.text, kind: b.kind || 'fact', scope: b.scope === 'all' ? 'all' : 'company', source: 'user' });
+  json(res, r.error ? r : { ok: true, ...r }, r.error ? 400 : 200);
+});
+
+add('DELETE', /^\/api\/agent\/memory\/([^/]+)$/, (req, res, params, q) => {
+  const cid = reqCompany(q);
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+  const r = forgetFact(cid, decodeURIComponent(params[0]));
+  json(res, r.error ? r : { ok: true, ...r }, r.error ? 404 : 200);
 });
 
 // ---- הצעות מחיר שחויבו ונשארו פתוחות ----

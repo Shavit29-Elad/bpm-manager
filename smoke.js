@@ -3045,6 +3045,64 @@ check('סוכן AI — כלים כותבים רק למנהל, וכל כלי רו
   return true;
 });
 
+// הזיכרון הוא מה שהופך את הסוכן למי שמכיר את העסק — ולכן גם הסיכון: זיכרון
+// שגוי או כפול משפיע על כל שיחה עתידית ואיש לא יבין למה הוא מתנהג מוזר.
+check('סוכן AI — זיכרון: דדופ, תקרה, מחיקה, ובידוד בין עסקים', () => {
+  const src = fs.readFileSync('aiAgent.js', 'utf8');
+  const block = src.slice(src.indexOf('const MEM_MAX'), src.indexOf('const ymd =')).replace(/^export /gm, '');
+  const dbs = { agentMemory: {} };
+  const fns = new Function('load', 'save', 'newId', `${block}\nreturn { memoryOf, rememberFact, forgetFact, MEM_MAX };`)(
+    () => dbs, () => {}, (p) => p + '_' + Math.random().toString(36).slice(2, 8));
+
+  fns.rememberFact('co_bpm', { text: 'המחיר הסטנדרטי להגברה בחתונה הוא 12,000 ללא מע״מ' });
+  if (fns.memoryOf('co_bpm').length !== 1) throw new Error('הזיכרון לא נשמר');
+  // אותו טקסט בדיוק — לא נוצר כפל
+  fns.rememberFact('co_bpm', { text: 'המחיר הסטנדרטי להגברה בחתונה הוא 12,000 ללא מע״מ' });
+  if (fns.memoryOf('co_bpm').length !== 1) throw new Error('טקסט זהה נשמר פעמיים');
+  // אותו נושא בניסוח אחר — מחליף, ולא מצטבר לצד הישן וסותר אותו
+  fns.rememberFact('co_bpm', { text: 'המחיר הסטנדרטי להגברה בחתונה הוא 14,000 ללא מע״מ' });
+  const after = fns.memoryOf('co_bpm');
+  if (after.length !== 1) throw new Error('עדכון יצר זיכרון סותר: ' + after.length);
+  if (!/14,000/.test(after[0].text)) throw new Error('הערך לא עודכן');
+  // נושא אחר לגמרי — כן מתווסף
+  fns.rememberFact('co_bpm', { text: 'אבי גואטה מבקש תמיד חשבונית על שם אבי גואטה הפקות' });
+  if (fns.memoryOf('co_bpm').length !== 2) throw new Error('זיכרון בנושא אחר לא נוסף');
+
+  // בידוד בין עסקים: מה ש-BPM למד אינו מגיע לאופק
+  fns.rememberFact('co_ofek', { text: 'אצל אופק הקבלן הקבוע לתאורה הוא תאורת הצפון' });
+  if (fns.memoryOf('co_ofek').length !== 1) throw new Error('הזיכרון של אופק לא נשמר');
+  if (fns.memoryOf('co_bpm').length !== 2) throw new Error('זיכרון של אופק דלף ל-BPM');
+  // scope:'all' כן מגיע לכולם
+  fns.rememberFact('co_bpm', { text: 'הוא מעדיף תשובות קצרות', scope: 'all' });
+  if (!fns.memoryOf('co_ofek').some(m => /קצרות/.test(m.text))) throw new Error('זיכרון גלובלי לא מגיע לכל העסקים');
+
+  // טקסט קצר מדי נדחה — "כן"/"אוקיי" אינם לקח
+  if (!fns.rememberFact('co_bpm', { text: 'כן' }).error) throw new Error('טקסט קצר מדי נשמר');
+  // תקרה: הזיכרון לא תופח בלי גבול
+  for (let i = 0; i < fns.MEM_MAX + 25; i++) fns.rememberFact('co_moshe', { text: `נושא מספר ${i} עם מלל ייחודי ${i * 7}` });
+  if (fns.memoryOf('co_moshe').length > fns.MEM_MAX) throw new Error('התקרה לא נאכפת');
+
+  // מחיקה לפי טקסט ולפי מזהה
+  const target = fns.memoryOf('co_bpm').find(m => /אבי גואטה/.test(m.text));
+  if (!fns.forgetFact('co_bpm', target.id).ok) throw new Error('מחיקה לפי מזהה נכשלה');
+  if (fns.memoryOf('co_bpm').some(m => m.id === target.id)) throw new Error('הפריט לא נמחק');
+  if (fns.forgetFact('co_bpm', 'משהו שלא קיים בכלל').ok) throw new Error('מחיקה של לא-קיים דיווחה הצלחה');
+
+  // הרפלקציה: שמרנית, זולה, ולא חוסמת את התשובה
+  const refl = src.slice(src.indexOf('const REFLECT_SYSTEM'), src.indexOf('export default'));
+  if (!/haiku/i.test(refl)) throw new Error('הרפלקציה רצה על מודל יקר');
+  if (!/\{"learn":\[\]\}/.test(refl)) throw new Error('אין הנחיה להחזיר ריק כשאין מה ללמוד');
+  if (!/slice\(0, 3\)/.test(refl)) throw new Error('אין תקרה ללקחים בתור אחד');
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const route = srv.slice(srv.indexOf("add('POST', /^\\/api\\/agent\\/chat$/"), srv.indexOf("add('GET', /^\\/api\\/agent\\/memory$/"));
+  if (route.indexOf('learnFromTurn') < route.indexOf('json(res, { ok: true, reply'))
+    throw new Error('הרפלקציה חוסמת את התשובה');
+  if (!/if \(isAdmin\)/.test(route)) throw new Error('משתמש צפייה מלמד את הסוכן של הבעלים');
+  // כלי הזיכרון חסומים למשתמש צפייה
+  if (!/WRITE_TOOLS = new Set\(\[[^\]]*'remember'[^\]]*'forget'/.test(src)) throw new Error('remember/forget פתוחים לכל משתמש');
+  return true;
+});
+
 // buildQuote הוא הצומת שקובע מה בפועל יופק. תצוגה מקדימה והפקה חולקות אותו
 // בכוונה — אחרת מה שנראה בתצוגה לא היה בהכרח מה שנוצר.
 check('סוכן AI — בניית ההצעה: מאירוע, מתאריך, ובלי להמציא חסרים', async () => {
