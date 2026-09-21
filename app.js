@@ -10679,6 +10679,28 @@ function setupModal() {
 // ההיסטוריה נשמרת בזיכרון בלבד ומתאפסת ברענון — שיחה ארוכה מתומחרת בכל סיבוב.
 let _agentMsgs = [], _agentBusy = false;
 
+// Enter שולח רק במקלדת אמיתית. בטלפון Enter הוא "שורה חדשה" ככל מקלדת אחרת,
+// והשליחה בכפתור — אחרת כל ירידת שורה הייתה שולחת הודעה חצי-כתובה.
+const AGENT_ENTER_SENDS = (() => {
+  try { return window.matchMedia('(pointer: fine)').matches; } catch { return true; }
+})();
+
+window.agentKey = (e) => {
+  if (e.key !== 'Enter') return;
+  if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;   // Shift+Enter — שורה חדשה
+  if (e.isComposing || e.keyCode === 229) return;                 // באמצע הרכבת תו (מקלדות IME)
+  if (!AGENT_ENTER_SENDS) return;
+  e.preventDefault();
+  window.agentSend();
+};
+
+// גדילה לפי התוכן, עד התקרה שב-CSS. בלי זה שורה שנייה נחתכת ואינה נראית.
+window.agentGrow = (el) => {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 132) + 'px';
+};
+
 window.openAgent = () => {
   let m = document.getElementById('agentModal');
   if (!m) { m = document.createElement('div'); m.id = 'agentModal'; m.className = 'modal'; document.body.appendChild(m);
@@ -10697,11 +10719,13 @@ window.openAgent = () => {
     </div>
     <div id="agentMem" class="hidden" style="border-bottom:1px solid var(--line);background:var(--panel2,#f4f5fb);padding:10px 18px;max-height:34vh;overflow:auto"></div>
     <div id="agentLog" style="flex:1;overflow:auto;padding:14px 18px;min-height:220px"></div>
-    <div style="padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px">
-      <input id="agentIn" placeholder="מה יש לי בשבוע הבא?" style="flex:1;padding:9px 12px"
-        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();agentSend()}"/>
+    <div style="padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:flex-end">
+      <textarea id="agentIn" rows="1" placeholder="מה יש לי בשבוע הבא?"
+        style="flex:1;padding:9px 12px;resize:none;overflow-y:auto;max-height:132px;line-height:1.5;font-family:inherit"
+        onkeydown="agentKey(event)" oninput="agentGrow(this)"></textarea>
       <button class="btn primary" style="padding:8px 16px" onclick="agentSend()">שלח</button>
     </div>
+    <div class="muted" style="padding:0 18px 10px;font-size:10.5px">${AGENT_ENTER_SENDS ? 'Enter שולח · Shift+Enter שורה חדשה' : 'Enter יורד שורה · לשליחה — הכפתור'}</div>
   </div>`;
   renderAgentLog();
   setTimeout(() => { const i = document.getElementById('agentIn'); if (i) i.focus(); }, 40);
@@ -10795,6 +10819,7 @@ window.agentSend = async () => {
   const text = inp ? inp.value.trim() : '';
   if (!text || _agentBusy) return;
   inp.value = '';
+  window.agentGrow(inp);   // חזרה לשורה אחת אחרי שליחה
   _agentMsgs.push({ role: 'user', content: text });
   _agentBusy = true; renderAgentLog();
   const r = await fetch('/api/agent/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' },
