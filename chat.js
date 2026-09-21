@@ -6,7 +6,7 @@ const PRICES = {
   'claude-3-5-sonnet-20241022': { in: 3,    out: 15,  cacheW: 3.75,  cacheR: 0.30 },
 };
 export const aiUsage = { calls: 0, byLabel: {}, since: new Date().toISOString() };
-function trackUsage(label, model, u) {
+export function trackUsage(label, model, u) {
   if (!u) return;
   const i = Number(u.input_tokens) || 0, o = Number(u.output_tokens) || 0;
   const cw = Number(u.cache_creation_input_tokens) || 0, cr = Number(u.cache_read_input_tokens) || 0;

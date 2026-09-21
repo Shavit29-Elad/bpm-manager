@@ -13,6 +13,7 @@
 - `invoicing.js` — לוגיקת חיוב: קיבוץ אירועים לפי לקוח, שורות חשבונית, קבלנים לתשלום.
 - `store.js` — שמירה/טעינה (`load()`, `save()`), מזהים (`id()`), קבצים, `upsertEvent()`. Postgres כשיש `DATABASE_URL`, אחרת בזיכרון.
 - `chat.js` — AI: חילוץ אירועים מווטסאפ, קריאת חשבוניות (vision), צ'אט הצוות. Claude ראשי עם fallback ל-Gemini.
+- `aiAgent.js` — **סוכן עם כלים** (tool-use של Anthropic): חיפוש אירועים, פרטי אירוע, מסמכים פתוחים, חיפוש לקוח, הפקת הצעת מחיר, שליחת מסמך. `POST /api/agent/chat`, כפתור 🤖 צף בכל הלשוניות. שלוש גדרות: כלים כותבים רק ל-`role==='admin'` (`WRITE_TOOLS` מסוננים גם מרשימת הכלים וגם בהרצה), כל כלי עובר `companyEvents(db, companyId)` ורץ בתוך `withCompany`, ו-`MAX_ROUNDS` חוסם לולאת כלים. **אין כלי שמפיק מסמך מס** — 10 בלבד. פונקציות של server.js מוזרקות דרך `registerAgentHost` כדי למנוע import מעגלי.
 - `bankParser.js` / `bankMatch.js` — פרסור קובצי בנק (מזרחי הדבקה/HTML, דיסקונט xlsx) והצעות התאמה.
 - `index.html`, `styles.css` — מבנה + עיצוב (פלטה בהירה אינדיגו/ענבר).
 

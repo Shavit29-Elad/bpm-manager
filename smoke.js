@@ -2994,6 +2994,41 @@ check('שיוך מסמך ספק — מציג הכול עם סיבה, ולא "ל�
   return true;
 });
 
+// הסוכן מריץ פעולות אמיתיות, ולכן שתי הבדיקות כאן אינן על טקסט אלא על הגדרות
+// ההרשאה והבידוד: כלי כותב שנחשף בטעות למשתמש צפייה, או כלי שקורא אירועים בלי
+// סינון חברה, הם באג שמדליף או משנה נתונים.
+check('סוכן AI — כלים כותבים רק למנהל, וכל כלי רואה חברה אחת בלבד', async () => {
+  const agent = await import('./aiAgent.js');
+  const names = agent.AGENT_TOOLS.map(t => t.name);
+  for (const t of ['search_events', 'event_details', 'open_documents', 'find_client', 'create_quote', 'send_document'])
+    if (!names.includes(t)) throw new Error('כלי חסר: ' + t);
+  // אין כלי שמפיק מסמך מס — הצעת מחיר בלבד
+  const src = fs.readFileSync('aiAgent.js', 'utf8');
+  if (/type:\s*(305|320|300)\b/.test(src)) throw new Error('הסוכן יכול להפיק מסמך מס');
+  if (!/type:\s*10\b/.test(src)) throw new Error('הפקת הצעת המחיר לא נמצאה');
+  // כל כלי קורא-אירועים עובר דרך companyEvents (סינון חברה), לא דרך db.events
+  if (/\bdb\.events\b/.test(src)) throw new Error('קריאה ישירה ל-db.events — בלי סינון חברה');
+  if (!/companyEvents\(load\(\), companyId\)/.test(src)) throw new Error('אירועים נקראים בלי companyId');
+
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const route = srv.slice(srv.indexOf("add('POST', /^\\/api\\/agent\\/chat$/"), srv.indexOf('// ---- הצעות מחיר שחויבו'));
+  if (!route) throw new Error('ראוט הסוכן לא נמצא');
+  if (!/reqCompany\(q, b\)/.test(route)) throw new Error('הראוט אינו נוגזר מ-reqCompany');
+  if (!/req\.user && req\.user\.role === 'admin'/.test(route)) throw new Error('הרשאת הכתיבה אינה נגזרת מתפקיד המשתמש');
+  if (!/allowWrites: isAdmin/.test(route)) throw new Error('הרשאת הכתיבה אינה מועברת לסוכן');
+  if (!/withCompany\(cid,/.test(route)) throw new Error('הכלים רצים מחוץ להקשר החברה — חשבונית ירוקה תפנה לחברה הלא נכונה');
+
+  // allowWrites=false באמת מסתיר את הכלים הכותבים מהמודל
+  const loop = src.slice(src.indexOf('export async function runAgent'), src.indexOf('export default'));
+  if (!/AGENT_TOOLS\.filter\(t => allowWrites \|\| !WRITE_TOOLS\.has\(t\.name\)\)/.test(loop))
+    throw new Error('כלים כותבים נשלחים למודל גם בלי הרשאה');
+  // וגם נחסמים בהרצה — הגנה שנייה, למקרה שהמודל ינחש שם כלי
+  if (!/WRITE_TOOLS\.has\(c\.name\) && !allowWrites/.test(loop)) throw new Error('אין חסימה בהרצת הכלי עצמו');
+  // גדר מול לולאת כלים אינסופית
+  if (!/MAX_ROUNDS/.test(loop)) throw new Error('אין תקרת סיבובים — מודל תקוע ישרוף תקציב');
+  return true;
+});
+
 for (const pr of pendingAsync) { try { await pr; } catch (e) { bad('בדיקה אסינכרונית', e.message); } }
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} עברו · ${fail} נכשלו\n`);
 process.exit(fail ? 1 : 0);

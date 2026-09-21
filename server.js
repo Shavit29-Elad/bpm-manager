@@ -27,6 +27,7 @@ import { toAcceptable as toMailableDoc } from './pngPdf.js';
 import mailer from './mailer.js';
 import mailReader from './mailReader.js';
 import { hashPassword, verifyPassword, createSession, getSessionUser, destroySession, setSessionCookie, clearSessionCookie, publicUser } from './auth.js';
+import { runAgent, registerAgentHost } from './aiAgent.js';
 
 loadEnvIntoProcess(); // טוען מפתחות מ-.env אם קיים
 
@@ -4395,6 +4396,33 @@ add('GET', /^\/api\/mail-log$/, (req, res, _p, q) => {
       || String(m.ref || '').toLowerCase().includes(t)); }
   const failed = list.filter(m => !m.ok).length;
   json(res, { total: list.length, failed, items: list.slice(0, limit) });
+});
+
+// ================= סוכן AI =================
+// הסוכן מריץ כלים אמיתיים (חיפוש אירועים, הפקת הצעת מחיר, שליחת מסמך), ולכן
+// שלוש גדרות שאין לוותר עליהן:
+//   1. הרשאת כתיבה רק למנהל — משתמש צפייה מקבל סוכן קריאה בלבד.
+//   2. חברה אחת בלבד, דרך reqCompany — כמו כל ראוט שנוגע בנתוני חברה.
+//   3. הכלים רצים בתוך withCompany, אחרת קריאות חשבונית ירוקה יפנו לחברה הלא נכונה.
+registerAgentHost({ mailDocToClient });
+
+add('POST', /^\/api\/agent\/chat$/, async (req, res, _p, q, body) => {
+  const b = body || {}, cid = reqCompany(q, b);
+  const msgs = Array.isArray(b.messages) ? b.messages : [];
+  if (!msgs.length) return json(res, { error: 'אין הודעות' }, 400);
+  if (msgs.length > 40) return json(res, { error: 'השיחה ארוכה מדי — התחל חדשה' }, 400);
+  const clean = msgs.slice(-20)
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+    .map(m => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
+  if (!clean.length || clean[clean.length - 1].role !== 'user') return json(res, { error: 'ההודעה האחרונה חייבת להיות שלך' }, 400);
+  const isAdmin = Boolean(req.user && req.user.role === 'admin');
+  const co = (load().companies || []).find(c => c.id === cid);
+  try {
+    const r = await greenInvoice.withCompany(cid, () => runAgent({
+      companyId: cid, companyName: (co && co.name) || cid, messages: clean, allowWrites: isAdmin,
+    }));
+    json(res, { ok: true, reply: r.reply, steps: r.steps.map(s => ({ tool: s.tool, input: s.input })) });
+  } catch (e) { json(res, { error: e.message }, 500); }
 });
 
 // ---- הצעות מחיר שחויבו ונשארו פתוחות ----
