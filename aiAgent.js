@@ -15,6 +15,7 @@
 import { load, companyEvents } from './store.js';
 import { greenInvoice } from './greenInvoice.js';
 import { trackUsage } from './chat.js';
+import { invoiceItemsFromEvents, subjectForEvents } from './invoicing.js';
 
 // פונקציות שחיות ב-server.js (שליחת מייל, חישובי דף הבית) מוזרקות מבחוץ כדי
 // שלא ייווצר import מעגלי: server.js מייבא את הקובץ הזה, לא להפך.
@@ -66,16 +67,17 @@ export const AGENT_TOOLS = [
     },
   },
   {
-    name: 'create_quote',
-    description: 'הפקת הצעת מחיר בחשבונית ירוקה. המחירים הם ללא מע״מ — חשבונית ירוקה מוסיפה מע״מ מעליהם. לא שולח ללקוח: לשליחה יש כלי נפרד. להפיק רק אחרי שברור מי הלקוח, מה השורות ומה הסכום.',
+    name: 'preview_quote',
+    description: 'תצוגה מקדימה של הצעת מחיר — מייצר PDF לצפייה **בלי ליצור מסמך** בחשבונית ירוקה ובלי לתפוס מספר. זה הכלי המועדף כשהמשתמש מבקש "תראה לי" / "תצוגה מקדימה" / "לפני שמפיקים". מקבל את אותם שדות כמו create_quote.',
     input_schema: {
       type: 'object',
       properties: {
-        clientId: { type: 'string', description: 'מזהה לקוח קיים מ-find_client. עדיף על clientName.' },
-        clientName: { type: 'string', description: 'שם לקוח חדש, כשאין מזהה.' },
+        clientId: { type: 'string', description: 'מזהה לקוח קיים מ-find_client.' },
+        clientName: { type: 'string', description: 'שם לקוח, כשאין מזהה.' },
+        eventId: { type: 'string', description: 'מזהה אירוע — השורות ייבנו אוטומטית מהתמחור שלו (הגברה, תאורה, סאונד, בקליין, לד, תוספות). במקרה כזה items מיותר.' },
         items: {
           type: 'array',
-          description: 'שורות ההצעה.',
+          description: 'שורות ידניות. לא נדרש אם ניתן eventId.',
           items: {
             type: 'object',
             properties: {
@@ -86,10 +88,38 @@ export const AGENT_TOOLS = [
             required: ['description', 'price'],
           },
         },
-        description: { type: 'string', description: 'נושא המסמך — למשל "הגברה ותאורה · 03.11.26 · היכל מנורה".' },
+        date: { type: 'string', description: 'תאריך המסמך YYYY-MM-DD. ברירת מחדל היום.' },
+        description: { type: 'string', description: 'נושא המסמך. אם ניתן eventId ולא צוין — ייבנה מהאירוע.' },
         remarks: { type: 'string', description: 'הערה בתחתית המסמך. אופציונלי.' },
       },
-      required: ['items'],
+    },
+  },
+  {
+    name: 'create_quote',
+    description: 'הפקת הצעת מחיר אמיתית בחשבונית ירוקה — תופסת מספר מסמך. המחירים ללא מע״מ; חשבונית ירוקה מוסיפה מע״מ מעליהם. לא שולח ללקוח (לשליחה יש כלי נפרד). אם המשתמש ביקש לראות קודם — השתמש ב-preview_quote.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        clientId: { type: 'string', description: 'מזהה לקוח קיים מ-find_client. עדיף על clientName.' },
+        clientName: { type: 'string', description: 'שם לקוח חדש, כשאין מזהה.' },
+        eventId: { type: 'string', description: 'מזהה אירוע — השורות ייבנו אוטומטית מהתמחור שלו. במקרה כזה items מיותר.' },
+        items: {
+          type: 'array',
+          description: 'שורות ידניות. לא נדרש אם ניתן eventId.',
+          items: {
+            type: 'object',
+            properties: {
+              description: { type: 'string', description: 'תיאור השורה, בעברית.' },
+              price: { type: 'number', description: 'מחיר ליחידה, ללא מע״מ.' },
+              quantity: { type: 'number', description: 'כמות. ברירת מחדל 1.' },
+            },
+            required: ['description', 'price'],
+          },
+        },
+        date: { type: 'string', description: 'תאריך המסמך YYYY-MM-DD. ברירת מחדל היום.' },
+        description: { type: 'string', description: 'נושא המסמך — למשל "הגברה - אבי גואטה - ספטמבר 26".' },
+        remarks: { type: 'string', description: 'הערה בתחתית המסמך. אופציונלי.' },
+      },
     },
   },
   {
@@ -107,6 +137,8 @@ export const AGENT_TOOLS = [
   },
 ];
 
+// preview_quote אינו כאן בכוונה: הוא אינו יוצר מסמך ואינו תופס מספר, ולכן
+// גם משתמש צפייה יכול לראות איך הצעה תיראה.
 const WRITE_TOOLS = new Set(['create_quote', 'send_document']);
 
 // ---- מימוש הכלים ----
@@ -123,6 +155,32 @@ const isPaid = (e) => Boolean(e.clientPaid) || activeDocs(e).some(d => [320, 400
 function evMatches(e, q) {
   const hay = [e.artist, e.clientName, e.location, ...(e.contractors || []), ...(e.employees || [])].join(' ').toLowerCase();
   return hay.includes(String(q).toLowerCase());
+}
+
+// בניית גוף ההצעה — משותף לתצוגה המקדימה ולהפקה, כדי ששניהם לא יתפצלו.
+// מה שראית בתצוגה המקדימה הוא בדיוק מה שיופק.
+function buildQuote(a, { companyId }) {
+  let items = (a.items || []).filter(it => it && it.description && Number(it.price) > 0)
+    .map(it => ({ description: String(it.description), price: Number(it.price), quantity: Number(it.quantity) || 1 }));
+  let description = a.description || null;
+  let clientId = a.clientId || null, clientName = String(a.clientName || '').trim();
+  // אירוע → שורות. אותו פורמט שורה של מסך החיוב, ולא ניסוח שהמודל ימציא.
+  if (a.eventId) {
+    const ev = companyEvents(load(), companyId).find(e => e.id === a.eventId);
+    if (!ev) return { error: 'לא נמצא אירוע עם המזהה הזה בעסק הזה.' };
+    if (!items.length) items = invoiceItemsFromEvents([ev]).map(it => ({ description: it.description, price: it.price, quantity: it.quantity }));
+    if (!description) description = subjectForEvents([ev]);
+    if (!clientId && !clientName) { clientId = ev.clientId || null; clientName = (ev.clientName || '').trim(); }
+  }
+  if (!items.length) return { error: 'אין שורות תקינות להצעה — צריך תיאור ומחיר גדול מאפס, או eventId עם תמחור.' };
+  if (!clientId && !clientName) return { error: 'חסר לקוח — clientId, clientName או eventId עם לקוח משויך.' };
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(a.date || '')) ? a.date : new Date().toISOString().slice(0, 10);
+  return {
+    total: Math.round(items.reduce((s, it) => s + it.price * it.quantity, 0) * 100) / 100,
+    clientLabel: clientName || null,
+    opts: { type: 10, client: clientId ? { id: clientId } : { name: clientName }, items, date,
+      description: description || undefined, remarks: a.remarks || null },
+  };
 }
 
 const EXEC = {
@@ -188,19 +246,30 @@ const EXEC = {
     };
   },
 
-  async create_quote(a) {
-    const items = (a.items || []).filter(it => it && it.description && Number(it.price) > 0);
-    if (!items.length) return { error: 'אין שורות תקינות להצעה — צריך תיאור ומחיר גדול מאפס.' };
-    if (!a.clientId && !String(a.clientName || '').trim()) return { error: 'חסר לקוח — clientId או clientName.' };
-    const doc = await greenInvoice.createDocument({
-      type: 10,
-      client: a.clientId ? { id: a.clientId } : { name: String(a.clientName).trim() },
-      items: items.map(it => ({ description: it.description, price: Number(it.price), quantity: Number(it.quantity) || 1 })),
-      description: a.description || undefined,
-      remarks: a.remarks || null,
+  async preview_quote(a, ctx) {
+    const built = buildQuote(a, ctx);
+    if (built.error) return built;
+    let pdf;
+    try { pdf = await greenInvoice.previewDocument(built.opts); }
+    catch (e) { return { error: 'התצוגה המקדימה נכשלה: ' + String(e.message).slice(0, 200) }; }
+    if (!pdf || !pdf.pdfBase64) return { error: 'חשבונית ירוקה לא החזירה PDF לתצוגה מקדימה.' };
+    // ה-PDF נשמר ומוחזר כקישור. הוא לא נכנס לתשובת הכלי: base64 של מסמך שלם
+    // היה תופח את ההקשר בכל סיבוב של הלולאה ומתומחר שוב ושוב.
+    if (!host.saveAgentFile) return { error: 'שמירת התצוגה המקדימה אינה זמינה.' };
+    const url = await host.saveAgentFile(ctx.companyId, {
+      filename: `הצעת מחיר - ${built.clientLabel || 'טיוטה'}.pdf`, mime: 'application/pdf', base64: pdf.pdfBase64,
     });
-    const total = items.reduce((s, it) => s + Number(it.price) * (Number(it.quantity) || 1), 0);
-    return { ok: true, docId: doc.id, number: doc.number, totalExVat: total, url: doc.url || null };
+    return { ok: true, preview: true, previewUrl: url, totalExVat: built.total, date: built.opts.date,
+      lines: built.opts.items.map(it => `${it.description} · ${it.quantity}×${it.price}`),
+      note: 'זו תצוגה מקדימה בלבד — לא נוצר מסמך ולא נתפס מספר.' };
+  },
+
+  async create_quote(a, ctx) {
+    const built = buildQuote(a, ctx);
+    if (built.error) return built;
+    const doc = await greenInvoice.createDocument(built.opts);
+    return { ok: true, docId: doc.id, number: doc.number, totalExVat: built.total,
+      date: built.opts.date, url: doc.url || null };
   },
 
   async send_document(a, { companyId }) {
@@ -223,15 +292,39 @@ const EXEC = {
 const MAX_ROUNDS = 8;   // גדר בטיחות: מודל שנתקע בלולאת כלים לא ישרוף תקציב
 
 function systemPrompt({ companyName, today, allowWrites }) {
-  return `אתה העוזר האישי של בעל העסק "${companyName}". אתה מדבר איתו בווטסאפ, בעברית, קצר וענייני — לא פסקאות.
+  return `אתה העוזר האישי של בעל העסק "${companyName}" — חברת הפקות, הגברה ותאורה.
 
 היום ${today}.
+
+**איך לדבר.** כמו עוזר אנושי מנוסה שמכיר את העסק: עברית טבעית וזורמת, גוף ראשון,
+בלי רובוטיות ובלי "אני מודל שפה". קצר — משפט או שניים, כמו בווטסאפ — אבל לא יבש
+ולא בנוסח טופס. אל תחזור על מה שהוא כתב ואל תפתח ב"בוודאי" או "בשמחה".
+כשאתה מדווח על פעולה, אמור בפשטות מה עשית ומה יצא.
+
+**הבן אותו גם כשהוא לא מדייק.** הוא כותב מהר, מהטלפון, בקיצורים:
+· תאריכים: "10.09.26" / "10.9" / "מחר" / "בשבוע הבא" — כולם תקינים. שנה חסרה = השנה הנוכחית.
+· שמות עסקים: "בי פי אם" = BPM. "אופק" / "משה" = שאר העסקים.
+· סכומים: "15 אלף" = 15,000. "5.5" בהקשר של מחיר = 5,500.
+· פעלים: "תוציא" / "תכין" / "תעשה לי" = הפק. "תראה לי" / "תעביר אליי" = תצוגה מקדימה.
+אל תבקש ממנו לנסח מחדש — תבין, ואם באמת לא ברור, שאל על הפרט האחד שחסר.
 
 מה שחשוב לדעת:
 · כל הסכומים במערכת הם **ללא מע״מ**, אלא אם נאמר אחרת. חשבונית ירוקה מוסיפה מע״מ מעל.
 · אתה רואה **רק** את הנתונים של ${companyName}. אם נשאלת על עסק אחר — אמור שצריך להחליף עסק.
 · אל תמציא מספרים. אם אין לך נתון — הפעל כלי או אמור שאין.
-· לפני הפקת מסמך, ודא שברור מי הלקוח, מה השורות ומה הסכום. בספק — שאל שאלה אחת קצרה במקום לנחש.
+
+**כשחסר מידע — תשאל.** לעולם אל תמציא ואל תוותר על הבקשה. קודם נסה להשלים לבד
+מהמערכת (למשל: המשתמש נקב בתאריך אירוע → חפש את האירוע ומשם קח לקוח ותמחור;
+נקב בשם לקוח → find_client). רק מה שבאמת אי אפשר להסיק — שאל עליו, בשאלה אחת
+קצרה, וכשאפשר הצע ברירת מחדל ("אשתמש ב-X אם לא תגיד אחרת"). אם חסרים כמה פרטים,
+שאל עליהם יחד ברשימה קצרה ולא אחד-אחד.
+· כלי שמחזיר error עם פרט חסר — זו לא תקלה. קרא מה חסר, השלם או שאל, ונסה שוב.
+· "תראה לי" / "תצוגה מקדימה" / "לפני שמפיקים" → preview_quote, לא create_quote.
+
+**לפני create_quote — הכלל המחמיר.** הפקה תופסת מספר מסמך ואי אפשר לבטל אותה
+בלחיצה. לכן ארבעת הפרטים — לקוח, שורות, סכום, תאריך — חייבים להיות **נתונים
+מהמשתמש או שנשלפו מהמערכת**. פרט שאתה רק מניח או משלים מהיגיון — אל תפיק, שאל.
+מוטב לשאול שאלה מיותרת מלהפיק מסמך שגוי.
 · הצעת מחיר היא **ללא מע״מ** בשורות. אם הוא נקב בסכום "כולל מע״מ" — חלק ב-1.18 ואמור לו מה עשית.
 · אחרי הפקת מסמך, דווח מספר מסמך וסכום. אל תשלח ללקוח אלא אם ביקש במפורש.
 ${allowWrites ? '' : '· אתה במצב קריאה בלבד — אינך יכול להפיק או לשלוח מסמכים. אם הוא מבקש, אמור זאת.\n'}

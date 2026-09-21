@@ -4404,7 +4404,16 @@ add('GET', /^\/api\/mail-log$/, (req, res, _p, q) => {
 //   1. הרשאת כתיבה רק למנהל — משתמש צפייה מקבל סוכן קריאה בלבד.
 //   2. חברה אחת בלבד, דרך reqCompany — כמו כל ראוט שנוגע בנתוני חברה.
 //   3. הכלים רצים בתוך withCompany, אחרת קריאות חשבונית ירוקה יפנו לחברה הלא נכונה.
-registerAgentHost({ mailDocToClient });
+// התצוגה המקדימה נשמרת כקובץ ומוחזרת כקישור. התיוג biz:<cid> הוא מה ש-fileCompanyId
+// מפענח ב-/api/files/:id, ולכן ההרשאה נאכפת כמו לכל קובץ אחר של החברה.
+registerAgentHost({
+  mailDocToClient,
+  saveAgentFile: async (cid, { filename, mime, base64 }) => {
+    const saved = await saveFile({ id: id('agf'), employeeId: `biz:${cid}`, kind: 'agent-preview',
+      filename, mime, data: Buffer.from(base64, 'base64') });
+    return `/api/files/${encodeURIComponent(saved.id)}`;
+  },
+});
 
 add('POST', /^\/api\/agent\/chat$/, async (req, res, _p, q, body) => {
   const b = body || {}, cid = reqCompany(q, b);
@@ -4421,7 +4430,15 @@ add('POST', /^\/api\/agent\/chat$/, async (req, res, _p, q, body) => {
     const r = await greenInvoice.withCompany(cid, () => runAgent({
       companyId: cid, companyName: (co && co.name) || cid, messages: clean, allowWrites: isAdmin,
     }));
-    json(res, { ok: true, reply: r.reply, steps: r.steps.map(s => ({ tool: s.tool, input: s.input })) });
+    // קישורים שנוצרו בדרך (תצוגה מקדימה, מסמך שהופק) מוחזרים בנפרד — כך הם
+    // מוצגים ככפתור ולא תלויים בכך שהמודל יטרח להזכיר אותם בטקסט.
+    const links = [];
+    for (const s of r.steps) {
+      const o = s.output || {};
+      if (o.previewUrl) links.push({ label: 'תצוגה מקדימה', url: o.previewUrl });
+      else if (o.docId) links.push({ label: `הצעת מחיר #${o.number ?? ''}`.trim(), docId: String(o.docId) });
+    }
+    json(res, { ok: true, reply: r.reply, links, steps: r.steps.map(s => ({ tool: s.tool, input: s.input })) });
   } catch (e) { json(res, { error: e.message }, 500); }
 });
 

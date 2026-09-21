@@ -10707,9 +10707,17 @@ window.openAgent = () => {
 
 window.agentReset = () => { _agentMsgs = []; renderAgentLog(); };
 
+// פתיחת מסמך מתוך השיחה — באותו צפיין של כל המערכת (זום, הגדלה, הורדה).
+// companyId מוזרק כי ה-iframe אינו עובר דרך העטיפה של fetch.
+window.agentOpenFile = (url, label) => {
+  const full = state.company && url.indexOf('companyId=') === -1
+    ? url + (url.indexOf('?') === -1 ? '?' : '&') + 'companyId=' + encodeURIComponent(state.company) : url;
+  previewDoc(full, { title: label || 'מסמך' });
+};
+
 // תיאור קצר של הכלי שהופעל — כדי שתראה מה הוא עשה ולא רק מה הוא ענה
 const AGENT_TOOL_HE = { search_events: 'חיפש אירועים', event_details: 'פתח אירוע', open_documents: 'בדק מסמכים פתוחים',
-  find_client: 'חיפש לקוח', create_quote: 'הפיק הצעת מחיר', send_document: 'שלח מסמך במייל' };
+  find_client: 'חיפש לקוח', preview_quote: 'הכין תצוגה מקדימה', create_quote: 'הפיק הצעת מחיר', send_document: 'שלח מסמך במייל' };
 
 function renderAgentLog() {
   const box = document.getElementById('agentLog'); if (!box) return;
@@ -10725,9 +10733,15 @@ function renderAgentLog() {
   box.innerHTML = _agentMsgs.map(m => {
     const mine = m.role === 'user';
     const tools = (m.steps || []).map(s => AGENT_TOOL_HE[s.tool] || s.tool).join(' · ');
+    // מסמך שנוצר בדרך מוצג ככפתור — התצוגה המקדימה נפתחת באותה חלונית מסמכים
+    // של כל המערכת, כדי שתוכל להגדיל ולהקטין כרגיל.
+    const links = (m.links || []).map(l => {
+      const url = l.url || `/api/documents/${encodeURIComponent(l.docId)}/download`;
+      return `<button class="btn ghost" style="padding:3px 10px;font-size:11.5px;margin-top:6px" onclick="agentOpenFile('${escAttr(url)}','${escAttr(l.label)}')">📄 ${escapeHtml(l.label)}</button>`;
+    }).join(' ');
     return `<div style="margin-bottom:10px;display:flex;${mine ? 'justify-content:flex-start' : 'justify-content:flex-end'}">
       <div style="max-width:86%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.65;white-space:pre-wrap;${
-        mine ? 'background:var(--accent);color:#fff' : 'background:var(--panel2,#f4f5fb);border:1px solid var(--line)'}">${escapeHtml(m.content)}${
+        mine ? 'background:var(--accent);color:#fff' : 'background:var(--panel2,#f4f5fb);border:1px solid var(--line)'}">${escapeHtml(m.content)}${links}${
         tools ? `<div style="font-size:10.5px;opacity:.65;margin-top:5px">⚙ ${escapeHtml(tools)}</div>` : ''}</div></div>`;
   }).join('') + (_agentBusy ? `<div class="muted" style="font-size:12.5px">חושב…</div>` : '');
   box.scrollTop = box.scrollHeight;
@@ -10745,7 +10759,7 @@ window.agentSend = async () => {
     .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   _agentBusy = false;
   if (!r || r.error) _agentMsgs.push({ role: 'assistant', content: '⚠ ' + String((r && r.error) || 'שגיאה') });
-  else _agentMsgs.push({ role: 'assistant', content: r.reply, steps: r.steps || [] });
+  else _agentMsgs.push({ role: 'assistant', content: r.reply, steps: r.steps || [], links: r.links || [] });
   renderAgentLog();
   // פעולה שכותבת שינתה נתונים — המטמון של הלשוניות כבר לא מעודכן
   if ((r.steps || []).some(s => s.tool === 'create_quote' || s.tool === 'send_document')) clearApiCache();

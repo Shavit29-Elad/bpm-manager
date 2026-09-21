@@ -3026,6 +3026,72 @@ check('סוכן AI — כלים כותבים רק למנהל, וכל כלי רו
   if (!/WRITE_TOOLS\.has\(c\.name\) && !allowWrites/.test(loop)) throw new Error('אין חסימה בהרצת הכלי עצמו');
   // גדר מול לולאת כלים אינסופית
   if (!/MAX_ROUNDS/.test(loop)) throw new Error('אין תקרת סיבובים — מודל תקוע ישרוף תקציב');
+
+  // תצוגה מקדימה אינה יוצרת מסמך, ולכן אינה כלי כותב
+  if (/WRITE_TOOLS = new Set\(\[[^\]]*preview_quote/.test(src)) throw new Error('התצוגה המקדימה סומנה ככלי כותב');
+  // ה-PDF לא נכנס לתשובת הכלי — הוא היה תופח את ההקשר בכל סיבוב
+  const prev = src.slice(src.indexOf('async preview_quote'), src.indexOf('async create_quote'));
+  const ret = prev.slice(prev.indexOf('return { ok: true, preview: true'));
+  if (!ret) throw new Error('תשובת ההצלחה של התצוגה המקדימה לא נמצאה');
+  if (/base64|pdfBase64/.test(ret)) throw new Error('ה-PDF מוחזר למודל');
+  if (!/previewUrl/.test(ret)) throw new Error('אין קישור לתצוגה המקדימה');
+
+  // ההנחיה לשאול כשחסר מידע, ולא להפיק על סמך ניחוש
+  const sys = src.slice(src.indexOf('function systemPrompt'), src.indexOf('export async function runAgent'));
+  for (const [pat, what] of [[/כשחסר מידע — תשאל/, 'ההנחיה לשאול'], [/אל תמציא/, 'האיסור להמציא'],
+      [/הכלל המחמיר/, 'הכלל לפני הפקה'], [/preview_quote, לא create_quote/, 'העדפת תצוגה מקדימה']]) {
+    if (!pat.test(sys)) throw new Error('חסר בהנחיות: ' + what);
+  }
+  return true;
+});
+
+// buildQuote הוא הצומת שקובע מה בפועל יופק. תצוגה מקדימה והפקה חולקות אותו
+// בכוונה — אחרת מה שנראה בתצוגה לא היה בהכרח מה שנוצר.
+check('סוכן AI — בניית ההצעה: מאירוע, מתאריך, ובלי להמציא חסרים', async () => {
+  const src = fs.readFileSync('aiAgent.js', 'utf8');
+  const fn = src.match(/function buildQuote\(a, \{ companyId \}\) \{[\s\S]*?\n\}/);
+  if (!fn) throw new Error('buildQuote לא נמצאה');
+  const ev = { id: 'ev1', companyId: 'c', confirmed: true, date: '2026-09-10', artist: 'אבי גואטה',
+    location: 'האחוזה', clientName: 'אבי גואטה', clientId: 'cl9',
+    price: 12000, priceSound: 2500, priceLighting: 0 };
+  const build = new Function('companyEvents', 'load', 'invoiceItemsFromEvents', 'subjectForEvents',
+    fn[0] + '; return buildQuote;')(
+    () => [ev], () => ({}),
+    (evs) => evs.flatMap(e => [{ description: `הגברה - ${e.artist} - 10.09.26 - ${e.location}`, price: e.price, quantity: 1 },
+      { description: `סאונד - ${e.artist} - 10.09.26 - ${e.location}`, price: e.priceSound, quantity: 1 }]),
+    () => 'הגברה - אבי גואטה - ספטמבר 26');
+  const ctx = { companyId: 'c' };
+
+  // אירוע → שורות, לקוח, נושא. בלי שהמודל ינסח כלום בעצמו.
+  const fromEv = build({ eventId: 'ev1', date: '2026-09-21' }, ctx);
+  if (fromEv.error) throw new Error('בנייה מאירוע נכשלה: ' + fromEv.error);
+  if (fromEv.opts.items.length !== 2) throw new Error('השורות לא נבנו מהאירוע');
+  if (fromEv.total !== 14500) throw new Error('הסכום שגוי: ' + fromEv.total);
+  if (fromEv.opts.client.id !== 'cl9') throw new Error('הלקוח לא נלקח מהאירוע');
+  if (fromEv.opts.date !== '2026-09-21') throw new Error('תאריך המסמך לא נלקח מהבקשה');
+  if (!/ספטמבר 26/.test(fromEv.opts.description)) throw new Error('נושא המסמך לא נבנה מהאירוע');
+  if (Number(fromEv.opts.type) !== 10) throw new Error('סוג המסמך אינו הצעת מחיר');
+
+  // בלי תאריך — היום, ולא תאריך שהומצא
+  const today = new Date().toISOString().slice(0, 10);
+  if (build({ eventId: 'ev1' }, ctx).opts.date !== today) throw new Error('ברירת המחדל אינה היום');
+  if (build({ eventId: 'ev1', date: '10.09.26' }, ctx).opts.date !== today) throw new Error('תאריך בפורמט שגוי לא נדחה');
+
+  // חסר מידע → שגיאה שאומרת מה חסר, כדי שהמודל ישאל ולא ינחש
+  const noClient = build({ items: [{ description: 'הגברה', price: 5000 }] }, ctx);
+  if (!noClient.error || !/לקוח/.test(noClient.error)) throw new Error('הפקה בלי לקוח אינה נחסמת');
+  const noItems = build({ clientName: 'אבי' }, ctx);
+  if (!noItems.error || !/שורות/.test(noItems.error)) throw new Error('הפקה בלי שורות אינה נחסמת');
+  const badPrice = build({ clientName: 'אבי', items: [{ description: 'הגברה', price: 0 }] }, ctx);
+  if (!badPrice.error) throw new Error('שורה במחיר אפס עוברת');
+  // אירוע של חברה אחרת אינו נגיש
+  const other = new Function('companyEvents', 'load', 'invoiceItemsFromEvents', 'subjectForEvents',
+    fn[0] + '; return buildQuote;')(() => [], () => ({}), () => [], () => '');
+  if (!other({ eventId: 'ev1' }, ctx).error) throw new Error('אירוע שאינו של החברה נבנה בכל זאת');
+
+  // שורות ידניות גוברות על האירוע, ולא מתווספות אליו
+  const manual = build({ eventId: 'ev1', items: [{ description: 'חבילה', price: 20000 }] }, ctx);
+  if (manual.opts.items.length !== 1 || manual.total !== 20000) throw new Error('שורות ידניות לא גברו על האירוע');
   return true;
 });
 
