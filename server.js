@@ -4537,6 +4537,18 @@ const BILL_SEED = {
     'סיטי הפקות (ת.ס) בע"מ', 'שרית הפקות בע״מ', 'גאגא בוקינג בע״מ'],
 };
 
+// השוואת שמות לקוח לצורך הרשימה. normName הכללי מסיר רק מרכאות ASCII וגרש/גרשיים
+// עבריים — ולא מרכאות טיפוגרפיות (U+201C/D) ולא סימני כיווניות בלתי נראים
+// (RLM/LRM/ZWJ/BOM), שנדבקים לשמות שמועתקים מחשבונית ירוקה או מווטסאפ.
+// שם שנראה זהה על המסך אך נבדל בתו בלתי נראה — הוא הסיבה ששיוך "מפספס".
+function billKey(s) {
+  return String(s || '')
+    .replace(/[​-‏‪-‮⁠﻿]/g, '')   // סימני כיווניות ורוחב־אפס
+    .replace(/["'`׳״‘’“”]/g, '')  // כל וריאנטי הגרש והמרכאות
+    .replace(/\s+/g, ' ')
+    .trim().toLowerCase();
+}
+
 function billingList(db, cid) {
   db.clientBilling = db.clientBilling || {};
   if (!db.clientBilling[cid] && BILL_SEED[cid]) {
@@ -4550,10 +4562,10 @@ function billingList(db, cid) {
 // מצב החיוב של לקוח. השוואה על שם מנורמל — שם הלקוח באירוע מוקלד ידנית
 // ולא תמיד זהה תו-בתו לשם בחשבונית ירוקה.
 function billModeFor(db, cid, clientName) {
-  const n = normName(clientName);
+  const n = billKey(clientName);
   if (!n) return BILL_NEXT_DAY;
   const { list } = billingList(db, cid);
-  return list.some(x => normName(x.name) === n) ? BILL_MONTH_END : BILL_NEXT_DAY;
+  return list.some(x => billKey(x.name) === n) ? BILL_MONTH_END : BILL_NEXT_DAY;
 }
 
 const lastDayOfMonth = (iso) => {
@@ -4582,7 +4594,7 @@ function billingDue(db, cid, today) {
     const due = billDueDate(db, cid, ev);
     if (!due || due > t) continue;                                   // עוד לא הגיע המועד
     const client = (ev.clientName || '').trim() || '— ללא לקוח —';
-    const key = normName(client) || client;
+    const key = billKey(client) || client;
     const g = groups.get(key) || { client, mode: billModeFor(db, cid, client), events: [], total: 0, due, oldestDue: due };
     g.events.push({ id: ev.id, date: String(ev.date || ev.dateRaw || '').slice(0, 10), artist: ev.artist || '',
       location: ev.location || '', amount: eventTotal(ev), due });
@@ -4603,6 +4615,30 @@ add('GET', /^\/api\/billing-due$/, (req, res, _p, q) => {
   json(res, billingDue(load(), cid, /^\d{4}-\d{2}-\d{2}$/.test(String(q.today || '')) ? q.today : null));
 });
 
+// GET /api/billing-due/diag — למה לקוח מסוים לא זוהה כ"סוף חודש".
+// מציג את המפתח המנורמל של כל שם, כולל קודי התווים, כי ההבדל הוא לרוב תו
+// בלתי נראה ששני השמות נראים זהים בגללו.
+add('GET', /^\/api\/billing-due\/diag$/, (req, res, _p, q) => {
+  const cid = reqCompany(q), db = load();
+  const { list } = billingList(db, cid);
+  const codes = (s) => [...String(s || '')].map(ch => ch.codePointAt(0)).filter(c => c > 0x2000 && c < 0x2100 || c === 0xFEFF)
+    .map(c => 'U+' + c.toString(16).toUpperCase()).join(' ') || '—';
+  const names = new Map();
+  for (const ev of (db.events || [])) {
+    if (!ownedBy(ev, cid) || !ev.confirmed) continue;
+    const n = (ev.clientName || '').trim(); if (!n) continue;
+    const g = names.get(billKey(n)) || { name: n, key: billKey(n), oddChars: codes(n), events: 0 };
+    g.events++; names.set(g.key, g);
+  }
+  const keys = new Set(list.map(x => billKey(x.name)));
+  json(res, {
+    companyId: cid,
+    monthEndList: list.map(x => ({ name: x.name, key: billKey(x.name), oddChars: codes(x.name), seeded: !!x.seeded })),
+    clientsInEvents: [...names.values()].sort((a, b) => b.events - a.events)
+      .map(g => ({ ...g, mode: keys.has(g.key) ? 'monthEnd' : 'nextDay' })),
+  });
+});
+
 // GET /api/billing-schedule — רשימת לקוחות "סוף חודש" של החברה
 add('GET', /^\/api\/billing-schedule$/, (req, res, _p, q) => {
   const cid = reqCompany(q), db = load();
@@ -4619,8 +4655,8 @@ add('POST', /^\/api\/billing-schedule$/, (req, res, _p, q, body) => {
   if (!name) return json(res, { error: 'חסר שם לקוח' }, 400);
   const db = load();
   const { list } = billingList(db, cid);
-  const n = normName(name);
-  const i = list.findIndex(x => normName(x.name) === n);
+  const n = billKey(name);
+  const i = list.findIndex(x => billKey(x.name) === n);
   if (b.mode === BILL_NEXT_DAY) { if (i >= 0) list.splice(i, 1); }
   else if (i < 0) list.push({ name, mode: BILL_MONTH_END, at: new Date().toISOString() });
   db.clientBilling[cid] = list;

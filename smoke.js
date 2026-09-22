@@ -3069,9 +3069,21 @@ check('מועד חיוב — סוף חודש מול יום אחרי, וההתר�
   if (f.addDays('2026-12-31', 1) !== '2027-01-01') throw new Error('מעבר שנה שגוי');
 
   const db = () => ({ clientBilling: { c: ME } });
-  if (f.billModeFor(db(), 'c', 'אבי גואטה הפקות בע"מ') !== 'monthEnd')
-    throw new Error('גרש מול גרשיים — הלקוח לא זוהה ברשימה');
+  // שם שנראה זהה אך נבדל בתו בלתי נראה או בווריאנט מרכאות — חייב להיתפס.
+  // זה מה ששבר את השיוך בפועל: הלקוח הופיע כ"יום אחרי האירוע" אף שהיה ברשימה.
+  for (const [what, name] of [
+    ['גרשיים עברי', 'אבי גואטה הפקות בע״מ'],
+    ['מרכאות ASCII', 'אבי גואטה הפקות בע"מ'],
+    ['מרכאות טיפוגרפיות', 'אבי גואטה הפקות בע”מ'],
+    ['סימן כיווניות RLM', 'אבי גואטה הפקות בע״מ‏'],
+    ['LRM בהתחלה ורווח בסוף', '‎אבי גואטה הפקות בע״מ '],
+    ['בלי מרכאות כלל', 'אבי גואטה הפקות בעמ'],
+    ['רווח כפול', 'אבי גואטה  הפקות בע״מ'],
+  ]) {
+    if (f.billModeFor(db(), 'c', name) !== 'monthEnd') throw new Error('לא זוהה ברשימה: ' + what);
+  }
   if (f.billModeFor(db(), 'c', 'לקוח אחר') !== 'nextDay') throw new Error('ברירת המחדל אינה יום אחרי');
+  if (f.billModeFor(db(), 'c', 'אבי גואטה') !== 'nextDay') throw new Error('שם חלקי נחשב התאמה');
 
   const ev = (o) => ({ id: 'e', companyId: 'c', confirmed: true, date: '2026-09-10', artist: 'זמר',
     clientName: 'לקוח רגיל', price: 10000, linkedDocs: [], ...o });
@@ -3110,7 +3122,8 @@ check('מועד חיוב — סוף חודש מול יום אחרי, וההתר�
   if (/createDocument|invoicing\/generate/.test(block)) throw new Error('קוד ההתראה נוגע בהפקת מסמכים');
   // והראוטים: חברה אחת, ועריכת הרשימה למנהל בלבד
   const routes = srv.slice(srv.indexOf("add('GET', /^\\/api\\/billing-due$/"), srv.indexOf('// ---- הצעות מחיר שחויבו'));
-  if ((routes.match(/reqCompany\(/g) || []).length !== 3) throw new Error('ראוט שאינו נגזר מ-reqCompany');
+  if ((routes.match(/add\('/g) || []).length !== (routes.match(/reqCompany\(/g) || []).length)
+    throw new Error('ראוט חיוב שאינו נגזר מ-reqCompany');
   const post = routes.slice(routes.indexOf("add('POST'"));
   if (!/role !== 'admin'/.test(post)) throw new Error('משתמש צפייה יכול לשנות את הרשימה');
   return true;
