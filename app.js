@@ -240,12 +240,65 @@ function applyPermissions() {
   // פרטי משתמש + התנתקות + ניהול משתמשים (למנהל) בכותרת
   let box = document.getElementById('userBox');
   if (!box) { box = document.createElement('div'); box.id = 'userBox'; box.style.cssText = 'display:flex;gap:8px;align-items:center;margin-inline-start:auto'; document.querySelector('.topbar').appendChild(box); }
-  box.innerHTML = `<span id="mailAlert" style="display:none"></span><span class="muted" style="font-size:12.5px">👤 ${escapeHtml(u.username || '')}${isAdmin ? ' · הנהלה' : ' · צפייה'}</span>
+  box.innerHTML = `<span id="billAlert" style="display:none"></span><span id="mailAlert" style="display:none"></span><span class="muted" style="font-size:12.5px">👤 ${escapeHtml(u.username || '')}${isAdmin ? ' · הנהלה' : ' · צפייה'}</span>
     ${isAdmin ? `<button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="openUsersModal()">👥 משתמשים</button>` : ''}
     <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="logout()">התנתק</button>`;
   refreshMailAlert();
-  if (!window._mailAlertTimer) window._mailAlertTimer = setInterval(() => { try { refreshMailAlert(); } catch { } }, 3 * 60 * 1000);
+  refreshBillAlert();
+  if (!window._mailAlertTimer) window._mailAlertTimer = setInterval(() => { try { refreshMailAlert(); refreshBillAlert(); } catch { } }, 3 * 60 * 1000);
 }
+
+// ---- התראה: חשבוניות שהגיע מועד הפקתן ----
+// מועד החיוב נגזר מהלקוח: "סוף חודש" → היום האחרון בחודש האירוע; כל השאר →
+// יום אחרי האירוע. ההתראה בלבד — היא לעולם לא מפיקה מסמך.
+let _billDue = null;
+window.refreshBillAlert = async () => {
+  const el = document.getElementById('billAlert'); if (!el) return;
+  let r = null;
+  try { r = await fetch('/api/billing-due?companyId=' + encodeURIComponent(state.company)).then(x => x.json()); } catch { }
+  _billDue = r && !r.error ? r : null;
+  const n = (_billDue && _billDue.total) || 0;
+  if (!n) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const late = (_billDue.groups || []).some(g => g.lateDays > 0);
+  el.style.display = '';
+  el.innerHTML = `<button onclick="openBillDue()" title="אירועים שהגיע מועד החיוב שלהם וטרם הופקה להם חשבונית"
+    style="cursor:pointer;border:none;background:${late ? '#b45309' : '#4338ca'};color:#fff;font-weight:700;font-size:12.5px;padding:4px 11px;border-radius:999px;white-space:nowrap">🧾 ${n} להוצאת חשבונית</button>`;
+};
+
+window.openBillDue = async () => {
+  let m = document.getElementById('billDueModal');
+  if (!m) { m = document.createElement('div'); m.id = 'billDueModal'; m.className = 'modal'; document.body.appendChild(m);
+    m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); }; }
+  m.classList.remove('hidden');
+  m.style.zIndex = topZ(140, m);
+  if (!_billDue) await window.refreshBillAlert();
+  const r = _billDue || { total: 0, groups: [] };
+  const MODE_HE = { monthEnd: 'סוף חודש', nextDay: 'יום אחרי האירוע' };
+  const groups = (r.groups || []).map(g => `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+      <div class="row-between" style="gap:8px;flex-wrap:wrap">
+        <div><b style="font-size:13.5px">${escapeHtml(g.client)}</b>
+          <span class="muted" style="font-size:11.5px"> · ${MODE_HE[g.mode] || ''} · ${g.events.length} אירועים</span></div>
+        <div style="text-align:left"><b>${money(g.total)}</b>
+          ${g.lateDays > 0 ? `<div style="font-size:11.5px;color:var(--danger)">באיחור ${g.lateDays} ימים</div>` : '<div style="font-size:11.5px;color:var(--warn)">הגיע המועד</div>'}</div>
+      </div>
+      <div style="margin-top:6px;font-size:12px">${g.events.map(e => `<div class="muted" style="padding:2px 0">${ddmy(e.date)} · ${escapeHtml(e.artist || '—')}${e.location ? ' · ' + escapeHtml(e.location) : ''} · ${money(e.amount)}</div>`).join('')}</div>
+      <div style="margin-top:7px"><button class="btn ghost" style="padding:3px 11px;font-size:12px" onclick="billDueGo()">← למסך הפקת החשבוניות</button></div>
+    </div>`).join('');
+  m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:86vh;max-height:86dvh;overflow:auto">
+    <div class="row-between"><h3 style="margin:0">🧾 חשבוניות שצריך להוציא</h3>
+      <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="document.getElementById('billDueModal').classList.add('hidden')">✕</button></div>
+    <div class="muted" style="font-size:12px;margin:6px 0 12px">לקוח שמוגדר "סוף חודש" — החשבונית שלו מגיעה ביום האחרון של החודש, על כל אירועי החודש יחד. כל השאר — יום אחרי האירוע. את הרשימה עורכים בפרטי העסק.</div>
+    ${r.total ? `<div class="muted" style="font-size:12.5px;margin-bottom:10px">${r.total} אירועים · ${r.clients} לקוחות · ${money(r.amount)}</div>${groups}`
+      : '<div class="empty">אין כרגע חשבוניות שהגיע מועד הפקתן 👌</div>'}
+  </div>`;
+};
+
+window.billDueGo = () => {
+  const m = document.getElementById('billDueModal'); if (m) m.classList.add('hidden');
+  const tab = document.querySelector('.tab[data-tab="events"]');
+  if (tab) tab.click();
+  setTimeout(() => { const p = document.getElementById('invoicingWrap'); if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 500);
+};
 // תג התראה בולט בראש המסך: כמה חשבוניות מהמייל ממתינות לטיפול ידני (לינק שלא נשלף אוטומטית)
 window.refreshMailAlert = async () => {
   const el = document.getElementById('mailAlert'); if (!el) return;
@@ -9013,6 +9066,11 @@ async function renderBusiness(c) {
         <div id="staleQuotes" style="margin-top:8px;font-size:13px"></div>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <b style="font-size:13.5px">📅 לקוחות שמחויבים בסוף החודש</b>
+        <div class="muted" style="font-size:12px;margin:3px 0 8px">לקוח ברשימה הזו מקבל חשבונית אחת ביום האחרון של החודש, על כל אירועי החודש. כל לקוח שאינו ברשימה — החשבונית שלו צריכה לצאת יום אחרי האירוע. ההגדרה קובעת מתי תופיע ההתראה 🧾 בראש המסך, ואינה מפיקה שום מסמך לבד.</div>
+        <div id="billSched" style="margin-top:8px;font-size:13px"><button class="btn ghost" onclick="loadBillSchedule(this)">הצג את הרשימה</button></div>
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
         <b style="font-size:13.5px">🧾 חשבונות עסקה שחויבו ונשארו פתוחים</b>
         <div class="muted" style="font-size:12px;margin:3px 0 8px">חשבון עסקה נסגר בחשבונית ירוקה רק אם חשבונית המס/מס-קבלה הופקה כמסמך המשך שלו. כשהמסמך הופק ישירות בחשבונית ירוקה, חשבון העסקה נשאר פתוח שם — גם כשאצלנו האירוע כבר מחויב ושולם. קישור בדיעבד אינו אפשרי, אבל אפשר לסגור אותם. נסגרים רק כאלה שעל האירוע שלהם כבר יש חשבונית מס/מס-קבלה.</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -9376,6 +9434,51 @@ window.runCloseStaleQuotes = async (btn) => {
 
 // חשבונות עסקה שנשארו פתוחים בחשבונית ירוקה אף שהאירוע שלהם כבר חויב.
 // הרשימה נקראת מחשבונית ירוקה עצמה, ולכן מוצג בה רק מה שבאמת פתוח שם.
+// ---- רשימת לקוחות "סוף חודש" ----
+// רשימה פר-חברה שניתנת לעריכה, ולא קבועה בקוד: לקוחות מצטרפים ועוזבים.
+window.loadBillSchedule = async (btn) => {
+  const box = document.getElementById('billSched'); if (!box) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'טוען…'; }
+  const [r, cl] = await Promise.all([
+    api('/api/billing-schedule').catch(() => ({ error: 'שגיאת רשת' })),
+    api('/api/clients').catch(() => []),
+  ]);
+  if (!r || r.error) { box.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
+  const inList = new Set((r.items || []).map(x => String(x.name || '').replace(/["'׳״`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase()));
+  const options = (Array.isArray(cl) ? cl : []).map(c => c.name).filter(Boolean)
+    .filter(n => !inList.has(String(n).replace(/["'׳״`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase()))
+    .sort((a, b) => a.localeCompare(b, 'he'));
+  const rows = (r.items || []).map(x => `<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-top:1px solid var(--line)">
+      <span style="flex:1;font-size:12.5px">${escapeHtml(x.name)}</span>
+      <button class="btn ghost" style="padding:2px 9px;font-size:11.5px;color:var(--danger)" onclick="setBillMode('${escAttr(x.name)}','nextDay')">הסר</button>
+    </div>`).join('');
+  box.innerHTML = `<div style="border:1px solid var(--line);border-radius:12px;padding:12px">
+    <div><b>${(r.items || []).length}</b> לקוחות מחויבים בסוף החודש</div>
+    ${rows || '<div class="muted" style="font-size:12.5px;padding-top:6px">הרשימה ריקה — כל הלקוחות מחויבים יום אחרי האירוע.</div>'}
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="billAddName" list="billClientList" placeholder="שם לקוח…" style="flex:1;min-width:200px;padding:6px 10px;font-size:12.5px"/>
+      <datalist id="billClientList">${options.map(n => `<option value="${escAttr(n)}"></option>`).join('')}</datalist>
+      <button class="btn ghost" style="padding:5px 12px;font-size:12.5px" onclick="addBillMonthEnd()">+ הוסף לרשימה</button>
+    </div>
+  </div>`;
+};
+
+window.addBillMonthEnd = async () => {
+  const inp = document.getElementById('billAddName');
+  const name = inp ? inp.value.trim() : '';
+  if (!name) return;
+  await window.setBillMode(name, 'monthEnd');
+};
+
+window.setBillMode = async (name, mode) => {
+  const r = await fetch('/api/billing-schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ companyId: state.company, name, mode }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (r && r.error) { alert(r.error); return; }
+  clearApiCache();
+  window.loadBillSchedule();
+  window.refreshBillAlert();   // שינוי ברשימה משנה מיד מה נחשב "הגיע המועד"
+};
+
 window.loadStaleProformas = async (btn) => {
   const box = document.getElementById('staleProformas'); if (!box) return;
   if (btn) { btn.disabled = true; btn.textContent = 'בודק…'; }

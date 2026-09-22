@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 import { init as initStore, load, save, id, upsertEvent, companyEvents, saveFile, getFile, deleteFile } from './store.js';
 import { parseEventMessage, parseEventMessages } from './whatsappParser.js';
 import { matchEvents, fetchCalendarEvents, verify as calendarVerify, hasCalendar, calendarCompanies, setDbIcal } from './googleCalendar.js';
-import { contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents, eventTotal } from './invoicing.js';
+import { contractorPayables, eventsByClient, invoiceItemsFromEvents, subjectForEvents, eventTotal, isNoInvoice } from './invoicing.js';
 import eventBoard from './eventBoard.js';
 import { employeePayForMonth } from './payroll.js';
 import greenInvoice from './greenInvoice.js';
@@ -4457,6 +4457,7 @@ add('GET', /^\/api\/mail-log$/, (req, res, _p, q) => {
 // מפענח ב-/api/files/:id, ולכן ההרשאה נאכפת כמו לכל קובץ אחר של החברה.
 registerAgentHost({
   mailDocToClient,
+  billingDue,
   saveAgentFile: async (cid, { filename, mime, base64 }) => {
     const saved = await saveFile({ id: id('agf'), employeeId: `biz:${cid}`, kind: 'agent-preview',
       filename, mime, data: Buffer.from(base64, 'base64') });
@@ -4519,6 +4520,112 @@ add('DELETE', /^\/api\/agent\/memory\/([^/]+)$/, (req, res, params, q) => {
   if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
   const r = forgetFact(cid, decodeURIComponent(params[0]));
   json(res, r.error ? r : { ok: true, ...r }, r.error ? 404 : 200);
+});
+
+// ================= מועד חיוב ללקוח =================
+// לקוח "סוף חודש" מקבל חשבונית אחת ביום האחרון של החודש, על אירועי אותו חודש.
+// כל השאר — יום אחרי האירוע. ההגדרה היא רשימה פר-חברה שניתנת לעריכה, ולא
+// רשימה קבועה בקוד: לקוחות מצטרפים ועוזבים.
+// ⚠️ שום דבר כאן אינו מפיק מסמך. זו התראה בלבד — ההפקה נשארת ידנית.
+const BILL_MONTH_END = 'monthEnd', BILL_NEXT_DAY = 'nextDay';
+// ברירת המחדל שנזרעת לעסקים שבהם היא רלוונטית, כשעדיין לא הוגדרה רשימה.
+// אחרי שהמשתמש נגע ברשימה — הזריעה לא חוזרת, גם אם מחק הכל.
+const BILL_SEED = {
+  co_bpm: ['א.מ הפקות מוסיקה בע״מ', 'אבי גואטה הפקות בע״מ', 'כספית ייצוג והפקת אומנים ואירועים בעמ',
+    'סיטי הפקות (ת.ס) בע"מ', 'שרית הפקות בע״מ', 'גאגא בוקינג בע״מ'],
+  co_ofek: ['א.מ הפקות מוסיקה בע״מ', 'אבי גואטה הפקות בע״מ', 'כספית ייצוג והפקת אומנים ואירועים בעמ',
+    'סיטי הפקות (ת.ס) בע"מ', 'שרית הפקות בע״מ', 'גאגא בוקינג בע״מ'],
+};
+
+function billingList(db, cid) {
+  db.clientBilling = db.clientBilling || {};
+  if (!db.clientBilling[cid] && BILL_SEED[cid]) {
+    db.clientBilling[cid] = BILL_SEED[cid].map(name => ({ name, mode: BILL_MONTH_END, at: null, seeded: true }));
+    return { list: db.clientBilling[cid], seeded: true };
+  }
+  db.clientBilling[cid] = db.clientBilling[cid] || [];
+  return { list: db.clientBilling[cid], seeded: false };
+}
+
+// מצב החיוב של לקוח. השוואה על שם מנורמל — שם הלקוח באירוע מוקלד ידנית
+// ולא תמיד זהה תו-בתו לשם בחשבונית ירוקה.
+function billModeFor(db, cid, clientName) {
+  const n = normName(clientName);
+  if (!n) return BILL_NEXT_DAY;
+  const { list } = billingList(db, cid);
+  return list.some(x => normName(x.name) === n) ? BILL_MONTH_END : BILL_NEXT_DAY;
+}
+
+const lastDayOfMonth = (iso) => {
+  const [y, m] = String(iso).slice(0, 7).split('-').map(Number);
+  if (!y || !m) return null;
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);   // יום 0 של החודש הבא = האחרון בנוכחי
+};
+const addDays = (iso, n) => new Date(Date.parse(iso + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+
+// מועד החיוב של אירוע: סוף החודש שלו, או יום אחריו.
+function billDueDate(db, cid, ev) {
+  const d = String(ev.date || ev.dateRaw || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  return billModeFor(db, cid, ev.clientName) === BILL_MONTH_END ? lastDayOfMonth(d) : addDays(d, 1);
+}
+
+// אירועים שהגיע מועד החיוב שלהם וטרם הופקה להם חשבונית, מקובצים לפי לקוח.
+function billingDue(db, cid, today) {
+  const t = today || new Date().toISOString().slice(0, 10);
+  const groups = new Map();
+  for (const ev of (db.events || [])) {
+    if (!ownedBy(ev, cid) || !ev.confirmed) continue;
+    if (isNoInvoice(ev)) continue;
+    const real = (ev.linkedDocs || []).filter(d => [300, 305, 320].includes(Number(d.type)) && !d.credited && !d.credit && !d.converted);
+    if (real.length || ev.invoiceStatus === 'invoiced') continue;   // כבר חויב
+    const due = billDueDate(db, cid, ev);
+    if (!due || due > t) continue;                                   // עוד לא הגיע המועד
+    const client = (ev.clientName || '').trim() || '— ללא לקוח —';
+    const key = normName(client) || client;
+    const g = groups.get(key) || { client, mode: billModeFor(db, cid, client), events: [], total: 0, due, oldestDue: due };
+    g.events.push({ id: ev.id, date: String(ev.date || ev.dateRaw || '').slice(0, 10), artist: ev.artist || '',
+      location: ev.location || '', amount: eventTotal(ev), due });
+    g.total += eventTotal(ev);
+    if (due < g.oldestDue) g.oldestDue = due;
+    groups.set(key, g);
+  }
+  const days = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86400000);
+  const out = [...groups.values()].map(g => ({ ...g, lateDays: Math.max(0, days(g.oldestDue, t)) }))
+    .sort((a, b) => b.lateDays - a.lateDays || a.client.localeCompare(b.client, 'he'));
+  return { total: out.reduce((s, g) => s + g.events.length, 0), clients: out.length,
+    amount: Math.round(out.reduce((s, g) => s + g.total, 0) * 100) / 100, groups: out };
+}
+
+// GET /api/billing-due — מה צריך להוציא עכשיו
+add('GET', /^\/api\/billing-due$/, (req, res, _p, q) => {
+  const cid = reqCompany(q);
+  json(res, billingDue(load(), cid, /^\d{4}-\d{2}-\d{2}$/.test(String(q.today || '')) ? q.today : null));
+});
+
+// GET /api/billing-schedule — רשימת לקוחות "סוף חודש" של החברה
+add('GET', /^\/api\/billing-schedule$/, (req, res, _p, q) => {
+  const cid = reqCompany(q), db = load();
+  const { list, seeded } = billingList(db, cid);
+  if (seeded) save(db);   // הזריעה נשמרת פעם אחת, כדי שמחיקה של המשתמש לא תתבטל בטעינה הבאה
+  json(res, { mode: { monthEnd: BILL_MONTH_END, nextDay: BILL_NEXT_DAY }, items: list });
+});
+
+// POST /api/billing-schedule { name, mode } — הוספה/הסרה של לקוח מהרשימה
+add('POST', /^\/api\/billing-schedule$/, (req, res, _p, q, body) => {
+  const b = body || {}, cid = reqCompany(q, b);
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+  const name = String(b.name || '').trim();
+  if (!name) return json(res, { error: 'חסר שם לקוח' }, 400);
+  const db = load();
+  const { list } = billingList(db, cid);
+  const n = normName(name);
+  const i = list.findIndex(x => normName(x.name) === n);
+  if (b.mode === BILL_NEXT_DAY) { if (i >= 0) list.splice(i, 1); }
+  else if (i < 0) list.push({ name, mode: BILL_MONTH_END, at: new Date().toISOString() });
+  db.clientBilling[cid] = list;
+  save(db);
+  json(res, { ok: true, items: list });
 });
 
 // ---- הצעות מחיר שחויבו ונשארו פתוחות ----

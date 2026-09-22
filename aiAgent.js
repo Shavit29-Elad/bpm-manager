@@ -190,6 +190,11 @@ export const AGENT_TOOLS = [
     },
   },
   {
+    name: 'billing_due',
+    description: 'מה צריך להוציא חשבונית עכשיו — אירועים שהגיע מועד החיוב שלהם וטרם הופקה להם חשבונית, מקובצים לפי לקוח. מועד החיוב: לקוח "סוף חודש" — היום האחרון בחודש האירוע, על כל אירועי החודש יחד; כל השאר — יום אחרי האירוע. להשתמש עבור "מה אני צריך להוציא", "מה פספסתי", "מה באיחור".',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'remember',
     description: 'שמירת משהו לזיכרון הקבוע, כך שיהיה לך גם בשיחות הבאות. להשתמש כשהמשתמש אומר "תזכור ש...", כשהוא מתקן אותך, או כשעולה העדפה קבועה (מחיר סטנדרטי, ניסוח שהוא אוהב, לקוח שמתנהג אחרת). לשמור עובדה אחת קצרה וברורה בכל קריאה — לא סיכום של שיחה.',
     input_schema: {
@@ -363,6 +368,20 @@ const EXEC = {
       date: built.opts.date, url: doc.url || null };
   },
 
+  async billing_due(a, { companyId }) {
+    if (!host.billingDue) return { error: 'החישוב אינו זמין כרגע.' };
+    const r = host.billingDue(load(), companyId);
+    return {
+      total: r.total, clients: r.clients, amount: r.amount,
+      groups: (r.groups || []).slice(0, 25).map(g => ({
+        client: g.client, mode: g.mode === 'monthEnd' ? 'סוף חודש' : 'יום אחרי האירוע',
+        events: g.events.length, amountExVat: Math.round(g.total * 100) / 100, lateDays: g.lateDays,
+        dates: g.events.map(e => e.date),
+      })),
+      note: 'התראה בלבד — המסמכים אינם מופקים אוטומטית.',
+    };
+  },
+
   async remember(a, { companyId }) {
     const r = rememberFact(companyId, { text: a.text, kind: a.kind || 'fact', scope: a.scope === 'all' ? 'all' : 'company', source: 'agent' });
     return r.error ? r : { ok: true, remembered: String(a.text).trim().slice(0, MEM_TEXT_MAX), updated: Boolean(r.replaced) };
@@ -438,6 +457,11 @@ function systemPrompt({ companyName, today, allowWrites }) {
 · אחרי הפקת מסמך, דווח מספר מסמך וסכום. אל תשלח ללקוח אלא אם ביקש במפורש.
 ${allowWrites ? '' : '· אתה במצב קריאה בלבד — אינך יכול להפיק או לשלוח מסמכים. אם הוא מבקש, אמור זאת.\n'}
 · חשבונית מס וחשבונית מס-קבלה אינן נוצרות דרכך. אם הוא מבקש — הפנה אותו לאתר.
+
+**מועד חיוב.** יש לקוחות שמחויבים **בסוף החודש** — חשבונית אחת ביום האחרון של
+החודש, על כל אירועי אותו חודש יחד. כל שאר הלקוחות מחויבים **יום אחרי האירוע**.
+billing_due מחזיר מי הם ומה כבר באיחור. אל תנחש מי ברשימה — הפעל את הכלי.
+המערכת לעולם אינה מפיקה מסמך לבד; ההתראה היא תזכורת בלבד.
 
 **תלמד תוך כדי עבודה.** אתה לא זוכר שיחות קודמות מלבד מה ששמור בזיכרון, ולכן
 הפעל remember בכל פעם שעולה משהו שיועיל לך גם בעוד חודש: מחיר סטנדרטי, איך הוא

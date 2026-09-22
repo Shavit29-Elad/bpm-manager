@@ -3045,6 +3045,77 @@ check('סוכן AI — כלים כותבים רק למנהל, וכל כלי רו
   return true;
 });
 
+// מועד החיוב הוא חשבון תאריכים, ושם נופלות שגיאות של יום אחד בשקט. בדיקה על
+// גבולות חודש, שנה וחודש קצר — ועל כך ששום דבר כאן אינו מפיק מסמך.
+check('מועד חיוב — סוף חודש מול יום אחרי, וההתראה על מה שטרם הוצא', () => {
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const block = srv.slice(srv.indexOf('const BILL_MONTH_END'), srv.indexOf("// GET /api/billing-due"));
+  const mk = (list, events) => new Function('load', 'save', 'ownedBy', 'normName', 'isNoInvoice', 'eventTotal',
+    block + '; return { billingDue, billDueDate, billModeFor, lastDayOfMonth, addDays };')(
+    () => ({ clientBilling: { c: list }, events }), () => {}, () => true,
+    (s) => String(s || '').replace(/["'׳״`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase(),
+    (ev) => Boolean(ev.noInvoice), (ev) => Number(ev.price) || 0);
+
+  const ME = [{ name: 'אבי גואטה הפקות בע״מ', mode: 'monthEnd' }];
+  const f = mk(ME, []);
+  // סוף חודש — גם בחודש קצר, גם בפברואר מעוברת, גם בסוף שנה
+  if (f.lastDayOfMonth('2026-09-10') !== '2026-09-30') throw new Error('סוף ספטמבר שגוי');
+  if (f.lastDayOfMonth('2026-02-03') !== '2026-02-28') throw new Error('סוף פברואר שגוי');
+  if (f.lastDayOfMonth('2024-02-03') !== '2024-02-29') throw new Error('שנה מעוברת שגויה');
+  if (f.lastDayOfMonth('2026-12-01') !== '2026-12-31') throw new Error('סוף דצמבר שגוי');
+  // יום אחרי — כולל מעבר חודש ושנה
+  if (f.addDays('2026-09-10', 1) !== '2026-09-11') throw new Error('יום אחרי שגוי');
+  if (f.addDays('2026-09-30', 1) !== '2026-10-01') throw new Error('מעבר חודש שגוי');
+  if (f.addDays('2026-12-31', 1) !== '2027-01-01') throw new Error('מעבר שנה שגוי');
+
+  const db = () => ({ clientBilling: { c: ME } });
+  if (f.billModeFor(db(), 'c', 'אבי גואטה הפקות בע"מ') !== 'monthEnd')
+    throw new Error('גרש מול גרשיים — הלקוח לא זוהה ברשימה');
+  if (f.billModeFor(db(), 'c', 'לקוח אחר') !== 'nextDay') throw new Error('ברירת המחדל אינה יום אחרי');
+
+  const ev = (o) => ({ id: 'e', companyId: 'c', confirmed: true, date: '2026-09-10', artist: 'זמר',
+    clientName: 'לקוח רגיל', price: 10000, linkedDocs: [], ...o });
+  const due = (evs, today) => mk(ME, evs).billingDue({ clientBilling: { c: ME }, events: evs }, 'c', today);
+
+  // לקוח רגיל: ביום האירוע עוד לא, למחרת כן
+  if (due([ev()], '2026-09-10').total !== 0) throw new Error('התראה ביום האירוע עצמו');
+  if (due([ev()], '2026-09-11').total !== 1) throw new Error('אין התראה יום אחרי האירוע');
+  if (due([ev()], '2026-09-20').groups[0].lateDays !== 9) throw new Error('חישוב האיחור שגוי');
+
+  // לקוח סוף-חודש: לא למחרת, כן ב-30 בחודש
+  const me = ev({ clientName: 'אבי גואטה הפקות בע״מ' });
+  if (due([me], '2026-09-11').total !== 0) throw new Error('לקוח סוף-חודש קיבל התראה יום אחרי');
+  if (due([me], '2026-09-30').total !== 1) throw new Error('לקוח סוף-חודש לא קיבל התראה ביום האחרון');
+
+  // כמה אירועים של אותו לקוח סוף-חודש מתקבצים לשורה אחת, עם הסכום המצטבר
+  const g = due([me, ev({ id: 'e2', date: '2026-09-22', clientName: 'אבי גואטה הפקות בע״מ', price: 5000 })], '2026-09-30');
+  if (g.clients !== 1 || g.total !== 2) throw new Error('אירועי אותו לקוח לא קובצו');
+  if (g.groups[0].total !== 15000) throw new Error('הסכום המצטבר שגוי');
+
+  // מה שלא אמור להופיע בכלל
+  for (const [what, e] of [
+    ['אירוע שכבר חויב', ev({ linkedDocs: [{ type: 305, number: 1 }] })],
+    ['אירוע עם invoiceStatus', ev({ invoiceStatus: 'invoiced' })],
+    ['אירוע ללא חיוב', ev({ noInvoice: true })],
+    ['אירוע שטרם אושר', ev({ confirmed: false })],
+    ['אירוע בלי תאריך', ev({ date: '' })],
+  ]) {
+    if (due([e], '2026-10-15').total !== 0) throw new Error('הופיע בהתראה: ' + what);
+  }
+  // מסמך שזוכה אינו נחשב חיוב — האירוע חוזר להתראה
+  if (due([ev({ linkedDocs: [{ type: 305, credited: true }] })], '2026-09-11').total !== 1)
+    throw new Error('אירוע שהחשבונית שלו זוכתה אינו חוזר להתראה');
+
+  // ההתראה אינה מפיקה כלום
+  if (/createDocument|invoicing\/generate/.test(block)) throw new Error('קוד ההתראה נוגע בהפקת מסמכים');
+  // והראוטים: חברה אחת, ועריכת הרשימה למנהל בלבד
+  const routes = srv.slice(srv.indexOf("add('GET', /^\\/api\\/billing-due$/"), srv.indexOf('// ---- הצעות מחיר שחויבו'));
+  if ((routes.match(/reqCompany\(/g) || []).length !== 3) throw new Error('ראוט שאינו נגזר מ-reqCompany');
+  const post = routes.slice(routes.indexOf("add('POST'"));
+  if (!/role !== 'admin'/.test(post)) throw new Error('משתמש צפייה יכול לשנות את הרשימה');
+  return true;
+});
+
 // החשבונית צריכה לצאת העתק של ההצעה שסוכמה עם הלקוח. הסכנה היא בכיוון השני:
 // נפילה לא נכונה להצעה כשחלק מהאירועים בלי הצעה תשמיט חיוב בשקט.
 check('חיוב מאירוע — השורות מועתקות מהצעת המחיר, ובספק נופלות לתמחור האירוע', async () => {
