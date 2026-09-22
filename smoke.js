@@ -3045,6 +3045,79 @@ check('סוכן AI — כלים כותבים רק למנהל, וכל כלי רו
   return true;
 });
 
+// החשבונית צריכה לצאת העתק של ההצעה שסוכמה עם הלקוח. הסכנה היא בכיוון השני:
+// נפילה לא נכונה להצעה כשחלק מהאירועים בלי הצעה תשמיט חיוב בשקט.
+check('חיוב מאירוע — השורות מועתקות מהצעת המחיר, ובספק נופלות לתמחור האירוע', async () => {
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const fn = srv.match(/async function quoteCopyForEvents\(evs\) \{[\s\S]*?\n\}/);
+  if (!fn) throw new Error('quoteCopyForEvents לא נמצאה');
+  const mk = (docs, creds = true) => new Function('greenInvoice',
+    fn[0] + '; return quoteCopyForEvents;')({
+    haveCredentials: () => creds,
+    getDocument: async (qid) => { if (!docs[qid]) throw new Error('404'); return docs[qid]; },
+  });
+  const Q = {
+    q1: { number: 635, description: 'הגברה ותאורה — ידעי 10.09.26', remarks: 'התשלום עד 30 יום מהאירוע.',
+      discount: { amount: 5, type: 'percentage' },
+      income: [{ description: 'הגברה מלאה', quantity: 1, price: 18000 }, { description: 'תאורה', quantity: 2, price: 1500 }] },
+    q2: { number: 636, description: 'מופע נוסף', income: [{ description: 'חבילת מופע', quantity: 1, price: 9000 }] },
+  };
+  const ev = (o) => ({ id: 'e', linkedDocs: [{ id: 'q1', type: 10 }], ...o });
+
+  // אירוע עם הצעה פעילה — הכל מועתק: שורות, נושא, הערה והנחה
+  const one = await mk(Q)([ev()]);
+  if (!one || one.items.length !== 2) throw new Error('השורות לא הועתקו מההצעה');
+  if (one.items[0].description !== 'הגברה מלאה' || one.items[1].quantity !== 2 || one.items[1].price !== 1500)
+    throw new Error('השורות לא זהות להצעה');
+  if (one.description !== 'הגברה ותאורה — ידעי 10.09.26') throw new Error('נושא המסמך לא הועתק');
+  if (one.remarks !== 'התשלום עד 30 יום מהאירוע.') throw new Error('ההערה לא הועתקה');
+  if (!one.discount || one.discount.amount !== 5 || one.discount.type !== 'percentage') throw new Error('ההנחה לא הועתקה');
+  if (!one.numbers.includes('635')) throw new Error('מספר ההצעה אינו מדווח');
+
+  // שני אירועים שחולקים הצעה אחת — היא נספרת פעם אחת ולא כפול
+  const shared = await mk(Q)([ev({ id: 'e1' }), ev({ id: 'e2' })]);
+  if (shared.items.length !== 2) throw new Error('הצעה משותפת נספרה פעמיים: ' + shared.items.length);
+  if (shared.description !== 'הגברה ותאורה — ידעי 10.09.26') throw new Error('הצעה אחת משותפת — הנושא עדיין אמור לעבור');
+  // שני אירועים עם שתי הצעות — השורות מצטרפות, אבל לא הנושא/הערה (אין "הנושא")
+  const two = await mk(Q)([ev({ id: 'e1' }), ev({ id: 'e2', linkedDocs: [{ id: 'q2', type: 10 }] })]);
+  if (two.items.length !== 3) throw new Error('חיוב מאוחד לא צירף את שתי ההצעות');
+  if (two.description || two.remarks || two.discount) throw new Error('חיוב מאוחד העתיק נושא/הערה/הנחה מהצעה אחת');
+
+  // כל מצב של ספק → null, כלומר נפילה לתמחור האירוע
+  const cases = [
+    ['אירוע בלי הצעה', [ev(), { id: 'e2', linkedDocs: [] }]],
+    ['הצעה שהועלתה כקובץ', [ev({ linkedDocs: [{ id: 'q1', type: 10, uploaded: true }] })]],
+    ['הצעה שזוכתה', [ev({ linkedDocs: [{ id: 'q1', type: 10, credited: true }] })]],
+    ['הצעה בלי מזהה', [ev({ linkedDocs: [{ type: 10 }] })]],
+    ['הצעה שנמחקה בחשבונית ירוקה', [ev({ linkedDocs: [{ id: 'נעלם', type: 10 }] })]],
+    ['הצעה בלי שורות', [ev({ linkedDocs: [{ id: 'q0', type: 10 }] })]],
+    ['בלי אירועים', []],
+  ];
+  for (const [what, evs] of cases) {
+    const r = await mk({ ...Q, q0: { income: [] } })(evs);
+    if (r !== null) throw new Error('לא נפל לתמחור האירוע: ' + what);
+  }
+  // בלי חיבור לחשבונית ירוקה — לא מנסים בכלל
+  if (await mk(Q, false)([ev()]) !== null) throw new Error('ניסה לשלוף הצעה בלי חיבור');
+
+  // הראוט משתמש בנפילה ולא בהצעה בלבד, ומדווח לפרונט מאיפה הגיעו השורות
+  const route = srv.slice(srv.indexOf("add('POST', /^\\/api\\/invoicing\\/preview$/"), srv.indexOf("// POST /api/invoicing/preview-pdf"));
+  if (!/fromQuote && fromQuote\.items\) \|\| invoiceItemsFromEvents\(evs\)/.test(route)) throw new Error('אין נפילה לתמחור האירוע');
+  if (!/itemsFrom: fromQuote \? 'quote' : 'event'/.test(route)) throw new Error('הפרונט לא יודע מאיפה השורות');
+  if (!/fromQuote && fromQuote\.remarks/.test(route)) throw new Error('ההערה לא מוחזרת לפרונט');
+
+  // וההערה עוברת עד ההפקה בפועל — לא נעצרת בתצוגה
+  const app2 = fs.readFileSync('app.js', 'utf8');
+  const gen2 = app2.slice(app2.indexOf("fetch('/api/invoicing/generate'"), app2.indexOf("fetch('/api/invoicing/generate'") + 700);
+  if (!/remarks: p\.remarks/.test(gen2)) throw new Error('ההערה אינה נשלחת בהפקה');
+  const pdf2 = app2.slice(app2.indexOf("fetch('/api/invoicing/preview-pdf'"), app2.indexOf("fetch('/api/invoicing/preview-pdf'") + 500);
+  if (!/remarks: p\.remarks/.test(pdf2)) throw new Error('ההערה אינה נשלחת לתצוגה המעוצבת');
+  // וההצעה עדיין נסגרת: ההפקה מקשרת אותה כמסמך מקור
+  const gen = srv.slice(srv.indexOf("add('POST', /^\\/api\\/invoicing\\/generate$/"), srv.indexOf('\n});', srv.indexOf("add('POST', /^\\/api\\/invoicing\\/generate$/")));
+  if (!/linkedDocumentIds: quoteIds/.test(gen)) throw new Error('ההצעה לא תיסגר בחשבונית ירוקה');
+  return true;
+});
+
 // הזיכרון הוא מה שהופך את הסוכן למי שמכיר את העסק — ולכן גם הסיכון: זיכרון
 // שגוי או כפול משפיע על כל שיחה עתידית ואיש לא יבין למה הוא מתנהג מוזר.
 check('סוכן AI — זיכרון: דדופ, תקרה, מחיקה, ובידוד בין עסקים', () => {

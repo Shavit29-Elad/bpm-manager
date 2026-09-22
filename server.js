@@ -811,11 +811,54 @@ add('GET', /^\/api\/invoicing\/clients$/, async (req, res, _p, q) => {
 });
 
 // POST /api/invoicing/preview — { eventIds } → שורות ברירת מחדל + נושא + סכומים (בלי ליצור מסמך)
+// העתק מלא של ההצעות המקושרות לאירועים — שורות, נושא, הערות והנחה — או null
+// אם אין להסתמך עליהן. null מוחזר בכל מקרה של ספק: חלק מהאירועים בלי הצעה,
+// הצעה שהועלתה כקובץ (אין לה שורות בחשבונית ירוקה), או שליפה שנכשלה. במצב כזה
+// נופלים לתמחור האירוע — חשבונית חסרה גרועה בהרבה מחשבונית שצריך לערוך.
+async function quoteCopyForEvents(evs) {
+  if (!evs.length || !greenInvoice.haveCredentials()) return null;
+  const ids = [];
+  for (const e of evs) {
+    const q = (e.linkedDocs || []).find(d => Number(d.type) === 10 && d.id && !d.uploaded && !d.credited && !d.credit);
+    if (!q) return null;                         // אירוע בלי הצעה פעילה — לא מסתמכים
+    if (!ids.includes(String(q.id))) ids.push(String(q.id));
+  }
+  const items = [], numbers = [];
+  let single = null;
+  for (const qid of ids) {                       // כמה אירועים יכולים לחלוק הצעה אחת — היא נספרת פעם אחת
+    let doc;
+    try { doc = await greenInvoice.getDocument(qid); } catch { return null; }
+    const lines = (doc && doc.income) || [];
+    if (!lines.length) return null;
+    for (const it of lines) {
+      items.push({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0,
+        ...(it.catalogNum ? { catalogNum: String(it.catalogNum) } : {}) });
+    }
+    if (doc.number != null) numbers.push(String(doc.number));
+    single = ids.length === 1 ? doc : null;
+  }
+  if (!items.length) return null;
+  // נושא, הערות והנחה מועתקים רק מהצעה יחידה. בחיוב מאוחד של כמה הצעות אין
+  // "הנושא" — צירוף של שניים היה יוצר מסמך עם טקסט סותר.
+  return {
+    items, numbers,
+    description: single ? (single.description || null) : null,
+    remarks: single ? (single.remarks || null) : null,
+    discount: (single && single.discount && Number(single.discount.amount) > 0)
+      ? { amount: Number(single.discount.amount), type: single.discount.type === 'percentage' ? 'percentage' : 'sum' } : null,
+  };
+}
+
 add('POST', /^\/api\/invoicing\/preview$/, async (req, res, _p, _q, body) => {
   const db = load();
   const _cid = reqCompany(_q, body);
   const evs = (body.eventIds || []).map(id => db.events.find(e => e.id === id)).filter(e => ownedBy(e, _cid));
-  const items = invoiceItemsFromEvents(evs);
+  // הצעת מחיר מקושרת = מה שסוכם עם הלקוח. החשבונית צריכה לצאת העתק שלה ולא
+  // חישוב מחדש מהתמחור של האירוע: בהצעה יש ניסוח, פיצול שורות והנחות שסוכמו
+  // מולו, והתמחור באירוע הוא פנימי. רק כשלכל האירועים הנבחרים יש הצעה פעילה —
+  // אחרת חיוב מאוחד היה מאבד בשקט את האירועים שאין להם הצעה.
+  const fromQuote = await quoteCopyForEvents(evs);
+  const items = (fromQuote && fromQuote.items) || invoiceItemsFromEvents(evs);
   const subtotal = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0);
   // מייל שמור של הלקוח — כדי שיופיע מראש בתיבה בהפקה (המשתמש מחליט אם לשלוח)
   let clientEmail = null;
@@ -841,7 +884,13 @@ add('POST', /^\/api\/invoicing\/preview$/, async (req, res, _p, _q, body) => {
       break;
     }
   } catch { }
-  json(res, { items, subtotal, vat: +(subtotal * 0.18).toFixed(2), total: +(subtotal * 1.18).toFixed(2), subject: subjectForEvents(evs), clientEmail, linkedQuote });
+  json(res, { items, subtotal, vat: +(subtotal * 0.18).toFixed(2), total: +(subtotal * 1.18).toFixed(2),
+    subject: (fromQuote && fromQuote.description) || subjectForEvents(evs),
+    remarks: (fromQuote && fromQuote.remarks) || '',
+    discount: (fromQuote && fromQuote.discount) || null,
+    clientEmail, linkedQuote,
+    itemsFrom: fromQuote ? 'quote' : 'event',
+    quoteNumbers: (fromQuote && fromQuote.numbers) || [] });
 });
 
 // POST /api/invoicing/preview-pdf — תצוגה מקדימה מעוצבת של המסמך (לפני הפקה), מחזיר PDF ב-base64

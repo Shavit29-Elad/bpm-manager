@@ -4119,7 +4119,10 @@ async function _invPreviewForIds(ids, client, clientId) {
   _invPreview = { ids, client: client || '', clientId: clientId || null,
     items: (pv.items || []).map(it => ({ description: it.description, quantity: it.quantity ?? 1, price: it.price ?? 0 })),
     subject: pv.subject || '', type: 305, docDate: todayIso(), sendEmail: false, email: pv.clientEmail || '',
-    quote: (pv.linkedQuote && pv.linkedQuote.url) ? pv.linkedQuote : null };
+    quote: (pv.linkedQuote && pv.linkedQuote.url) ? pv.linkedQuote : null,
+    // העתק מלא מההצעה: שורות, נושא, הערה והנחה. הכל ניתן לעריכה כאן לפני ההפקה.
+    itemsFrom: pv.itemsFrom || 'event', remarks: pv.remarks || '', quoteNumbers: pv.quoteNumbers || [],
+    ...(pv.discount ? { discAmount: pv.discount.amount, discType: pv.discount.type, discAfterVat: false } : {}) };
   showInvoicePreviewModal();
 }
 window.openInvoicePreview = async (safe, clientEnc, clientId) => {
@@ -4195,6 +4198,7 @@ function renderInvoicePreviewModal() {
     ${quotePane}
     <div style="flex:1;min-width:0">
     <div class="row-between"><h3>תצוגה מקדימה — הפקת מסמך</h3><span class="muted">${escapeHtml(p.client)}</span></div>
+    ${p.itemsFrom === 'quote' ? `<div class="muted" style="font-size:12px;background:rgba(14,164,114,.10);border-radius:8px;padding:6px 10px;margin-top:8px">✓ הועתק מהצעת המחיר${(p.quoteNumbers || []).length ? ' #' + escapeHtml((p.quoteNumbers || []).join(', #')) : ''} — שורות, נושא, הערה והנחה. אפשר לערוך הכל כאן לפני ההפקה.</div>` : ''}
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0">
       <label style="display:flex;flex-direction:column;font-size:12px;color:var(--muted)">סוג מסמך
         <select id="invType" onchange="invSetType(this.value)">${INV_TYPES.map(([v, l]) => `<option value="${v}" ${+p.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -4207,6 +4211,8 @@ function renderInvoicePreviewModal() {
     ${isReceipt ? `<div class="warn-banner" style="margin-bottom:10px">שים לב: ${DOC_TYPE_SHORT[+p.type]} מתעדת קבלת תשלום. תיווצר שורת תקבול של העברה בנקאית על מלוא הסכום.</div>` : ''}
     <table><thead><tr><th>פירוט</th><th>כמות</th><th>מחיר</th><th>סה"כ</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     <div style="margin-top:8px"><button class="btn ghost" onclick="invAddRow()">+ הוסף שורה</button></div>
+    <label style="font-size:12px;color:var(--muted);display:block;margin-top:10px">הערה בתחתית המסמך${p.itemsFrom === 'quote' ? ' (הועתקה מההצעה)' : ' (לא חובה)'}
+      <textarea rows="2" oninput="_invPreview.remarks=this.value" style="width:100%;padding:6px 8px;margin-top:3px;font-family:inherit;resize:vertical">${escapeHtml(p.remarks || '')}</textarea></label>
     <div style="margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px">
       <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer">
         <input type="checkbox" ${p.sendEmail ? 'checked' : ''} onchange="invToggleEmail(this.checked)"/>
@@ -4291,6 +4297,7 @@ window.generateInvoice = async (btn) => {
   const doGen = (allowReinvoice) => fetch('/api/invoicing/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ companyId: state.company, eventIds: p.ids, clientName: p.client, clientId: p.clientId,
       type: p.type, items: invItemsForApi(items), discount: invDiscountForApi(), description: p.subject, date: p.docDate || null,
+      remarks: p.remarks || null,
       sendEmail: p.sendEmail, email: p.sendEmail ? p.email : null, allowReinvoice, skipDateValidation: !!p.skipSeq }) }).then(r => r.json()).catch(() => ({ error: 'שגיאת רשת' }));
   let r = await doGen(false);
   // אירועים שכבר חויבו — דורש אישור מפורש כדי להפיק חשבונית נוספת (מונע חיוב כפול)
@@ -4353,7 +4360,7 @@ window.showDesignedPreview = async (btn) => {
   if (btn) { btn.disabled = true; btn.textContent = 'טוען…'; }
   if (st) st.innerHTML = '<span class="muted">טוען תצוגה מקדימה מעוצבת מחשבונית ירוקה…</span>';
   const r = await fetch('/api/invoicing/preview-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ eventIds: p.ids, items: invItemsForApi(items), discount: invDiscountForApi(), type: p.type, description: p.subject, date: p.docDate || null, clientId: p.clientId, clientName: p.client, skipDateValidation: !!p.skipSeq }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+    body: JSON.stringify({ eventIds: p.ids, items: invItemsForApi(items), discount: invDiscountForApi(), type: p.type, description: p.subject, remarks: p.remarks || null, date: p.docDate || null, clientId: p.clientId, clientName: p.client, skipDateValidation: !!p.skipSeq }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) { btn.disabled = false; btn.textContent = '👁 תצוגה מקדימה מעוצבת'; }
   if (r.ok && r.pdfBase64) {
     if (st) st.innerHTML = '';
