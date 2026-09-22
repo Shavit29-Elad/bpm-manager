@@ -1709,6 +1709,10 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
     // מסמך המקור (להצגה מצד ימין בעורך מסמך המשך) + מקור שהועלה (חשבונית ישנה → הפקה בחשבונית ירוקה)
     srcUrl: (su && su.url) || null,
     srcLabel: `${DOC_TYPE_SHORT[r.srcType] || 'מסמך'}${r.srcNumber ? ' #' + r.srcNumber : ''}`,
+    // פרטי מסמך המקור — נחוצים כשמפיקים קבלה מתוך התאמת בנק: אז גם החשבונית
+    // עצמה נקשרת לשורת הבנק, והקבלה מקוננת תחתיה
+    srcType: Number(r.srcType) || null, srcNumber: r.srcNumber ?? null,
+    srcAmount: r.srcAmount != null ? Number(r.srcAmount) : null,
     uploadedSource: r.uploaded ? { eventId: r.eventId || null, oldInvoiceId: r.oldInvoiceId || null, uploadedDocId: id } : null,
   };
   if (!_derEdit.items.length) _derEdit.items.push({ description: '', quantity: 1, price: 0 });
@@ -2037,7 +2041,12 @@ window.derConfirm = async () => {
     if (_derBankLink && r.doc) {
       // הופק מתוך "צור הכנסה" בבנק — קישור לתנועה, ואז אותה חלונית פעולות כמו בכל הפקה (הורדה / מייל / צפייה / וואטסאפ). ללא הורדה אוטומטית.
       const entry = { id: r.doc.id, number: r.doc.number, type: e.type, clientName: e.clientName || '', amount: t.total, url: r.doc.url || null };
-      await linkDocToBankTx(_derBankLink.txId, entry);
+      // sourceId נשמט כאן קודם, ולכן קבלה שהופקה מחשבונית נקשרה לשורת הבנק
+      // לבדה — החשבונית שהיא מתעדת לא הופיעה כלל.
+      await linkDocToBankTx(_derBankLink.txId, entry, _derBankLink.sourceId || e.id, {
+        id: e.id, number: e.srcNumber, type: e.srcType, clientName: e.clientName || '',
+        amount: e.srcAmount, url: e.srcUrl,
+      });
       _derBankLink = null;
       const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');
       showDocReadyPopup(r.doc, typeName, (document.getElementById('derSendEmail') || {}).value || (e.sendEmail || ''));
@@ -2136,11 +2145,21 @@ window.docReadySend = async (docId, btn, email) => {
     : `<span style="color:var(--danger)">${escapeHtml(String(r.error || 'שליחה נכשלה — ייתכן שאין מייל שמור ללקוח'))}</span>`;
 };
 // קישור מסמך שהופק לתנועת בנק (מוסיף ל-matchedInvoices ומעדכן את השורה)
-async function linkDocToBankTx(txId, entry, sourceId) {
+async function linkDocToBankTx(txId, entry, sourceId, sourceDoc) {
   const tx = (_bankList || []).find(t => t.id === txId); if (!tx) return;
   const matched = JSON.parse(JSON.stringify(tx.matchedInvoices || []));
   // #3 — אם המסמך החדש הוא קבלה (400) וחשבונית המקור כבר משויכת לשורה — מצרפים אותה כקבלה מקוננת תחת החשבונית, לא כשורה נפרדת
-  const src = sourceId ? matched.find(x => String(x.id) === String(sourceId)) : null;
+  let src = sourceId ? matched.find(x => String(x.id) === String(sourceId)) : null;
+  // "צור הכנסה" על שורה לא מותאמת: החשבונית עדיין אינה משויכת, ולכן צורפה רק
+  // הקבלה והחשבונית שהיא מתעדת נעדרה מהשורה. כאן מצרפים אותה, והקבלה מקוננת
+  // תחתיה — כך הסכום נספר פעם אחת ולא פעמיים.
+  if (!src && Number(entry.type) === 400 && sourceDoc && sourceDoc.id && [300, 305].includes(Number(sourceDoc.type))) {
+    src = { id: sourceDoc.id, number: sourceDoc.number ?? null, type: Number(sourceDoc.type),
+      clientName: sourceDoc.clientName || entry.clientName || '',
+      amount: Number(sourceDoc.amount) > 0 ? Number(sourceDoc.amount) : entry.amount,
+      url: sourceDoc.url || null };
+    matched.push(src);
+  }
   if (src && Number(entry.type) === 400) {
     src.receipt = { number: entry.number, url: entry.url || null, amount: entry.amount };
   } else if (!matched.find(x => x.id === entry.id)) {

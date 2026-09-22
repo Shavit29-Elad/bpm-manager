@@ -3045,6 +3045,52 @@ check('סוכן AI — כלים כותבים רק למנהל, וכל כלי רו
   return true;
 });
 
+// "צור הכנסה" בבנק עם קבלה שמופקת מחשבונית קיימת: לשורה צורפה רק הקבלה,
+// והחשבונית שהיא מתעדת נעדרה. הסכום חייב להיספר פעם אחת — ולכן קינון ולא שתי שורות.
+check('התאמת בנק — קבלה שהופקה מחשבונית מצרפת גם אותה, מקוננת', () => {
+  const src = app.slice(app.indexOf('async function linkDocToBankTx'), app.indexOf('// ============ סימון טופל'));
+  const body = src.replace(/const r = await fetch[\s\S]*?\n\}/, 'return matched;\n}');
+  const mk = (existing) => new Function('_bankList', 'JSONSAFE',
+    body + '; return linkDocToBankTx;')([{ id: 'tx1', matchedInvoices: existing }]);
+
+  const receipt = { id: 'r1', number: 80095, type: 400, clientName: 'לקוח', amount: 11800, url: '/r' };
+  const invoice = { id: 'i1', number: 50425, type: 305, clientName: 'לקוח', amount: 11800, url: '/i' };
+
+  // המקרה שנשבר: החשבונית עדיין לא משויכת לשורה
+  const a = mk([])('tx1', receipt, 'i1', invoice);
+  return Promise.resolve(a).then((m) => {
+    if (m.length !== 1) throw new Error('נוצרו שתי שורות — הסכום ייספר פעמיים: ' + m.length);
+    if (Number(m[0].type) !== 305 || m[0].number !== 50425) throw new Error('החשבונית לא צורפה לשורה');
+    if (!m[0].receipt || m[0].receipt.number !== 80095) throw new Error('הקבלה אינה מקוננת תחת החשבונית');
+    if (m[0].amount !== 11800) throw new Error('סכום החשבונית שגוי');
+
+    // כשהחשבונית כבר משויכת — ההתנהגות הישנה נשמרת
+    return mk([{ ...invoice }])('tx1', receipt, 'i1', invoice);
+  }).then((m2) => {
+    if (m2.length !== 1) throw new Error('החשבונית שוכפלה');
+    if (!m2[0].receipt) throw new Error('הקבלה לא קוננה תחת חשבונית קיימת');
+
+    // מסמך שאינו קבלה — נוסף כשורה עצמאית, בלי קינון
+    return mk([])('tx1', { id: 'd2', number: 40468, type: 300, amount: 5000 }, 'i1', invoice);
+  }).then((m3) => {
+    if (m3.length !== 1 || Number(m3[0].type) !== 300) throw new Error('מסמך שאינו קבלה טופל כקבלה');
+    if (m3[0].receipt) throw new Error('נוצר קינון למסמך שאינו קבלה');
+
+    // בלי פרטי מקור — לא ממציאים חשבונית, מצרפים את הקבלה בלבד
+    return mk([])('tx1', receipt, null, null);
+  }).then((m4) => {
+    if (m4.length !== 1 || Number(m4[0].type) !== 400) throw new Error('בלי מקור — הקבלה לא צורפה');
+
+    // הקריאה מהבנק מעבירה את פרטי המקור, אחרת כל התיקון לא נכנס לפעולה
+    const call = app.slice(app.indexOf('if (_derBankLink && r.doc)'), app.indexOf('if (_derBankLink && r.doc)') + 900);
+    if (!/linkDocToBankTx\(_derBankLink\.txId, entry, _derBankLink\.sourceId \|\| e\.id, \{/.test(call))
+      throw new Error('הקריאה מהבנק אינה מעבירה את מסמך המקור');
+    if (!/srcNumber|srcType|srcAmount/.test(call)) throw new Error('פרטי מסמך המקור אינם מועברים');
+    if (!/srcType: Number\(r\.srcType\)/.test(app)) throw new Error('פרטי המקור אינם נשמרים בעורך');
+    return true;
+  });
+});
+
 // מועד החיוב הוא חשבון תאריכים, ושם נופלות שגיאות של יום אחד בשקט. בדיקה על
 // גבולות חודש, שנה וחודש קצר — ועל כך ששום דבר כאן אינו מפיק מסמך.
 check('מועד חיוב — סוף חודש מול יום אחרי, וההתראה על מה שטרם הוצא', () => {
