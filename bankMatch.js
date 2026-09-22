@@ -35,12 +35,35 @@ function amountKind(bank, invAmt, wh) {
   return null;
 }
 
-export function scoreMatch(tx, inv, wh = 0.95) {
+// התאמת מט"ח: כסף שהגיע מהמרה לא יהיה זהה לסכום שבחשבונית — החשבונית הופקה
+// בשקלים לפי שער אחד, והכסף הומר בשער אחר, ובניכוי עמלה.
+// במקום להרחיב סתם את הסבילות בשקלים, מחשבים את **השער המשתמע** מהחשבונית
+// (סכום החשבונית ÷ הסכום במט"ח) ומשווים אותו לשער שהבנק עצמו כתב בשורה.
+// זו בדיקה מדויקת ומוסברת, ולא ניחוש: אותו סכום מט"ח, שני שערים קרובים.
+const FX_RATE_TOL = 0.04;   // 4% — תנודת שער סבירה בין הפקת החשבונית לקבלת הכסף
+function fxKind(tx, invAmt) {
+  const fx = tx && tx.fx;
+  if (!fx || !(fx.amount > 0) || !(fx.rate > 0) || !(invAmt > 0)) return null;
+  const implied = invAmt / fx.amount;
+  const diff = Math.abs(implied - fx.rate) / fx.rate;
+  if (diff > FX_RATE_TOL) return null;
+  return { implied: Math.round(implied * 10000) / 10000, rate: fx.rate,
+    pct: Math.round(diff * 1000) / 10, currency: fx.currency, amount: fx.amount, fee: fx.fee };
+}
+
+export function scoreMatch(tx, inv, wh = 0.95, opts = {}) {
   let score = 0; const reasons = [];
   if (tx.invoiceNumber && inv.number != null && String(inv.number) === String(tx.invoiceNumber)) { score += 100; reasons.push('מספר חשבונית'); }
   const ak = amountKind(tx.absAmount, inv.amountIncVat, wh);
   if (ak === 'exact') { score += 50; reasons.push('סכום זהה'); }
   else if (ak === 'wh') { score += 45; reasons.push(`סכום פחות ${Math.round((1 - wh) * 100)}% (ניכוי מס)`); }
+  else if (opts.fx) {
+    const f = fxKind(tx, inv.amountIncVat);
+    if (f) {
+      score += 44;   // מתחת ל"סכום זהה" — התאמה מוסברת, אך לא ודאית
+      reasons.push(`מט״ח: ${f.amount} ${f.currency} · שער בחשבונית ${f.implied} מול ${f.rate} בבנק (${f.pct}%)${f.fee ? ` · עמלה ₪${f.fee}` : ''}`);
+    }
+  }
   if (tx.nameHint && inv.clientName && nameMatch(tx.nameHint, inv.clientName)) { score += 40; reasons.push('שם לקוח'); }
   const dd = daysBetween(tx.date, inv.date);
   if (dd <= 7) score += 12; else if (dd <= 30) score += 6;
@@ -72,11 +95,13 @@ function findCombo(target, invs) {
 // (לחיצה על הצעה → 'manual', או כפתור "אשר את כל ההתאמות המדויקות" שמאשר רק הצעות חד-משמעיות).
 // דירוג ההצעות: מספר חשבונית / שם+סכום קודמים לסכום-בלבד — כדי ש"מי שבאמת שילם" (לפי השם) יופיע ראשון,
 // ולא חשבונית אחרת שרק במקרה זהה בסכום.
-export function matchCredits(txns, invoices, whRate = 0.05) {
+// opts.fx — לאפשר התאמת מט"ח. מופעל פר-חברה בלבד: הרחבת ההתאמה רלוונטית רק
+// למי שבאמת מקבל כסף מחו"ל, ואין סיבה לרפות את הקריטריון אצל השאר.
+export function matchCredits(txns, invoices, whRate = 0.05, opts = {}) {
   const wh = 1 - (Number(whRate) || 0);   // החלק שמתקבל בבנק אחרי ניכוי מס במקור
   return txns.map((t, i) => {
     if (t.direction !== 'credit') return { ...t, matchStatus: 'skip' };
-    const scored = invoices.map(inv => ({ inv, ...scoreMatch(t, inv, wh) }))
+    const scored = invoices.map(inv => ({ inv, ...scoreMatch(t, inv, wh, opts) }))
       .filter(s => s.score >= 40)                     // רלוונטי: התאמת סכום / שם / מספר חשבונית
       .sort((a, b) => b.score - a.score);             // שם+סכום ומספר חשבונית קודמים לסכום-בלבד
     const suggestions = scored.filter(s => bankLinkable(s.inv)).slice(0, 6).map(s => toInv(s.inv, { reasons: s.reasons, score: s.score }));
@@ -142,4 +167,4 @@ export function attachReceipts(matched, receipts) {
   return matched;
 }
 
-export default { scoreMatch, matchCredits, matchDebits, attachReceipts, BANK_DOC_TYPES };
+export default { fxKind, scoreMatch, matchCredits, matchDebits, attachReceipts, BANK_DOC_TYPES };

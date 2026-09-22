@@ -177,10 +177,29 @@ export function parseLeumiExcel(htmlText) {
     t.invoiceNumber = extractInvoiceNumber(fullText);
     t.counterparty = leumiCounterparty(memo) || extractCounterparty(fullText);
     t.nameHint = nameHintFrom(t.counterparty, description);
+    const fx = parseFxMemo(memo);
+    if (fx) t.fx = fx;   // הכסף הגיע ממט"ח — הסכום בבנק לא יהיה זהה לחשבונית
     txns.push(t);
   }
   return txns;
 }
+// המרת מט"ח: לאומי כותב בשורה את כל הפרטים —
+//   "המרה מ: 1980.00  דולר,שע"ח:3.1275  בניכוי עמלה בסך 18.32 ש"ח"
+// מכאן אפשר לשחזר את הסכום לפני העמלה, ולהבין למה הסכום שנכנס לבנק אינו זהה
+// לסכום שבחשבונית: החשבונית הופקה בשקלים לפי שער אחד, והכסף הגיע בשער אחר.
+export function parseFxMemo(memo) {
+  const s = String(memo || '');
+  const m = s.match(/המרה\s*מ\s*:?\s*([\d,.]+)\s*([^\s,،]+)\s*,?\s*שע["'׳]?ח\s*:?\s*([\d.]+)/);
+  if (!m) return null;
+  const amount = parseFloat(String(m[1]).replace(/,/g, ''));
+  const rate = parseFloat(m[3]);
+  if (!(amount > 0) || !(rate > 0)) return null;
+  const fm = s.match(/עמלה\s*בסך\s*([\d,.]+)/);
+  const fee = fm ? parseFloat(String(fm[1]).replace(/,/g, '')) : 0;
+  return { currency: String(m[2]).trim(), amount, rate, fee: fee || 0,
+    gross: Math.round(amount * rate * 100) / 100 };
+}
+
 // לאומי כותב את הצד השני בעמודת הפרטים: "העברה אל: <שם> <מספר חשבון> תשלום",
 // "העברה מאת: <שם> <מספר חשבון>". השם נקטע אצלם, ולכן נלקח כפי שהוא.
 function leumiCounterparty(memo) {
@@ -382,4 +401,4 @@ export function parseBank(text) {
   return parseMizrahi(text);
 }
 
-export default { parseMizrahi, parseMizrahiExcel, parseLeumiExcel, parseGridStatement, parseBank, extractAccountBalance };
+export default { parseMizrahi, parseMizrahiExcel, parseLeumiExcel, parseFxMemo, parseGridStatement, parseBank, extractAccountBalance };

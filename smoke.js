@@ -2084,6 +2084,48 @@ check('לוח האירועים — לחברות הלוח בלבד, מרשימה 
   return true;
 });
 
+// כסף שהגיע ממט"ח לעולם לא יהיה זהה לסכום שבחשבונית, ולכן לא הוצע כהתאמה כלל.
+// ההשוואה היא בין השער המשתמע מהחשבונית לשער שהבנק כתב — מדויק ומוסבר.
+check('התאמת בנק — מט״ח: השוואת שערים, ורק לחברות שמקבלות מחו״ל', async () => {
+  const P = await import('./bankParser.js');
+  const M = await import('./bankMatch.js');
+
+  // פרטי ההמרה נקראים מהשורה של לאומי
+  const fx = P.parseFxMemo('המרה מ: 1980.00  דולר,שע"ח:3.1275  בניכוי עמלה בסך 18.32 ש"ח');
+  if (!fx) throw new Error('פרטי ההמרה לא נקראו');
+  if (fx.amount !== 1980 || fx.rate !== 3.1275 || fx.fee !== 18.32) throw new Error('פרטי ההמרה שגויים: ' + JSON.stringify(fx));
+  if (Math.abs(fx.gross - 6192.45) > 0.01) throw new Error('הסכום לפני עמלה שגוי: ' + fx.gross);
+  if (P.parseFxMemo('העברה מאת: גניש אלי 11-090-121012370') !== null) throw new Error('שורה רגילה זוהתה כהמרה');
+
+  const tx = { date: '05/01/2026', direction: 'credit', absAmount: 6174.13, nameHint: null, memo: '', fx };
+  const inv = (amt) => [{ id: 'd', number: '1210', type: 320, clientName: 'FIVE STAR', amountIncVat: amt, date: '2026-01-05' }];
+  const sug = (amt, opts) => (M.matchCredits([tx], inv(amt), 0.05, opts)[0].suggestions || []);
+
+  // בלי מט"ח אין הצעה בכלל — זה המצב שהיה
+  if (sug(6301, { fx: false }).length) throw new Error('הצעה ניתנה בלי הפעלת מט״ח');
+  // עם מט"ח — הצעה עם הסבר שכולל את שני השערים
+  const s = sug(6301, { fx: true });
+  if (s.length !== 1) throw new Error('לא הוצעה התאמת מט״ח');
+  const why = (s[0].reasons || []).join(' ');
+  if (!/3\.1823/.test(why) || !/3\.1275/.test(why)) throw new Error('ההסבר אינו כולל את שני השערים: ' + why);
+  if (!/1980 דולר/.test(why)) throw new Error('ההסבר אינו כולל את הסכום במט״ח');
+
+  // חשבונית בשער רחוק מדי אינה מוצעת — אחרת כל סכום דומה היה נתפס
+  if (sug(7500, { fx: true }).length) throw new Error('שער רחוק (18%) התקבל כהתאמה');
+  // ושער קרוב מאוד כן
+  if (!sug(6250, { fx: true }).length) throw new Error('שער קרוב נדחה');
+  // שורה בלי פרטי המרה אינה נהנית מהסבילות המורחבת
+  const plain = M.matchCredits([{ ...tx, fx: null }], inv(6301), 0.05, { fx: true })[0];
+  if ((plain.suggestions || []).length) throw new Error('שורה רגילה קיבלה סבילות של מט״ח');
+
+  // מופעל פר-חברה בלבד
+  const srv = fs.readFileSync('server.js', 'utf8');
+  if (!/const FX_COMPANIES = \['co_tal'\]/.test(srv)) throw new Error('רשימת חברות המט״ח חסרה');
+  if ((srv.match(/FX_COMPANIES\.includes\(companyId\)/g) || []).length !== 2)
+    throw new Error('לא כל מסלולי ההתאמה מעבירים את דגל המט״ח');
+  return true;
+});
+
 // שורה ששויכה מפסיקה להיות "לא מותאמת" ויוצאת מהמסנן — וזה נראה כאילו התנועה
 // נמחקה. ההודעה היא ההבדל בין "נעלם לי כסף" לבין "עבר למותאמות".
 check('התאמת בנק — שורה שיצאה מהתצוגה אחרי שיוך מוסברת ולא נעלמת בשקט', () => {

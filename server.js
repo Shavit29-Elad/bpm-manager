@@ -7208,7 +7208,7 @@ async function runBankMatchBg(companyId) {
     });
     try { const _notes = snap.expenseNotes || {}; if (Object.keys(_notes).length) expenses.forEach(e => { if (_notes[e.id]) e.description = _notes[e.id]; }); } catch { }
     const whRate = bizProfile(snap, companyId).withholdingRate || 0;   // שיעור ניכוי מס במקור של החברה
-    const cmatched = attachReceipts(matchCredits(txns, invoices, whRate), receipts);  // תנועות זכות מסומנות במקום
+    const cmatched = attachReceipts(matchCredits(txns, invoices, whRate, { fx: FX_COMPANIES.includes(companyId) }), receipts);  // תנועות זכות מסומנות במקום
     const dmap = new Map();
     try { for (const dm of matchDebits(txns, expenses)) dmap.set(dm.i, dm); } catch { }
     // כותבים על ה-DB העדכני לפי id (למניעת דריסת שינויים מקבילים)
@@ -7400,7 +7400,7 @@ add('POST', /^\/api\/bank\/rematch$/, async (req, res, _p, _q, body) => {
   }
   try { const _notes = snap.expenseNotes || {}; if (Object.keys(_notes).length) expenses.forEach(e => { if (_notes[e.id]) e.description = _notes[e.id]; }); } catch { }
   const whRate = bizProfile(snap, companyId).withholdingRate || 0;   // ניכוי מס במקור (לזכות)
-  const cmatched = attachReceipts(matchCredits(txns, invoices, whRate), receipts);   // התאמת זכות (הכנסות + קבלות)
+  const cmatched = attachReceipts(matchCredits(txns, invoices, whRate, { fx: FX_COMPANIES.includes(companyId) }), receipts);   // התאמת זכות (הכנסות + קבלות)
   const dmap = new Map();
   try { for (const dm of matchDebits(txns, expenses)) dmap.set(dm.i, dm); } catch { }
   const db2 = load();
@@ -7981,6 +7981,9 @@ const COMPANY_SEED = [
 // חברות שעובדות בלוח האירועים (במקום "אירועים ויומן" + "עובדים"). מפה נגזרות
 // הלשוניות, ולכן הוספת חברה כזו היא שורה אחת ולא פיזור של מזהה בקוד.
 const BOARD_COMPANIES = ['co_moshe', 'co_tal'];
+// חברות שמקבלות תשלומים ממט"ח — אצלן הסכום בבנק לעולם לא זהה לחשבונית,
+// ולכן ההתאמה משווה שערים ולא שקלים. לא מופעל אצל השאר, כדי לא לרפות קריטריון.
+const FX_COMPANIES = ['co_tal'];
 // פיצול מוזיקה/דיגיטל — אצל משה בלבד. אצל טל אין חלוקה כזו.
 const GROUP_SPLIT_COMPANIES = ['co_moshe'];
 // חברה שנוספה אחרי שהמסד כבר נזרע — נוספת בעלייה, בלי לגעת בקיימות
