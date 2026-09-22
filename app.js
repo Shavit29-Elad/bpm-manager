@@ -277,7 +277,8 @@ window.openBillDue = async () => {
   const groups = (r.groups || []).map(g => `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
       <div class="row-between" style="gap:8px;flex-wrap:wrap">
         <div><b style="font-size:13.5px">${escapeHtml(g.client)}</b>
-          <span class="muted" style="font-size:11.5px"> · ${MODE_HE[g.mode] || ''} · ${g.events.length} אירועים</span></div>
+          <span class="muted" style="font-size:11.5px"> · ${MODE_HE[g.mode] || ''} · ${g.events.length} אירועים${
+            g.firstDate ? ` · ${ddmy(g.firstDate)}${g.lastDate && g.lastDate !== g.firstDate ? '–' + ddmy(g.lastDate) : ''}` : ''}</span></div>
         <div style="text-align:left"><b>${money(g.total)}</b>
           ${g.lateDays > 0 ? `<div style="font-size:11.5px;color:var(--danger)">באיחור ${g.lateDays} ימים</div>` : '<div style="font-size:11.5px;color:var(--warn)">הגיע המועד</div>'}</div>
       </div>

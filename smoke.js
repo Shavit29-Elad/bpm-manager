@@ -3150,6 +3150,21 @@ check('מועד חיוב — סוף חודש מול יום אחרי, וההתר�
   if (g.clients !== 1 || g.total !== 2) throw new Error('אירועי אותו לקוח לא קובצו');
   if (g.groups[0].total !== 15000) throw new Error('הסכום המצטבר שגוי');
 
+  // סדר כרונולוגי: אירועים בתוך לקוח, ולקוחות לפי האירוע הוותיק שלהם
+  const mixed = due([
+    ev({ id: 'x1', date: '2026-08-20', clientName: 'לקוח ב' }),
+    ev({ id: 'x2', date: '2026-07-05', clientName: 'לקוח א' }),
+    ev({ id: 'x3', date: '2026-06-11', clientName: 'לקוח ב' }),
+  ], '2026-09-30');
+  const order = mixed.groups.map(x => x.client);
+  if (order[0] !== 'לקוח ב' || order[1] !== 'לקוח א')
+    throw new Error('הלקוחות אינם לפי האירוע הוותיק: ' + order.join(', '));
+  const inner = mixed.groups[0].events.map(e => e.date);
+  if (inner[0] !== '2026-06-11' || inner[1] !== '2026-08-20')
+    throw new Error('האירועים בתוך הלקוח אינם לפי תאריך: ' + inner.join(', '));
+  if (mixed.groups[0].firstDate !== '2026-06-11' || mixed.groups[0].lastDate !== '2026-08-20')
+    throw new Error('טווח התאריכים של הלקוח שגוי');
+
   // מה שלא אמור להופיע בכלל
   for (const [what, e] of [
     ['אירוע שכבר חויב', ev({ linkedDocs: [{ type: 305, number: 1 }] })],

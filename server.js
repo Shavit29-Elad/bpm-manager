@@ -4603,8 +4603,15 @@ function billingDue(db, cid, today) {
     groups.set(key, g);
   }
   const days = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86400000);
-  const out = [...groups.values()].map(g => ({ ...g, lateDays: Math.max(0, days(g.oldestDue, t)) }))
-    .sort((a, b) => b.lateDays - a.lateDays || a.client.localeCompare(b.client, 'he'));
+  // סדר כרונולוגי: האירועים בתוך כל לקוח לפי תאריך, והלקוחות לפי האירוע
+  // הוותיק שלהם — כך הישן ביותר, שהוא גם הדחוף ביותר, נמצא למעלה.
+  const out = [...groups.values()].map(g => {
+    g.events.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const dates = g.events.map(e => e.date).filter(Boolean);
+    return { ...g, lateDays: Math.max(0, days(g.oldestDue, t)),
+      firstDate: dates[0] || null, lastDate: dates[dates.length - 1] || null };
+  }).sort((a, b) => String(a.firstDate || '').localeCompare(String(b.firstDate || ''))
+    || a.client.localeCompare(b.client, 'he'));
   return { total: out.reduce((s, g) => s + g.events.length, 0), clients: out.length,
     amount: Math.round(out.reduce((s, g) => s + g.total, 0) * 100) / 100, groups: out };
 }
