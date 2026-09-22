@@ -96,6 +96,9 @@ const api = (p) => {
 
 // חברות שעובדות בלוח האירועים במקום "אירועים ויומן" + "עובדים"
 const BOARD_COMPANIES = ['co_moshe', 'co_tal'];
+// חברות בלי רכבי חברה — הרכבים פרטיים. הלשונית מוסתרת, והסטטוס אומר זאת
+// במפורש במקום "אין רכבים", שנקרא כאילו חסר מידע.
+const NO_FLEET_COMPANIES = ['co_tal', 'co_moshe'];
 // חברות שמייבאות מסמכי הכנסה ממערכת קודמת (אופק — מפייפרלס; טל — מהכוורת).
 // הייבוא הוא חד-פעמי במעבר לחשבונית ירוקה, ולכן הכפתורים מוצגים להן בלבד.
 const LEGACY_IMPORT_COMPANIES = ['co_ofek', 'co_tal'];
@@ -108,6 +111,7 @@ function companyTabsFor(cid) {
   const out = [];
   for (const k of Object.keys(TAB_LABELS)) {
     if (k === 'business') continue;
+    if (k === 'vehicles' && NO_FLEET_COMPANIES.includes(cid)) continue;   // אין צי רכב
     if (['events', 'payroll'].includes(k)) { if (!isBoard) out.push(k); continue; }
     if (k === 'eventsboard') { if (isBoard) out.push(k); continue; }   // לוח האירועים — חברות הלוח בלבד
     out.push(k);   // כולל 'summary' — סיכום עסק זמין לכל החברות
@@ -390,6 +394,10 @@ function applyCompanyTabs() {
   if (isBoard && BOARD_HIDDEN_TABS.includes(state.tab)) goHome();
   // "סיכום עסק" — זמין לכל החברות (סיכום כל הקטגוריות/קבוצות: חודשי + שנתי), לפי הרשאות המשתמש
   document.querySelectorAll('.tab[data-tab="summary"]').forEach(t => { t.style.display = userAllows('summary') ? '' : 'none'; });
+  // "רכבי חברה" — מוסתרת בעסק שבו הרכבים פרטיים
+  const noFleet = NO_FLEET_COMPANIES.includes(state.company);
+  document.querySelectorAll('.tab[data-tab="vehicles"]').forEach(t => { t.style.display = (!noFleet && userAllows('vehicles')) ? '' : 'none'; });
+  if (noFleet && state.tab === 'vehicles') goHome();
   // "לוח אירועים" — חברות הלוח בלבד. אצלן "אירועים ויומן" מוסתרת, וזה התחליף שלה.
   document.querySelectorAll('.tab[data-tab="eventsboard"]').forEach(t => { t.style.display = (isBoard && userAllows('eventsboard')) ? '' : 'none'; });
   if (!isBoard && state.tab === 'eventsboard') goHome();
@@ -505,6 +513,8 @@ const pill = (label, ok, text) =>
 // חיווי תוקף מסמכי הרכבים בראש המסך — לפי אותם ספים של ההתראות במייל:
 // מסמך שפג · מסמך שפג בתוך 30 יום · הכל תקין.
 async function vehiclePill() {
+  // עסק בלי צי רכב — אין מה לעקוב אחריו, והסטטוס אומר את הסיבה
+  if (NO_FLEET_COMPANIES.includes(state.company)) return `<span class="pill off">רכבים: פרטיים — אין רכבי חברה</span>`;
   let list = [];
   try { list = await api('/api/vehicles'); } catch { return ''; }
   if (!Array.isArray(list) || !list.length) return `<span class="pill off" style="cursor:pointer" onclick="gotoVehicles()">סטטוס רכבים: אין רכבים</span>`;

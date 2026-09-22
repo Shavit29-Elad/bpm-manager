@@ -675,9 +675,10 @@ check('רכבי חברה — בידוד חברות, הרשאת קבצים וחי
   if (!/רכב אישי/.test(fs.readFileSync('vehicleAlerts.js', 'utf8'))) throw new Error('המייל לא מבחין ברכב אישי');
 
   // חיווי סטטוס הרכבים בראש המסך — אותם ספים כמו ההתראות במייל
-  const pillFn = new Function('api', 'vehWorst',
+  const pillFn = new Function('api', 'vehWorst', 'state', 'NO_FLEET_COMPANIES',
     app.match(/async function vehiclePill\(\) \{[\s\S]*?\n\}/)[0] + '; return vehiclePill;');
-  const run = async (vehicles, worstOf) => pillFn(async () => vehicles, worstOf)();
+  const run = async (vehicles, worstOf, co = 'co_bpm') =>
+    pillFn(async () => vehicles, worstOf, { company: co }, ['co_tal', 'co_moshe'])();
   const days = { ok: 200, soon: 12, bad: -3 };
   const check1 = async () => {
     const empty = await run([], () => null);
@@ -688,6 +689,10 @@ check('רכבי חברה — בידוד חברות, הרשאת קבצים וחי
     if (!/pill warn/.test(warn) || !/פג בתוך 30 יום/.test(warn)) throw new Error('חיווי "מתקרב" שגוי');
     const bad = await run([{ x: 1 }, { x: 2 }], (v) => (v.x === 1 ? days.bad : days.soon));
     if (!/pill bad/.test(bad) || !/פג תוקף/.test(bad) || !/מתקרב/.test(bad)) throw new Error('חיווי "פג תוקף" שגוי');
+    // עסק בלי צי רכב: הסטטוס אומר את הסיבה, ולא "אין רכבים" שנקרא כמידע חסר
+    const noFleet = await run([{}], () => days.bad, 'co_tal');
+    if (!/רכבים: פרטיים/.test(noFleet)) throw new Error('עסק בלי צי רכב אינו מסומן ככזה');
+    if (/gotoVehicles/.test(noFleet)) throw new Error('החיווי מקשר ללשונית שמוסתרת');
   };
   pendingAsync.push(check1());
   if (!/gotoVehicles/.test(app)) throw new Error('אי אפשר לעבור ללשונית מהחיווי');
@@ -2040,10 +2045,18 @@ check('לוח האירועים — לחברות הלוח בלבד, מרשימה 
   if (!/data-tab="eventsboard".*isBoard/s.test(apply)) throw new Error('הלשונית אינה מוסתרת לשאר החברות');
   if (!/state\.tab === 'eventsboard'/.test(apply)) throw new Error('מעבר חברה משאיר את המשתמש בלשונית שאינה שלו');
   // מזהי החברות מופיעים רק בהגדרת הרשימות עצמן, לא פזורים בקוד
-  const lists = (app.match(/const (?:BOARD_COMPANIES|GROUP_SPLIT_COMPANIES|LEGACY_IMPORT_COMPANIES) = \[[^\]]*\]/g) || []).join('\n');
+  const lists = (app.match(/const (?:BOARD_COMPANIES|GROUP_SPLIT_COMPANIES|LEGACY_IMPORT_COMPANIES|NO_FLEET_COMPANIES) = \[[^\]]*\]/g) || []).join('\n');
   const inLists = (lists.match(/co_moshe|co_tal/g) || []).length;
   const total = (app.match(/co_moshe|co_tal/g) || []).length;
   if (total > inLists) throw new Error(`מזהה חברה מקובע מחוץ לרשימות: ${total - inLists}`);
+
+  // "רכבי חברה" — מוסתרת בעסקים שהרכבים בהם פרטיים
+  const fleet = app.match(/const NO_FLEET_COMPANIES = \[([^\]]*)\]/);
+  if (!fleet) throw new Error('NO_FLEET_COMPANIES לא נמצאה');
+  for (const id of ['co_tal', 'co_moshe']) if (!fleet[1].includes(id)) throw new Error('חסרה חברה בלי צי רכב: ' + id);
+  if (!/k === 'vehicles' && NO_FLEET_COMPANIES\.includes\(cid\)/.test(app)) throw new Error('הלשונית אינה מוסרת מהרשאות המשתמש');
+  if (!/data-tab="vehicles".*noFleet/s.test(app)) throw new Error('הלשונית אינה מוסתרת במסך');
+  if (!/noFleet && state\.tab === 'vehicles'/.test(app)) throw new Error('מעבר חברה משאיר בלשונית שאינה קיימת');
 
   // פיצול מוזיקה/דיגיטל — משה בלבד; אצל טל אין חלוקה כזו
   const split = app.match(/const GROUP_SPLIT_COMPANIES = \[([^\]]*)\]/);
