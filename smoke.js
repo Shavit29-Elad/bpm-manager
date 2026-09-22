@@ -2143,6 +2143,25 @@ check('התאמת בנק — מט״ח: השוואת שערים, ורק לחבר�
   if (sug(7500, { fx: true }).length) throw new Error('שער רחוק (18%) התקבל כהתאמה');
   // ושער קרוב מאוד כן
   if (!sug(6250, { fx: true }).length) throw new Error('שער קרוב נדחה');
+  // לקוח חו"ל (מע"מ 0) מקבל סף רחב יותר: הוא משלם במט"ח, וההפרש סופג גם תנודת
+  // שער וגם תשלום-חסר. המקרה האמיתי: חשבונית 1225 על ₪7,890 מול €2,100 ב-3.5571.
+  const foreignInv = (amt) => [{ id: 'f', number: '1225', type: 320, clientName: 'SKY EVENTS',
+    amountIncVat: amt, amountExVat: amt, date: '2026-02-19' }];
+  const eurTx = { date: '10/03/2026', direction: 'credit', absAmount: 7451.97, nameHint: null, memo: '',
+    fx: { currency: 'אירו', amount: 2100, rate: 3.5571, fee: 17.94, gross: 7469.91 } };
+  const fs2 = (amt) => (M.matchCredits([eurTx], foreignInv(amt), 0.05, { fx: true })[0].suggestions || []);
+  const hit = fs2(7890);
+  if (!hit.length) throw new Error('לקוח חו״ל בפער 5.6% לא הוצע');
+  const r2 = (hit[0].reasons || []).join(' ');
+  if (!/לקוח חו״ל/.test(r2)) throw new Error('לא סומן כלקוח חו״ל');
+  if (!/חסר ₪438\.03/.test(r2)) throw new Error('הפער שלא התקבל אינו מדווח: ' + r2);
+  // אותו פער בחשבונית עם מע"מ ישראלי — נדחה, היא לא אמורה להשתלם באירו
+  const local = [{ id: 'l', number: '9', type: 320, clientName: 'x', amountIncVat: 7890, amountExVat: 6686.44, date: '2026-02-19' }];
+  if ((M.matchCredits([eurTx], local, 0.05, { fx: true })[0].suggestions || []).length)
+    throw new Error('חשבונית עם מע״מ ישראלי קיבלה את הסף הרחב');
+  // גם ללקוח חו"ל יש גבול — 12% אינו תנודת שער
+  if (fs2(9400).length) throw new Error('פער של 12% התקבל אצל לקוח חו״ל');
+
   // שורה בלי פרטי המרה אינה נהנית מהסבילות המורחבת
   const plain = M.matchCredits([{ ...tx, fx: null }], inv(6301), 0.05, { fx: true })[0];
   if ((plain.suggestions || []).length) throw new Error('שורה רגילה קיבלה סבילות של מט״ח');

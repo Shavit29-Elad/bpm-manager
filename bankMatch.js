@@ -40,15 +40,27 @@ function amountKind(bank, invAmt, wh) {
 // במקום להרחיב סתם את הסבילות בשקלים, מחשבים את **השער המשתמע** מהחשבונית
 // (סכום החשבונית ÷ הסכום במט"ח) ומשווים אותו לשער שהבנק עצמו כתב בשורה.
 // זו בדיקה מדויקת ומוסברת, ולא ניחוש: אותו סכום מט"ח, שני שערים קרובים.
-const FX_RATE_TOL = 0.04;   // 4% — תנודת שער סבירה בין הפקת החשבונית לקבלת הכסף
-function fxKind(tx, invAmt) {
+// הסף צריך לספוג שני דברים: תנודת השער בין הפקת החשבונית לקבלת הכסף, וגם
+// תשלום-חסר — לקוח ששלח את הסכום במט"ח שסוכם, והשקל התחזק בינתיים.
+// חשבונית ללא מע"מ היא לקוח חו"ל, כלומר בדיוק מי שמשלם במט"ח, ושם הסף רחב יותר.
+// חשבונית עם מע"מ ישראלי לא אמורה להשתלם באירו, ולכן נשארת בסף צר.
+const FX_RATE_TOL = 0.04;
+const FX_RATE_TOL_FOREIGN = 0.08;
+// לקוח חו"ל: מע"מ אפס — הסכום כולל מע"מ שווה לסכום לפניו
+const isZeroVat = (inv) => inv && inv.amountExVat != null && inv.amountIncVat != null
+  && Math.abs(Number(inv.amountIncVat) - Number(inv.amountExVat)) < 0.5;
+function fxKind(tx, inv) {
   const fx = tx && tx.fx;
+  const invAmt = inv && Number(inv.amountIncVat);
   if (!fx || !(fx.amount > 0) || !(fx.rate > 0) || !(invAmt > 0)) return null;
+  const foreign = isZeroVat(inv);
   const implied = invAmt / fx.amount;
   const diff = Math.abs(implied - fx.rate) / fx.rate;
-  if (diff > FX_RATE_TOL) return null;
+  if (diff > (foreign ? FX_RATE_TOL_FOREIGN : FX_RATE_TOL)) return null;
+  const net = Math.round((fx.gross != null ? fx.gross : fx.amount * fx.rate) * 100) / 100 - (Number(fx.fee) || 0);
   return { implied: Math.round(implied * 10000) / 10000, rate: fx.rate,
-    pct: Math.round(diff * 1000) / 10, currency: fx.currency, amount: fx.amount, fee: fx.fee };
+    pct: Math.round(diff * 1000) / 10, currency: fx.currency, amount: fx.amount, fee: fx.fee,
+    foreign, shortfall: Math.round((invAmt - net) * 100) / 100 };
 }
 
 export function scoreMatch(tx, inv, wh = 0.95, opts = {}) {
@@ -58,10 +70,14 @@ export function scoreMatch(tx, inv, wh = 0.95, opts = {}) {
   if (ak === 'exact') { score += 50; reasons.push('סכום זהה'); }
   else if (ak === 'wh') { score += 45; reasons.push(`סכום פחות ${Math.round((1 - wh) * 100)}% (ניכוי מס)`); }
   else if (opts.fx) {
-    const f = fxKind(tx, inv.amountIncVat);
+    const f = fxKind(tx, inv);
     if (f) {
       score += 44;   // מתחת ל"סכום זהה" — התאמה מוסברת, אך לא ודאית
-      reasons.push(`מט״ח: ${f.amount} ${f.currency} · שער בחשבונית ${f.implied} מול ${f.rate} בבנק (${f.pct}%)${f.fee ? ` · עמלה ₪${f.fee}` : ''}`);
+      reasons.push(`מט״ח: ${f.amount} ${f.currency} · שער בחשבונית ${f.implied} מול ${f.rate} בבנק (${f.pct}%)`
+        + (f.fee ? ` · עמלה ₪${f.fee}` : '')
+        + (f.foreign ? ' · לקוח חו״ל (מע״מ 0)' : '')
+        // ההפרש אינו טעות אלא תנודת שער — אבל צריך לדעת עליו, זה כסף שלא התקבל
+        + (Math.abs(f.shortfall) >= 1 ? ` · ${f.shortfall > 0 ? 'חסר' : 'עודף'} ₪${Math.abs(f.shortfall).toLocaleString('he-IL')}` : ''));
     }
   }
   if (tx.nameHint && inv.clientName && nameMatch(tx.nameHint, inv.clientName)) { score += 40; reasons.push('שם לקוח'); }
