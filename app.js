@@ -7789,6 +7789,10 @@ window.openBoardEdit = async (id) => {
     artist: (ev && ev.artist) || '', location: (ev && ev.location) || '',
     clientId: (ev && ev.clientId) || '', clientName: (ev && ev.clientName) || '',
     price: (ev && ev.price != null) ? ev.price : '', commissionPct: (ev && ev.commissionPct != null) ? ev.commissionPct : '',
+    // שני אלה לא הועתקו מהאירוע, ולכן כל פתיחה של העריכה החזירה את עמלת השורה
+    // הראשונה ואיפסה את בסיס החישוב — גם אחרי שהוסרו ונשמרו.
+    commissionOff: !!(ev && ev.commissionOff),
+    commissionBase: (ev && ev.commissionBase === 'net') ? 'net' : 'client',
     extraCommissions: JSON.parse(JSON.stringify((ev && ev.extraCommissions) || [])), notes: (ev && ev.notes) || '',
     rows: [...rows, ...extras],
   };
@@ -8432,7 +8436,11 @@ function boardGroupReportHtml(title, sub, events) {
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7">${escapeHtml(ev.artist || '')}${ev.location ? `<div style="font-size:11px;color:#6b7488">${escapeHtml(ev.location)}</div>` : ''}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7">${escapeHtml(ev.clientName || '—')}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(t.clientPriceEx)}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#b45309">−${_repMoney(t.commissionEx)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#b45309">${
+        (t.commissions || []).length
+          ? `−${_repMoney(t.commissionEx)}<div style="font-size:10px;color:#8a6a3a;line-height:1.5;margin-top:2px">${
+              (t.commissions || []).map(c => `${escapeHtml(c.name)}${c.pct != null ? ` ${c.pct}%` : ''}${c.base === 'net' ? ' (נטו)' : ''} ${_repMoney(c.amount)}`).join('<br>')}</div>`
+          : (t.commissionEx ? '−' + _repMoney(t.commissionEx) : '<span style="color:#6b7488">ללא עמלה</span>')}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#0a7d33">${_repMoney(t.incomeEx)}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#b42318">${_repMoney(t.expenseEx)}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;font-weight:700">${_repMoney(t.profitEx)}</td>

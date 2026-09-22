@@ -2736,6 +2736,19 @@ check('עמלות — הסרת השורה הראשונה ובחירת בסיס �
     const b = boardMod.eventTotals(fx).commissionEx;
     if (Math.abs(a - b) > 0.01) throw new Error(`ממשק ${a} · שרת ${b}`);
   }
+
+  // עריכה חוזרת לא מחזירה את שורה ראשונה: הפתיחה חייבת להעתיק את commissionOff
+  // ואת הבסיס מהאירוע. בלעדיהם כל שמירה החזירה את העמלה שהוסרה.
+  const init = app.slice(app.indexOf('_boardEdit = {'), app.indexOf('renderBoardEdit();', app.indexOf('_boardEdit = {')));
+  if (!/commissionOff: !!\(ev && ev\.commissionOff\)/.test(init))
+    throw new Error('commissionOff לא נטען לעריכה — שורה ראשונה תחזור בכל שמירה');
+  if (!/commissionBase: \(ev && ev\.commissionBase === 'net'\)/.test(init))
+    throw new Error('בסיס העמלה לא נטען לעריכה');
+  // וכל שדות העמלה שנשמרים הם בדיוק אלה שנטענים — אחרת שדה חדש ייעלם באותו אופן
+  const body = app.slice(app.indexOf('commissionOff: !!e.commissionOff'), app.indexOf('commissionOff: !!e.commissionOff') + 200);
+  for (const f of ['commissionOff', 'commissionBase']) {
+    if (!body.includes(f)) throw new Error('שדה שנשמר ואינו נטען: ' + f);
+  }
   return true;
 });
 
@@ -2791,6 +2804,18 @@ check('דוחות לוח האירועים — לאירוע ולחודש, נבנ�
   // הסיכומים נגזרים מהאירועים, ולכן דוח חודשי על אותם אירועים זהה
   const asMonth = fns.boardMonthReportHtml({ month: '2026-10', events: [ev, two] });
   for (const n of ['30,000', '25,500', '21,900']) if (!asMonth.includes(n)) throw new Error('דוח חודשי ודוח נבחרים התפצלו: ' + n);
+
+  // פירוט עמלות בכל שורת אירוע — לא רק הסכום הכולל
+  const withComm = { ...ev, totals: { ...ev.totals, commissionEx: 4500,
+    commissions: [{ name: 'שורה ראשונה', pct: 15, base: 'client', amount: 3000 },
+      { name: 'מפיק חיצוני', pct: 10, base: 'net', amount: 1500 }] } };
+  const det = fns.boardGroupReportHtml('דוח אירועים נבחרים', '1 אירועים', [withComm]);
+  if (!/שורה ראשונה 15%/.test(det)) throw new Error('שם ואחוז העמלה חסרים בשורת האירוע');
+  if (!/מפיק חיצוני 10% \(נטו\)/.test(det)) throw new Error('עמלה נוספת או בסיס הנטו חסרים');
+  if (!/3,000/.test(det) || !/1,500/.test(det)) throw new Error('סכומי העמלות אינם מפורטים');
+  // אירוע בלי עמלה כלל — נאמר במפורש ולא נשאר תא ריק
+  const noComm = fns.boardGroupReportHtml('x', 'y', [{ ...ev, totals: { ...ev.totals, commissionEx: 0, commissions: [] } }]);
+  if (!/ללא עמלה/.test(noComm)) throw new Error('אירוע בלי עמלה אינו מסומן');
   return true;
 });
 
