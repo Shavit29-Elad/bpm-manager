@@ -1383,6 +1383,36 @@ add('POST', /^\/api\/old-invoices$/, async (req, res, _p, q, body) => {
   save(db);
   json(res, { ok: true, id: rec.id, doc });
 });
+// GET /api/bank/diag?amount=&companyId= — האם התנועה קיימת, ולמה היא לא נראית.
+// שורה ששויכה יוצאת ממסנן "לא מותאמות", וזה נראה כאילו נמחקה. כאן רואים את
+// האמת: אם היא קיימת, באיזו חברה, באיזה סטטוס, ומה משויך אליה.
+add('GET', /^\/api\/bank\/diag$/, (req, res, _p, q) => {
+  const cid = reqCompany(q);
+  const db = load();
+  const want = Number(q.amount);
+  const all = (db.bankTx || []);
+  const mine = all.filter(t => ownedBy(t, cid));
+  const hit = (t) => !isNaN(want) ? Math.abs((Number(t.absAmount) || 0) - Math.abs(want)) < 0.5 : false;
+  const show = (t) => ({
+    id: t.id, date: t.date, amount: t.absAmount, direction: t.direction,
+    matchStatus: t.matchStatus, companyId: t.companyId || null,
+    description: t.description || '', nameHint: t.nameHint || null,
+    matched: (t.matchedInvoices || []).map(m => ({ number: m.number, type: m.type, amount: m.amount })),
+    // למה לא נראית במסנן ברירת המחדל
+    hiddenFrom: [t.direction !== 'credit' ? 'רק זכות' : null,
+      t.matchStatus !== 'unmatched' ? 'לא מותאמות' : null].filter(Boolean),
+  });
+  json(res, {
+    companyId: cid,
+    totalInCompany: mine.length,
+    totalAllCompanies: all.length,
+    matches: mine.filter(hit).map(show),
+    // אותו סכום בחברה אחרת — הסיבה השכיחה ל"נעלם": הקובץ יובא כשעסק אחר היה פעיל
+    inOtherCompanies: all.filter(t => !ownedBy(t, cid) && hit(t))
+      .map(t => ({ ...show(t), companyId: t.companyId || '(ללא)' })),
+  });
+});
+
 // ---- ייבוא רשימת מסמכים ממערכת קודמת (הכוורת) ----
 // במעבר לחשבונית ירוקה יש היסטוריה שצריכה להיכנס למערכת: לצורך דוחות, למעקב
 // אחרי מה שעדיין פתוח, ובעיקר כדי שאפשר יהיה לשייך אותה לתנועות בנק.
