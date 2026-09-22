@@ -2947,6 +2947,11 @@ check('דוחות לוח האירועים — לאירוע ולחודש, נבנ�
   // ריכוז הספקים מסכם נכון: דני 1,770 פתוח, רון שולם
   if (!/1,770/.test(rep)) throw new Error('סכום הספק אינו מופיע');
   if (!/✓ שולם/.test(rep)) throw new Error('ספק ששולם אינו מסומן');
+  // הדוח בעברית — הכל מיושר לימין. text-align:left נראה זר בתוך טקסט עברי.
+  const repSrc = app.slice(app.indexOf('const _repMoney ='), app.indexOf('async function _boardPdf'))
+    + app.slice(app.indexOf('function evMonthReportHtml'), app.indexOf('window.evMonthReport ='));
+  if (/text-align:\s*left/.test(repSrc)) throw new Error('נשארה עמודה מיושרת לשמאל בדוח');
+
   // חודש ריק אינו מפיל את הדוח
   const empty = fns.boardMonthReportHtml({ month: '2026-11', events: [] });
   if (!/אין ספקים בחודש זה/.test(empty)) throw new Error('חודש ריק אינו מטופל');
@@ -2969,7 +2974,8 @@ check('דוחות לוח האירועים — לאירוע ולחודש, נבנ�
       { name: 'מפיק חיצוני', pct: 10, base: 'net', amount: 1500 }] } };
   const det = fns.boardGroupReportHtml('דוח אירועים נבחרים', '1 אירועים', [withComm]);
   if (!/שורה ראשונה 15%/.test(det)) throw new Error('שם ואחוז העמלה חסרים בשורת האירוע');
-  if (!/מפיק חיצוני 10% \(נטו\)/.test(det)) throw new Error('עמלה נוספת או בסיס הנטו חסרים');
+  if (!/מפיק חיצוני 10% \(לאחר הוצאות ספקים\)/.test(det)) throw new Error('עמלה נוספת או בסיס החישוב חסרים');
+  if (/\(נטו\)/.test(det)) throw new Error('נשאר הניסוח "נטו" במקום "לאחר הוצאות ספקים"');
   if (!/3,000/.test(det) || !/1,500/.test(det)) throw new Error('סכומי העמלות אינם מפורטים');
   // אירוע בלי עמלה כלל — נאמר במפורש ולא נשאר תא ריק
   const noComm = fns.boardGroupReportHtml('x', 'y', [{ ...ev, totals: { ...ev.totals, commissionEx: 0, commissions: [] } }]);

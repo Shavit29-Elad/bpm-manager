@@ -8491,7 +8491,7 @@ const _repHead = (title, sub) => `<div style="border-bottom:2px solid #4338ca;pa
   <div style="font-size:11px;color:#9aa1b5;margin-top:2px">${escapeHtml(currentCompanyName())} · הופק ${ddmy(todayIso())}</div></div>`;
 const _repRow = (l, v, opt = {}) => `<tr>
   <td style="padding:5px 8px;border-bottom:1px solid #edeff7;${opt.bold ? 'font-weight:700' : ''}">${l}</td>
-  <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;${opt.bold ? 'font-weight:700;' : ''}${opt.color ? `color:${opt.color}` : ''}">${v}</td></tr>`;
+  <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap;${opt.bold ? 'font-weight:700;' : ''}${opt.color ? `color:${opt.color}` : ''}">${v}</td></tr>`;
 
 function boardEventReportHtml(ev) {
   const t = ev.totals || {};
@@ -8499,8 +8499,8 @@ function boardEventReportHtml(ev) {
   const expRows = rows.length ? rows.map(r => `<tr>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;font-weight:600">${escapeHtml(r.role)}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7">${escapeHtml(r.name || '—')}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(r.ex)}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(r.inc)}${r.vatExempt ? ' <span style="font-size:10px;color:#6b7488">פטור</span>' : ''}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap">${_repMoney(r.ex)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap">${_repMoney(r.inc)}${r.vatExempt ? ' <span style="font-size:10px;color:#6b7488">פטור</span>' : ''}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;white-space:nowrap">${r.paid ? 'שולם' : 'טרם שולם'}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;font-size:11px;color:#6b7488">${escapeHtml(r.note || '')}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;font-size:11px">${(r.docs || []).map(d => `${SUP_DOC_NAMES[d.type] || 'מסמך'}${d.number ? ' #' + d.number : ''}`).join(', ') || '—'}</td>
@@ -8524,14 +8524,14 @@ function boardEventReportHtml(ev) {
     <table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:16px">
       <thead><tr style="background:#eef0fb">
         <th style="padding:6px 8px;text-align:right">תפקיד</th><th style="padding:6px 8px;text-align:right">ספק</th>
-        <th style="padding:6px 8px;text-align:left">ללא מע״מ</th><th style="padding:6px 8px;text-align:left">כולל מע״מ</th>
+        <th style="padding:6px 8px;text-align:right">ללא מע״מ</th><th style="padding:6px 8px;text-align:right">כולל מע״מ</th>
         <th style="padding:6px 8px;text-align:right">תשלום</th><th style="padding:6px 8px;text-align:right">הערה</th>
         <th style="padding:6px 8px;text-align:right">מסמכים</th></tr></thead>
       <tbody>${expRows}</tbody>
       <tfoot><tr style="font-weight:700;background:#f7f8fc">
         <td colspan="2" style="padding:6px 8px">סה״כ</td>
-        <td style="padding:6px 8px;text-align:left">${_repMoney(t.expenseEx)}</td>
-        <td style="padding:6px 8px;text-align:left">${_repMoney(t.expenseInc)}</td>
+        <td style="padding:6px 8px;text-align:right">${_repMoney(t.expenseEx)}</td>
+        <td style="padding:6px 8px;text-align:right">${_repMoney(t.expenseInc)}</td>
         <td colspan="3"></td></tr></tfoot>
     </table>
     <div style="font-size:14px;font-weight:700;margin:0 0 6px">מסמכים ללקוח</div>
@@ -8555,15 +8555,15 @@ function boardGroupReportHtml(title, sub, events) {
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;white-space:nowrap">${ddmy(ev.date)}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7">${escapeHtml(ev.artist || '')}${ev.location ? `<div style="font-size:11px;color:#6b7488">${escapeHtml(ev.location)}</div>` : ''}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7">${escapeHtml(ev.clientName || '—')}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(t.clientPriceEx)}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#b45309">${
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap">${_repMoney(t.clientPriceEx)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap;color:#b45309">${
         (t.commissions || []).length
           ? `−${_repMoney(t.commissionEx)}<div style="font-size:10px;color:#8a6a3a;line-height:1.5;margin-top:2px">${
-              (t.commissions || []).map(c => `${escapeHtml(c.name)}${c.pct != null ? ` ${c.pct}%` : ''}${c.base === 'net' ? ' (נטו)' : ''} ${_repMoney(c.amount)}`).join('<br>')}</div>`
+              (t.commissions || []).map(c => `${escapeHtml(c.name)}${c.pct != null ? ` ${c.pct}%` : ''}${c.base === 'net' ? ' (לאחר הוצאות ספקים)' : ''} ${_repMoney(c.amount)}`).join('<br>')}</div>`
           : (t.commissionEx ? '−' + _repMoney(t.commissionEx) : '<span style="color:#6b7488">ללא עמלה</span>')}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#0a7d33">${_repMoney(t.incomeEx)}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:#b42318">${_repMoney(t.expenseEx)}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;font-weight:700">${_repMoney(t.profitEx)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap;color:#0a7d33">${_repMoney(t.incomeEx)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap;color:#b42318">${_repMoney(t.expenseEx)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap;font-weight:700">${_repMoney(t.profitEx)}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:center;white-space:nowrap">${(t.unpaidRows || 0) ? `${t.unpaidRows} טרם שולמו` : '✓'}</td></tr>`;
   }).join('');
   // ריכוז ספקים: כמה כל אחד מקבל בחודש, וכמה מזה טרם שולם
@@ -8577,9 +8577,9 @@ function boardGroupReportHtml(title, sub, events) {
   const sup = [...bySup.values()].sort((a, b) => b.inc - a.inc).map(g => `<tr>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7">${escapeHtml(g.name)}</td>
       <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:center">${g.n}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(g.ex)}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap">${_repMoney(g.inc)}</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:left;white-space:nowrap;color:${g.open ? '#b45309' : '#0a7d33'}">${g.open ? _repMoney(g.open) : '✓ שולם'}</td></tr>`).join('');
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap">${_repMoney(g.ex)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap">${_repMoney(g.inc)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #edeff7;text-align:right;white-space:nowrap;color:${g.open ? '#b45309' : '#0a7d33'}">${g.open ? _repMoney(g.open) : '✓ שולם'}</td></tr>`).join('');
   return `${_repHead(title, sub)}
     <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">
       ${_repRow('מחיר ללקוח (ללא מע״מ)', _repMoney(m.clientPriceEx))}
@@ -8592,9 +8592,9 @@ function boardGroupReportHtml(title, sub, events) {
     <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
       <thead><tr style="background:#eef0fb">
         <th style="padding:6px 8px;text-align:right">תאריך</th><th style="padding:6px 8px;text-align:right">אירוע</th>
-        <th style="padding:6px 8px;text-align:right">לקוח</th><th style="padding:6px 8px;text-align:left">מחיר</th>
-        <th style="padding:6px 8px;text-align:left">עמלות</th><th style="padding:6px 8px;text-align:left">תשלום</th>
-        <th style="padding:6px 8px;text-align:left">הוצאות</th><th style="padding:6px 8px;text-align:left">רווח</th>
+        <th style="padding:6px 8px;text-align:right">לקוח</th><th style="padding:6px 8px;text-align:right">מחיר</th>
+        <th style="padding:6px 8px;text-align:right">עמלות</th><th style="padding:6px 8px;text-align:right">תשלום</th>
+        <th style="padding:6px 8px;text-align:right">הוצאות</th><th style="padding:6px 8px;text-align:right">רווח</th>
         <th style="padding:6px 8px;text-align:center">ספקים</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -8602,8 +8602,8 @@ function boardGroupReportHtml(title, sub, events) {
     <table style="width:100%;border-collapse:collapse;font-size:12.5px">
       <thead><tr style="background:#eef0fb">
         <th style="padding:6px 8px;text-align:right">ספק</th><th style="padding:6px 8px;text-align:center">אירועים</th>
-        <th style="padding:6px 8px;text-align:left">ללא מע״מ</th><th style="padding:6px 8px;text-align:left">כולל מע״מ</th>
-        <th style="padding:6px 8px;text-align:left">טרם שולם</th></tr></thead>
+        <th style="padding:6px 8px;text-align:right">ללא מע״מ</th><th style="padding:6px 8px;text-align:right">כולל מע״מ</th>
+        <th style="padding:6px 8px;text-align:right">טרם שולם</th></tr></thead>
       <tbody>${sup || '<tr><td colspan="5" style="padding:10px;color:#6b7488">אין ספקים בחודש זה.</td></tr>'}</tbody>
     </table>`;
 }
@@ -8683,7 +8683,7 @@ function evMonthReportHtml(monthKey, mode, events, shiftsByEvent) {
     const ctrRows = (e.contractorDetails || []).filter(c => (c.name || '').trim()).map(c => {
       const paid = Boolean(c.paid);
       const how = paid ? (c.paidSource === 'manual' ? 'סומן ידנית' : c.paidSource === 'bank' ? 'התאמת בנק' : '') : '';
-      return `<tr>${cell(escapeHtml(c.name))}${cell(_repMoney(c.amount), 'text-align:left;white-space:nowrap')}
+      return `<tr>${cell(escapeHtml(c.name))}${cell(_repMoney(c.amount), 'text-align:right;white-space:nowrap')}
         ${cell(`<span style="color:${paid ? '#0a7d33' : '#b45309'}">${paid ? '✓ שולם' : 'טרם שולם'}</span>${how ? `<span style="color:#6b7488"> · ${how}</span>` : ''}`, 'white-space:nowrap')}
         ${cell(escapeHtml((c.paidInvoice && String(c.paidInvoice)) || ''), 'font-size:11px;color:#6b7488')}</tr>`;
     }).join('');
@@ -8691,17 +8691,17 @@ function evMonthReportHtml(monthKey, mode, events, shiftsByEvent) {
     const empRows = (havePay ? shifts.map(s => {
       const lbl = s.factorLabel || EV_FACTOR_LABEL[Number(s.factor)] || (s.factor != null ? `×${s.factor}` : '');
       return `<tr>${cell(escapeHtml(s.name))}${cell(escapeHtml(lbl), 'white-space:nowrap;color:#6b7488')}
-        ${cell(_repMoney(s.base), 'text-align:left;white-space:nowrap')}${cell(s.bonus ? _repMoney(s.bonus) : '—', 'text-align:left;white-space:nowrap')}
-        ${cell(s.food ? _repMoney(s.food) : '—', 'text-align:left;white-space:nowrap')}${cell(s.travel ? _repMoney(s.travel) : '—', 'text-align:left;white-space:nowrap')}
-        ${cell(_repMoney(evShiftTotal(s)), 'text-align:left;white-space:nowrap;font-weight:700')}
+        ${cell(_repMoney(s.base), 'text-align:right;white-space:nowrap')}${cell(s.bonus ? _repMoney(s.bonus) : '—', 'text-align:right;white-space:nowrap')}
+        ${cell(s.food ? _repMoney(s.food) : '—', 'text-align:right;white-space:nowrap')}${cell(s.travel ? _repMoney(s.travel) : '—', 'text-align:right;white-space:nowrap')}
+        ${cell(_repMoney(evShiftTotal(s)), 'text-align:right;white-space:nowrap;font-weight:700')}
         ${cell(escapeHtml(s.note || ''), 'font-size:11px;color:#6b7488')}</tr>`;
     }).join('')
       // בלי נתוני שכר (למשל משתמש צפייה) — לפחות מי עבד ובאיזו יומית, בלי סכומים
       : (e.employeeDetails || []).filter(w => (w.name || '').trim()).map(w =>
         `<tr>${cell(escapeHtml(w.name))}${cell(escapeHtml(EV_FACTOR_LABEL[Number(w.factor)] || ''), 'white-space:nowrap;color:#6b7488')}
-        ${cell('—', 'text-align:left')}${cell(w.bonus ? _repMoney(w.bonus) : '—', 'text-align:left;white-space:nowrap')}
-        ${cell(w.food ? _repMoney(w.food) : '—', 'text-align:left;white-space:nowrap')}${cell(w.travel ? _repMoney(w.travel) : '—', 'text-align:left;white-space:nowrap')}
-        ${cell('—', 'text-align:left')}${cell(escapeHtml(w.note || ''), 'font-size:11px;color:#6b7488')}</tr>`).join('')) ;
+        ${cell('—', 'text-align:right')}${cell(w.bonus ? _repMoney(w.bonus) : '—', 'text-align:right;white-space:nowrap')}
+        ${cell(w.food ? _repMoney(w.food) : '—', 'text-align:right;white-space:nowrap')}${cell(w.travel ? _repMoney(w.travel) : '—', 'text-align:right;white-space:nowrap')}
+        ${cell('—', 'text-align:right')}${cell(escapeHtml(w.note || ''), 'font-size:11px;color:#6b7488')}</tr>`).join('')) ;
 
     const docs = (e.linkedDocs || []).length
       ? (e.linkedDocs || []).map(d => `<span style="display:inline-block;border:1px solid #d8dced;border-radius:6px;padding:1px 7px;margin:0 0 3px 4px;font-size:11px${d.converted || d.credited || d.credit ? ';color:#6b7488' : ''}">${SHORT_BILL[Number(d.type)] || 'מסמך'}${d.number != null ? ' #' + d.number : ''}${d.converted ? ' (הומר)' : ''}${d.credit ? ' (זיכוי)' : ''}${d.credited ? ' (זוכה)' : ''}</span>`).join('')
@@ -8711,15 +8711,15 @@ function evMonthReportHtml(monthKey, mode, events, shiftsByEvent) {
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;border-bottom:1px solid #edeff7;padding-bottom:6px">
         <div><b style="font-size:13.5px">${ddmy(e.date || e.dateRaw)} · ${escapeHtml(e.artist || 'אירוע')}</b>
           <div style="font-size:11.5px;color:#6b7488">${[e.location, e.clientName].filter(Boolean).map(escapeHtml).join(' · ') || '—'}</div></div>
-        <div style="text-align:left"><b style="font-size:13.5px">${_repMoney(g)}</b> <span style="font-size:11px;color:#6b7488">ללא מע״מ</span>
+        <div style="text-align:right"><b style="font-size:13.5px">${_repMoney(g)}</b> <span style="font-size:11px;color:#6b7488">ללא מע״מ</span>
           <div style="font-size:11.5px;color:${EV_PAY_COLOR[st]}">${EV_PAY_LABEL[st]} · כולל מע״מ ${_repMoney(r2(g * (1 + VAT_RATE)))}</div></div>
       </div>
       <div style="margin-top:7px">${parts}</div>
       ${ctrRows ? mini('קבלנים / ספקים',
-        `<th style="padding:4px 8px;text-align:right">שם</th><th style="padding:4px 8px;text-align:left">סכום</th><th style="padding:4px 8px;text-align:right">תשלום</th><th style="padding:4px 8px;text-align:right">חשבונית</th>`,
+        `<th style="padding:4px 8px;text-align:right">שם</th><th style="padding:4px 8px;text-align:right">סכום</th><th style="padding:4px 8px;text-align:right">תשלום</th><th style="padding:4px 8px;text-align:right">חשבונית</th>`,
         ctrRows) : '<div style="margin-top:7px;font-size:11.5px;color:#6b7488">אין קבלנים באירוע זה.</div>'}
       ${empRows ? mini('עובדים',
-        `<th style="padding:4px 8px;text-align:right">שם</th><th style="padding:4px 8px;text-align:right">יומית</th><th style="padding:4px 8px;text-align:left">תשלום</th><th style="padding:4px 8px;text-align:left">בונוס</th><th style="padding:4px 8px;text-align:left">אוכל</th><th style="padding:4px 8px;text-align:left">נסיעות</th><th style="padding:4px 8px;text-align:left">סה״כ</th><th style="padding:4px 8px;text-align:right">הערה</th>`,
+        `<th style="padding:4px 8px;text-align:right">שם</th><th style="padding:4px 8px;text-align:right">יומית</th><th style="padding:4px 8px;text-align:right">תשלום</th><th style="padding:4px 8px;text-align:right">בונוס</th><th style="padding:4px 8px;text-align:right">אוכל</th><th style="padding:4px 8px;text-align:right">נסיעות</th><th style="padding:4px 8px;text-align:right">סה״כ</th><th style="padding:4px 8px;text-align:right">הערה</th>`,
         empRows) : '<div style="margin-top:7px;font-size:11.5px;color:#6b7488">אין עובדים באירוע זה.</div>'}
       <div style="margin-top:8px"><span style="font-size:11.5px;font-weight:700;color:#4338ca">מסמכי חיוב</span> ${docs}</div>
       <div style="margin-top:8px;padding-top:6px;border-top:1px solid #edeff7;font-size:12px">
