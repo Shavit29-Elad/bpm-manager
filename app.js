@@ -96,6 +96,9 @@ const api = (p) => {
 
 // חברות שעובדות בלוח האירועים במקום "אירועים ויומן" + "עובדים"
 const BOARD_COMPANIES = ['co_moshe', 'co_tal'];
+// חברות שמייבאות מסמכי הכנסה ממערכת קודמת (אופק — מפייפרלס; טל — מהכוורת).
+// הייבוא הוא חד-פעמי במעבר לחשבונית ירוקה, ולכן הכפתורים מוצגים להן בלבד.
+const LEGACY_IMPORT_COMPANIES = ['co_ofek', 'co_tal'];
 // פיצול מוזיקה/דיגיטל בדף הבית — משה בלבד. אצל טל אין חלוקה כזו.
 const GROUP_SPLIT_COMPANIES = ['co_moshe'];
 const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', eventsboard: '🎭 לוח אירועים', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', vehicles: '🚚 רכבי חברה', business: '🏢 פרטי העסק' };
@@ -1427,7 +1430,7 @@ function renderOpenInvoices() {
   wrap.innerHTML = `
     <div class="row-between"><div><h2>חשבוניות פתוחות</h2>
       <span class="muted">${docs.length} מסמכים · ${money(totalAll)} · מקובץ לפי לקוח${_toks.length ? ` · מתוך ${byType.length}` : ''}</span></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="exportExpectedIncomePdf(this)" title="דוח PDF של כל ההכנסות הצפויות מהחשבוניות הפתוחות שטרם שולמו">📄 דוח הכנסות צפויות</button>${state.company === 'co_ofek' ? `<button class="btn primary" style="padding:4px 12px;font-size:13px" onclick="openOldInvoice('create','',300)" title="העלאת חשבונית עסקה/מס ישנה (לפני יולי) שאינה במערכת">➕ העלה חשבונית ישנה</button><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="openBulkOldInvoices()" title="העלאת כמה מסמכי הכנסה (PDF מפייפרלס) בבת אחת — מילוי אוטומטי לכל קובץ">📎 העלאה מרובה</button>` : ''}${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="exportExpectedIncomePdf(this)" title="דוח PDF של כל ההכנסות הצפויות מהחשבוניות הפתוחות שטרם שולמו">📄 דוח הכנסות צפויות</button>${LEGACY_IMPORT_COMPANIES.includes(state.company) ? `<button class="btn primary" style="padding:4px 12px;font-size:13px" onclick="openOldInvoice('create','',300)" title="העלאת מסמך הכנסה ישן מהמערכת הקודמת שאינו כאן">➕ העלה חשבונית ישנה</button><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="openBulkOldInvoices()" title="העלאת כמה מסמכי הכנסה (PDF מפייפרלס) בבת אחת — מילוי אוטומטי לכל קובץ">📎 העלאה מרובה</button>` : ''}${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
       <span style="font-size:14px">🔎</span>
@@ -3321,7 +3324,7 @@ async function openEventEditor(ev) {
       <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted);grid-column:1/3"><input id="evNoInvoice" type="checkbox" ${ev.noInvoice ? 'checked' : ''}/> ללא חיוב (לא צריך להוציא חשבונית על אירוע זה)</label>
       <div style="grid-column:1/3;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button type="button" class="btn ghost" style="padding:6px 12px;font-size:12.5px" onclick="openEventDocLink('${ev.id}', (document.getElementById('evClient')?.value||'').trim(), '')">🔗 שייך מסמך קיים</button>
-        ${state.company === 'co_ofek' ? `<button type="button" class="btn ghost" style="padding:6px 12px;font-size:12.5px" onclick="openAttachDoc('${ev.id}')">📎 העלה מסמך ישן</button>` : ''}
+        ${LEGACY_IMPORT_COMPANIES.includes(state.company) ? `<button type="button" class="btn ghost" style="padding:6px 12px;font-size:12.5px" onclick="openAttachDoc('${ev.id}')">📎 העלה מסמך ישן</button>` : ''}
         <span class="muted" style="font-size:11.5px">הצעת מחיר / עסקה / מס / מס-קבלה / זיכוי — של הלקוח בלבד, שאינו משוייך לאירוע אחר</span>
       </div>
       <div id="evLinkedDocs" style="grid-column:1/3">${evLinkedDocsHtml(ev)}</div>
@@ -10452,7 +10455,7 @@ window.openLinkModal = async (txId) => {
       </label>
       <div id="bankExpStatus" style="font-size:12.5px;margin-top:6px"></div>
     </div>` : ''}
-    ${(tx && tx.direction !== 'debit' && state.company === 'co_ofek') ? `<div style="margin:8px 0;padding:10px 12px;border:1.5px dashed var(--accent);border-radius:12px;background:var(--panel2)">
+    ${(tx && tx.direction !== 'debit' && LEGACY_IMPORT_COMPANIES.includes(state.company)) ? `<div style="margin:8px 0;padding:10px 12px;border:1.5px dashed var(--accent);border-radius:12px;background:var(--panel2)">
       <div style="font-size:13px;font-weight:700;margin-bottom:5px">➕ מסמך הכנסה ישן שאינו במערכת? העלה אותו כאן</div>
       <div class="muted" style="font-size:12px;margin-bottom:8px">העלה מסמך הכנסה מהמערכת הקודמת (עסקה / מס / מס-קבלה / קבלה). אחרי ההעלאה — בחר את הלקוח למטה כדי לשייך את המסמך לתנועה זו.</div>
       <button class="btn primary" style="padding:5px 14px;font-size:13px" onclick="openOldInvoice('create','',300)">📎 העלה מסמך ישן</button>

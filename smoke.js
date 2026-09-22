@@ -2039,9 +2039,11 @@ check('לוח האירועים — לחברות הלוח בלבד, מרשימה 
   const apply = app.slice(app.indexOf('function applyCompanyTabs'), app.indexOf('// ---- ניהול משתמשים'));
   if (!/data-tab="eventsboard".*isBoard/s.test(apply)) throw new Error('הלשונית אינה מוסתרת לשאר החברות');
   if (!/state\.tab === 'eventsboard'/.test(apply)) throw new Error('מעבר חברה משאיר את המשתמש בלשונית שאינה שלו');
-  // אין מזהה חברה מקובע מחוץ לשתי הרשימות
-  const stray = [...app.matchAll(/co_moshe|co_tal/g)].length;
-  if (stray > 3) throw new Error('מזהה חברה מקובע פזור בקוד: ' + stray);
+  // מזהי החברות מופיעים רק בהגדרת הרשימות עצמן, לא פזורים בקוד
+  const lists = (app.match(/const (?:BOARD_COMPANIES|GROUP_SPLIT_COMPANIES|LEGACY_IMPORT_COMPANIES) = \[[^\]]*\]/g) || []).join('\n');
+  const inLists = (lists.match(/co_moshe|co_tal/g) || []).length;
+  const total = (app.match(/co_moshe|co_tal/g) || []).length;
+  if (total > inLists) throw new Error(`מזהה חברה מקובע מחוץ לרשימות: ${total - inLists}`);
 
   // פיצול מוזיקה/דיגיטל — משה בלבד; אצל טל אין חלוקה כזו
   const split = app.match(/const GROUP_SPLIT_COMPANIES = \[([^\]]*)\]/);
@@ -2060,6 +2062,25 @@ check('לוח האירועים — לחברות הלוח בלבד, מרשימה 
     throw new Error('טל קיבלה את קבוצות הפיצול של משה');
   const gi = fs.readFileSync('greenInvoice.js', 'utf8');
   if (!/co_tal:\s*\['GREENINVOICE_TAL_API_KEY_ID'/.test(gi)) throw new Error('אין מיפוי מפתחות לחברה החדשה');
+
+  // ייבוא מסמכים ממערכת קודמת — אופק (פייפרלס) וטל (הכוורת). גם כאן רשימה אחת
+  // ולא בדיקת מזהה מפוזרת, אחרת כפתור אחד נפתח והשני נשכח.
+  const imp = app.match(/const LEGACY_IMPORT_COMPANIES = \[([^\]]*)\]/);
+  if (!imp) throw new Error('LEGACY_IMPORT_COMPANIES לא נמצאה');
+  for (const id of ['co_ofek', 'co_tal']) if (!imp[1].includes(id)) throw new Error('חסרה חברת ייבוא: ' + id);
+  for (const fn of ['openOldInvoice', 'openBulkOldInvoices']) {
+    if (!app.includes(`window.${fn} =`)) throw new Error('חסרה פונקציית ייבוא: ' + fn);
+  }
+  // שלושת הכפתורים נגזרים מהרשימה ולא ממזהה מקובע
+  if (/state\.company === 'co_ofek' \? `<button class="btn primary"[^`]*openOldInvoice/.test(app))
+    throw new Error('כפתור ההעלאה עדיין נעול לאופק');
+  if (/state\.company === 'co_ofek' \? `<button type="button"[^`]*openAttachDoc/.test(app))
+    throw new Error('כפתור המסמך הישן באירוע עדיין נעול לאופק');
+  if ((app.match(/LEGACY_IMPORT_COMPANIES\.includes\(state\.company\)/g) || []).length < 3)
+    throw new Error('לא כל נקודות הייבוא נגזרות מהרשימה');
+  // השרת אינו חוסם חברה מסוימת בקליטת מסמך ישן
+  const oi = srv.slice(srv.indexOf("add('POST', /^\\/api\\/old-invoices$/"), srv.indexOf("// POST /api/old-invoices/:id/attach-doc"));
+  if (/co_ofek/.test(oi)) throw new Error('ראוט המסמכים הישנים נעול לאופק');
   return true;
 });
 
