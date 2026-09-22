@@ -3165,9 +3165,27 @@ check('מועד חיוב — סוף חודש מול יום אחרי, וההתר�
   if (mixed.groups[0].firstDate !== '2026-06-11' || mixed.groups[0].lastDate !== '2026-08-20')
     throw new Error('טווח התאריכים של הלקוח שגוי');
 
+  // חשבון עסקה והצעת מחיר אינם חיוב — האירוע עדיין צריך מסמך, ומוצע לו "מסמך המשך"
+  for (const [what, e, srcType] of [
+    ['חשבון עסקה מקושר', ev({ linkedDocs: [{ id: 'd1', type: 300, number: 40468 }] }), 300],
+    ['הצעת מחיר מקושרת', ev({ linkedDocs: [{ id: 'd2', type: 10, number: 635 }] }), 10],
+    ['עסקה במסלול הישן', ev({ invoiceId: 'x', invoiceType: 300, invoiceStatus: 'invoiced' }), null],
+  ]) {
+    const r = due([e], '2026-10-15');
+    if (r.total !== 1) throw new Error('לא הופיע בהתראה: ' + what);
+    const f = r.groups[0].events[0].followup;
+    if (srcType && (!f || f.type !== srcType)) throw new Error('אין מסמך מקור למסמך המשך: ' + what);
+  }
+  // עסקה עדיפה על הצעה כמקור למסמך המשך
+  const both = due([ev({ linkedDocs: [{ id: 'q', type: 10, number: 635 }, { id: 'p', type: 300, number: 40468 }] })], '2026-10-15');
+  if (both.groups[0].events[0].followup.type !== 300) throw new Error('הצעת המחיר נבחרה על פני חשבון העסקה');
+  // אירוע בלי שום מסמך — אין מקור, ולכן "צור מסמך"
+  if (due([ev()], '2026-10-15').groups[0].events[0].followup !== null) throw new Error('הומצא מסמך מקור');
+
   // מה שלא אמור להופיע בכלל
   for (const [what, e] of [
     ['אירוע שכבר חויב', ev({ linkedDocs: [{ type: 305, number: 1 }] })],
+    ['מס-קבלה מקושרת', ev({ linkedDocs: [{ type: 320, number: 2 }] })],
     ['אירוע עם invoiceStatus', ev({ invoiceStatus: 'invoiced' })],
     ['אירוע ללא חיוב', ev({ noInvoice: true })],
     ['אירוע שטרם אושר', ev({ confirmed: false })],

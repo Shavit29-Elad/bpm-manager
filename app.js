@@ -282,8 +282,18 @@ window.openBillDue = async () => {
         <div style="text-align:left"><b>${money(g.total)}</b>
           ${g.lateDays > 0 ? `<div style="font-size:11.5px;color:var(--danger)">באיחור ${g.lateDays} ימים</div>` : '<div style="font-size:11.5px;color:var(--warn)">הגיע המועד</div>'}</div>
       </div>
-      <div style="margin-top:6px;font-size:12px">${g.events.map(e => `<div class="muted" style="padding:2px 0">${ddmy(e.date)} · ${escapeHtml(e.artist || '—')}${e.location ? ' · ' + escapeHtml(e.location) : ''} · ${money(e.amount)}</div>`).join('')}</div>
-      <div style="margin-top:7px"><button class="btn ghost" style="padding:3px 11px;font-size:12px" onclick="billDueGo()">← למסך הפקת החשבוניות</button></div>
+      <div style="margin-top:6px;font-size:12px">${g.events.map(e => {
+        // מסמך מקושר (עסקה / הצעה) → מסמך המשך. אין מסמך → יצירת מסמך חדש.
+        const fu = e.followup;
+        const act = fu
+          ? `<button class="btn ghost" style="padding:2px 9px;font-size:11px;color:var(--accent2);white-space:nowrap" title="מסמך המשך ל${escAttr(BILL_SRC_HE[fu.type] || 'מסמך')}${fu.number ? ' #' + escAttr(String(fu.number)) : ''}" onclick="billDueFollowup('${escAttr(e.id)}','${escAttr(fu.id)}','${escAttr(String(fu.number || ''))}',${fu.type},${fu.uploaded ? 1 : 0})">📄 מסמך המשך</button>`
+          : `<button class="btn ghost" style="padding:2px 9px;font-size:11px;color:var(--accent2);white-space:nowrap" onclick="billDueProduce('${escAttr(e.id)}')">📄 צור מסמך</button>`;
+        return `<div style="display:flex;gap:8px;align-items:center;padding:3px 0;flex-wrap:wrap">
+          <span class="muted" style="flex:1;min-width:160px">${ddmy(e.date)} · ${escapeHtml(e.artist || '—')}${e.location ? ' · ' + escapeHtml(e.location) : ''} · ${money(e.amount)}${
+            fu ? `<span style="font-size:10.5px;color:var(--warn)"> · ${escapeHtml(BILL_SRC_HE[fu.type] || '')}${fu.number ? ' #' + escapeHtml(String(fu.number)) : ''}</span>` : ''}</span>
+          ${act}</div>`;
+      }).join('')}</div>
+      ${g.events.length > 1 ? `<div style="margin-top:7px"><button class="btn ghost" style="padding:3px 11px;font-size:12px" onclick="billDueMerged('${escAttr(g.client)}','${escAttr(g.clientId || '')}')">🧾 חשבונית מרכזת לכל ${g.events.length} האירועים</button></div>` : ''}
     </div>`).join('');
   m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:86vh;max-height:86dvh;overflow:auto">
     <div class="row-between"><h3 style="margin:0">🧾 חשבוניות שצריך להוציא</h3>
@@ -299,6 +309,40 @@ window.billDueGo = () => {
   const tab = document.querySelector('.tab[data-tab="events"]');
   if (tab) tab.click();
   setTimeout(() => { const p = document.getElementById('invoicingWrap'); if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 500);
+};
+
+// ---- הפקה מתוך חלונית ההתראה ----
+// ההפקה נעשית כאן ולא בלשונית האירועים: אותן פונקציות בדיוק, רק שהחלונית
+// נשארת פתוחה מאחור כדי להמשיך לאירוע הבא. העלאת ה-z נדרשת כי חלונית
+// ההתראה כבר גבוהה, והעורך היה נפתח מאחוריה.
+const BILL_SRC_HE = { 10: 'הצעת מחיר', 300: 'חשבון עסקה' };
+// אחרי הפקה — האירוע ירד מהרשימה, והחלונית שנשארה פתוחה מאחור מתעדכנת מיד
+window.billDueRefreshIfOpen = async () => {
+  const m = document.getElementById('billDueModal');
+  if (!m || m.classList.contains('hidden')) { window.refreshBillAlert && window.refreshBillAlert(); return; }
+  _billDue = null;
+  await window.refreshBillAlert();
+  await window.openBillDue();
+};
+function billDueRaise() {
+  for (const id of ['derModal', 'invPvModal']) {
+    const el = document.getElementById(id);
+    if (el && !el.classList.contains('hidden')) el.style.zIndex = topZ(300, el);
+  }
+}
+window.billDueFollowup = (eventId, docId, number, type, uploaded) => {
+  window.eventFollowupDoc(eventId, docId, number, Number(type), Number(uploaded) === 1);
+  setTimeout(billDueRaise, 60);
+};
+window.billDueProduce = async (eventId) => {
+  await window.eventProduceDoc(eventId);
+  billDueRaise();
+};
+window.billDueMerged = async (client, clientId) => {
+  const g = ((_billDue && _billDue.groups) || []).find(x => x.client === client);
+  if (!g || !g.events.length) return;
+  await _invPreviewForIds(g.events.map(e => e.id), client, clientId || null);
+  billDueRaise();
 };
 // תג התראה בולט בראש המסך: כמה חשבוניות מהמייל ממתינות לטיפול ידני (לינק שלא נשלף אוטומטית)
 window.refreshMailAlert = async () => {
@@ -2003,6 +2047,7 @@ window.derConfirm = async () => {
     const r2 = await fetch('/api/documents/consolidate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sourceIds: e.sourceIds, uploadedSources: e.uploadedSources || [], clientName: e.clientName, type: e.type, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (r2.ok) {
+      billDueRefreshIfOpen();
       if (typeof clearApiCache === 'function') clearApiCache();
       const m0 = document.getElementById('derModal'); if (m0) m0.classList.add('hidden');
       showDocReadyPopup(r2.doc, typeName2);
@@ -2031,6 +2076,7 @@ window.derConfirm = async () => {
           email: ((document.getElementById('derSendEmail') || {}).value || '').trim(),
           email2: ((document.getElementById('derSendEmail2') || {}).value || '').trim() }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (r.ok) {
+    billDueRefreshIfOpen();
     // מסמך המשך שנוצר ממסמך שהועלה — השרת כבר קישר וסימן את הישן כ"הומר"; נעדכן את עורך האירוע אם פתוח
     if (e.uploadedSource && _evEditing && _evEditing.id === e.uploadedSource.eventId && r.doc) {
       const ld = _evEditing.linkedDocs || [];
@@ -4381,6 +4427,7 @@ window.generateInvoice = async (btn) => {
     document.getElementById('invPvModal').classList.add('hidden');
     showDocReadyPopup(r.doc, typeName); // חלונית צפייה/הורדה/שליחה — בלי לפתוח טאב חדש בכרום
     refreshInvoicingUI();
+    billDueRefreshIfOpen();
   } else {
     st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || 'לא הופק'))}</span>`;
   }

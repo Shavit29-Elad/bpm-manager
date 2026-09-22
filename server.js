@@ -4589,15 +4589,26 @@ function billingDue(db, cid, today) {
   for (const ev of (db.events || [])) {
     if (!ownedBy(ev, cid) || !ev.confirmed) continue;
     if (isNoInvoice(ev)) continue;
-    const real = (ev.linkedDocs || []).filter(d => [300, 305, 320].includes(Number(d.type)) && !d.credited && !d.credit && !d.converted);
-    if (real.length || ev.invoiceStatus === 'invoiced') continue;   // כבר חויב
+    const active = (ev.linkedDocs || []).filter(d => !d.credited && !d.credit && !d.converted);
+    // "חויב" = יצאה חשבונית מס או מס-קבלה. חשבון עסקה והצעת מחיר אינם חיוב —
+    // הכסף טרם דווח, והאירוע עדיין צריך מסמך (המשך מהם).
+    const types = new Set(active.map(d => Number(d.type)));
+    // תאימות לאחור: אירוע שחויב במסלול הישן נושא invoiceId/invoiceStatus בלבד.
+    // הוא נחשב מחויב — אלא אם הסוג הוא במפורש עסקה או הצעה, שאינם חיוב.
+    const legacyType = Number(ev.invoiceType) || 0;
+    const legacyBilled = (ev.invoiceId || ev.invoiceStatus === 'invoiced') && legacyType !== 300 && legacyType !== 10;
+    if (types.has(305) || types.has(320) || legacyBilled) continue;
     const due = billDueDate(db, cid, ev);
     if (!due || due > t) continue;                                   // עוד לא הגיע המועד
+    // המסמך שממנו מפיקים המשך: חשבון עסקה עדיף על הצעת מחיר
+    const fu = active.find(d => Number(d.type) === 300 && d.id) || active.find(d => Number(d.type) === 10 && d.id) || null;
     const client = (ev.clientName || '').trim() || '— ללא לקוח —';
     const key = billKey(client) || client;
-    const g = groups.get(key) || { client, mode: billModeFor(db, cid, client), events: [], total: 0, due, oldestDue: due };
+    const g = groups.get(key) || { client, clientId: ev.clientId || null, mode: billModeFor(db, cid, client), events: [], total: 0, due, oldestDue: due };
+    if (!g.clientId && ev.clientId) g.clientId = ev.clientId;
     g.events.push({ id: ev.id, date: String(ev.date || ev.dateRaw || '').slice(0, 10), artist: ev.artist || '',
-      location: ev.location || '', amount: eventTotal(ev), due });
+      location: ev.location || '', amount: eventTotal(ev), due,
+      followup: fu ? { id: String(fu.id), number: fu.number ?? null, type: Number(fu.type), uploaded: Boolean(fu.uploaded) } : null });
     g.total += eventTotal(ev);
     if (due < g.oldestDue) g.oldestDue = due;
     groups.set(key, g);
