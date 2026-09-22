@@ -3118,6 +3118,26 @@ check('מועד חיוב — סוף חודש מול יום אחרי, וההתר�
   if (due([ev({ linkedDocs: [{ type: 305, credited: true }] })], '2026-09-11').total !== 1)
     throw new Error('אירוע שהחשבונית שלו זוכתה אינו חוזר להתראה');
 
+  // שם ברשימה שאינו תואם לאף אירוע — טעות שקטה שהפילה את כל התכונה בפועל
+  // ("גואטה הפקות" ברשימה מול "אבי גואטה הפקות" באירועים). חייבת להיות הצעת תיקון.
+  const sg = srv.match(/function suggestClientName\(name, namesByKey\) \{[\s\S]*?\n\}/);
+  if (!sg) throw new Error('suggestClientName לא נמצאה');
+  const bk = srv.match(/function billKey\(s\) \{[\s\S]*?\n\}/);
+  const suggest = new Function(bk[0] + ';' + sg[0] + '; return suggestClientName;')();
+  const names = new Map([['אבי גואטה הפקות בעמ', 'אבי גואטה הפקות בע״מ'], ['שרית הפקות בעמ', 'שרית הפקות בע״מ']]);
+  if (suggest('גואטה הפקות בע״מ', names) !== 'אבי גואטה הפקות בע״מ') throw new Error('אין הצעת תיקון לשם חלקי');
+  if (suggest('שרית הפקות בע״מ', names) !== null) throw new Error('שם שתואם בדיוק קיבל הצעה');
+  if (suggest('זבנג הפקות', names) !== null) throw new Error('שם זר קיבל הצעה');
+  if (suggest('הפקות', names) !== null) throw new Error('שם קצר מדי התאים לכל דבר');
+  // הראוט מחזיר מונה אירועים לכל שם, ומועמדים מתוך האירועים ולא מרשימה אחרת
+  const sched = srv.slice(srv.indexOf("add('GET', /^\\/api\\/billing-schedule$/"), srv.indexOf('function suggestClientName'));
+  if (!/events: counts\.get\(billKey\(x\.name\)\) \|\| 0/.test(sched)) throw new Error('אין מונה אירועים לשם');
+  if (!/candidates:/.test(sched)) throw new Error('אין רשימת מועמדים מהאירועים');
+  const appSrc = fs.readFileSync('app.js', 'utf8');
+  const ui = appSrc.slice(appSrc.indexOf('window.loadBillSchedule'), appSrc.indexOf('window.fixBillName'));
+  if (!/לא תואם לאף אירוע/.test(ui)) throw new Error('שם שלא תפס אינו מסומן במסך');
+  if (/api\('\/api\/clients'\)/.test(ui)) throw new Error('ההשלמה עדיין מרשימת הלקוחות ולא מהאירועים');
+
   // ההתראה אינה מפיקה כלום
   if (/createDocument|invoicing\/generate/.test(block)) throw new Error('קוד ההתראה נוגע בהפקת מסמכים');
   // והראוטים: חברה אחת, ועריכת הרשימה למנהל בלבד

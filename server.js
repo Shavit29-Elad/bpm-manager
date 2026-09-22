@@ -4644,8 +4644,44 @@ add('GET', /^\/api\/billing-schedule$/, (req, res, _p, q) => {
   const cid = reqCompany(q), db = load();
   const { list, seeded } = billingList(db, cid);
   if (seeded) save(db);   // הזריעה נשמרת פעם אחת, כדי שמחיקה של המשתמש לא תתבטל בטעינה הבאה
-  json(res, { mode: { monthEnd: BILL_MONTH_END, nextDay: BILL_NEXT_DAY }, items: list });
+  // כמה אירועים באמת נושאים כל שם. שם ברשימה שאינו מופיע באף אירוע הוא טעות
+  // שקטה — בדיוק מה שקרה עם "גואטה הפקות" מול "אבי גואטה הפקות". בלי המונה
+  // הזה אין שום סימן שהשם לא תפס.
+  const counts = new Map(), names = new Map();
+  for (const ev of (db.events || [])) {
+    if (!ownedBy(ev, cid) || !ev.confirmed) continue;
+    const n = (ev.clientName || '').trim(); if (!n) continue;
+    const k = billKey(n);
+    counts.set(k, (counts.get(k) || 0) + 1);
+    if (!names.has(k)) names.set(k, n);
+  }
+  const inList = new Set(list.map(x => billKey(x.name)));
+  json(res, {
+    mode: { monthEnd: BILL_MONTH_END, nextDay: BILL_NEXT_DAY },
+    items: list.map(x => ({ ...x, events: counts.get(billKey(x.name)) || 0,
+      // שם דומה שכן קיים באירועים — כדי להציע תיקון במקום רק להתריע
+      suggest: counts.get(billKey(x.name)) ? null : suggestClientName(x.name, names) })),
+    // שמות הלקוחות כפי שהם מופיעים באירועים — מהם בוחרים, ולא מרשימה אחרת
+    candidates: [...names.entries()].filter(([k]) => !inList.has(k))
+      .map(([k, n]) => ({ name: n, events: counts.get(k) || 0 }))
+      .sort((a, b) => b.events - a.events),
+  });
 });
+
+// שם מהאירועים שדומה מספיק לשם שהוזן. מחזיר הצעה אחת או null.
+// ההתאמה היא הכלה דו-כיוונית: "גואטה הפקות בעמ" מוכל ב"אבי גואטה הפקות בעמ".
+function suggestClientName(name, namesByKey) {
+  const k = billKey(name);
+  if (!k) return null;
+  let best = null;
+  for (const [k2, n2] of namesByKey) {
+    if (k2 === k) return null;
+    if (!(k2.includes(k) || k.includes(k2))) continue;
+    const score = Math.min(k.length, k2.length) / Math.max(k.length, k2.length);
+    if (score >= 0.6 && (!best || score > best.score)) best = { name: n2, score };
+  }
+  return best ? best.name : null;
+}
 
 // POST /api/billing-schedule { name, mode } — הוספה/הסרה של לקוח מהרשימה
 add('POST', /^\/api\/billing-schedule$/, (req, res, _p, q, body) => {

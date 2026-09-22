@@ -9496,28 +9496,36 @@ window.runCloseStaleQuotes = async (btn) => {
 window.loadBillSchedule = async (btn) => {
   const box = document.getElementById('billSched'); if (!box) return;
   if (btn) { btn.disabled = true; btn.textContent = 'טוען…'; }
-  const [r, cl] = await Promise.all([
-    api('/api/billing-schedule').catch(() => ({ error: 'שגיאת רשת' })),
-    api('/api/clients').catch(() => []),
-  ]);
+  const r = await api('/api/billing-schedule').catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) { btn.disabled = false; btn.textContent = 'הצג את הרשימה'; }
   if (!r || r.error) { box.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || ''))}</span>`; return; }
-  const inList = new Set((r.items || []).map(x => String(x.name || '').replace(/["'׳״`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase()));
-  const options = (Array.isArray(cl) ? cl : []).map(c => c.name).filter(Boolean)
-    .filter(n => !inList.has(String(n).replace(/["'׳״`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase()))
-    .sort((a, b) => a.localeCompare(b, 'he'));
-  const rows = (r.items || []).map(x => `<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-top:1px solid var(--line)">
-      <span style="flex:1;font-size:12.5px">${escapeHtml(x.name)}</span>
+  // מונה האירועים לכל שם הוא הבדיקה: שם שלא תפס אף אירוע הוא טעות כתיב,
+  // וקודם לא היה שום סימן לכך — הלקוח פשוט המשיך להופיע כ"יום אחרי האירוע".
+  const bad = (r.items || []).filter(x => !x.events).length;
+  const rows = (r.items || []).map(x => `<div style="display:flex;gap:8px;align-items:center;padding:5px 0;border-top:1px solid var(--line)">
+      <span style="flex:1;font-size:12.5px">${escapeHtml(x.name)}
+        ${x.events ? `<span class="muted" style="font-size:11px"> · ${x.events} אירועים</span>`
+          : `<span style="font-size:11px;color:var(--danger)"> · ⚠ לא תואם לאף אירוע</span>`}
+        ${x.suggest ? `<div style="font-size:11.5px;margin-top:2px">התכוונת ל־<b>${escapeHtml(x.suggest)}</b>?
+          <button class="btn ghost" style="padding:1px 8px;font-size:11px;margin-inline-start:4px" onclick="fixBillName('${escAttr(x.name)}','${escAttr(x.suggest)}')">תקן</button></div>` : ''}</span>
       <button class="btn ghost" style="padding:2px 9px;font-size:11.5px;color:var(--danger)" onclick="setBillMode('${escAttr(x.name)}','nextDay')">הסר</button>
     </div>`).join('');
   box.innerHTML = `<div style="border:1px solid var(--line);border-radius:12px;padding:12px">
-    <div><b>${(r.items || []).length}</b> לקוחות מחויבים בסוף החודש</div>
+    <div><b>${(r.items || []).length}</b> לקוחות מחויבים בסוף החודש${bad ? ` · <span style="color:var(--danger)">${bad} לא תואמים לאף אירוע</span>` : ''}</div>
     ${rows || '<div class="muted" style="font-size:12.5px;padding-top:6px">הרשימה ריקה — כל הלקוחות מחויבים יום אחרי האירוע.</div>'}
     <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <input id="billAddName" list="billClientList" placeholder="שם לקוח…" style="flex:1;min-width:200px;padding:6px 10px;font-size:12.5px"/>
-      <datalist id="billClientList">${options.map(n => `<option value="${escAttr(n)}"></option>`).join('')}</datalist>
+      <input id="billAddName" list="billClientList" placeholder="שם לקוח כפי שהוא מופיע באירועים…" style="flex:1;min-width:220px;padding:6px 10px;font-size:12.5px"/>
+      <datalist id="billClientList">${(r.candidates || []).map(c => `<option value="${escAttr(c.name)}">${c.events} אירועים</option>`).join('')}</datalist>
       <button class="btn ghost" style="padding:5px 12px;font-size:12.5px" onclick="addBillMonthEnd()">+ הוסף לרשימה</button>
     </div>
+    <div class="muted" style="font-size:11.5px;margin-top:6px">הרשימה נבחרת מתוך שמות הלקוחות כפי שהם רשומים באירועים — שם שנכתב אחרת לא יתפוס.</div>
   </div>`;
+};
+
+// החלפת שם שגוי ברשימה בשם שקיים באירועים
+window.fixBillName = async (oldName, newName) => {
+  await window.setBillMode(oldName, 'nextDay');
+  await window.setBillMode(newName, 'monthEnd');
 };
 
 window.addBillMonthEnd = async () => {
