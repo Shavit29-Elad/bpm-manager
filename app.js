@@ -5459,7 +5459,11 @@ window.filterPayablesText = (v) => { _spSearch = String(v || '').toLowerCase().t
 let _linkPay = null;
 window.openLinkEventsToPayable = async (pid) => {
   const p = (_supPayables || []).find(x => x.id === pid); if (!p) return;
-  _linkPay = { pid, name: p.supplierName || '', sel: new Set(), events: [], q: '', year: 'all', month: 'all' };
+  _linkPay = { pid, name: p.supplierName || '', sel: new Set(), events: [], q: '', year: 'all', month: 'all',
+    // החשבונית שמשייכים — מוצגת לצד רשימת האירועים, כי בלי לראות אותה
+    // אי אפשר לדעת לאיזה אירוע היא שייכת
+    docNote: [p.supplierName, p.number ? '#' + p.number : '', p.amount != null ? money(p.amount) : ''].filter(Boolean).join(' · '),
+    hasFile: Boolean(p.hasFile) };
   let m = document.getElementById('linkEvModal');
   if (!m) { m = document.createElement('div'); m.id = 'linkEvModal'; m.className = 'modal'; document.body.appendChild(m); }
   m.classList.remove('hidden');
@@ -5470,6 +5474,46 @@ window.openLinkEventsToPayable = async (pid) => {
   (pay || []).forEach(g => (g.events || []).forEach(ev => events.push({ ...ev, contractor: g.name })));
   _linkPay.events = events;
   buildLinkEvShell(); renderLinkEvRows(); renderLinkedNow();
+  if (_linkPay.hasFile) linkEvShowDoc();   // המסמך נפתח מיד — זו כל המטרה של החלונית
+};
+
+// ---- תצוגת החשבונית לצד רשימת האירועים ----
+let _linkEvBlobUrl = null;
+window.linkEvShowDoc = async () => {
+  const pane = document.getElementById('linkEvDocPane'), card = document.getElementById('linkEvCard');
+  if (!pane || !card || !_linkPay) return;
+  card.style.width = 'min(1180px,98vw)';
+  pane.style.display = 'flex';
+  const head = (extra) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:#fff">
+      <b style="font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(_linkPay.docNote || 'החשבונית')}</b>
+      <div style="display:flex;gap:6px;white-space:nowrap">${extra}<button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="linkEvCloseDoc()">✕</button></div>
+    </div>`;
+  pane.innerHTML = head('') + `<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען מסמך…</div>`;
+  const url = `/api/supplier-payables/${encodeURIComponent(_linkPay.pid)}/file?companyId=${encodeURIComponent(state.company)}`;
+  try {
+    const resp = await fetch(url);
+    const ct = (resp.headers.get('content-type') || '').toLowerCase();
+    if (!resp.ok || ct.includes('application/json')) throw new Error('אין קובץ');
+    const blob = await resp.blob();
+    if (_linkEvBlobUrl) URL.revokeObjectURL(_linkEvBlobUrl);
+    _linkEvBlobUrl = URL.createObjectURL(blob);
+    const cur = document.getElementById('linkEvDocPane'); if (!cur || cur.style.display === 'none') return;
+    const t = (blob.type || ct);
+    const body = t.startsWith('image')
+      ? `<div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;background:#fff;padding:6px"><img src="${_linkEvBlobUrl}" style="max-width:100%;object-fit:contain" alt="החשבונית"/></div>`
+      : `<iframe src="${_linkEvBlobUrl}#toolbar=1&navpanes=0&view=FitH" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
+    cur.innerHTML = head(`<button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="previewDoc('${escAttr(url)}')" title="פתיחה בחלון גדול עם זום">⤢</button>`) + body;
+  } catch {
+    const cur = document.getElementById('linkEvDocPane');
+    if (cur) cur.innerHTML = head('') + `<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center;padding:14px;text-align:center">אין קובץ שמור לחשבונית הזו.</div>`;
+  }
+};
+
+window.linkEvCloseDoc = () => {
+  const pane = document.getElementById('linkEvDocPane'), card = document.getElementById('linkEvCard');
+  if (pane) { pane.style.display = 'none'; pane.innerHTML = ''; }
+  if (card) card.style.width = 'min(640px,95vw)';
+  if (_linkEvBlobUrl) { URL.revokeObjectURL(_linkEvBlobUrl); _linkEvBlobUrl = null; }
 };
 const _linkNorm = s => (s || '').replace(/בע["'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
 function buildLinkEvShell() {
@@ -5477,9 +5521,21 @@ function buildLinkEvShell() {
   const years = [...new Set((_linkPay.events || []).map(e => String(e.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
   const yearOpts = ['<option value="all">כל השנים</option>'].concat(years.map(y => `<option value="${y}" ${_linkPay.year === y ? 'selected' : ''}>${y}</option>`)).join('');
   const monthOpts = ['<option value="all">כל החודשים</option>'].concat(MONTHS_HE.map((n, i) => { const v = String(i + 1).padStart(2, '0'); return `<option value="${v}" ${_linkPay.month === v ? 'selected' : ''}>${n}</option>`; })).join('');
-  m.querySelector('.modal-card').innerHTML = `
-    <div class="row-between"><h3>🔗 שייך אירועים — ${escapeHtml(_linkPay.name)}</h3><button class="btn ghost" onclick="document.getElementById('linkEvModal').classList.add('hidden')">סגור</button></div>
-    <p class="muted" style="font-size:12px;margin:2px 0 8px">בחר את האירועים שההוצאה מכסה. אפשר לחפש חופשי (זמר / מיקום / תאריך) או לסנן לפי חודש ושנה. אירועים של אותו ספק מודגשים.</p>
+  const card = m.querySelector('.modal-card');
+  // מבנה שני פאנלים, כמו בעורך האירוע: המסמך מימין, בחירת האירועים משמאל.
+  // כשאין קובץ הפאנל נשאר סגור והחלונית ברוחב הרגיל.
+  const wide = _linkPay.hasFile;
+  card.id = 'linkEvCard';
+  card.style.cssText = `width:min(${wide ? '1180px,98vw' : '640px,95vw'});max-height:88vh;max-height:88dvh;overflow:hidden;padding:0;display:flex;flex-direction:row`;
+  card.innerHTML = `
+    <div id="linkEvDocPane" style="display:none;flex:1 1 50%;min-width:0;min-height:min(72vh,620px);max-height:88vh;max-height:88dvh;flex-direction:column;border-inline-end:1px solid var(--line);background:#f4f5fb"></div>
+    <div style="flex:1 1 100%;min-width:0;overflow:auto;max-height:88vh;max-height:88dvh;padding:20px">
+    <div class="row-between"><h3 style="margin:0">🔗 שייך אירועים — ${escapeHtml(_linkPay.name)}</h3>
+      <div style="display:flex;gap:6px">
+        ${_linkPay.hasFile ? `<button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="linkEvShowDoc()">👁 הצג חשבונית</button>` : ''}
+        <button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="document.getElementById('linkEvModal').classList.add('hidden')">סגור</button>
+      </div></div>
+    <p class="muted" style="font-size:12px;margin:6px 0 8px">בחר את האירועים שההוצאה מכסה. אפשר לחפש חופשי (זמר / מיקום / תאריך) או לסנן לפי חודש ושנה. אירועים של אותו ספק מודגשים.</p>
     <div id="linkEvLinked"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
       <input id="linkEvSearch" placeholder="חיפוש — למשל: נסרין אמארה · 02/07" oninput="onLinkEvSearch(this.value)" style="flex:1;min-width:180px;padding:6px 9px" value="${escAttr(_linkPay.q || '')}"/>
@@ -5487,7 +5543,8 @@ function buildLinkEvShell() {
       <select onchange="setLinkEvYM('month',this.value)" style="padding:6px 8px;font-size:13px">${monthOpts}</select>
     </div>
     <div id="linkEvRows"></div>
-    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('linkEvModal').classList.add('hidden')">ביטול</button><button class="btn success" onclick="confirmLinkEv(this)">✓ שייך נבחרים</button></div>`;
+    <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('linkEvModal').classList.add('hidden')">ביטול</button><button class="btn success" onclick="confirmLinkEv(this)">✓ שייך נבחרים</button></div>
+    </div>`;
 }
 function renderLinkEvRows() {
   const box = document.getElementById('linkEvRows'); if (!box || !_linkPay) return;

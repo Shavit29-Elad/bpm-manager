@@ -434,6 +434,13 @@ textarea.doc-desc {
    הן דחפו שדות וכפתורים אל מחוץ למסך, ובפועל לא היה אפשר להגיע אליהם.
    במסך צר הן נערמות, וכל שדה מקבל תווית משלו. */
 @media (max-width: 640px) {
+  /* שיוך אירועים להוצאת ספק: שני הפאנלים לא נכנסים זה לצד זה במסך צר —
+     המסמך עובר למעלה בגובה קבוע, ורשימת האירועים מתחתיו. */
+  #linkEvCard { flex-direction: column !important; width: 96vw !important; }
+  #linkEvCard > #linkEvDocPane { flex: 0 0 38vh !important; min-height: 0 !important; max-height: 38vh !important;
+    border-inline-end: none !important; border-bottom: 1px solid var(--line); }
+  #linkEvCard > div:last-child { padding: 14px !important; }
+
   /* שורת פריט במסמך: תיאור מלא, ואז כמות/מחיר/מחיקה בשורה שנייה */
   .nq-item {
     grid-template-columns: 1fr 96px 34px !important;
