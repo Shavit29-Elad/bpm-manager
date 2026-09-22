@@ -2079,8 +2079,53 @@ check('לוח האירועים — לחברות הלוח בלבד, מרשימה 
   if ((app.match(/LEGACY_IMPORT_COMPANIES\.includes\(state\.company\)/g) || []).length < 3)
     throw new Error('לא כל נקודות הייבוא נגזרות מהרשימה');
   // השרת אינו חוסם חברה מסוימת בקליטת מסמך ישן
-  const oi = srv.slice(srv.indexOf("add('POST', /^\\/api\\/old-invoices$/"), srv.indexOf("// POST /api/old-invoices/:id/attach-doc"));
+  const oi = srv.slice(srv.indexOf("add('POST', /^\\/api\\/old-invoices$/"), srv.indexOf("// ---- ייבוא רשימת מסמכים ממערכת קודמת"));
   if (/co_ofek/.test(oi)) throw new Error('ראוט המסמכים הישנים נעול לאופק');
+  return true;
+});
+
+// ייבוא רשימת המסמכים מהמערכת הקודמת. שגיאת מיפוי כאן מכניסה היסטוריה שגויה
+// שתיראה אמיתית בדוחות ובהתאמות הבנק, ולכן כל מיפוי נבדק בפועל.
+check('ייבוא ממערכת קודמת — סוגים, תאריכים, סגור/פתוח וכפילויות', () => {
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const blk = srv.slice(srv.indexOf('const LEGACY_DOC_TYPES'), srv.indexOf("// POST /api/legacy-import"));
+  const f = new Function(blk + '; return { legacyDocType, legacyIso };')();
+
+  // הסוגים כפי שהכוורת כותבת אותם
+  for (const [name, want] of [['חשבונית מס קבלה', 320], ['חשבונית מס-קבלה', 320], ['חשבונית מס', 305],
+    ['קבלה', 400], ['חשבונית זיכוי', 330], ['חשבון עסקה', 300]]) {
+    if (f.legacyDocType(name) !== want) throw new Error(`סוג "${name}" → ${f.legacyDocType(name)} במקום ${want}`);
+  }
+  if (f.legacyDocType('משהו אחר') !== null) throw new Error('סוג לא מוכר לא נדחה');
+  // "חשבונית מס" לא תיבלע לתוך "חשבונית מס קבלה" — ההבדל הוא 305 מול 320
+  if (f.legacyDocType('חשבונית מס') === f.legacyDocType('חשבונית מס קבלה')) throw new Error('שני סוגים שונים מופו לאותו קוד');
+
+  // תאריכים: DD.MM.YYYY של הכוורת, וגם ספרה בודדת
+  for (const [raw, want] of [['05.01.2026', '2026-01-05'], ['31.08.2026', '2026-08-31'],
+    ['1.2.2026', '2026-02-01'], ['2026-03-05', '2026-03-05']]) {
+    if (f.legacyIso(raw) !== want) throw new Error(`תאריך ${raw} → ${f.legacyIso(raw)}`);
+  }
+  if (f.legacyIso('שטות') !== null) throw new Error('תאריך לא תקין לא נדחה');
+
+  const route = srv.slice(srv.indexOf("add('POST', /^\\/api\\/legacy-import$/"), srv.indexOf("// POST /api/old-invoices/:id/attach-doc"));
+  if (!/reqCompany\(q, b\)/.test(route)) throw new Error('הייבוא אינו נגזר מ-reqCompany');
+  if (!/role !== 'admin'/.test(route)) throw new Error('משתמש צפייה יכול לייבא היסטוריה');
+  if (!/existing\.has\(key\)/.test(route)) throw new Error('אין מניעת כפילות — ייבוא חוזר ישכפל הכל');
+  if (!/סגור\|שולם\|נסגר/.test(route)) throw new Error('סטטוס "מסמך סגור" אינו נקרא');
+  if (!/noFile: true/.test(route)) throw new Error('רשומה בלי קובץ אינה מסומנת ככזו');
+  // מסמך שסומן סגור אינו נספר כחוב פתוח
+  if (!/d\.closed \|\| !\[300, 305\]/.test(srv)) throw new Error('מסמך סגור מהייבוא יופיע כחשבונית פתוחה');
+  // ובבורר המסמכים של הבנק לא נבנית כתובת קובץ למסמך שאין לו קובץ
+  if (!/d\.noFile \? null : '\/api\/files\/' \+ d\.id/.test(srv)) throw new Error('נבנית כתובת קובץ למסמך בלי קובץ');
+
+  // הפרונט: זיהוי עמודות לפי שמות, ולא לפי מיקום קבוע
+  const ui = app.slice(app.indexOf('const LEGACY_HEADERS'), app.indexOf('window.openBulkOldInvoices ='));
+  for (const h of ['מספר המסמך', 'סוג מסמך', 'שם הלקוח', 'תאריך המסמך', 'סטטוס', 'חשבונית רגילה']) {
+    if (!ui.includes(h)) throw new Error('כותרת חסרה בזיהוי: ' + h);
+  }
+  if (!/cand\.number != null && cand\.type != null && cand\.date != null/.test(ui))
+    throw new Error('שורת הכותרת מזוהה בלי לוודא שהעמודות החיוניות קיימות');
+  if (!/legacyTypeNum/.test(ui)) throw new Error('אין תצוגה מקדימה של הסוגים לפני ייבוא');
   return true;
 });
 

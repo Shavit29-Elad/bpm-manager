@@ -1383,6 +1383,69 @@ add('POST', /^\/api\/old-invoices$/, async (req, res, _p, q, body) => {
   save(db);
   json(res, { ok: true, id: rec.id, doc });
 });
+// ---- ייבוא רשימת מסמכים ממערכת קודמת (הכוורת) ----
+// במעבר לחשבונית ירוקה יש היסטוריה שצריכה להיכנס למערכת: לצורך דוחות, למעקב
+// אחרי מה שעדיין פתוח, ובעיקר כדי שאפשר יהיה לשייך אותה לתנועות בנק.
+// כאן נקלטת **הרשימה** (ייצוא אקסל) ולא קובצי ה-PDF: רשומה בלי קובץ עדיין
+// מופיעה בחשבוניות הפתוחות ובבורר המסמכים של הבנק, ואפשר לצרף לה קובץ אחר כך.
+const LEGACY_DOC_TYPES = {
+  'חשבונית מס קבלה': 320, 'חשבונית מס-קבלה': 320, 'חשבונית מס/קבלה': 320,
+  'חשבונית מס': 305, 'קבלה': 400, 'חשבונית זיכוי': 330, 'זיכוי': 330,
+  'חשבון עסקה': 300, 'הצעת מחיר': 10,
+};
+function legacyDocType(s) {
+  const t = String(s || '').replace(/["'׳״]/g, '').replace(/\s+/g, ' ').trim();
+  if (LEGACY_DOC_TYPES[t]) return LEGACY_DOC_TYPES[t];
+  for (const [k, v] of Object.entries(LEGACY_DOC_TYPES)) if (t === k.replace(/["'׳״]/g, '')) return v;
+  return null;
+}
+const legacyIso = (s) => {
+  const m = String(s || '').trim().match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '').trim()) ? String(s).trim() : null;
+};
+
+// POST /api/legacy-import — { rows: [{ number, type, clientName, date, status, amount }] }
+add('POST', /^\/api\/legacy-import$/, (req, res, _p, q, body) => {
+  const b = body || {}, cid = reqCompany(q, b);
+  if (!req.user || req.user.role !== 'admin') return json(res, { error: 'אין הרשאה' }, 403);
+  const rows = Array.isArray(b.rows) ? b.rows : [];
+  if (!rows.length) return json(res, { error: 'אין שורות לייבוא' }, 400);
+  if (rows.length > 2000) return json(res, { error: 'יותר מדי שורות בייבוא אחד' }, 400);
+  const db = load();
+  db.oldInvoices = db.oldInvoices || [];
+  const existing = new Set();
+  for (const r of db.oldInvoices) {
+    if (!ownedBy(r, cid)) continue;
+    for (const d of (r.linkedDocs || [])) if (d.number != null) existing.add(`${String(d.number).trim()}|${Number(d.type)}`);
+  }
+  const out = { created: 0, skipped: 0, errors: [] };
+  for (const r of rows) {
+    const type = legacyDocType(r.type);
+    const num = (r.number != null && String(r.number).trim() !== '') ? String(r.number).trim() : null;
+    const date = legacyIso(r.date);
+    const amount = (r.amount != null && r.amount !== '' && !isNaN(Number(r.amount))) ? Number(r.amount) : null;
+    const clientName = String(r.clientName || '').trim();
+    if (!type || !num) { out.errors.push({ number: num, reason: !type ? `סוג לא מוכר: ${r.type}` : 'חסר מספר מסמך' }); continue; }
+    const key = `${num}|${type}`;
+    if (existing.has(key)) { out.skipped++; continue; }      // כבר יובא — ייבוא חוזר לא יוצר כפילות
+    existing.add(key);
+    const doc = { id: id('limp'), number: num, type, date, amount, url: null,
+      uploaded: true, noFile: true, source: 'legacy',
+      // "מסמך סגור" במערכת הקודמת — לא אמור להופיע כחוב פתוח
+      closed: /סגור|שולם|נסגר/.test(String(r.status || '')) };
+    db.oldInvoices.push({
+      id: id('oinv'), companyId: cid, clientName: clientName || '—',
+      description: String(r.description || '').trim(), linkedDocs: [doc],
+      legacySource: String(b.source || 'הכוורת'), createdAt: new Date().toISOString(),
+    });
+    out.created++;
+  }
+  save(db);
+  console.log(`[legacy-import] ${cid}: נוצרו ${out.created} · דולגו ${out.skipped} · שגיאות ${out.errors.length}`);
+  json(res, { ok: true, ...out, errors: out.errors.slice(0, 20) });
+});
+
 // POST /api/old-invoices/:id/attach-doc — צירוף קבלה/מס-קבלה (או מסמך נוסף) לחשבונית ישנה
 add('POST', /^\/api\/old-invoices\/([^/]+)\/attach-doc$/, async (req, res, params, _q, body) => {
   const db = load(); db.oldInvoices = db.oldInvoices || [];
@@ -3615,13 +3678,15 @@ add('GET', /^\/api\/open-invoices$/, async (req, res, _p, q) => {
         });
       }
     }
-    // חשבוניות ישנות עצמאיות שהועלו ידנית (אופק) — פתוחות עד קבלה/מס-קבלה או המרה למסמך המשך
+    // חשבוניות ישנות עצמאיות שהועלו ידנית — פתוחות עד קבלה/מס-קבלה או המרה למסמך המשך
     for (const rec of (db.oldInvoices || [])) {
       if (cid && rec.companyId && rec.companyId !== cid) continue;
       const linked = Array.isArray(rec.linkedDocs) ? rec.linkedDocs : [];
       if (linked.some(d => [320, 400].includes(Number(d.type)) && !d.converted)) continue;
       for (const d of linked) {
-        if (!d.uploaded || d.converted || ![300, 305].includes(Number(d.type))) continue;
+        // closed — סומן סגור כבר במערכת הקודמת (ייבוא היסטורי). נשמר לתיעוד
+        // ולשיוך בנק, אבל אינו חוב פתוח.
+        if (!d.uploaded || d.converted || d.closed || ![300, 305].includes(Number(d.type))) continue;
         const upKey = (d.number || d.id) + '|' + Number(d.type);
         if (seenUp.has(upKey)) continue; seenUp.add(upKey);
         docs.push({
@@ -6865,7 +6930,7 @@ add('GET', /^\/api\/clients\/([^/]+)\/documents$/, async (req, res, params) => {
           if (!d || !d.uploaded) return;
           const key = (d.number || d.id) + '|' + Number(d.type);
           if (seen.has(key)) return; seen.add(key);
-          docs.push({ id: d.id, number: d.number || null, type: Number(d.type), date: d.date || null, amount: d.amount != null ? Number(d.amount) : null, amountDue: d.amount != null ? Number(d.amount) : null, url: d.url || ('/api/files/' + d.id), status: 0, uploaded: true, clientName });
+          docs.push({ id: d.id, number: d.number || null, type: Number(d.type), date: d.date || null, amount: d.amount != null ? Number(d.amount) : null, amountDue: d.amount != null ? Number(d.amount) : null, url: d.url || (d.noFile ? null : '/api/files/' + d.id), status: 0, uploaded: true, noFile: !!d.noFile, clientName });
         };
         for (const e of (db.events || [])) { if (!match(e.clientName || e.client || '')) continue; for (const d of (e.linkedDocs || [])) if (d && d.uploaded) push(d, e.clientName || nm); }
         for (const rec of (db.oldInvoices || [])) { if (!match(rec.clientName || '')) continue; for (const d of (rec.linkedDocs || [])) if (d && d.uploaded) push(d, rec.clientName || nm); }

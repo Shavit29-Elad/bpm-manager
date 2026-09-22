@@ -1430,7 +1430,7 @@ function renderOpenInvoices() {
   wrap.innerHTML = `
     <div class="row-between"><div><h2>חשבוניות פתוחות</h2>
       <span class="muted">${docs.length} מסמכים · ${money(totalAll)} · מקובץ לפי לקוח${_toks.length ? ` · מתוך ${byType.length}` : ''}</span></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="exportExpectedIncomePdf(this)" title="דוח PDF של כל ההכנסות הצפויות מהחשבוניות הפתוחות שטרם שולמו">📄 דוח הכנסות צפויות</button>${LEGACY_IMPORT_COMPANIES.includes(state.company) ? `<button class="btn primary" style="padding:4px 12px;font-size:13px" onclick="openOldInvoice('create','',300)" title="העלאת מסמך הכנסה ישן מהמערכת הקודמת שאינו כאן">➕ העלה חשבונית ישנה</button><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="openBulkOldInvoices()" title="העלאת כמה מסמכי הכנסה (PDF מפייפרלס) בבת אחת — מילוי אוטומטי לכל קובץ">📎 העלאה מרובה</button>` : ''}${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="exportExpectedIncomePdf(this)" title="דוח PDF של כל ההכנסות הצפויות מהחשבוניות הפתוחות שטרם שולמו">📄 דוח הכנסות צפויות</button>${LEGACY_IMPORT_COMPANIES.includes(state.company) ? `<button class="btn primary" style="padding:4px 12px;font-size:13px" onclick="openOldInvoice('create','',300)" title="העלאת מסמך הכנסה ישן מהמערכת הקודמת שאינו כאן">➕ העלה חשבונית ישנה</button><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="openBulkOldInvoices()" title="העלאת כמה מסמכי הכנסה (PDF מפייפרלס) בבת אחת — מילוי אוטומטי לכל קובץ">📎 העלאה מרובה</button><button class="btn ghost" style="padding:4px 12px;font-size:13px" onclick="openLegacyImport()" title="ייבוא רשימת מסמכים מקובץ אקסל של המערכת הקודמת">📥 ייבוא מאקסל</button>` : ''}${chip('all', 'הכל')}${chip('proforma', 'חשבון עסקה')}${chip('invoice', 'חשבונית מס')}</div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
       <span style="font-size:14px">🔎</span>
@@ -4126,6 +4126,123 @@ window.delOldInvoice = async (oldInvoiceId) => {
 };
 // ===== העלאה מרובה של מסמכי הכנסה (אופק) — כמה PDF-ים מפייפרלס בבת אחת, מילוי אוטומטי ב-AI, שמירה כרשומות מקומיות =====
 let _bulkFiles = [], _bulkAiRunning = false;
+// ===== ייבוא רשימת מסמכים ממערכת קודמת (הכוורת) =====
+// במעבר לחשבונית ירוקה יש היסטוריה שצריכה להיכנס: לדוחות, למעקב אחרי מה שפתוח,
+// ובעיקר כדי שאפשר יהיה לשייך אותה לתנועות בנק. נקלטת הרשימה (ייצוא אקסל) —
+// לא קובצי ה-PDF. רשומה בלי קובץ עדיין משתתפת בהתאמות בנק.
+let _legacyRows = [];
+const LEGACY_HEADERS = {
+  number: ['מספר המסמך', 'מספר מסמך', 'מס מסמך', 'מספר'],
+  type: ['סוג מסמך', 'סוג המסמך', 'סוג'],
+  clientName: ['שם הלקוח', 'לקוח', 'שם לקוח'],
+  date: ['תאריך המסמך', 'תאריך'],
+  status: ['סטטוס', 'מצב'],
+  amount: ['חשבונית רגילה', 'סה"כ', 'סהכ', 'סכום', 'סך הכל'],
+};
+const _lgNorm = (s) => String(s || '').replace(/["'׳״]/g, '').replace(/\s+/g, ' ').trim();
+
+window.openLegacyImport = async () => {
+  _legacyRows = [];
+  let m = document.getElementById('legacyModal');
+  if (!m) { m = document.createElement('div'); m.id = 'legacyModal'; m.className = 'modal'; document.body.appendChild(m); }
+  m.style.zIndex = topZ(215, m); m.classList.remove('hidden');
+  m.onclick = (e) => { if (e.target === m) m.classList.add('hidden'); };
+  m.innerHTML = `<div class="modal-card" style="width:min(1060px,97vw);max-height:92vh;max-height:92dvh;overflow:auto">
+    <div class="row-between"><h3 style="margin:0">📥 ייבוא מסמכים ממערכת קודמת</h3>
+      <button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="document.getElementById('legacyModal').classList.add('hidden')">✕</button></div>
+    <p class="muted" style="font-size:12.5px;margin:6px 0 10px">בחר את קובץ ייצוא המסמכים (אקסל) מהמערכת הקודמת. המערכת תזהה את העמודות לבד, תציג לך מה נקלט, ורק אז תייבא. מסמך שכבר יובא — מדולג, אפשר להריץ שוב בבטחה.</p>
+    <label class="btn primary" style="padding:6px 14px;font-size:13px;display:inline-block;cursor:pointer">בחר קובץ אקסל
+      <input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="legacyPick(this)"></label>
+    <div id="legacyStatus" style="font-size:13px;margin-top:10px"></div>
+    <div id="legacyBox" style="margin-top:10px"></div>
+  </div>`;
+};
+
+window.legacyPick = async (inp) => {
+  const f = inp && inp.files && inp.files[0]; if (!f) return;
+  const st = document.getElementById('legacyStatus');
+  if (st) st.innerHTML = '<span class="muted">קורא את הקובץ…</span>';
+  try {
+    const XLSX = await ensureSheetJS();
+    const buf = await f.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+    // שורת הכותרת היא הראשונה שמכילה גם "סוג מסמך" וגם "תאריך" — בקובץ יש שורת
+    // כותרת-על ("דוח מסמכים") מעליה, ודילוג עיוור על שורה אחת היה שביר.
+    let hi = -1, map = null;
+    for (let i = 0; i < Math.min(grid.length, 12); i++) {
+      const cells = (grid[i] || []).map(_lgNorm);
+      const cand = {};
+      for (const [field, names] of Object.entries(LEGACY_HEADERS)) {
+        const idx = cells.findIndex(c => names.some(n => c === _lgNorm(n)));
+        if (idx >= 0) cand[field] = idx;
+      }
+      if (cand.number != null && cand.type != null && cand.date != null) { hi = i; map = cand; break; }
+    }
+    if (hi < 0) throw new Error('לא נמצאה שורת כותרת עם "מספר המסמך", "סוג מסמך" ו"תאריך המסמך"');
+    _legacyRows = [];
+    for (let i = hi + 1; i < grid.length; i++) {
+      const r = grid[i] || [];
+      const get = (k) => (map[k] != null ? String(r[map[k]] ?? '').trim() : '');
+      const number = get('number');
+      if (!number) continue;
+      _legacyRows.push({ number, type: get('type'), clientName: get('clientName'),
+        date: get('date'), status: get('status'), amount: get('amount').replace(/[^\d.\-]/g, '') });
+    }
+    renderLegacyPreview(f.name);
+  } catch (e) {
+    if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String(e.message || e))}</span>`;
+  }
+};
+
+const LEGACY_TYPE_HE = { 320: 'מס-קבלה', 305: 'חשבונית מס', 400: 'קבלה', 330: 'זיכוי', 300: 'חשבון עסקה', 10: 'הצעת מחיר' };
+const legacyTypeNum = (s) => ({ 'חשבונית מס קבלה': 320, 'חשבונית מס-קבלה': 320, 'חשבונית מס': 305, 'קבלה': 400, 'חשבונית זיכוי': 330, 'זיכוי': 330, 'חשבון עסקה': 300, 'הצעת מחיר': 10 })[_lgNorm(s)] || null;
+
+function renderLegacyPreview(fileName) {
+  const box = document.getElementById('legacyBox'), st = document.getElementById('legacyStatus');
+  if (!box) return;
+  const rows = _legacyRows;
+  const bad = rows.filter(r => !legacyTypeNum(r.type));
+  const byType = {};
+  for (const r of rows) { const t = legacyTypeNum(r.type); const k = t ? (LEGACY_TYPE_HE[t] || t) : 'לא מזוהה'; byType[k] = (byType[k] || 0) + 1; }
+  const total = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const open = rows.filter(r => !/סגור|שולם|נסגר/.test(r.status || '')).length;
+  if (st) st.innerHTML = `<b>${rows.length}</b> מסמכים בקובץ ${escapeHtml(fileName)} · סה״כ ${money(total)} · ${open} פתוחים`
+    + (bad.length ? ` · <span style="color:var(--danger)">${bad.length} בסוג שאינו מזוהה — ידולגו</span>` : '');
+  box.innerHTML = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${
+      Object.entries(byType).map(([k, n]) => `<span class="tag" style="font-size:11.5px">${escapeHtml(k)}: ${n}</span>`).join('')}</div>
+    <div style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:10px">
+      <table class="cardify" style="width:100%;font-size:12px">
+        <thead><tr><th>מספר</th><th>סוג</th><th>לקוח</th><th>תאריך</th><th>סטטוס</th><th>סכום</th></tr></thead>
+        <tbody>${rows.slice(0, 300).map(r => { const t = legacyTypeNum(r.type); return `<tr${t ? '' : ' style="background:rgba(225,29,72,.08)"'}>
+          <td>${escapeHtml(r.number)}</td><td>${escapeHtml(t ? (LEGACY_TYPE_HE[t] || r.type) : r.type + ' ⚠')}</td>
+          <td>${escapeHtml(r.clientName || '—')}</td><td>${escapeHtml(r.date)}</td>
+          <td>${escapeHtml(r.status || '')}</td><td style="white-space:nowrap">${r.amount ? money(Number(r.amount)) : '—'}</td></tr>`; }).join('')}</tbody>
+      </table></div>
+    ${rows.length > 300 ? `<div class="muted" style="font-size:11.5px;margin-top:4px">מוצגות 300 הראשונות · ייובאו כל ${rows.length}</div>` : ''}
+    <div class="modal-actions" style="margin-top:12px">
+      <button class="btn ghost" onclick="document.getElementById('legacyModal').classList.add('hidden')">ביטול</button>
+      <button class="btn success" onclick="runLegacyImport(this)">✓ ייבא ${rows.length - bad.length} מסמכים</button>
+    </div>
+    <div id="legacyResult" style="font-size:13px;margin-top:8px"></div>`;
+}
+
+window.runLegacyImport = async (btn) => {
+  if (!_legacyRows.length) return;
+  const out = document.getElementById('legacyResult');
+  if (btn) { btn.disabled = true; btn.textContent = 'מייבא…'; }
+  const r = await fetch('/api/legacy-import', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ companyId: state.company, source: 'הכוורת', rows: _legacyRows }) })
+    .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) { btn.disabled = false; btn.textContent = '✓ ייבא'; }
+  if (!r || r.error) { if (out) out.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || 'הייבוא נכשל'))}</span>`; return; }
+  const errs = (r.errors || []).length ? `<div style="color:var(--danger);margin-top:4px">${r.errors.map(e => escapeHtml(`#${e.number || '?'}: ${e.reason}`)).join(' · ')}</div>` : '';
+  if (out) out.innerHTML = `<span style="color:var(--accent2)">✓ יובאו ${r.created} מסמכים${r.skipped ? ` · ${r.skipped} כבר היו במערכת` : ''}</span>${errs}`;
+  clearApiCache();
+  if (typeof loadOpenInvoices === 'function') loadOpenInvoices();
+};
+
 window.openBulkOldInvoices = async () => {
   if (!_evClients) { try { _evClients = await api('/api/clients'); } catch { _evClients = []; } }
   const clientNames = [...new Set([...(_evClients || []).map(c => c.name), ...(_openInvClients || [])].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he'));
