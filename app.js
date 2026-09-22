@@ -10593,7 +10593,7 @@ window.openLinkModal = async (txId) => {
   m.innerHTML = `<div class="modal-card" style="width:min(700px,95vw);max-height:88vh;max-height:88dvh;overflow:auto">
     <h3>שיוך ידני של מסמך${tx ? ` — ${tx.date} · ${money(tx.absAmount)}${tx.direction === 'debit' ? ' (חובה)' : ' (זכות)'}` : ''}</h3>
     <div style="margin:8px 0;padding:8px 10px;background:var(--panel2);border-radius:10px"><b style="font-size:13px">מקושר כרגע:</b><div id="linkSelBox" style="margin-top:4px">${linkSelHtml()}</div></div>
-    <div style="display:flex;gap:6px;margin:6px 0">${seg('clients', '🏢 לקוחות')}${seg('suppliers', '🏭 ספקים')}</div>
+    <div style="display:flex;gap:6px;margin:6px 0;flex-wrap:wrap">${seg('clients', '🏢 לקוחות')}${seg('suppliers', '🏭 ספקים')}${seg('local', '📥 מסמכים שהועלו')}</div>
     ${(tx && tx.direction === 'debit') ? `<div style="margin:8px 0;padding:10px 12px;border:1.5px dashed var(--accent);border-radius:12px;background:var(--panel2)">
       <div style="font-size:13px;font-weight:700;margin-bottom:5px">➕ אין חשבונית במערכת? העלה אותה כאן</div>
       <div class="muted" style="font-size:12px;margin-bottom:8px">גרור או בחר את קובץ החשבונית — המערכת תזהה אוטומטית (OCR) את הספק והסכום, תפתח את טופס אישור ההוצאה, וברגע שתאשר — ההוצאה תיווצר בחשבונית ירוקה ותשויך אוטומטית לתנועה זו.</div>
@@ -10682,9 +10682,11 @@ async function ensureLinkPool() {
 window.setLinkMode = async (mode) => {
   if (_linkMode === mode) return;
   _linkMode = mode; _linkClientDocs = []; _linkClientName = '';
-  ['clients', 'suppliers'].forEach(mo => { const b = document.getElementById('linkSeg-' + mo); if (b) b.className = 'btn ' + (mo === mode ? 'primary' : 'ghost'); });
+  ['clients', 'suppliers', 'local'].forEach(mo => { const b = document.getElementById('linkSeg-' + mo); if (b) b.className = 'btn ' + (mo === mode ? 'primary' : 'ghost'); });
   const cw = document.getElementById('linkCreditsWrap'); if (cw) cw.style.display = mode === 'clients' ? 'flex' : 'none';
   const dbox = document.getElementById('linkDocs'); if (dbox) dbox.innerHTML = '';
+  // מסמכים שהועלו/יובאו — אינם תלויים בלקוח מחשבונית ירוקה, ולכן נטענים ישירות
+  if (mode === 'local') { await loadLocalLinkDocs(); return; }
   await ensureLinkPool();
   renderLinkContacts(_linkQuery);
 };
@@ -10693,6 +10695,12 @@ window.toggleLinkInclUsed = (v) => { _linkInclUsed = !!v; renderLinkContacts(_li
 // חיפוש: מסנן את רשימת הלקוחות/ספקים לפי שם, ובמקביל מחפש מסמכים לפי מספר/תיאור
 window.onLinkSearch = (q) => {
   _linkQuery = q || '';
+  // במסמכים שהועלו החיפוש רץ בשרת על כל הרשימה, ולא מסנן רשימת לקוחות
+  if (_linkMode === 'local') {
+    clearTimeout(_linkNumTimer);
+    _linkNumTimer = setTimeout(() => loadLocalLinkDocs(), 280);
+    return;
+  }
   renderLinkContacts(_linkQuery);
   if (_linkClientDocs.length) renderLinkDocs();
   clearTimeout(_linkNumTimer);
@@ -10750,6 +10758,25 @@ window.linkPickContact = async (id, name) => {
   _linkClientName = decodeURIComponent(name);
   renderLinkDocs();
 };
+// מסמכים שהועלו או יובאו למערכת — נטענים ישירות, בלי לבחור לקוח מחשבונית ירוקה.
+// זה המסלול היחיד שמגיע למסמכים שיובאו ממערכת קודמת: הלקוחות שלהם אינם קיימים
+// בחשבונית ירוקה, ולכן הבורר הרגיל לא יכול היה להציג אותם בכלל.
+window.loadLocalLinkDocs = async () => {
+  const box = document.getElementById('linkDocs');
+  if (box) box.innerHTML = '<div class="empty">טוען מסמכים…</div>';
+  const cbox = document.getElementById('linkClients'); if (cbox) cbox.innerHTML = '';
+  const q = (_linkQuery || '').trim();
+  const r = await api(`/api/local-documents${q ? `?q=${encodeURIComponent(q)}` : ''}`).catch(() => null);
+  _linkDocsKind = 'income';
+  _linkClientDocs = (r && r.documents) || [];
+  _linkClientName = 'מסמכים שהועלו';
+  if (!_linkClientDocs.length && box) {
+    box.innerHTML = `<div class="empty">אין מסמכים שהועלו לעסק הזה${q ? ' שתואמים לחיפוש' : ''}.</div>`;
+    return;
+  }
+  renderLinkDocs();
+};
+
 // מסמכים שכבר משויכים לתנועות אחרות (כדי לא להציע אותם שוב)
 function linkedDocIds() {
   const ids = new Set(), recs = new Set(), used = new Set();

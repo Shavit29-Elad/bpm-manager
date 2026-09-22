@@ -2084,6 +2084,35 @@ check('לוח האירועים — לחברות הלוח בלבד, מרשימה 
   return true;
 });
 
+// מסמך שיובא ממערכת קודמת היה בלתי נגיש לשיוך בבנק: הבורר דורש לבחור לקוח
+// מחשבונית ירוקה, והלקוחות של מסמכים מיובאים אינם קיימים שם.
+check('שיוך בבנק — מסמכים שהועלו נגישים בלי לקוח מחשבונית ירוקה', () => {
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const route = srv.slice(srv.indexOf("add('GET', /^\\/api\\/local-documents$/"), srv.indexOf("// GET /api/clients —"));
+  if (!route) throw new Error('ראוט המסמכים המקומיים לא נמצא');
+  if (!/reqCompany\(q\)/.test(route)) throw new Error('הראוט אינו נגזר מ-reqCompany');
+  if ((route.match(/ownedBy\(/g) || []).length < 2) throw new Error('אין בידוד חברה על אירועים ועל חשבוניות ישנות');
+  if (!/db\.oldInvoices/.test(route) || !/db\.events/.test(route)) throw new Error('לא נאספים שני המקורות');
+  if (!/d\.noFile \? null/.test(route)) throw new Error('נבנית כתובת קובץ למסמך בלי קובץ');
+
+  // הדלף שתוקן אגב: הבורר לפי לקוח הציע מסמכים של חברות אחרות
+  const byClient = srv.slice(srv.indexOf("add('GET', /^\\/api\\/clients\\/([^/]+)\\/documents$/"), srv.indexOf("add('GET', /^\\/api\\/local-documents$/") + 1 || srv.length);
+  const loops = srv.slice(srv.indexOf('const push = (d, clientName) => {'), srv.indexOf('const push = (d, clientName) => {') + 1200);
+  if (!/ownedBy\(e, _cid\)/.test(loops) || !/ownedBy\(rec, _cid\)/.test(loops))
+    throw new Error('בורר המסמכים לפי לקוח אינו מסנן לפי חברה');
+
+  // הפרונט: מצב שלישי בבורר, שנטען ישירות ולא דרך בחירת לקוח
+  if (!/seg\('local', '📥 מסמכים שהועלו'\)/.test(app)) throw new Error('אין כפתור למסמכים שהועלו');
+  if (!/if \(mode === 'local'\) \{ await loadLocalLinkDocs\(\); return; \}/.test(app))
+    throw new Error('המצב אינו נטען ישירות');
+  const fn = app.slice(app.indexOf('window.loadLocalLinkDocs'), app.indexOf('// מסמכים שכבר משויכים'));
+  if (!/\/api\/local-documents\$\{q \? `\?q=/.test(fn)) throw new Error('החיפוש נשלח בפרמטר שגוי');
+  if (!/אין מסמכים שהועלו/.test(fn)) throw new Error('אין הודעה כשאין מסמכים');
+  if (!/_linkMode === 'local'/.test(app.slice(app.indexOf('window.onLinkSearch'), app.indexOf('window.onLinkSearch') + 500)))
+    throw new Error('החיפוש אינו מרענן את רשימת המסמכים במצב הזה');
+  return true;
+});
+
 // כסף שהגיע ממט"ח לעולם לא יהיה זהה לסכום שבחשבונית, ולכן לא הוצע כהתאמה כלל.
 // ההשוואה היא בין השער המשתמע מהחשבונית לשער שהבנק כתב — מדויק ומוסבר.
 check('התאמת בנק — מט״ח: השוואת שערים, ורק לחברות שמקבלות מחו״ל', async () => {

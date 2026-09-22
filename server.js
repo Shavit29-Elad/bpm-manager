@@ -6950,6 +6950,38 @@ add('GET', /^\/api\/client-bank$/, (req, res, _p, q) => {
   json(res, { ok: true, bank: hit || null });
 });
 
+// GET /api/local-documents?q= — מסמכים שהועלו/יובאו למערכת, בלי תלות בחשבונית ירוקה.
+// בלעדיו מסמך מיובא היה בלתי נגיש לשיוך בבנק: הבורר דורש לבחור לקוח מחשבונית
+// ירוקה, והלקוחות של מסמכים שיובאו ממערכת קודמת אינם קיימים שם.
+add('GET', /^\/api\/local-documents$/, (req, res, _p, q) => {
+  const cid = reqCompany(q), db = load();
+  const term = String(q.q || '').trim().toLowerCase();
+  const out = [];
+  const seen = new Set();
+  const push = (d, clientName, src) => {
+    if (!d || !d.uploaded || d.credited || d.credit) return;
+    const key = (d.number != null ? d.number : d.id) + '|' + Number(d.type);
+    if (seen.has(key)) return; seen.add(key);
+    out.push({ id: d.id, number: d.number ?? null, type: Number(d.type) || null, date: d.date || null,
+      amount: d.amount != null ? Number(d.amount) : null,
+      amountDue: d.amount != null ? Number(d.amount) : null,
+      url: d.url || (d.noFile ? null : '/api/files/' + d.id),
+      status: 0, uploaded: true, noFile: !!d.noFile, closed: !!d.closed,
+      clientName: clientName || '—', source: src });
+  };
+  for (const rec of (db.oldInvoices || [])) {
+    if (!ownedBy(rec, cid)) continue;                  // בידוד — נעדר מהמסלול הישן
+    for (const d of (rec.linkedDocs || [])) push(d, rec.clientName || '—', rec.legacySource || 'הועלה');
+  }
+  for (const ev of (db.events || [])) {
+    if (!ownedBy(ev, cid)) continue;
+    for (const d of (ev.linkedDocs || [])) push(d, ev.clientName || '—', 'אירוע');
+  }
+  const hit = (x) => !term || [x.number, x.clientName, x.date].some(v => String(v || '').toLowerCase().includes(term));
+  const list = out.filter(hit).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  json(res, { total: out.length, shown: list.length, documents: list.slice(0, 300) });
+});
+
 // GET /api/clients — רשימת לקוחות (fresh=1 מרענן מחשבונית ירוקה)
 add('GET', /^\/api\/clients$/, async (req, res, _p, q) => {
   if (q.fresh) greenInvoice.clearDataCache();
@@ -6957,7 +6989,7 @@ add('GET', /^\/api\/clients$/, async (req, res, _p, q) => {
 });
 
 // GET /api/clients/:id/documents — כל המסמכים של לקוח (כולל מסמכים ישנים שהועלו ידנית — לשיוך בבנק/אירועים)
-add('GET', /^\/api\/clients\/([^/]+)\/documents$/, async (req, res, params) => {
+add('GET', /^\/api\/clients\/([^/]+)\/documents$/, async (req, res, params, q) => {
   try {
     const docs = (await greenInvoice.clientDocuments(params[0]) || []).slice(); // שכפול — לא לגעת במטמון
     try {
@@ -6976,8 +7008,10 @@ add('GET', /^\/api\/clients\/([^/]+)\/documents$/, async (req, res, params) => {
           if (seen.has(key)) return; seen.add(key);
           docs.push({ id: d.id, number: d.number || null, type: Number(d.type), date: d.date || null, amount: d.amount != null ? Number(d.amount) : null, amountDue: d.amount != null ? Number(d.amount) : null, url: d.url || (d.noFile ? null : '/api/files/' + d.id), status: 0, uploaded: true, noFile: !!d.noFile, clientName });
         };
-        for (const e of (db.events || [])) { if (!match(e.clientName || e.client || '')) continue; for (const d of (e.linkedDocs || [])) if (d && d.uploaded) push(d, e.clientName || nm); }
-        for (const rec of (db.oldInvoices || [])) { if (!match(rec.clientName || '')) continue; for (const d of (rec.linkedDocs || [])) if (d && d.uploaded) push(d, rec.clientName || nm); }
+        // בידוד חברה: בלעדיו מסמך שהועלה בחברה אחרת הוצע לשיוך כאן
+        const _cid = reqCompany(q);
+        for (const e of (db.events || [])) { if (!ownedBy(e, _cid) || !match(e.clientName || e.client || '')) continue; for (const d of (e.linkedDocs || [])) if (d && d.uploaded) push(d, e.clientName || nm); }
+        for (const rec of (db.oldInvoices || [])) { if (!ownedBy(rec, _cid) || !match(rec.clientName || '')) continue; for (const d of (rec.linkedDocs || [])) if (d && d.uploaded) push(d, rec.clientName || nm); }
       }
     } catch {}
     json(res, docs);
