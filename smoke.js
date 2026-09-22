@@ -2084,6 +2084,27 @@ check('לוח האירועים — לחברות הלוח בלבד, מרשימה 
   return true;
 });
 
+// שורה ששויכה מפסיקה להיות "לא מותאמת" ויוצאת מהמסנן — וזה נראה כאילו התנועה
+// נמחקה. ההודעה היא ההבדל בין "נעלם לי כסף" לבין "עבר למותאמות".
+check('התאמת בנק — שורה שיצאה מהתצוגה אחרי שיוך מוסברת ולא נעלמת בשקט', () => {
+  if (!/id="bankNotice"/.test(app)) throw new Error('אין מקום להודעה מעל הטבלה');
+  const fn = app.slice(app.indexOf('window.bankNoticeIfHidden'), app.indexOf('window.bankShowTx'));
+  if (!fn) throw new Error('bankNoticeIfHidden לא נמצאה');
+  if (!/bankVisibleRows\(\)\.some\(x => x\.id === id\)/.test(fn))
+    throw new Error('ההודעה אינה נגזרת מהשאלה אם השורה באמת נעלמה מהתצוגה');
+  if (!/לא נמחקה/.test(fn)) throw new Error('ההודעה אינה אומרת במפורש שהתנועה קיימת');
+  // שני מסלולי השיוך מפעילים אותה — הכפתור בשורה, והחלונית
+  if ((app.match(/bankNoticeIfHidden\(/g) || []).length < 2)
+    throw new Error('לא כל מסלולי השיוך מודיעים על היעלמות');
+  // המעבר לשורה מנקה את כל המסננים, אחרת "הצג אותה" לא יראה כלום
+  const show = app.slice(app.indexOf('window.bankShowTx'), app.indexOf('window.bankShowTx') + 800);
+  for (const f of ['bankFilter', 'bankPer', 'bankSearch']) {
+    if (!show.includes(f)) throw new Error('המעבר אינו מנקה את המסנן: ' + f);
+  }
+  if (!/btr-/.test(show)) throw new Error('השורה אינה מאותרת לפי המזהה שלה');
+  return true;
+});
+
 // ייבוא רשימת המסמכים מהמערכת הקודמת. שגיאת מיפוי כאן מכניסה היסטוריה שגויה
 // שתיראה אמיתית בדוחות ובהתאמות הבנק, ולכן כל מיפוי נבדק בפועל.
 check('ייבוא ממערכת קודמת — סוגים, תאריכים, סגור/פתוח וכפילויות', () => {

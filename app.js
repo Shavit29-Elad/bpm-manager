@@ -2221,7 +2221,7 @@ async function linkDocToBankTx(txId, entry, sourceId, sourceDoc) {
   }
   const r = await fetch(`/api/bank/${txId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchStatus: 'manual', matchedInvoices: matched }) }).then(x => x.json()).catch(() => null);
   if (r && r.error) { alert(r.error); return; }
-  if (r && r.tx) { const i = _bankList.findIndex(t => t.id === txId); if (i >= 0) _bankList[i] = r.tx; renderBankBody(); }
+  if (r && r.tx) { const i = _bankList.findIndex(t => t.id === txId); if (i >= 0) _bankList[i] = r.tx; renderBankBody(); bankNoticeIfHidden(txId); }
 }
 
 // ============ סימון טופל (סגירה) / פתיחה מחדש ============
@@ -10212,8 +10212,39 @@ async function bankAction(id, body) {
   }
   if (r && r.covered === false) { alert(`המסמכים המשויכים מכסים ₪${money(r.matchedSum)} מתוך ₪${money(r.bankAmount)} — חסר ₪${money(r.shortfall)}.\nהשורה נשארת לא מתואמת עד שהסכום המלא מכוסה (או שההעברה = הסכום פחות 5% ניכוי מס). שייך מסמכים נוספים דרך "שייך מסמכים".`); return; }
   const tx = r && r.tx;
-  if (tx) { const i = _bankList.findIndex(t => t.id === id); if (i >= 0) _bankList[i] = tx; renderBankBody(); }
+  if (tx) { const i = _bankList.findIndex(t => t.id === id); if (i >= 0) _bankList[i] = tx; renderBankBody(); bankNoticeIfHidden(id); }
 }
+
+// שורה ששויכה מפסיקה להיות "לא מותאמת", ולכן נעלמת מיד מהמסנן הזה — וזה נראה
+// בדיוק כאילו התנועה נמחקה. כאן אומרים מה קרה ומציעים לעבור אליה.
+window.bankNoticeIfHidden = (id) => {
+  const t = (_bankList || []).find(x => x.id === id);
+  if (!t) return;
+  if (bankVisibleRows().some(x => x.id === id)) return;   // עדיין על המסך — אין מה להסביר
+  const el = document.getElementById('bankNotice');
+  if (!el) return;
+  el.innerHTML = `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:rgba(14,164,114,.12);border:1px solid rgba(14,164,114,.35);border-radius:10px;padding:8px 12px;font-size:12.5px">
+    <span>✓ התנועה ${escapeHtml(ddmy(t.date))} · ${escapeHtml(money(t.absAmount))} שויכה — ולכן ירדה מהתצוגה הנוכחית. <b>היא לא נמחקה.</b></span>
+    <button class="btn ghost" style="padding:2px 10px;font-size:11.5px" onclick="bankShowTx('${escAttr(id)}')">הצג אותה</button>
+    <button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="document.getElementById('bankNotice').innerHTML=''">✕</button></div>`;
+};
+// מעבר לתצוגה שבה השורה נראית, וסימון שלה
+window.bankShowTx = (id) => {
+  const el = document.getElementById('bankNotice'); if (el) el.innerHTML = '';
+  state.bankFilter = 'all';
+  state.bankPer = { mode: 'all' };          // גם התקופה — אחרת השורה עדיין לא תיראה
+  state.bankSearch = {};
+  renderBank($('#content'));
+  setTimeout(() => {
+    const row = document.getElementById('btr-' + id);
+    if (!row) return;
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const old = row.style.background;
+    row.style.transition = 'background .4s';
+    row.style.background = 'rgba(67,56,202,.18)';
+    setTimeout(() => { row.style.background = old; }, 1800);
+  }, 400);
+};
 // ---- קבוצות שיוך (מוזיקה/דיגיטל/…) — אך ורק אצל משה כורסיה ----
 let _txGroups = [];
 // קבוצות שיוך + סיכום עסק — זמינים לכל החברות. קבוצות מוגדרות פר-חברה בפרטי העסק.
@@ -10295,7 +10326,7 @@ async function renderBank(c, soft) {
   const bs = state.bankSort || { key: 'date', dir: 'desc' };
   const th = (key, label) => { const on = bs.key === key; const arw = on ? (bs.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'; return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="setBankSort('${key}')">${label}<span class="muted" style="font-size:11px">${arw}</span></th>`; };
   const p = (label) => `<th style="white-space:nowrap">${label}</th>`;
-  const table = rows.length ? `<div style="overflow-x:auto;margin-top:14px"><table class="cardify" style="width:100%;min-width:${mosheBank() ? 1040 : 960}px;font-size:13px">
+  const table = rows.length ? `<div id="bankNotice" style="margin-top:10px"></div><div style="overflow-x:auto;margin-top:14px"><table class="cardify" style="width:100%;min-width:${mosheBank() ? 1040 : 960}px;font-size:13px">
     <thead><tr>
       ${th('date', 'תאריך')}${th('amount', 'סכום בבנק')}${p('סכום חשבונית')}${p('ניכוי במקור')}${th('name', 'שם עסק')}
       ${p('חשבונית מס / מס-קבלה')}${p(dir === 'debit' ? 'תיאור החשבונית' : 'קבלה')}${mosheBank() ? p('קבוצה') : ''}${p('הערות')}${p('אישור')}
