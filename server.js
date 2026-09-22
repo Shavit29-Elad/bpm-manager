@@ -1402,11 +1402,25 @@ add('GET', /^\/api\/bank\/diag$/, (req, res, _p, q) => {
     hiddenFrom: [t.direction !== 'credit' ? 'רק זכות' : null,
       t.matchStatus !== 'unmatched' ? 'לא מותאמות' : null].filter(Boolean),
   });
+  // חיפוש לפי מספר מסמך: "שייכתי מסמך ואני לא מוצא לאיזו שורה" — השאלה השכיחה
+  // יותר מ"איפה התנועה", כי הסכום שמחפשים הוא לרוב של המסמך ולא של התנועה.
+  const docNum = String(q.doc || '').trim();
+  const byDoc = docNum
+    ? mine.filter(t => (t.matchedInvoices || []).some(m => String(m.number || '').trim() === docNum)).map(show)
+    : null;
+  // כשאין התאמה מדויקת — מה הכי קרוב, כדי לראות מיד אם חיפשת סכום של מסמך
+  const closest = !isNaN(want)
+    ? mine.map(t => ({ d: Math.abs((Number(t.absAmount) || 0) - Math.abs(want)), t }))
+      .sort((a, b) => a.d - b.d).slice(0, 5)
+      .map(x => ({ ...show(x.t), diffFromSearched: Math.round(x.d * 100) / 100 }))
+    : null;
   json(res, {
     companyId: cid,
     totalInCompany: mine.length,
     totalAllCompanies: all.length,
     matches: mine.filter(hit).map(show),
+    ...(byDoc ? { documentMatchedTo: byDoc } : {}),
+    ...(closest && !mine.filter(hit).length ? { closestAmounts: closest } : {}),
     // אותו סכום בחברה אחרת — הסיבה השכיחה ל"נעלם": הקובץ יובא כשעסק אחר היה פעיל
     inOtherCompanies: all.filter(t => !ownedBy(t, cid) && hit(t))
       .map(t => ({ ...show(t), companyId: t.companyId || '(ללא)' })),
