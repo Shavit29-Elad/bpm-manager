@@ -1982,12 +1982,84 @@ check('לוח האירועים — עריכה אינה מוחקת מעקב תש�
   if (!boardMod.normalizeRows([{ role: 'בסיסט', name: '', priceExVat: null, note: 'בהמתנה' }]).length) throw new Error('הערה בלבד לא נשמרה');
   return true;
 });
-check('לוח האירועים — מוצג למשה בלבד', () => {
+// בנק לאומי מייצא HTML עם סיומת xls, כמו מזרחי, אבל במבנה עמודות אחר: שתי
+// עמודות מקדימות (סניף, חשבון), תאריך ב-2, חובה/זכות ב-5/6. הפרסר של מזרחי
+// החזיר עליו רשימה ריקה — הקובץ פשוט "לא נקלט".
+check('בנק לאומי — פרסור תנועות, כיוונים ויתרה', async () => {
+  const bank = await import('./bankParser.js');
+  const row = (c) => '<tr>' + c.map(x => `<td>${x}</td>`).join('') + '</tr>';
+  const html = `<html><body><table>
+    ${row(['בנק לאומי | תאריך שמירה/הדפסה: 22/9/2026'])}
+    ${row(['תנועות עו"ש שקלים  נכון לתאריך: 22.09.2026'])}
+    ${row(['יתרה: 20,980.42 ₪'])}
+    ${row(['680', '47458/32', '15/09/2026', 'מקס איט פיננ-י', '34685', '1,624.29', '', '20,980.42', '', ''])}
+    ${row(['680', '47458/32', '14/09/2026', 'העברה דיגיטל', '13148', '2,832', '', '22,604.71', 'העברה אל: גניפר חלמי 11-526-164133153 תשלום', ''])}
+    ${row(['680', '47458/32', '09/09/2026', 'זיכוי', '77001', '', '20,844', '43,448.71', 'העברה מאת: גניש אלי,גניש צי 11-090-121012370 אירוע', ''])}
+    ${row(['680', '47458/32', '08/09/2026', 'שורה בלי סכום', '1', '', '', '43,448.71', '', ''])}
+  </table></body></html>`;
+
+  const t = bank.parseBank(html);
+  if (t.length !== 3) throw new Error('מספר תנועות שגוי: ' + t.length);
+  // כיוונים: חובה שלילי, זכות חיובי — אחרת כל ההתאמות וסיכומי ההכנסה יתהפכו
+  const debit = t.find(x => x.reference === '34685');
+  if (debit.amount !== -1624.29 || debit.direction !== 'debit') throw new Error('חובה לא נקראה כיוצאת');
+  if (debit.balance !== 20980.42) throw new Error('יתרת השורה שגויה');
+  if (debit.date !== '15/09/2026') throw new Error('תאריך שגוי: ' + debit.date);
+  const credit = t.find(x => x.reference === '77001');
+  if (credit.amount !== 20844 || credit.direction !== 'credit') throw new Error('זכות לא נקראה כנכנסת');
+  // שם הצד השני מעמודת הפרטים — בלעדיו אין התאמה ללקוח/ספק
+  if (credit.nameHint !== 'גניש אלי,גניש צי') throw new Error('שם המעביר לא חולץ: ' + credit.nameHint);
+  const out = t.find(x => x.reference === '13148');
+  if (out.nameHint !== 'גניפר חלמי') throw new Error('שם המוטב לא חולץ: ' + out.nameHint);
+  // שורה בלי סכום אינה הופכת לתנועה על אפס
+  if (t.some(x => !(x.absAmount > 0))) throw new Error('נוצרה תנועה בלי סכום');
+
+  const bal = bank.extractAccountBalance(html);
+  if (!bal || bal.balance !== 20980.42) throw new Error('יתרת החשבון לא זוהתה');
+  if (bal.date !== '22/09/2026') throw new Error('תאריך היתרה שגוי: ' + bal.date);
+
+  // המבנה של מזרחי ממשיך לעבוד — התאריך אצלו בעמודה 0
+  const miz = bank.parseBank(`<table>${row(['05/01/2026', '1234', 'העברה', '5,000', '', '10,000', '999'])}</table>`);
+  if (miz.length !== 1 || miz[0].direction !== 'credit' || miz[0].amount !== 5000)
+    throw new Error('פורמט מזרחי נשבר: ' + JSON.stringify(miz[0] || null));
+  return true;
+});
+
+// לוח האירועים מוצג לחברות שמוגדרות ככאלה (משה, טל) ומוסתר לשאר. הרשימה היא
+// מקור אמת אחד — פיזור של מזהי חברה בקוד הוא מה שהופך הוספת חברה לסיכון.
+check('לוח האירועים — לחברות הלוח בלבד, מרשימה אחת', () => {
+  const list = app.match(/const BOARD_COMPANIES = \[([^\]]*)\]/);
+  if (!list) throw new Error('BOARD_COMPANIES לא נמצאה');
+  const ids = list[1].split(',').map(s => s.trim().replace(/['"]/g, '')).filter(Boolean);
+  for (const id of ['co_moshe', 'co_tal']) if (!ids.includes(id)) throw new Error('חסרה חברת לוח: ' + id);
+
   const fn = app.slice(app.indexOf('function companyTabsFor'), app.indexOf('const currentCompanyName'));
-  if (!/k === 'eventsboard'.*isMoshe/s.test(fn)) throw new Error('הלשונית אינה מוגבלת למשה');
+  if (!/k === 'eventsboard'.*isBoard/s.test(fn)) throw new Error('הלשונית אינה נגזרת מרשימת חברות הלוח');
+  if (!/\['events', 'payroll'\].*!isBoard/s.test(fn)) throw new Error('אירועים/עובדים אינם מוסתרים בחברות הלוח');
   const apply = app.slice(app.indexOf('function applyCompanyTabs'), app.indexOf('// ---- ניהול משתמשים'));
-  if (!/data-tab="eventsboard".*isMoshe/s.test(apply)) throw new Error('הלשונית אינה מוסתרת לשאר החברות');
+  if (!/data-tab="eventsboard".*isBoard/s.test(apply)) throw new Error('הלשונית אינה מוסתרת לשאר החברות');
   if (!/state\.tab === 'eventsboard'/.test(apply)) throw new Error('מעבר חברה משאיר את המשתמש בלשונית שאינה שלו');
+  // אין מזהה חברה מקובע מחוץ לשתי הרשימות
+  const stray = [...app.matchAll(/co_moshe|co_tal/g)].length;
+  if (stray > 3) throw new Error('מזהה חברה מקובע פזור בקוד: ' + stray);
+
+  // פיצול מוזיקה/דיגיטל — משה בלבד; אצל טל אין חלוקה כזו
+  const split = app.match(/const GROUP_SPLIT_COMPANIES = \[([^\]]*)\]/);
+  if (!split) throw new Error('GROUP_SPLIT_COMPANIES לא נמצאה');
+  if (/co_tal/.test(split[1])) throw new Error('טל נכללה בפיצול מוזיקה/דיגיטל');
+  if (!/GROUP_SPLIT_COMPANIES\.includes\(state\.company\)/.test(app)) throw new Error('דף הבית אינו נגזר מהרשימה');
+
+  // בשרת: החברה קיימת, מקבלת מפתחות GI משלה, וקבוצות הכנסה/הוצאה רגילות
+  const srv = fs.readFileSync('server.js', 'utf8');
+  if (!/id: 'co_tal'/.test(srv)) throw new Error('החברה אינה ב-COMPANY_SEED');
+  if (!/ensureCompaniesSeeded\(db\)/.test(srv)) throw new Error('אין מיגרציה שמוסיפה חברה למסד קיים');
+  if (!/INCEXP_GROUP_COMPANIES = \['co_bpm', 'co_ofek', 'co_tal'\]/.test(srv))
+    throw new Error('טל אינה מקבלת קבוצות הכנסה/הוצאה רגילות');
+  const groups = srv.slice(srv.indexOf('function ensureGroupsSeeded'), srv.indexOf('function ensureRulesSeeded'));
+  if (/co_tal/.test(groups.slice(0, groups.indexOf('INCEXP_GROUP_COMPANIES') + 1)) && /MOSHE_DEFAULT_GROUPS/.test(groups.split('co_tal')[0] || ''))
+    throw new Error('טל קיבלה את קבוצות הפיצול של משה');
+  const gi = fs.readFileSync('greenInvoice.js', 'utf8');
+  if (!/co_tal:\s*\['GREENINVOICE_TAL_API_KEY_ID'/.test(gi)) throw new Error('אין מיפוי מפתחות לחברה החדשה');
   return true;
 });
 

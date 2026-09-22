@@ -143,6 +143,54 @@ export function parseMizrahiExcel(htmlText) {
   return txns;
 }
 
+// ----- "אקסל" של בנק לאומי (גם הוא טבלת HTML עם סיומת xls) -----
+// המבנה שונה ממזרחי ולכן הפרסר שלו החזיר רשימה ריקה: אצל מזרחי התאריך בעמודה 0
+// וזכות/חובה ב-3/4; אצל לאומי שתי עמודות מקדימות (סניף, חשבון), התאריך ב-2,
+// וחובה/זכות ב-5/6. שם הצד השני יושב בעמודה 8 ("העברה אל: ..." / "העברה מאת: ...")
+// והוא מה שמאפשר להתאים תנועה ללקוח או לספק.
+const LEUMI_COLS = { branch: 0, account: 1, date: 2, desc: 3, ref: 4, debit: 5, credit: 6, balance: 7, memo: 8 };
+function isLeumiHtml(text) {
+  return /בנק\s*לאומי/.test(text) || /תנועות\s*עו["'׳]?ש/.test(text);
+}
+export function parseLeumiExcel(htmlText) {
+  const rows = [...String(htmlText).matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map(m => m[1]);
+  const txns = [];
+  for (const r of rows) {
+    const c = [...r.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(m => decodeCell(m[1]));
+    if (c.length < 8) continue;
+    if (!/^\d{2}\/\d{2}\/\d{2,4}$/.test(c[LEUMI_COLS.date] || '')) continue;   // שורת נתונים בלבד
+    const debit = parseAmt(c[LEUMI_COLS.debit]);
+    const credit = parseAmt(c[LEUMI_COLS.credit]);
+    let amount = null, direction = null;
+    if (credit) { amount = Math.abs(credit); direction = 'credit'; }
+    else if (debit) { amount = -Math.abs(debit); direction = 'debit'; }
+    else continue;                                                             // שורה בלי סכום
+    const description = clean(c[LEUMI_COLS.desc] || '');
+    const memo = clean(c[LEUMI_COLS.memo] || '');
+    const fullText = `${description} | ${memo}`;
+    const t = {
+      date: normDate(c[LEUMI_COLS.date]), description, amount, absAmount: Math.abs(amount), direction,
+      balance: parseAmt(c[LEUMI_COLS.balance]),
+      reference: (c[LEUMI_COLS.ref] || '').replace(/\D/g, '') || null,
+      memo,
+    };
+    t.invoiceNumber = extractInvoiceNumber(fullText);
+    t.counterparty = leumiCounterparty(memo) || extractCounterparty(fullText);
+    t.nameHint = nameHintFrom(t.counterparty, description);
+    txns.push(t);
+  }
+  return txns;
+}
+// לאומי כותב את הצד השני בעמודת הפרטים: "העברה אל: <שם> <מספר חשבון> תשלום",
+// "העברה מאת: <שם> <מספר חשבון>". השם נקטע אצלם, ולכן נלקח כפי שהוא.
+function leumiCounterparty(memo) {
+  if (!memo) return null;
+  const m = memo.match(/העברה\s*(?:אל|מאת|ל|מ)\s*:\s*(.+?)(?:\s+\d[\d-]{4,}|\s*\||$)/);
+  if (!m) return null;
+  const name = clean(m[1]).replace(/\s+(תשלום|העברה|זיכוי)\s*$/, '').trim();
+  return name && name.length > 1 ? name : null;
+}
+
 // ============================================================================
 // פורמט "רשת" (grid) — קובץ xlsx אמיתי (למשל בנק דיסקונט). הדפדפן קורא את ה-xlsx
 // עם SheetJS וממיר למערך שורות (כל שורה = מערך תאים כמחרוזות), ושולח עם הסימן #BANKGRID#.
@@ -302,14 +350,19 @@ export function extractAccountBalance(text) {
   if (grid) return gridAccountBalance(grid);
   const flat = String(text || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(BIDI, '').replace(/\s+/g, ' ');
   // תומך בגרסאות שונות של הכותרת + מספר עם/בלי עשרוני ומינוס מוביל/נגרר
-  const m = flat.match(/(?:יתרה\s*(?:ב|ה)?חשבון|יתרה\s*משוערכת|היתרה\s*בחשבון)\s*:?\s*(-?[\d,]+(?:\.\d{1,2})?-?)/);
+  let m = flat.match(/(?:יתרה\s*(?:ב|ה)?חשבון|יתרה\s*משוערכת|היתרה\s*בחשבון)\s*:?\s*(-?[\d,]+(?:\.\d{1,2})?-?)/);
+  // לאומי כותב "יתרה: 20,980.42 ₪" בלבד. דורשים את סימן השקל שאחרי המספר, אחרת
+  // המילה "יתרה" בתוך שורת תנועה הייתה נתפסת כיתרת החשבון.
+  if (!m) m = flat.match(/יתרה\s*:?\s*(-?[\d,]+(?:\.\d{1,2})?-?)\s*(?:₪|ש["'׳]?ח)/);
   if (!m) return null;
   let raw = m[1].trim();
   const neg = raw.startsWith('-') || raw.endsWith('-');
   const balance = (neg ? -1 : 1) * parseFloat(raw.replace(/[^\d.]/g, ''));
   if (isNaN(balance)) return null;
-  const dm = flat.slice(m.index).match(/לתאריך\s*-?\s*(\d{2}\/\d{2}\/\d{2,4})(?:\s+(\d{2}:\d{2}))?/);
-  const date = dm ? normDate(dm[1]) : null;
+  // תאריך היתרה: אצל לאומי הוא מופיע *לפני* שורת היתרה ומופרד בנקודות
+  const dm = flat.slice(m.index).match(/לתאריך\s*-?\s*(\d{2}\/\d{2}\/\d{2,4})(?:\s+(\d{2}:\d{2}))?/)
+    || flat.match(/נכון\s*לתאריך\s*:?\s*(\d{2}[./]\d{2}[./]\d{2,4})/);
+  const date = dm ? normDate(String(dm[1]).replace(/\./g, '/')) : null;
   const time = dm && dm[2] ? dm[2] : null;
   return { balance, date, time };
 }
@@ -318,8 +371,15 @@ export function extractAccountBalance(text) {
 export function parseBank(text) {
   const grid = gridPayload(text);
   if (grid) return parseGridStatement(grid);
-  if (/<tr[\s>]/i.test(text) || /<table/i.test(text)) return parseMizrahiExcel(text);
+  if (/<tr[\s>]/i.test(text) || /<table/i.test(text)) {
+    // שני הבנקים מייצאים HTML עם סיומת xls, במבנה עמודות שונה. הזיהוי לפי סימן
+    // מובהק, ואם הוא חסר — לפי מה שבאמת הצליח להיקרא, כדי שקובץ לא ייקלט ריק.
+    if (isLeumiHtml(text)) { const l = parseLeumiExcel(text); if (l.length) return l; }
+    const m = parseMizrahiExcel(text);
+    if (m.length) return m;
+    return parseLeumiExcel(text);
+  }
   return parseMizrahi(text);
 }
 
-export default { parseMizrahi, parseMizrahiExcel, parseGridStatement, parseBank, extractAccountBalance };
+export default { parseMizrahi, parseMizrahiExcel, parseLeumiExcel, parseGridStatement, parseBank, extractAccountBalance };

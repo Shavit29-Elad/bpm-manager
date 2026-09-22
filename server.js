@@ -7867,7 +7867,25 @@ const COMPANY_SEED = [
   { id: 'co_bpm', name: 'בי פי אם הגברה ותאורה בע"מ', active: true, accounting: 'greenInvoice' },
   { id: 'co_moshe', name: 'משה כורסיה בע"מ', active: false, accounting: 'greenInvoice' },
   { id: 'co_ofek', name: 'אופק ידעי הגברה ותאורה', active: false, accounting: 'greenInvoice' },
+  { id: 'co_tal', name: 'טל ואעקנין - טל מוסיקה', active: false, accounting: 'greenInvoice' },
 ];
+// חברות שעובדות בלוח האירועים (במקום "אירועים ויומן" + "עובדים"). מפה נגזרות
+// הלשוניות, ולכן הוספת חברה כזו היא שורה אחת ולא פיזור של מזהה בקוד.
+const BOARD_COMPANIES = ['co_moshe', 'co_tal'];
+// פיצול מוזיקה/דיגיטל — אצל משה בלבד. אצל טל אין חלוקה כזו.
+const GROUP_SPLIT_COMPANIES = ['co_moshe'];
+// חברה שנוספה אחרי שהמסד כבר נזרע — נוספת בעלייה, בלי לגעת בקיימות
+function ensureCompaniesSeeded(db) {
+  if (!Array.isArray(db.companies) || !db.companies.length) return false;
+  let added = false;
+  for (const c of COMPANY_SEED) {
+    if (db.companies.some(x => x.id === c.id)) continue;
+    db.companies.push({ ...c, active: false });
+    added = true;
+    console.log(`[companies] נוספה חברה: ${c.name} (${c.id})`);
+  }
+  return added;
+}
 // מזהה חברת ה-GI הראשית (ברירת מחדל BPM) — לשם תאימות לאחור בלבד
 function giCompanyId() { const c = (load().companies || []).find(x => x.accounting === 'greenInvoice'); return c ? c.id : 'co_bpm'; }
 
@@ -7950,7 +7968,9 @@ const INCEXP_DEFAULT_GROUPS = [
   { key: 'exp_bankfees', name: 'עמלות בנקים', kind: 'expense' },
   { key: 'exp_legal', name: 'עו״ד', kind: 'expense' },
 ];
-const INCEXP_GROUP_COMPANIES = ['co_bpm', 'co_ofek'];
+// קבוצות הכנסה/הוצאה רגילות. טל נמצאת כאן ולא בפיצול מוזיקה/דיגיטל —
+// אצלה אין חלוקה כזו, וקבוצת "דיגיטל" הייתה רעש בלבד.
+const INCEXP_GROUP_COMPANIES = ['co_bpm', 'co_ofek', 'co_tal'];
 function ensureGroupsSeeded(db) {
   db.txGroups = db.txGroups || [];
   let changed = false;
@@ -8000,7 +8020,8 @@ function applyGroupRules(db, companyId) {
 function runMigrations() {
   const db = load();
   let changed = false;
-  if (ensureGroupsSeeded(db)) { changed = true; console.log('מיגרציה: נזרעו קבוצות שיוך ברירת-מחדל למשה כורסיה'); }
+  if (ensureCompaniesSeeded(db)) changed = true;   // חברה חדשה שנוספה ל-COMPANY_SEED אחרי שהמסד כבר נזרע
+  if (ensureGroupsSeeded(db)) { changed = true; console.log('מיגרציה: נזרעו קבוצות שיוך ברירת-מחדל'); }
   if (ensureRulesSeeded(db)) { changed = true; console.log('מיגרציה: נזרע כלל שיוך-אוטומטי (גלי בראון → דיגיטל)'); }
   // הסרת חשבון ההתחברות 'iris' שנוצר בטעות (איריס היא סוכנת בצוות, לא משתמשת אנושית)
   const before = (db.users || []).length;

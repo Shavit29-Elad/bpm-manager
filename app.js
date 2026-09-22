@@ -94,15 +94,19 @@ const api = (p) => {
   };
 })();
 
+// חברות שעובדות בלוח האירועים במקום "אירועים ויומן" + "עובדים"
+const BOARD_COMPANIES = ['co_moshe', 'co_tal'];
+// פיצול מוזיקה/דיגיטל בדף הבית — משה בלבד. אצל טל אין חלוקה כזו.
+const GROUP_SPLIT_COMPANIES = ['co_moshe'];
 const TAB_LABELS = { home: '🏠 בית', summary: '📊 סיכום עסק', events: 'אירועים ויומן', eventsboard: '🎭 לוח אירועים', clients: 'לקוחות', quotes: '📄 הצעות מחיר', contractors: 'ספקים', payroll: 'עובדים', bank: '🏦 בנק', vehicles: '🚚 רכבי חברה', business: '🏢 פרטי העסק' };
 // לשוניות רלוונטיות לחברה מסוימת (לניהול הרשאות משתמשים) — נגזר מאותם כללים כמו applyCompanyTabs. "פרטי העסק" — הנהלה בלבד.
 function companyTabsFor(cid) {
-  const isBpm = cid === 'co_bpm', isMoshe = cid === 'co_moshe';
+  const isBoard = BOARD_COMPANIES.includes(cid);
   const out = [];
   for (const k of Object.keys(TAB_LABELS)) {
     if (k === 'business') continue;
-    if (['events', 'payroll'].includes(k)) { if (!isMoshe) out.push(k); continue; }
-    if (k === 'eventsboard') { if (isMoshe) out.push(k); continue; }   // לוח האירועים — משה בלבד
+    if (['events', 'payroll'].includes(k)) { if (!isBoard) out.push(k); continue; }
+    if (k === 'eventsboard') { if (isBoard) out.push(k); continue; }   // לוח האירועים — חברות הלוח בלבד
     out.push(k);   // כולל 'summary' — סיכום עסק זמין לכל החברות
   }
   return out;
@@ -361,12 +365,12 @@ window.gotoMailPending = () => {
 };
 
 // ---- לשוניות לפי חברה ----
-// "הצוות" (איריס) — BPM בלבד. משה: אין עובדים/אירועים-ויומן, ולשונית החיבורים מוסתרת.
-// כך שאצל משה נשארות: בית · מסמכים ולקוחות · הצעות מחיר · חשבוניות · קבלנים · בנק · פרטי העסק.
-const MOSHE_HIDDEN_TABS = ['events', 'payroll'];
+// חברות "לוח אירועים" (משה, טל): אין עובדים ואין "אירועים ויומן" — הלוח מחליף
+// אותם. נשארות: בית · סיכום · מסמכים ולקוחות · הצעות מחיר · לוח אירועים ·
+// ספקים · בנק · פרטי העסק. הוספת חברה כזו = שורה אחת ב-BOARD_COMPANIES.
+const BOARD_HIDDEN_TABS = ['events', 'payroll'];
 function applyCompanyTabs() {
-  const isBpm = state.company === 'co_bpm';
-  const isMoshe = state.company === 'co_moshe';
+  const isBoard = BOARD_COMPANIES.includes(state.company);
   const u = state.user || {};
   const isAdmin = u.role === 'admin';
   const allowedSet = (isAdmin || u.tabs === 'all') ? null : new Set(u.tabs || []);
@@ -376,16 +380,16 @@ function applyCompanyTabs() {
   // פרטי העסק — פר-חברה, אך להנהלה בלבד (מכיל ת״ז/רישיונות/מסמכים רגישים)
   document.querySelectorAll('.tab[data-tab="business"]').forEach(t => { t.style.display = isAdmin ? '' : 'none'; });
   if (!isAdmin && state.tab === 'business') goHome();
-  // משה: הסתרת עובדים / אירועים ויומן / חיבורים. שאר החברות — לפי הרשאות המשתמש.
-  MOSHE_HIDDEN_TABS.forEach(tab => {
-    document.querySelectorAll(`.tab[data-tab="${tab}"]`).forEach(t => { t.style.display = (!isMoshe && userAllows(tab)) ? '' : 'none'; });
+  // חברות הלוח: הסתרת עובדים / אירועים ויומן. שאר החברות — לפי הרשאות המשתמש.
+  BOARD_HIDDEN_TABS.forEach(tab => {
+    document.querySelectorAll(`.tab[data-tab="${tab}"]`).forEach(t => { t.style.display = (!isBoard && userAllows(tab)) ? '' : 'none'; });
   });
-  if (isMoshe && MOSHE_HIDDEN_TABS.includes(state.tab)) goHome();
+  if (isBoard && BOARD_HIDDEN_TABS.includes(state.tab)) goHome();
   // "סיכום עסק" — זמין לכל החברות (סיכום כל הקטגוריות/קבוצות: חודשי + שנתי), לפי הרשאות המשתמש
   document.querySelectorAll('.tab[data-tab="summary"]').forEach(t => { t.style.display = userAllows('summary') ? '' : 'none'; });
-  // "לוח אירועים" — משה בלבד. אצלו "אירועים ויומן" מוסתרת, וזה התחליף שלה.
-  document.querySelectorAll('.tab[data-tab="eventsboard"]').forEach(t => { t.style.display = (isMoshe && userAllows('eventsboard')) ? '' : 'none'; });
-  if (!isMoshe && state.tab === 'eventsboard') goHome();
+  // "לוח אירועים" — חברות הלוח בלבד. אצלן "אירועים ויומן" מוסתרת, וזה התחליף שלה.
+  document.querySelectorAll('.tab[data-tab="eventsboard"]').forEach(t => { t.style.display = (isBoard && userAllows('eventsboard')) ? '' : 'none'; });
+  if (!isBoard && state.tab === 'eventsboard') goHome();
 }
 
 // ---- ניהול משתמשים (מנהל בלבד) ----
@@ -1177,14 +1181,14 @@ async function renderHome(c) {
       </div>
       ${otherErrs.length ? `<div class="warn-banner" style="margin-top:12px">חלק מהנתונים לא נטענו: ${otherErrs.join(' | ')}</div>` : ''}
     </div>
-    ${state.company === 'co_moshe' ? '<div class="panel" id="grpSummaryWrap"><div class="empty">טוען סיכום מוזיקה / דיגיטל…</div></div>' : ''}
+    ${GROUP_SPLIT_COMPANIES.includes(state.company) ? '<div class="panel" id="grpSummaryWrap"><div class="empty">טוען סיכום מוזיקה / דיגיטל…</div></div>' : ''}
     <div class="panel" id="openInvWrap"><div class="empty">טוען חשבוניות פתוחות…</div></div>`;
   for (const [id, fn] of [['kpiIncome', 'openIncomeBreakdown'], ['kpiExpense', 'openExpenseBreakdown']]) {
     const el = document.getElementById(id);
     if (el) { el.style.cursor = 'pointer'; el.title = 'לחץ לפירוט מלא של החישוב'; el.onclick = () => window[fn](); }
   }
   loadOpenInvoices();
-  if (state.company === 'co_moshe') loadGroupSummary();
+  if (GROUP_SPLIT_COMPANIES.includes(state.company)) loadGroupSummary();
   // חלק "מסמכים" עבר ללשונית "מסמכים ולקוחות" (renderClients)
 }
 
