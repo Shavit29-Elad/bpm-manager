@@ -10168,8 +10168,15 @@ function bankSummaryHtml(rows) {
   const sumWh = _wr > 0 ? matchedCr.reduce((s, t) => { const si = invSum(t), w = si - t.absAmount; return s + ((w > 1 && w < si * (_wr + 0.03)) ? w : 0); }, 0) : 0;
   const unmatched = rows.filter(t => t.matchStatus === 'unmatched').length;
   const stat = (label, val, color) => `<div class="card" style="padding:11px 14px"><div class="label" style="font-size:12px">${label}</div><div style="font-size:18px;font-weight:700;color:${color || 'var(--text)'}">${val}</div></div>`;
-  return `${stat('שורות מוצגות', rows.length)}${stat('סה"כ זכות', money(sumCredit), 'var(--accent2)')}${dir !== 'credit' ? stat('סה"כ חובה', money(sumDebit), 'var(--danger)') : ''}${stat('סה"כ סכום חשבוניות', money(sumInv))}${stat('סה"כ ניכוי במקור', money(sumWh), 'var(--warn)')}${stat('שורות לא מותאמות', unmatched, unmatched ? 'var(--danger)' : 'var(--accent2)')}`;
+  // כמה שורות המסנן מסתיר. ברירת המחדל היא "רק זכות", וכל ההוצאות נעלמות בלי
+  // שום סימן — מה שנקרא כאילו הן לא נקלטו בייבוא.
+  const hidden = Math.max(0, (_bankList || []).length - rows.length);
+  return `${stat('שורות מוצגות', hidden ? `${rows.length} / ${(_bankList || []).length}` : rows.length, hidden ? 'var(--warn)' : null)}${stat('סה"כ זכות', money(sumCredit), 'var(--accent2)')}${dir !== 'credit' ? stat('סה"כ חובה', money(sumDebit), 'var(--danger)') : ''}${stat('סה"כ סכום חשבוניות', money(sumInv))}${stat('סה"כ ניכוי במקור', money(sumWh), 'var(--warn)')}${stat('שורות לא מותאמות', unmatched, unmatched ? 'var(--danger)' : 'var(--accent2)')}
+    ${hidden ? `<div style="grid-column:1/-1;font-size:12.5px;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.4);border-radius:10px;padding:7px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span>⚠ <b>${hidden}</b> שורות מוסתרות במסנן הנוכחי (${BANK_DIR_HE[dir] || dir}) — הן קיימות במערכת.</span>
+      <button class="btn ghost" style="padding:2px 10px;font-size:11.5px" onclick="setBankFilter('all')">הצג הכל</button></div>` : ''}`;
 }
+const BANK_DIR_HE = { credit: 'רק זכות', debit: 'רק חובה', unmatched: 'לא מותאמות', all: 'הכל' };
 function updateBankSummary() { const el = document.getElementById('bankSummary'); if (el) el.innerHTML = bankSummaryHtml(bankVisibleRows()); }
 function updateBankRow(tx) { const el = document.getElementById('btr-' + tx.id); if (el) el.outerHTML = bankTr(tx); updateBankSummary(); }
 // כל מזהי החשבוניות שמשויכות כרגע לתנועת בנק כלשהי (למעט תנועה נתונה) — לסינון חי של אופציות שיוך בכל השורות
