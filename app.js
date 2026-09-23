@@ -1671,7 +1671,7 @@ window.openConsolidateEditor = async (type) => {
   const m = document.getElementById('derModal') || (() => { const x = document.createElement('div'); x.id = 'derModal'; x.className = 'modal'; document.body.appendChild(x); return x; })();
   m.classList.remove('hidden');
   m.innerHTML = `<div class="modal-card" style="width:min(720px,96vw)"><div class="empty">טוען שורות מהמסמכים…</div></div>`;
-  let items = [], pricesInclVat = false, ld = {};
+  let items = [], pricesInclVat = false, ld = {}, clientId = null;
   if (gi.length) {
     // מקורות חשבונית ירוקה — שורות אמיתיות מכל מסמך (ללא מע״מ)
     const res = await Promise.all([
@@ -1679,7 +1679,12 @@ window.openConsolidateEditor = async (type) => {
       ...gi.map(s => api(`/api/documents/${s.id}/lines`).catch(() => ({ error: true }))),
     ]);
     ld = res[0] || {};
-    for (const r of res.slice(1)) { if (r && r.items) for (const it of r.items) items.push({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 }); }
+    for (const r of res.slice(1)) {
+      if (r && r.items) for (const it of r.items) items.push({ description: it.description || '', quantity: Number(it.quantity) || 1, price: Number(it.price) || 0 });
+      // מזהה הלקוח ממסמכי המקור — בלעדיו התצוגה המקדימה מרנדרת שם בלבד,
+      // בלי פרטי איש הקשר, ונראית חסרה לעומת המסמך שיופק
+      if (!clientId && r && r.client && r.client.id) clientId = r.client.id;
+    }
   } else {
     // מקורות שהועלו ידנית — שורה אחת לכל מסמך, לפי הסכום שנשמר (כברירת מחדל כולל מע״מ). ניתן לעריכה בעורך.
     ld = await api(`/api/documents/last-date?type=${type}`).catch(() => ({}));
@@ -1694,7 +1699,7 @@ window.openConsolidateEditor = async (type) => {
     sourceIds: gi.map(s => s.id),
     uploadedSources: up.map(u => ({ docId: u.docId, eventId: u.eventId || undefined, oldInvoiceId: u.oldInvoiceId || undefined, number: u.number })),
     consolCount: gi.length + up.length,
-    type, linked: true, clientName: sel.clientName, date, pricesInclVat,
+    type, linked: true, clientId, clientName: sel.clientName, date, pricesInclVat,
     lastDocDate: (ld && ld.lastDocDate) || null, lastDocTypeName: DOC_TYPE_NAMES[type] || 'מסוג זה', allowBackdate: false,
     // אותם שדות בדיוק כמו בעורך מסמך המשך — נושא, תנאי תשלום ומייל לשליחה
     // אוטומטית. בלעדיהם המסמך המרוכז יצא חסר לעומת מסמך רגיל.
@@ -1793,6 +1798,9 @@ window.openDeriveEditor = async (id, type, linked, opts) => {
   const remarks = isLinked ? followupRemarks(r.srcType, r.srcNumber) : (r.remarks || '');
   _derEdit = {
     id, type: Number(type), linked: isLinked,
+    // מזהה הלקוח נחוץ לתצוגה המקדימה: בלעדיו חשבונית ירוקה מרנדרת שם בלבד,
+    // בלי פרטי איש הקשר, והתצוגה נראית חסרה לעומת המסמך שיופק בפועל.
+    clientId: r.client?.id || null,
     clientName: r.client?.name || '', date,
     sendEmail: (ce && Array.isArray(ce.emails) ? (ce.emails.filter(Boolean)[0] || '') : ''),   // מייל הלקוח לשליחה אוטומטית — ניתן לעריכה בעורך
     lastDocDate: (ld && ld.lastDocDate) || null, lastDocTypeName: DOC_TYPE_NAMES[Number(type)] || 'מסוג זה', allowBackdate: false,
@@ -2070,7 +2078,7 @@ window.derPreviewPdf = async (btn) => {
   if (!items.length) { if (st) st.innerHTML = '<span style="color:var(--danger)">אין שורות לתצוגה.</span>'; return; }
   let payment = [];
   if (e.needsPay) payment = e.payments.map(p => ({ type: Number(p.type), price: Number(p.price) || 0, date: (p.date || e.date), chequeNum: p.chequeNum || '', bankName: p.bankName || '', bankBranch: p.bankBranch || '', bankAccount: p.bankAccount || '' })).filter(p => Math.abs(p.price) > 0);
-  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), description: e.description, date: e.date, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }, { statusEl: st, btn, onIssue: () => derConfirm(), issueLabel: `✓ הפק ${DOC_TYPE_SHORT[e.type] || 'מסמך'}` });
+  await openDesignedPdf('/api/documents/preview-pdf', { type: e.type, clientId: e.clientId || null, clientName: e.clientName || null, items: docItemsForApi(items, e), discount: docDiscForApi(e), description: e.description, date: e.date, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }, { statusEl: st, btn, onIssue: () => derConfirm(), issueLabel: `✓ הפק ${DOC_TYPE_SHORT[e.type] || 'מסמך'}` });
 };
 window.derConfirm = async () => {
   derSyncFromDom();
@@ -2093,7 +2101,7 @@ window.derConfirm = async () => {
     const btn2 = document.getElementById('derConfirmBtn'); if (btn2) btn2.disabled = true;
     const st2 = document.getElementById('derEditStatus'); if (st2) st2.innerHTML = '<span class="muted">מפיק מסמך מרוכז…</span>';
     const r2 = await fetch('/api/documents/consolidate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sourceIds: e.sourceIds, uploadedSources: e.uploadedSources || [], clientName: e.clientName, type: e.type, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, description: e.description, remarks: e.remarks, paymentTerms: e.payTerms || null, sendEmail: !!(document.getElementById('derAutoSend') || {}).checked, email: ((document.getElementById('derSendEmail') || {}).value || '').trim(), email2: ((document.getElementById('derSendEmail2') || {}).value || '').trim(), payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+      body: JSON.stringify({ sourceIds: e.sourceIds, uploadedSources: e.uploadedSources || [], clientId: e.clientId || null, clientName: e.clientName, type: e.type, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, description: e.description, remarks: e.remarks, paymentTerms: e.payTerms || null, sendEmail: !!(document.getElementById('derAutoSend') || {}).checked, email: ((document.getElementById('derSendEmail') || {}).value || '').trim(), email2: ((document.getElementById('derSendEmail2') || {}).value || '').trim(), payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (r2.ok) {
       billDueRefreshIfOpen();
       if (typeof clearApiCache === 'function') clearApiCache();

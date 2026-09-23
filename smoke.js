@@ -2237,6 +2237,19 @@ check('מסמך מרוכז — מיון לפי תאריך, וכל השדות ש�
     if (!conf.includes(f)) throw new Error('לא נשלח בהפקת המסמך המרוכז: ' + f);
   }
 
+  // מזהה הלקוח חייב להגיע לתצוגה המקדימה: בלעדיו חשבונית ירוקה מרנדרת שם בלבד,
+  // בלי פרטי איש הקשר, והתצוגה נראית חסרה לעומת המסמך שיופק בפועל.
+  if (!/clientId: e\.clientId \|\| null, clientName: e\.clientName \|\| null/.test(app))
+    throw new Error('התצוגה המקדימה של עורך המסמך אינה מעבירה clientId');
+  if (!/clientId: r\.client\?\.id \|\| null/.test(app)) throw new Error('עורך מסמך המשך אינו שומר את מזהה הלקוח');
+  if (!/if \(!clientId && r && r\.client && r\.client\.id\) clientId = r\.client\.id/.test(app))
+    throw new Error('המסמך המרוכז אינו שולף את מזהה הלקוח ממסמכי המקור');
+  if (!/clientId: e\.clientId \|\| null, clientName: e\.clientName, type: e\.type/.test(app))
+    throw new Error('הפקת המסמך המרוכז אינה שולחת clientId');
+  // והשרת אכן מעדיף מזהה על שם
+  if (!/body\.clientId \? \{ id: body\.clientId \} : \{ name: String\(body\.clientName/.test(fs.readFileSync('server.js', 'utf8')))
+    throw new Error('התצוגה המקדימה בשרת אינה מכבדת clientId');
+
   // חשבון עסקה מסכם — מותר בשרת ומוצע במסך
   const srv = fs.readFileSync('server.js', 'utf8');
   if (!/!\[300, 305, 320\]\.includes\(type\)/.test(srv)) throw new Error('השרת אינו מאפשר חשבון עסקה מסכם');
