@@ -1469,7 +1469,7 @@ function openInvClientHtml(cl) {
   // (התקבל תשלום וחסרה רק קבלה) לא ניתנת לבחירה — אין טעם לברר עליה מועד תשלום.
   const selectable = (d) => !d.paidNoReceipt;
   const rows = cl.ds.map(d => `<div style="display:flex;gap:10px;align-items:center;padding:7px 12px;border-top:1px solid var(--line);font-size:13px">
-    ${selectable(d) ? `<input type="checkbox" class="cx-${rid}" data-id="${escAttr(String(d.id))}" data-num="${escAttr(String(d.number || ''))}" data-type="${Number(d.type) || ''}" data-uploaded="${d.uploaded ? '1' : '0'}" data-event="${escAttr(String(d.eventId || ''))}" data-old="${escAttr(String(d.oldInvoiceId || ''))}" data-amount="${d.amount != null ? Number(d.amount) : (d.amountDue != null ? Number(d.amountDue) : '')}" data-desc="${escAttr(String(d.description || ''))}" onclick="event.stopPropagation()" title="סמן לבדיקת סטטוס תשלום או למסמך מרוכז" style="width:15px;height:15px;flex:0 0 auto;cursor:pointer">` : '<span style="width:15px;flex:0 0 auto" title="כבר התקבל תשלום"></span>'}
+    ${selectable(d) ? `<input type="checkbox" class="cx-${rid}" data-id="${escAttr(String(d.id))}" data-num="${escAttr(String(d.number || ''))}" data-type="${Number(d.type) || ''}" data-uploaded="${d.uploaded ? '1' : '0'}" data-event="${escAttr(String(d.eventId || ''))}" data-old="${escAttr(String(d.oldInvoiceId || ''))}" data-amount="${d.amount != null ? Number(d.amount) : (d.amountDue != null ? Number(d.amountDue) : '')}" data-date="${escAttr(String(d.date || ''))}" data-desc="${escAttr(String(d.description || ''))}" onclick="event.stopPropagation()" title="סמן לבדיקת סטטוס תשלום או למסמך מרוכז" style="width:15px;height:15px;flex:0 0 auto;cursor:pointer">` : '<span style="width:15px;flex:0 0 auto" title="כבר התקבל תשלום"></span>'}
     <span class="tag">${DOC_TYPE_SHORT[d.type] || 'מסמך'}${d.uploaded ? ' · ישן' : ''}</span>
     <span style="white-space:nowrap">${d.number ? '#' + d.number : ''}</span><span class="muted" style="white-space:nowrap">${fmtDate(d.date)}</span>
     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(d.description || '')}">${d.description ? escapeHtml(d.description) : '<span class="muted">—</span>'}</span>
@@ -1617,13 +1617,25 @@ window.psSend = async (btn) => {
   } else st.innerHTML = `<span style="color:var(--danger)">שגיאה: ${escapeHtml(String(r.error || ''))}</span>`;
 };
 
-// ===== מסמך מרוכז: כמה חשבוניות עסקה (300) של אותו לקוח → מסמך מס (305) או מס-קבלה (320) מסכם אחד =====
+// ===== מסמך מרוכז: כמה חשבוניות עסקה (300) של אותו לקוח → מסמך מסכם אחד =====
+// מפתח מיון אחיד לתאריך שמגיע כ-DD/MM/YYYY או כ-ISO
+function docSortKey(d) {
+  const s = String(d || '');
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : '9999';   // בלי תאריך — לסוף
+}
 let _consolSel = null;
 window.openConsolidate = (clientEnc, rid) => {
   const clientName = decodeURIComponent(clientEnc);
   const boxes = [...document.querySelectorAll('.cx-' + rid + ':checked')];
-  const gi = boxes.filter(c => c.dataset.uploaded !== '1').map(c => ({ id: c.dataset.id, number: c.dataset.num }));
-  const up = boxes.filter(c => c.dataset.uploaded === '1').map(c => ({ docId: c.dataset.id, number: c.dataset.num, eventId: c.dataset.event || null, oldInvoiceId: c.dataset.old || null, amount: c.dataset.amount !== '' ? Number(c.dataset.amount) : null, desc: c.dataset.desc || '' }));
+  // מיון לפי תאריך המסמך: שורות המסמך המרוכז נבנות בסדר המקורות, ובלי מיון הן
+  // יוצאות בסדר הסימון — מבולגן ובלתי קריא ללקוח.
+  const byDate = (a, b) => String(docSortKey(a.date)).localeCompare(String(docSortKey(b.date)));
+  const gi = boxes.filter(c => c.dataset.uploaded !== '1')
+    .map(c => ({ id: c.dataset.id, number: c.dataset.num, date: c.dataset.date || '' })).sort(byDate);
+  const up = boxes.filter(c => c.dataset.uploaded === '1')
+    .map(c => ({ docId: c.dataset.id, number: c.dataset.num, date: c.dataset.date || '', eventId: c.dataset.event || null, oldInvoiceId: c.dataset.old || null, amount: c.dataset.amount !== '' ? Number(c.dataset.amount) : null, desc: c.dataset.desc || '' })).sort(byDate);
   if (gi.length + up.length < 2) { alert('סמן לפחות שתי חשבוניות עסקה של אותו לקוח למיזוג.'); return; }
   if (gi.length && up.length) { alert('אפשר למזג יחד רק מסמכים מאותו סוג — או חשבוניות מחשבונית ירוקה, או מסמכים ישנים שהועלו ידנית. לא שילוב של השניים.'); return; }
   _consolSel = { clientName, gi, up };
@@ -1636,6 +1648,7 @@ window.openConsolidate = (clientEnc, rid) => {
     <h3>מסמך מרוכז — ${escapeHtml(clientName)}</h3>
     <p class="muted" style="font-size:13px">${sel.length} חשבוניות עסקה (${escapeHtml(nums)}) ימוזגו למסמך מסכם אחד שיקושר אליהן ויסגור את כולן. בחר סוג מסמך מסכם:</p>
     <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+      <button class="btn ghost" style="justify-content:flex-start;text-align:right" onclick="openConsolidateEditor(300)">חשבון עסקה מסכם ← <span class="muted" style="font-size:11.5px">(דרישת תשלום מרוכזת; אינו מסמך מס)</span></button>
       <button class="btn ghost" style="justify-content:flex-start;text-align:right" onclick="openConsolidateEditor(305)">חשבונית מס מסכמת ← <span class="muted" style="font-size:11.5px">(סוגרת את העסקאות; ממתינה לתשלום)</span></button>
       <button class="btn ghost" style="justify-content:flex-start;text-align:right" onclick="openConsolidateEditor(320)">חשבונית מס-קבלה מסכמת ← <span class="muted" style="font-size:11.5px">(סוגרת ומסמנת כשולם)</span></button>
     </div>
@@ -1643,6 +1656,14 @@ window.openConsolidate = (clientEnc, rid) => {
   </div>`;
   m.onclick = (ev) => { if (ev.target === m) m.classList.add('hidden'); };
 };
+// נושא ברירת מחדל: טווח התאריכים של המסמכים שמוזגו — מה שהלקוח צריך לראות
+function consolSubject(clientName, gi, up) {
+  const dates = [...gi, ...up].map(x => docSortKey(x.date)).filter(d => d !== '9999').sort();
+  if (!dates.length) return 'מסמך מרוכז';
+  const he = (iso) => { const [y, m, d] = iso.split('-'); return `${d}.${m}.${y.slice(2)}`; };
+  const a = he(dates[0]), b = he(dates[dates.length - 1]);
+  return `מסמך מרוכז ${a === b ? a : `${a}–${b}`}`;
+}
 window.openConsolidateEditor = async (type) => {
   const sel = _consolSel; if (!sel) return;
   type = Number(type);
@@ -1675,10 +1696,20 @@ window.openConsolidateEditor = async (type) => {
     consolCount: gi.length + up.length,
     type, linked: true, clientName: sel.clientName, date, pricesInclVat,
     lastDocDate: (ld && ld.lastDocDate) || null, lastDocTypeName: DOC_TYPE_NAMES[type] || 'מסוג זה', allowBackdate: false,
-    description: '', remarks: `מסמך מרוכז לחשבוניות עסקה: ${nums}`,
+    // אותם שדות בדיוק כמו בעורך מסמך המשך — נושא, תנאי תשלום ומייל לשליחה
+    // אוטומטית. בלעדיהם המסמך המרוכז יצא חסר לעומת מסמך רגיל.
+    description: consolSubject(sel.clientName, gi, up),
+    remarks: `מסמך מרוכז לחשבוניות עסקה: ${nums}`,
+    payTerms: { mode: 'default', text: '' },
+    sendEmail: '',
     items, payments: [], needsPay: DER_PAYMENT_DOCS.has(type),
     srcUrl: null, srcLabel: '', uploadedSource: null,
   };
+  // מייל הלקוח — נשלף מאחד ממסמכי המקור, כדי ששליחה אוטומטית תעבוד גם כאן
+  if (gi.length) {
+    try { const ce = await api(`/api/documents/${gi[0].id}/client-email`); 
+      _derEdit.sendEmail = (ce && Array.isArray(ce.emails) ? (ce.emails.filter(Boolean)[0] || '') : ''); } catch { }
+  }
   if (_derEdit.needsPay) { const total = derTotals().total; _derEdit.payments = [{ type: 4, price: +total.toFixed(2), date, chequeNum: '', bankName: '' }]; }
   _derBankLink = null;
   renderDeriveEditor();
@@ -2062,7 +2093,7 @@ window.derConfirm = async () => {
     const btn2 = document.getElementById('derConfirmBtn'); if (btn2) btn2.disabled = true;
     const st2 = document.getElementById('derEditStatus'); if (st2) st2.innerHTML = '<span class="muted">מפיק מסמך מרוכז…</span>';
     const r2 = await fetch('/api/documents/consolidate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sourceIds: e.sourceIds, uploadedSources: e.uploadedSources || [], clientName: e.clientName, type: e.type, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, description: e.description, remarks: e.remarks, payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+      body: JSON.stringify({ sourceIds: e.sourceIds, uploadedSources: e.uploadedSources || [], clientName: e.clientName, type: e.type, items: docItemsForApi(items, e), discount: docDiscForApi(e), date: e.date, description: e.description, remarks: e.remarks, paymentTerms: e.payTerms || null, sendEmail: !!(document.getElementById('derAutoSend') || {}).checked, email: ((document.getElementById('derSendEmail') || {}).value || '').trim(), email2: ((document.getElementById('derSendEmail2') || {}).value || '').trim(), payment, skipDateValidation: !!e.allowBackdate }) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
     if (r2.ok) {
       billDueRefreshIfOpen();
       if (typeof clearApiCache === 'function') clearApiCache();

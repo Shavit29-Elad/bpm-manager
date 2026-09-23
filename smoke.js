@@ -2203,6 +2203,49 @@ check('התאמת בנק — המסנן מדווח כמה שורות הוא מס
   return true;
 });
 
+// המסמך המרוכז נבנה בסדר שבו סומנו התיבות, והיה חסר שדות שיש בעורך מסמך המשך.
+// ללקוח הוא נראה מבולגן וחסר, אף שזה אותו עורך.
+check('מסמך מרוכז — מיון לפי תאריך, וכל השדות של מסמך המשך', () => {
+  const key = new Function(app.match(/function docSortKey\(d\) \{[\s\S]*?\n\}/)[0] + '; return docSortKey;')();
+  if (key('15/03/2026') !== '2026-03-15') throw new Error('DD/MM/YYYY לא מומר למיון');
+  if (key('2026-02-10') !== '2026-02-10') throw new Error('ISO לא נתמך');
+  if (key('') !== '9999') throw new Error('מסמך בלי תאריך אינו נדחק לסוף');
+  const rows = [{ date: '15/03/2026' }, { date: '01/01/2026' }, { date: '2026-02-10' }, { date: '' }];
+  const sorted = rows.slice().sort((a, b) => String(key(a.date)).localeCompare(String(key(b.date))));
+  if (sorted[0].date !== '01/01/2026' || sorted[3].date !== '') throw new Error('המיון שגוי: ' + sorted.map(x => x.date).join(','));
+
+  const subj = new Function(app.match(/function docSortKey\(d\) \{[\s\S]*?\n\}/)[0] + ';'
+    + app.match(/function consolSubject\(clientName, gi, up\) \{[\s\S]*?\n\}/)[0] + '; return consolSubject;')();
+  if (subj('c', rows, []) !== 'מסמך מרוכז 01.01.26–15.03.26') throw new Error('נושא לפי טווח תאריכים שגוי: ' + subj('c', rows, []));
+  if (subj('c', [{ date: '05/05/2026' }], []) !== 'מסמך מרוכז 05.05.26') throw new Error('נושא ליום אחד שגוי');
+  if (subj('c', [{}], []) !== 'מסמך מרוכז') throw new Error('נושא בלי תאריכים שגוי');
+
+  // המקורות ממוינים לפני בניית השורות
+  const open = app.slice(app.indexOf('window.openConsolidate ='), app.indexOf('window.openConsolidateEditor'));
+  if ((open.match(/\.sort\(byDate\)/g) || []).length !== 2) throw new Error('לא שני סוגי המקורות ממוינים');
+  if (!/data-date=/.test(app)) throw new Error('תאריך המסמך אינו נשמר על תיבת הסימון');
+
+  // אותם שדות כמו בעורך מסמך המשך
+  const ed = app.slice(app.indexOf('window.openConsolidateEditor'), app.indexOf('function followupRemarks'));
+  for (const f of ['payTerms', 'sendEmail', 'description']) {
+    if (!new RegExp(`${f}:`).test(ed)) throw new Error('שדה חסר במסמך המרוכז: ' + f);
+  }
+  if (!/client-email/.test(ed)) throw new Error('מייל הלקוח אינו נשלף לשליחה אוטומטית');
+  // והם נשלחים בפועל בהפקה
+  const conf = app.slice(app.indexOf("fetch('/api/documents/consolidate'"), app.indexOf("fetch('/api/documents/consolidate'") + 700);
+  for (const f of ['paymentTerms', 'sendEmail', 'email']) {
+    if (!conf.includes(f)) throw new Error('לא נשלח בהפקת המסמך המרוכז: ' + f);
+  }
+
+  // חשבון עסקה מסכם — מותר בשרת ומוצע במסך
+  const srv = fs.readFileSync('server.js', 'utf8');
+  if (!/!\[300, 305, 320\]\.includes\(type\)/.test(srv)) throw new Error('השרת אינו מאפשר חשבון עסקה מסכם');
+  if (!/openConsolidateEditor\(300\)/.test(app)) throw new Error('אין אפשרות לחשבון עסקה במסך');
+  const route = srv.slice(srv.indexOf("add('POST', /^\\/api\\/documents\\/consolidate$/"), srv.indexOf("add('POST', /^\\/api\\/documents\\/consolidate$/") + 9000);
+  if (!/applyPaymentTerms\(opts, body\)/.test(route)) throw new Error('תנאי התשלום אינם מוחלים במסמך המרוכז');
+  return true;
+});
+
 // תנועה שאושרה בלי מסמך אינה מופיעה ב"לא מותאמות" (היא מאושרת) ואינה מעוררת
 // חשד (היא ירוקה) — ונספרת במלואה בהכנסות/הוצאות. זו הדרך היחידה לראות אותה.
 check('התאמת בנק — תנועות שאושרו בלי אף מסמך מוצגות', () => {

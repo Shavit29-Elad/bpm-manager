@@ -3591,7 +3591,9 @@ add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) =>
   const uploadedSources = Array.isArray(body.uploadedSources) ? body.uploadedSources.filter(u => u && (u.eventId || u.oldInvoiceId) && u.docId != null) : [];
   if (sourceIds.length + uploadedSources.length < 1) return json(res, { error: 'לא נבחרו חשבוניות עסקה למיזוג' }, 400);
   const type = Number(body.type);
-  if (![305, 320].includes(type)) return json(res, { error: 'סוג מסמך מסכם חייב להיות חשבונית מס (305) או מס-קבלה (320)' }, 400);
+  // חשבון עסקה מסכם (300) הוא דרישת תשלום מרוכזת ואינו מסמך מס — לגיטימי לחלוטין
+  // כשרוצים לרכז כמה עסקאות לדרישה אחת לפני שמפיקים חשבונית.
+  if (![300, 305, 320].includes(type)) return json(res, { error: 'סוג מסמך מסכם חייב להיות חשבון עסקה (300), חשבונית מס (305) או מס-קבלה (320)' }, 400);
   try {
     // שליפת מסמכי המקור — לאימות לקוח אחיד ולאיסוף שורות
     const srcDocs = [];
@@ -3643,6 +3645,7 @@ add('POST', /^\/api\/documents\/consolidate$/, async (req, res, _p, _q, body) =>
       }).filter(p => Math.abs(p.price) > 0);
     }
     if (type === 320 && !(opts.payment && opts.payment.length)) return json(res, { error: 'חשבונית מס-קבלה מחייבת פירוט תקבול (סכום ואמצעי תשלום).' }, 400);
+    applyPaymentTerms(opts, body);   // תנאי תשלום — כמו בכל מסמך אחר
     // השליחה מצדנו בלבד (mailDocToClient) — חשבונית ירוקה אינה שולחת ללקוח.
     const doc = await createDocFwd(opts);
     // פרטי הבנק שהוזנו נשמרים ללקוח ומוצעים בפעם הבאה (consolidate)
