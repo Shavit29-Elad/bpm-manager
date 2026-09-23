@@ -10039,7 +10039,7 @@ window.setBankPerPart = (field, part, val) => {
   renderBank($('#content'));
 };
 function bankDirControls() {
-  const d = state.bankFilter || 'credit';
+  const d = state.bankFilter || 'all';
   const seg = (v, l) => `<button class="btn ${d === v ? 'primary' : 'ghost'}" style="padding:6px 12px" onclick="setBankFilter('${v}')">${l}</button>`;
   return `<div style="display:flex;gap:3px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:3px">${seg('credit', 'רק זכות')}${seg('all', 'הכל')}${seg('debit', 'רק חובה')}${seg('unmatched', 'לא מותאמות')}</div>`;
 }
@@ -10135,8 +10135,36 @@ function bankMonthlyHtml() {
   return `<details style="margin-top:14px" open><summary style="cursor:pointer;font-weight:600;font-size:14px">📊 זכות / חובה לפי חודשים (${keys.length} חודשים)</summary>
     <div style="overflow-x:auto;margin-top:8px"><table style="min-width:440px;font-size:13px"><thead><tr><th>חודש</th><th>זכות (הכנסות)</th><th>חובה (הוצאות)</th><th>נטו</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
 }
+// ברירת המחדל היא "הכל": שורה שלא נראית נקראת כשורה שלא נקלטה, וזה שלח אותנו
+// פעמיים לחפש כסף שקיים. סינון הוא בחירה מפורשת של המשתמש, לא מצב פתיחה.
+// תנועות שאושרו בלי אף מסמך משויך. הן לא מופיעות ב"לא מותאמות" (הן מאושרות)
+// ולא מעוררות חשד (הן ירוקות) — ולכן נעלמות מהעין לגמרי, אף שהן נספרות במלואן
+// בהכנסות/הוצאות. זו הרשימה שמחזירה אותן לשדה הראייה.
+function bankNoDocRows() {
+  return (_bankList || [])
+    .filter(t => t.matchStatus === 'approved' && !((t.matchedInvoices || []).length))
+    .sort((a, b) => (b.absAmount || 0) - (a.absAmount || 0));
+}
+function bankNoDocHtml() {
+  const rows = bankNoDocRows();
+  if (!rows.length) return '';
+  const sum = rows.reduce((s, t) => s + (t.absAmount || 0), 0);
+  const cr = rows.filter(t => t.direction === 'credit').length;
+  const list = rows.slice(0, 40).map(t => `<div style="display:flex;gap:8px;align-items:center;padding:3px 0;border-top:1px solid var(--line);font-size:12.5px;flex-wrap:wrap">
+      <span style="white-space:nowrap">${ddmy(t.date)}</span>
+      <span style="flex:1;min-width:150px" class="muted">${escapeHtml(t.nameHint || t.description || '')}</span>
+      <b style="white-space:nowrap;color:${t.direction === 'credit' ? 'var(--accent2)' : 'var(--danger)'}">${t.direction === 'credit' ? '' : '−'}${money(t.absAmount)}</b>
+      <button class="btn ghost" style="padding:2px 9px;font-size:11px" onclick="bankShowTx('${escAttr(t.id)}')">הצג</button>
+    </div>`).join('');
+  return `<details style="margin-top:12px;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.10);border-radius:12px;padding:10px 12px">
+    <summary style="cursor:pointer;font-weight:700;font-size:13.5px">⚠ ${rows.length} תנועות אושרו בלי אף מסמך · ${money(sum)}</summary>
+    <div class="muted" style="font-size:12px;margin:6px 0 4px">הן נספרות במלואן ב${cr ? 'הכנסות ו' : ''}הוצאות, אבל אין מאחוריהן חשבונית. אינן מופיעות ב"לא מותאמות" כי הן מאושרות — ולכן נעלמות מהעין.</div>
+    ${list}${rows.length > 40 ? `<div class="muted" style="font-size:11.5px;padding-top:4px">…ועוד ${rows.length - 40}</div>` : ''}
+  </details>`;
+}
+
 function bankVisibleRows() {
-  const dir = state.bankFilter || 'credit';
+  const dir = state.bankFilter || 'all';
   const s = state.bankSearch || {};
   const q = (s.q || '').trim();
   const min = parseFloat(s.min), max = parseFloat(s.max);
@@ -10156,7 +10184,7 @@ function bankVisibleRows() {
   return sortBankRows(rows);
 }
 function bankSummaryHtml(rows) {
-  const dir = state.bankFilter || 'credit';
+  const dir = state.bankFilter || 'all';
   const cr = rows.filter(t => t.direction === 'credit'), db = rows.filter(t => t.direction === 'debit');
   const sumCredit = cr.reduce((s, t) => s + (t.absAmount || 0), 0);
   const sumDebit = db.reduce((s, t) => s + (t.absAmount || 0), 0);
@@ -10336,7 +10364,7 @@ async function renderBank(c, soft) {
   _bankList = all;
   _bankBalance = await api(`/api/bank/balance?companyId=${state.company}`).catch(() => null);
   await loadTxGroups();
-  const dir = state.bankFilter || 'credit';
+  const dir = state.bankFilter || 'all';
   const rows = bankVisibleRows();
   const summary = `<div id="bankSummary" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(125px,1fr));margin-top:12px;gap:12px">${bankSummaryHtml(rows)}</div>`;
 
@@ -10360,6 +10388,7 @@ async function renderBank(c, soft) {
       </div>
     </div>
     ${bankHeaderHtml()}
+    ${bankNoDocHtml()}
     ${bankMonthlyHtml()}
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px">${bankDirControls()}${bankPeriodControls()}</div>
     ${bankSearchControls()}

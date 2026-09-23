@@ -2197,8 +2197,41 @@ check('התאמת בנק — המסנן מדווח כמה שורות הוא מס
   if (!/הן קיימות במערכת/.test(fn)) throw new Error('האזהרה אינה מבהירה שהשורות קיימות');
   if (!/setBankFilter\('all'\)/.test(fn)) throw new Error('אין דרך מהירה להציג הכל');
   if (!/BANK_DIR_HE/.test(fn)) throw new Error('שם המסנן אינו מוצג');
-  // ברירת המחדל עדיין "רק זכות" — לא שינינו התנהגות, רק הוספנו חיווי
-  if (!/state\.bankFilter \|\| 'credit'/.test(app)) throw new Error('ברירת המחדל של המסנן שונתה בלי כוונה');
+  // ברירת המחדל מציגה הכל: שורה שלא נראית נקראת כשורה שלא נקלטה
+  if (/state\.bankFilter \|\| 'credit'/.test(app)) throw new Error('ברירת המחדל עדיין מסתירה הוצאות');
+  if (!/state\.bankFilter \|\| 'all'/.test(app)) throw new Error('ברירת המחדל אינה "הכל"');
+  return true;
+});
+
+// תנועה שאושרה בלי מסמך אינה מופיעה ב"לא מותאמות" (היא מאושרת) ואינה מעוררת
+// חשד (היא ירוקה) — ונספרת במלואה בהכנסות/הוצאות. זו הדרך היחידה לראות אותה.
+check('התאמת בנק — תנועות שאושרו בלי אף מסמך מוצגות', () => {
+  const fn = app.slice(app.indexOf('function bankNoDocRows'), app.indexOf('function bankVisibleRows'));
+  if (!fn) throw new Error('bankNoDocRows לא נמצאה');
+  const rows = new Function('_bankList', 'ddmy', 'escapeHtml', 'escAttr', 'money',
+    fn + '; return { bankNoDocRows, bankNoDocHtml };')(
+    [{ id: 'a', date: '10/09/2026', absAmount: 55106, direction: 'debit', matchStatus: 'approved', matchedInvoices: [] },
+     { id: 'b', date: '01/09/2026', absAmount: 900, direction: 'credit', matchStatus: 'approved', matchedInvoices: [{ id: 'd' }] },
+     { id: 'c', date: '02/09/2026', absAmount: 7000, direction: 'debit', matchStatus: 'unmatched', matchedInvoices: [] },
+     { id: 'd', date: '03/09/2026', absAmount: 90000, direction: 'credit', matchStatus: 'approved', matchedInvoices: [] }],
+    (d) => String(d), (x) => String(x == null ? '' : x), (x) => String(x == null ? '' : x),
+    (n) => '₪' + Number(n || 0).toLocaleString('he-IL'));
+
+  const r = rows.bankNoDocRows();
+  if (r.length !== 2) throw new Error('נבחרו שורות שגויות: ' + r.length);
+  if (r[0].id !== 'd') throw new Error('אינן ממוינות לפי סכום — הגדולה ביותר ראשונה');
+  if (r.some(x => x.matchStatus !== 'approved')) throw new Error('נכללה שורה שאינה מאושרת');
+  if (r.some(x => (x.matchedInvoices || []).length)) throw new Error('נכללה שורה עם מסמך');
+
+  const html = rows.bankNoDocHtml();
+  if (!/2 תנועות אושרו בלי אף מסמך/.test(html)) throw new Error('הכותרת אינה מדווחת את המספר');
+  if (!/145,106/.test(html)) throw new Error('הסכום הכולל שגוי');
+  if (!/bankShowTx/.test(html)) throw new Error('אין דרך לקפוץ לשורה');
+  // בלי שורות כאלה — אין רעש על המסך
+  const empty = new Function('_bankList', 'ddmy', 'escapeHtml', 'escAttr', 'money',
+    fn + '; return bankNoDocHtml;')([], String, String, String, String)();
+  if (empty !== '') throw new Error('הרכיב מוצג גם כשאין מה להציג');
+  if (!/\$\{bankNoDocHtml\(\)\}/.test(app)) throw new Error('הרכיב אינו מוצג במסך הבנק');
   return true;
 });
 
