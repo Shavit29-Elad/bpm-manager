@@ -3881,6 +3881,15 @@ add('GET', /^\/api\/contractors\/diag$/, (req, res, _p, q) => {
         typeName: eventBoard.SUP_DOC_NAMES[eventBoard.normDocType(p.documentType)] || '(סוג לא מוכר)',
         allowedForLicensed: eventBoard.SUP_DOC_TYPES_LICENSED.includes(eventBoard.normDocType(p.documentType)),
         hasFile: !!(p.localFileId || p.giExpenseId || p.draftId), paid: !!p.paid,
+        // אילו שורות ספק מצביעות להוצאה הזו. שורה שמופיעה בעורך ההוצאה עם סכום
+        // אך אינה כאן — השיוך מעולם לא נשמר, ולכן האירוע אינו מציג את המסמך.
+        linkedRows: (db.events || []).filter(e => ownedBy(e, cid)).flatMap(e =>
+          (e.contractorDetails || []).map((c, i) => ({ c, i, e }))
+            .filter(x => String(x.c.paidPayableId || '') === String(p.id)
+              || (x.c.docs || []).some(d => String(d.payableId || '') === String(p.id)))
+            .map(x => ({ event: x.e.artist || x.e.id, date: x.e.date || null, row: x.i,
+              role: x.c.role || null, name: x.c.name || null, amount: x.c.amount ?? null,
+              via: String(x.c.paidPayableId || '') === String(p.id) ? 'paidPayableId' : 'docs' }))),
       })),
     };
   }) : null;
