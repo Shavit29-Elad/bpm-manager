@@ -8891,7 +8891,7 @@ window.openBoardView = (id, keepOpen) => {
       <td data-label="ללא מע״מ" style="text-align:left;white-space:nowrap">${money(r.ex)}</td>
       <td data-label="כולל מע״מ" style="text-align:left;white-space:nowrap">${money(r.inc)}${r.vatExempt ? ' <span class="tag" style="background:#eef0fb;color:#5b6180;font-size:10px">פטור</span>' : ''}</td>
       <td data-label="תשלום" style="white-space:nowrap">${r.paid
-        ? `<span class="tag" style="background:#e7f7ee;color:#0a7d33">שולם</span>${r.paidDate ? `<div style="font-size:10.5px;color:#6b7488;margin-top:2px">${escapeHtml(ddmy(r.paidDate))}${r.paidSource === 'bank' ? ' · מהבנק' : ''}</div>` : (r.paidSource === 'manual' ? '<div style="font-size:10.5px;color:#6b7488;margin-top:2px">סומן ידנית</div>' : '')}`
+        ? `<span class="tag" style="background:#e7f7ee;color:#0a7d33">שולם</span>${r.paidDate ? `<div style="font-size:10.5px;color:#6b7488;margin-top:2px">${escapeHtml(ddmy(r.paidDate))}</div>` : (r.paidSource === 'manual' ? '<div style="font-size:10.5px;color:#6b7488;margin-top:2px">סומן ידנית</div>' : '')}`
         : '<span class="tag" style="background:#fff4e5;color:#a15c00">טרם שולם</span>'}</td>
       <td data-label="מסמכי ספק" style="white-space:normal">${bDocChips(ev, r)}
         <button class="btn ghost" style="padding:1px 8px;font-size:11px;margin-inline-start:4px" onclick="bDocToggle(${r.index})" title="${_bvOpen[r.index] ? 'סגירת הפירוט' : 'פתיחת פירוט המסמכים'}">${_bvOpen[r.index] ? '▴ סגור' : '▾ פירוט'}</button></td>
