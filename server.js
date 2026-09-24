@@ -2097,10 +2097,28 @@ function applyBankSupplierPayments(db, want) {
   // חשבונית שקיימת בחשבונית ירוקה ומותאמת בבנק, אך מעולם לא נקלטה דרך האתר, אין
   // לה רשומה מקומית — ולכן היא לא נכללה בלולאה למעלה, והשיוך אליה לא זוהה כתשלום.
   // כאן נגזר הסטטוס ישירות מהתאמת הבנק: אם הבנק מכסה את סכום החשבונית, שולם.
+  // כל המסמכים שמצביעים על השורה: השדות הישנים, וגם docs[] — המסמכים שמצורפים
+  // לשורה בלוח האירועים. בלעדיהם מסמך ששויך דרך הלוח לא נספר כתשלום כלל,
+  // גם כשהוא מותאם לתנועת חובה בבנק.
+  const rowDocKeys = (c) => {
+    const keys = [];
+    const push = (pid, num, eid) => {
+      if (pid != null) keys.push('pid:' + String(pid));
+      if (eid != null) keys.push('eid:' + String(eid));
+      if (pid != null && String(pid).startsWith('gi:')) keys.push('eid:' + String(pid).slice(3));
+      if (num != null && String(num).trim() !== '') keys.push('num:' + _nrmExpKey(num));
+    };
+    push(c.paidPayableId, c.paidInvoice, c.paidExpenseId);
+    for (const d of (c.docs || [])) push(d.payableId, d.number, d.giExpenseId);
+    return keys;
+  };
   const bankOnlyStatus = (c) => {
     let paidAmt = 0;
+    for (const k of rowDocKeys(c)) {
+      if (k.startsWith('num:')) paidAmt = Math.max(paidAmt, debitByKey[k] || 0);
+      else if (k.startsWith('eid:')) paidAmt = Math.max(paidAmt, debitByKey['id:' + k.slice(4)] || 0);
+    }
     if (c.paidExpenseId != null) paidAmt = Math.max(paidAmt, debitByKey['id:' + String(c.paidExpenseId)] || 0);
-    if (c.paidInvoice != null) paidAmt = Math.max(paidAmt, debitByKey['num:' + _nrmExpKey(c.paidInvoice)] || 0);
     if (paidAmt <= 0) return null;
     // אין רשומה מקומית ולכן אין "סכום חשבונית" להשוות אליו. תנועת חובה מותאמת
     // לחשבונית הזו היא עדות מספקת שהיא שולמה.
@@ -2112,11 +2130,10 @@ function applyBankSupplierPayments(db, want) {
     if (want && (ev.companyId || giCompanyId()) !== want) continue;
     for (const c of (ev.contractorDetails || [])) {
       if (!c) continue;
-      const v = (c.paidPayableId != null && statusByKey['pid:' + String(c.paidPayableId)])
-        || (c.paidExpenseId != null && statusByKey['eid:' + String(c.paidExpenseId)])
-        || (c.paidInvoice != null && statusByKey['num:' + _nrmExpKey(c.paidInvoice)])
-        || bankOnlyStatus(c) || null;
-      const hasLink = !!(c.paidInvoice || c.paidPayableId || c.paidExpenseId);
+      let v = null;
+      for (const k of rowDocKeys(c)) { if (statusByKey[k]) { v = statusByKey[k]; break; } }
+      if (!v) v = bankOnlyStatus(c) || null;
+      const hasLink = !!(c.paidInvoice || c.paidPayableId || c.paidExpenseId || (c.docs || []).length);
       if (v && v.kind === 'full') {
         if (!c.paid || c.paidSource !== v.source) { c.paid = true; c.paidSource = v.source; dirty = true; }
       } else if (c.paid && c.paidSource !== 'manual' && hasLink) {

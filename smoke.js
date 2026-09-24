@@ -268,13 +268,21 @@ check('חשבונית מותאמת בבנק נחשבת שולמה גם בלי ר
   const fnSrc = srv.match(/const bankOnlyStatus = \(c\) => \{[\s\S]*?\n  \};/);
   if (!fnSrc) throw new Error('bankOnlyStatus לא קיימת');
   const nrm = (x) => String(x || '').trim().toLowerCase().replace(/^0+/, '');
-  const fn = new Function('debitByKey', '_nrmExpKey', 'c', fnSrc[0] + ' return bankOnlyStatus(c);');
+  // bankOnlyStatus נשענת על rowDocKeys, שאוספת גם את המסמכים שמצורפים לשורה
+  const keysSrc = srv.match(/const rowDocKeys = \(c\) => \{[\s\S]*?\n  \};/);
+  if (!keysSrc) throw new Error('rowDocKeys לא קיימת');
+  const fn = new Function('debitByKey', '_nrmExpKey', 'c', keysSrc[0] + fnSrc[0] + ' return bankOnlyStatus(c);');
   const keys = { 'num:40114': 16107 };
   if (!fn(keys, nrm, { paidInvoice: '40114' })) throw new Error('חשבונית מותאמת לא זוהתה כשולמה');
   if (fn(keys, nrm, { paidInvoice: '99999' })) throw new Error('חשבונית לא מותאמת סומנה כשולמה');
   if (fn(keys, nrm, {})) throw new Error('שורה בלי קישור סומנה כשולמה');
   // ובעיקר — שהפונקציה באמת מחוברת לשרשרת. בלי זה הבדיקה עוברת בזמן שהתיקון מנותק.
-  if (!/\|\|\s*bankOnlyStatus\(c\)/.test(srv)) throw new Error('bankOnlyStatus לא מחוברת לחישוב הסטטוס');
+  if (!/v = bankOnlyStatus\(c\)/.test(srv)) throw new Error('bankOnlyStatus לא מחוברת לחישוב הסטטוס');
+  // וכל מקורות הקישור נבדקים — כולל המסמכים שמצורפים לשורה בלוח
+  if (!/for \(const k of rowDocKeys\(c\)\) \{ if \(statusByKey\[k\]\)/.test(srv))
+    throw new Error('סטטוס התשלום אינו נגזר מכל המסמכים שמצביעים על השורה');
+  if (!/for \(const d of \(c\.docs \|\| \[\]\)\) push\(d\.payableId, d\.number, d\.giExpenseId\)/.test(srv))
+    throw new Error('docs[] אינם נכללים במקורות הקישור');
   return true;
 });
 
@@ -2200,6 +2208,45 @@ check('התאמת בנק — המסנן מדווח כמה שורות הוא מס
   // ברירת המחדל מציגה הכל: שורה שלא נראית נקראת כשורה שלא נקלטה
   if (/state\.bankFilter \|\| 'credit'/.test(app)) throw new Error('ברירת המחדל עדיין מסתירה הוצאות');
   if (!/state\.bankFilter \|\| 'all'/.test(app)) throw new Error('ברירת המחדל אינה "הכל"');
+  return true;
+});
+
+// "טרם שולם" נגזר מהתאמות הבנק: מסמך שמצורף לשורה ומותאם לתנועת חובה = שולם.
+// הלוגיקה קראה רק את השדות הישנים ולא את docs[] — ולכן שורות עם קבלה מצורפת
+// הופיעו כולן "טרם שולם" אף שהכסף יצא.
+check('תשלום לספק — מסמך שמצורף לשורה בלוח נספר מהתאמות הבנק', () => {
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const fn = srv.match(/function applyBankSupplierPayments\(db, want\) \{[\s\S]*?\n\}/);
+  if (!fn) throw new Error('applyBankSupplierPayments לא נמצאה');
+  const build = (debits) => new Function('supplierBankDebitByKey', '_nrmExpKey', 'giCompanyId', 'save',
+    fn[0] + '; return applyBankSupplierPayments;')(
+    () => debits, (x) => String(x || '').replace(/\s+/g, '').replace(/^0+/, ''), () => 'c', () => {});
+
+  // שורה שכל הקישור שלה הוא מסמך ב-docs, והמסמך מותאם בבנק
+  const mk = () => ({ supplierPayables: [], events: [{ id: 'e1', companyId: 'c',
+    contractorDetails: [{ role: 'קלידן', name: 'יואב', amount: 2100,
+      docs: [{ id: 'd1', number: '80298', type: 400 }] }] }] });
+  let db = mk();
+  build({ 'num:80298': 2100 })(db, 'c');
+  const row = db.events[0].contractorDetails[0];
+  if (!row.paid) throw new Error('מסמך שמצורף לשורה ומותאם בבנק לא נספר כתשלום');
+  if (row.paidSource !== 'bank') throw new Error('מקור התשלום אינו הבנק: ' + row.paidSource);
+
+  // בלי התאמה בבנק — נשאר טרם שולם
+  db = mk();
+  build({})(db, 'c');
+  if (db.events[0].contractorDetails[0].paid) throw new Error('שורה בלי התאמת בנק סומנה כשולמה');
+
+  // מזהה הוצאה של חשבונית ירוקה (gi:<id>) נבדק גם הוא
+  db = { supplierPayables: [], events: [{ id: 'e1', companyId: 'c',
+    contractorDetails: [{ name: 'מאיה', amount: 1800, docs: [{ id: 'd', payableId: 'gi:X1' }] }] }] };
+  build({ 'id:X1': 1800 })(db, 'c');
+  if (!db.events[0].contractorDetails[0].paid) throw new Error('מסמך מחשבונית ירוקה לא נספר כתשלום');
+
+  // סימון ידני אינו מבוטל בהיעדר התאמה
+  db = mk(); db.events[0].contractorDetails[0].paid = true; db.events[0].contractorDetails[0].paidSource = 'manual';
+  build({})(db, 'c');
+  if (!db.events[0].contractorDetails[0].paid) throw new Error('סימון ידני בוטל');
   return true;
 });
 
