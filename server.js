@@ -3920,14 +3920,18 @@ add('GET', /^\/api\/contractors\/diag$/, (req, res, _p, q) => {
       else if (c.paid) skipPaid++;
       else if (!(Number(c.amount) > 0)) noAmount++;
       for (const d of (c.docs || [])) { rowDocs++; if (!d.payableId) rowDocsUploaded++; }
-      if (sample.length < 12) sample.push({ event: ev.artist || ev.id, date: ev.date || null, name,
+      // שורות עם מסמך קודמות בדגימה — הן היחידות שיכולות ללמד משהו על הסטטוס
+      const hasDoc = !!(c.paidPayableId || c.paidInvoice || c.paidExpenseId || (c.docs || []).length);
+      if (hasDoc || sample.length < 12) (hasDoc ? sample.unshift : sample.push).call(sample, { event: ev.artist || ev.id, date: ev.date || null, name,
         amount: c.amount ?? null, paid: !!c.paid, paidSource: c.paidSource || null, handled: !!c.handled,
         links: { paidPayableId: c.paidPayableId || null, paidInvoice: c.paidInvoice || null, paidExpenseId: c.paidExpenseId || null },
         docs: (c.docs || []).map(d => ({ number: d.number ?? null, type: d.type ?? null, asPayable: !!d.payableId })),
         // האם מסמך כלשהו של השורה מותאם לתנועת חובה בבנק — זו העדות לתשלום
-        bankMatched: bankDocKeys.size ? [...docKeysOf(c)].filter(k => bankDocKeys.has(k)) : [] });
+        bankMatched: bankDocKeys.size ? [...docKeysOf(c)].filter(k => bankDocKeys.has(k)) : [],
+        allKeys: [...docKeysOf(c)] });
     }
   }
+  sample.length = Math.min(sample.length, 14);
   const pay = (db.supplierPayables || []).filter(p => ownedBy(p, cid));
   // חיפוש הוצאה לפי מספר מסמך — "יש לי חשבונית כזו ואני לא מוצא אותה".
   // נבדק בכל החברות, כי הסיבה השכיחה היא שהיא נקלטה תחת חברה אחרת.
