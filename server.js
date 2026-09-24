@@ -3822,8 +3822,27 @@ add('GET', /^\/api\/contractors\/diag$/, (req, res, _p, q) => {
     }
   }
   const pay = (db.supplierPayables || []).filter(p => ownedBy(p, cid));
+  // חיפוש הוצאה לפי מספר מסמך — "יש לי חשבונית כזו ואני לא מוצא אותה".
+  // נבדק בכל החברות, כי הסיבה השכיחה היא שהיא נקלטה תחת חברה אחרת.
+  const nums = String(q.number || '').split(',').map(x => x.trim()).filter(Boolean);
+  const lookup = nums.length ? nums.map(n => {
+    const all = (db.supplierPayables || []).filter(p => String(p.number || '').trim() === n);
+    return {
+      number: n,
+      found: all.map(p => ({
+        companyId: p.companyId || '(ברירת מחדל)', inThisCompany: ownedBy(p, cid),
+        supplierName: p.supplierName || null, date: p.date || null, amount: p.amount ?? null,
+        documentType: p.documentType ?? null,
+        normalizedType: eventBoard.normDocType(p.documentType),
+        typeName: eventBoard.SUP_DOC_NAMES[eventBoard.normDocType(p.documentType)] || '(סוג לא מוכר)',
+        allowedForLicensed: eventBoard.SUP_DOC_TYPES_LICENSED.includes(eventBoard.normDocType(p.documentType)),
+        hasFile: !!(p.localFileId || p.giExpenseId || p.draftId), paid: !!p.paid,
+      })),
+    };
+  }) : null;
   json(res, {
     companyId: cid, events: evs.length,
+    ...(lookup ? { lookup } : {}),
     supplierRows: { total: rows, withName: named,
       shownInPayables: Math.max(0, named - skipPaid - skipHandled),
       hiddenBecausePaid: skipPaid, hiddenBecauseHandled: skipHandled, withoutAmount: noAmount },
