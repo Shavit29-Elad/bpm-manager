@@ -355,13 +355,22 @@ add('GET', /^\/api\/event-board\/expenses$/, async (req, res, _p, q) => {
   const norm = (x) => String(x || '').replace(/בע["\'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
   const want = norm(q.supplier);
   const term = String(q.q || '').trim().toLowerCase();
-  // אילו הוצאות כבר משויכות לשורת אירוע כלשהי
-  const used = new Set();
+  // אילו הוצאות כבר משויכות לשורת אירוע — ולאיזה אירוע בדיוק. "כבר משויך" בלי
+  // לומר לאן מכריח לצאת ולחפש, וזו בדיוק השאלה שעולה באותו רגע.
+  const used = new Map();
+  const noteUse = (pid, e, c) => {
+    if (!pid) return;
+    const k = String(pid);
+    const label = `${e.artist || 'אירוע'}${e.date ? ' · ' + String(e.date).slice(0, 10).split('-').reverse().join('/') : ''}${c && c.role ? ' · ' + c.role : ''}`;
+    const arr = used.get(k) || [];
+    if (!arr.includes(label)) arr.push(label);
+    used.set(k, arr);
+  };
   for (const e of (db.events || [])) {
     if (!ownedBy(e, cid)) continue;
     for (const c of (e.contractorDetails || [])) {
-      if (c && c.paidPayableId) used.add(String(c.paidPayableId));
-      for (const d of ((c && c.docs) || [])) if (d && d.payableId) used.add(String(d.payableId));
+      if (c && c.paidPayableId) noteUse(c.paidPayableId, e, c);
+      for (const d of ((c && c.docs) || [])) if (d && d.payableId) noteUse(d.payableId, e, c);
     }
   }
   // כשמחפשים — החיפוש גובר על סינון הספק. אחרת אי אפשר להגיע למסמך שנרשם
@@ -375,7 +384,7 @@ add('GET', /^\/api\/event-board\/expenses$/, async (req, res, _p, q) => {
       documentType: eventBoard.normDocType(p.documentType),
       amount: Number(p.amount) || 0, amountExcludeVat: Number(p.amountExcludeVat) || 0,
       description: p.description || '', paid: !!p.paid,
-      hasFile: !!(p.localFileId || p.giExpenseId || p.draftId), linked: used.has(String(p.id)) }))
+      hasFile: !!(p.localFileId || p.giExpenseId || p.draftId), linked: used.has(String(p.id)), linkedTo: used.get(String(p.id)) || [] }))
     .sort((a, b) => (a.linked === b.linked ? String(b.date || '').localeCompare(String(a.date || '')) : (a.linked ? 1 : -1)))
     .slice(0, term ? 200 : 80);
   // ההוצאות של חשבונית ירוקה עצמן — לא רק המראה המקומית. מסך הבנק תמיד קרא
@@ -397,7 +406,7 @@ add('GET', /^\/api\/event-board\/expenses$/, async (req, res, _p, q) => {
           documentType: eventBoard.normDocType(e.type),
           amount: Number(e.amount) || 0, amountExcludeVat: Number(e.amountExVat) || 0,
           description: e.description || '', paid: false, source: 'gi',
-          hasFile: !!e.url, linked: used.has('gi:' + e.id) }));
+          hasFile: !!e.url, linked: used.has('gi:' + e.id), linkedTo: used.get('gi:' + e.id) || [] }));
     } catch (e) { giError = e.message; }
   }
   const merged = [...items, ...giItems]
@@ -2061,8 +2070,13 @@ add('GET', /^\/api\/contractors\/open-events$/, (req, res, _p, q) => {
 // בנוסף: מנרמל את שורות הקבלן באירועים — מאפס סימוני "שולם" ישנים שנוצרו מקישור בלבד (לא מבנק ולא ידני),
 // ומסמן כשולם את אלה שמכוסים במלואם בבנק. סימון ידני (paidSource='manual') או "סמן כשולם" על ההוצאה (p.paid) נשמרים.
 const _nrmExpKey = (s) => String(s == null ? '' : s).replace(/\s+/g, '').replace(/^0+/, '');
+// תאריך התשלום לכל מסמך — התנועה המאוחרת ביותר שמותאמת אליו. נשמר על השורה
+// כדי שליד "שולם" יופיע מתי בדיוק יצא הכסף, ולא רק שהוא יצא.
+const bankDebitDates = {};
+const _dateKey = (d) => { const m = String(d || '').match(/^(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : String(d || ''); };
 function supplierBankDebitByKey(db, want) {
   const byKey = {}; // 'id:'+expenseId / 'num:'+number → סכום מצטבר ששולם בבנק (חובה)
+  for (const k of Object.keys(bankDebitDates)) delete bankDebitDates[k];
   for (const t of (db.bankTx || [])) {
     // ownedBy ולא השוואה נוקשה: תנועה ישנה בלי תיוג חברה שייכת לחברת ברירת המחדל,
     // והשוואה נוקשה הפילה אותה מהחישוב לגמרי
@@ -2073,8 +2087,9 @@ function supplierBankDebitByKey(db, want) {
     for (const inv of exps) {
       // תרומת השורה: הקצאה מפורשת אם קיימת, אחרת סכום השורה (כשההוצאה היחידה בשורה), אחרת סכום ההוצאה
       const contrib = Number(inv.allocated != null ? inv.allocated : (exps.length === 1 ? rowAmt : (inv.amount != null ? inv.amount : 0))) || 0;
-      if (inv.id != null) { const k = 'id:' + String(inv.id); byKey[k] = (byKey[k] || 0) + contrib; }
-      if (inv.number != null) { const k = 'num:' + _nrmExpKey(inv.number); byKey[k] = (byKey[k] || 0) + contrib; }
+      const noteDate = (k) => { const d = String(t.date || ''); if (d && (!bankDebitDates[k] || _dateKey(d) > _dateKey(bankDebitDates[k]))) bankDebitDates[k] = d; };
+      if (inv.id != null) { const k = 'id:' + String(inv.id); byKey[k] = (byKey[k] || 0) + contrib; noteDate(k); }
+      if (inv.number != null) { const k = 'num:' + _nrmExpKey(inv.number); byKey[k] = (byKey[k] || 0) + contrib; noteDate(k); }
     }
   }
   return byKey;
@@ -2142,12 +2157,19 @@ function applyBankSupplierPayments(db, want) {
       let v = null;
       for (const k of rowDocKeys(c)) { if (statusByKey[k]) { v = statusByKey[k]; break; } }
       if (!v) v = bankOnlyStatus(c) || null;
+      // תאריך התשלום — מהתנועה שמותאמת לאחד ממסמכי השורה
+      let payDate = null;
+      for (const k of rowDocKeys(c)) {
+        const d = bankDebitDates[k] || (k.startsWith('eid:') ? bankDebitDates['id:' + k.slice(4)] : null);
+        if (d && (!payDate || _dateKey(d) > _dateKey(payDate))) payDate = d;
+      }
       const hasLink = !!(c.paidInvoice || c.paidPayableId || c.paidExpenseId || (c.docs || []).length);
       if (v && v.kind === 'full') {
         if (!c.paid || c.paidSource !== v.source) { c.paid = true; c.paidSource = v.source; dirty = true; }
+        if (v.source === 'bank' && payDate && c.paidDate !== payDate) { c.paidDate = payDate; dirty = true; }
       } else if (c.paid && c.paidSource !== 'manual' && hasLink) {
         // סימון ישן שנוצר מקישור בלבד (לא ידני, לא מכוסה במלואו בבנק) → מאופס
-        c.paid = false; c.paidSource = null; dirty = true;
+        c.paid = false; c.paidSource = null; c.paidDate = null; dirty = true;
       }
     }
   }

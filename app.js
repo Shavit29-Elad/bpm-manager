@@ -8532,7 +8532,7 @@ function renderBdLink() {
           <span style="flex:1;min-width:0"><b>${escapeHtml(x.supplierName || '—')}</b>
             <span class="muted">· ${escapeHtml(SUP_DOC_NAMES[x.documentType] || 'מסמך')}${x.number ? ' #' + escapeHtml(String(x.number)) : ''}${x.date ? ' · ' + ddmy(x.date) : ''}</span>
             ${ok(x) ? '' : `<div style="font-size:11px;color:var(--warn)">סוג שאינו מתאים ל${st.vatExempt ? 'עוסק פטור' : 'עוסק מורשה'} — מותר: ${escapeHtml(allowedTxt)}</div>`}</span>
-          ${x.linked ? '<span class="tag" style="background:#fff4e5;color:#a15c00;font-size:10px;white-space:nowrap">כבר משויך</span>' : ''}
+          ${x.linked ? `<span class="tag" style="background:#fff4e5;color:#a15c00;font-size:10px" title="${escAttr((x.linkedTo || []).join(' · ') || 'משויך לשורה אחרת')}">כבר משויך${(x.linkedTo || []).length ? ' — ' + escapeHtml(x.linkedTo[0]) + (x.linkedTo.length > 1 ? ` ועוד ${x.linkedTo.length - 1}` : '') : ''}</span>` : ''}
           ${x.hasFile ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33;font-size:10px">קובץ</span>' : ''}
           <span style="white-space:nowrap;font-weight:600">${money(x.amount)}</span></label>`).join('')}
       </div>`);
@@ -8890,7 +8890,9 @@ window.openBoardView = (id, keepOpen) => {
       <td data-label="ספק">${escapeHtml(r.name || '—')}</td>
       <td data-label="ללא מע״מ" style="text-align:left;white-space:nowrap">${money(r.ex)}</td>
       <td data-label="כולל מע״מ" style="text-align:left;white-space:nowrap">${money(r.inc)}${r.vatExempt ? ' <span class="tag" style="background:#eef0fb;color:#5b6180;font-size:10px">פטור</span>' : ''}</td>
-      <td data-label="תשלום" style="white-space:nowrap">${r.paid ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33">שולם</span>' : '<span class="tag" style="background:#fff4e5;color:#a15c00">טרם שולם</span>'}</td>
+      <td data-label="תשלום" style="white-space:nowrap">${r.paid
+        ? `<span class="tag" style="background:#e7f7ee;color:#0a7d33">שולם</span>${r.paidDate ? `<div style="font-size:10.5px;color:#6b7488;margin-top:2px">${escapeHtml(ddmy(r.paidDate))}${r.paidSource === 'bank' ? ' · מהבנק' : ''}</div>` : (r.paidSource === 'manual' ? '<div style="font-size:10.5px;color:#6b7488;margin-top:2px">סומן ידנית</div>' : '')}`
+        : '<span class="tag" style="background:#fff4e5;color:#a15c00">טרם שולם</span>'}</td>
       <td data-label="מסמכי ספק" style="white-space:normal">${bDocChips(ev, r)}
         <button class="btn ghost" style="padding:1px 8px;font-size:11px;margin-inline-start:4px" onclick="bDocToggle(${r.index})" title="${_bvOpen[r.index] ? 'סגירת הפירוט' : 'פתיחת פירוט המסמכים'}">${_bvOpen[r.index] ? '▴ סגור' : '▾ פירוט'}</button></td>
       ${r.note ? `<td data-label="הערה" class="muted" style="font-size:12px">${escapeHtml(r.note)}</td>` : '<td></td>'}
@@ -8937,9 +8939,12 @@ window.openBoardView = (id, keepOpen) => {
         </div>`
       : `<iframe src="${bDocUrl(shown.doc)}${bDocFrag()}" style="flex:1;min-height:66vh;width:100%;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>`}
     </div>` : '';
+  // מיקום הגלילה נשמר לפני הרינדור מחדש: פתיחת "פירוט" בונה את החלונית מחדש,
+  // והגלילה קפצה לראש בכל לחיצה — בדיוק כשהמשתמש בשורה שבתחתית הרשימה.
+  const _prevScroll = (() => { const el = m.querySelector && m.querySelector('.bv-scroll'); return el ? el.scrollTop : null; })();
   m.innerHTML = `<div class="modal-card bv-split" style="width:${shown ? 'min(1480px,98vw)' : 'min(1000px,97vw)'};max-height:92vh;max-height:92dvh;overflow:hidden;display:flex;gap:14px;align-items:stretch">
     ${side}
-    <div style="flex:1;min-width:0;overflow:auto">
+    <div class="bv-scroll" style="flex:1;min-width:0;overflow:auto">
     <div class="row-between" style="margin:0 0 4px">
       <h3 style="margin:0">${escapeHtml(ev.artist || 'אירוע')}</h3>
       <div style="display:flex;gap:6px">
@@ -8980,6 +8985,12 @@ window.openBoardView = (id, keepOpen) => {
     <div class="modal-actions"><button class="btn ghost" onclick="document.getElementById('bvModal').classList.add('hidden')">סגור</button></div>
     </div>
   </div>`;
+  // החזרת הגלילה למקום שבו המשתמש היה. רק ברינדור מחדש (keepOpen) — פתיחה
+  // חדשה של אירוע צריכה להתחיל מלמעלה.
+  if (keepOpen && _prevScroll != null && m.querySelector) {
+    const el = m.querySelector('.bv-scroll');
+    if (el) el.scrollTop = _prevScroll;
+  }
 };
 
 // הפקת מסמך לאירוע — פותח את חלונית המסמך עם פרטי האירוע כבר מלאים.

@@ -2218,9 +2218,10 @@ check('תשלום לספק — מסמך שמצורף לשורה בלוח נספ�
   const srv = fs.readFileSync('server.js', 'utf8');
   const fn = srv.match(/function applyBankSupplierPayments\(db, want\) \{[\s\S]*?\n\}/);
   if (!fn) throw new Error('applyBankSupplierPayments לא נמצאה');
-  const build = (debits) => new Function('supplierBankDebitByKey', '_nrmExpKey', 'giCompanyId', 'save',
+  const build = (debits, dates = {}) => new Function('supplierBankDebitByKey', '_nrmExpKey', 'giCompanyId', 'save', 'bankDebitDates', '_dateKey',
     fn[0] + '; return applyBankSupplierPayments;')(
-    () => debits, (x) => String(x || '').replace(/\s+/g, '').replace(/^0+/, ''), () => 'c', () => {});
+    () => debits, (x) => String(x || '').replace(/\s+/g, '').replace(/^0+/, ''), () => 'c', () => {},
+    dates, (d) => { const m = String(d || '').match(/^(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : String(d || ''); });
 
   // שורה שכל הקישור שלה הוא מסמך ב-docs, והמסמך מותאם בבנק
   const mk = () => ({ supplierPayables: [], events: [{ id: 'e1', companyId: 'c',
@@ -2257,6 +2258,12 @@ check('תשלום לספק — מסמך שמצורף לשורה בלוח נספ�
   // ותנועה בלי תיוג חברה אינה נופלת מהחישוב
   if (!/if \(want && !ownedBy\(t, want\)\) continue;/.test(srv))
     throw new Error('מפת החובה משתמשת בהשוואה נוקשה ומפילה תנועות בלי תיוג');
+
+  // תאריך התשלום נשמר על השורה — מהתנועה שמותאמת למסמך שלה
+  db = mk();
+  build({ 'num:80298': 2100 }, { 'num:80298': '16/09/2026' })(db, 'c');
+  if (db.events[0].contractorDetails[0].paidDate !== '16/09/2026')
+    throw new Error('תאריך התשלום לא נשמר: ' + db.events[0].contractorDetails[0].paidDate);
 
   // סימון ידני אינו מבוטל בהיעדר התאמה
   db = mk(); db.events[0].contractorDetails[0].paid = true; db.events[0].contractorDetails[0].paidSource = 'manual';
