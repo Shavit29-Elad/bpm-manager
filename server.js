@@ -542,9 +542,30 @@ add('POST', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc$/, async (req, res, p
     if (!allowed.includes(type)) return reject();
     const saved = await saveFile({ employeeId: 'evdoc:' + r.ev.id, kind: 'supplier-doc',
       filename: b.filename || 'document', mime: b.mime || 'application/octet-stream', data: String(b.data) });
-    doc = { id: id('bdoc'), type, number: (b.number != null && String(b.number).trim()) ? String(b.number).trim() : null,
-      date: b.date || null, amount: b.amount != null && b.amount !== '' ? Number(b.amount) : null,
-      payableId: null, fileId: saved.id, filename: b.filename || null, addedAt: new Date().toISOString() };
+    // קובץ שמועלה על שורה נרשם גם כהוצאת ספק — אותה תשתית של העלאה במסך
+    // הספקים. בלעדיו הוא היה מסמך של האירוע בלבד: לא נספר בהוצאות, לא הופיע
+    // במסך הספקים ולא היה ניתן לשיוך בהתאמות בנק.
+    const num = (b.number != null && String(b.number).trim()) ? String(b.number).trim() : null;
+    const amt = (b.amount != null && b.amount !== '' && !isNaN(Number(b.amount))) ? Number(b.amount) : null;
+    db.supplierPayables = db.supplierPayables || [];
+    const dupe = db.supplierPayables.find(p => ownedBy(p, cid) && num && String(p.number || '').trim() === num
+      && String(p.supplierName || '').trim() === String(r.row.name || '').trim());
+    let payable = dupe || null;
+    if (!payable) {
+      const net = amt != null ? Math.round((amt / (1 + eventBoard.VAT_RATE)) * 100) / 100 : null;
+      payable = { id: 'pay_' + Math.random().toString(36).slice(2, 10), companyId: cid,
+        supplierId: r.row.supplierId || null, supplierName: (r.row.name || '').trim(),
+        documentType: type, number: num, date: b.date || null,
+        amount: amt, amountExcludeVat: r.row.vatExempt ? amt : net,
+        vat: r.row.vatExempt || amt == null ? 0 : Math.round((amt - net) * 100) / 100,
+        description: b.description || `${r.row.role || ''} · ${r.ev.artist || ''}`.trim(),
+        paid: false, paidAt: null, localOnly: true, giExpenseId: null,
+        localFileId: saved.id, source: 'event-board', createdAt: new Date().toISOString() };
+      db.supplierPayables.push(payable);
+    }
+    doc = { id: id('bdoc'), type, number: num,
+      date: b.date || null, amount: amt,
+      payableId: payable.id, fileId: saved.id, filename: b.filename || null, addedAt: new Date().toISOString() };
   } else return json(res, { error: 'לא נבחר מסמך ולא הועלה קובץ' }, 400);
   r.row.docs.push(doc);
   save(db);

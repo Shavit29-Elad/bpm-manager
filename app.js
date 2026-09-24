@@ -8306,11 +8306,22 @@ window.bDocWide = () => { _bvWide = !_bvWide; const ev = _bvEvent; if (ev) openB
 
 function bDocChips(ev, r) {
   const docs = r.docs || [];
-  const chips = docs.map(d => `<span class="tag invoiced" style="font-size:10.5px;white-space:nowrap" title="${d.fromPayables ? 'שויך ממסך הספקים' : (d.payableId ? 'מהוצאות המערכת' : 'קובץ שהועלה')}">${escapeHtml(SUP_DOC_NAMES[d.type] || 'מסמך')}${d.number ? ' #' + escapeHtml(String(d.number)) : ''}</span>`).join(' ');
+  // התגית עצמה פותחת את המסמך בפאנל הצד של החלונית — בלי לפתוח "פירוט" קודם.
+  // המסמך הפתוח מסומן, כדי שיהיה ברור מה מוצג מימין.
+  const chips = docs.map(d => {
+    const open = _bvDoc === d.id;
+    return `<button class="tag invoiced" style="font-size:10.5px;white-space:nowrap;border:none;cursor:pointer;font-family:inherit;${open ? 'outline:2px solid var(--accent);' : ''}"
+      title="${d.fromPayables ? 'שויך ממסך הספקים' : (d.payableId ? 'מהוצאות המערכת' : 'קובץ שהועלה')} — לחץ לצפייה"
+      onclick="event.stopPropagation();bDocShow('${escAttr(String(d.id))}')">${escapeHtml(SUP_DOC_NAMES[d.type] || 'מסמך')}${d.number ? ' #' + escapeHtml(String(d.number)) : ''}${open ? ' ◂' : ''}</button>`;
+  }).join(' ');
   // סוג לא ידוע אינו נחשב כיסוי לשום סוג, אבל גם לא מוצג כ"חסר הכל"
   const known = docs.some(d => d.type == null);
   const missing = known ? [] : supDocTypes(r).filter(t => !docs.some(d => Number(d.type) === t));
-  const hint = docs.length ? '' : `<span class="muted" style="font-size:10.5px">אין מסמכים</span>`;
+  // אין מסמך — במקום להודיע על כך, מציעים מיד את שתי הדרכים לצרף אחד.
+  // קודם היה צריך לפתוח "פירוט" רק כדי לגלות איפה הכפתורים.
+  const act = (label, fn) => `<button class="btn ghost" style="padding:1px 8px;font-size:10.5px;white-space:nowrap" onclick="event.stopPropagation();${fn}">${label}</button>`;
+  const hint = docs.length ? '' : `<span style="display:inline-flex;gap:4px;flex-wrap:wrap;align-items:center">
+    ${act('🔗 שייך', `bDocLink('${escAttr(String(ev.id))}',${r.index})`)}${act('📎 העלה', `bDocUpload('${escAttr(String(ev.id))}',${r.index})`)}</span>`;
   return `${chips || hint}${docs.length && missing.length ? ` <span class="muted" style="font-size:10.5px">· חסר: ${missing.map(t => SUP_DOC_NAMES[t]).join(' / ')}</span>` : ''}`;
 }
 

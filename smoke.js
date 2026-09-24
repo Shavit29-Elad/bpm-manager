@@ -2499,9 +2499,44 @@ check('מסמכי ספק — עריכת שורה אינה מוחקת מסמכי�
   if (boardMod.normalizeRows([{ role: 'בסיסט', name: 'א', priceExVat: 100 }])[0].docs.length) throw new Error('שורה חדשה קיבלה מסמכים');
   return true;
 });
+// תגית המסמך בשורה הייתה טקסט בלבד: כדי לראות את המסמך היה צריך לפתוח "פירוט"
+// ורק אז ללחוץ. עכשיו התגית עצמה פותחת אותו בפאנל הצד.
+// קובץ שהועלה על שורה היה מסמך של האירוע בלבד: לא נספר בהוצאות, לא הופיע במסך
+// הספקים, ולא היה ניתן לשיוך בהתאמות בנק. עכשיו הוא נרשם כהוצאת ספק אמיתית.
+check('העלאת מסמך בשורה — נרשמת גם כהוצאת ספק', () => {
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const i = srv.indexOf("add('POST', /^\\/api\\/event-board\\/([^/]+)\\/row\\/(\\d+)\\/doc$/");
+  const route = srv.slice(i, i + 5000);
+  const up = route.slice(route.indexOf('} else if (b.data) {'));
+  if (!/db\.supplierPayables\.push\(payable\)/.test(up)) throw new Error('לא נוצרת רשומת הוצאה');
+  if (!/localFileId: saved\.id/.test(up)) throw new Error('הקובץ אינו מחובר להוצאה');
+  if (!/payableId: payable\.id/.test(up)) throw new Error('המסמך בשורה אינו מצביע להוצאה');
+  if (!/companyId: cid/.test(up)) throw new Error('ההוצאה נוצרת בלי שיוך חברה');
+  if (!/const dupe = db\.supplierPayables\.find/.test(up)) throw new Error('אין מניעת כפילות — העלאה חוזרת תשכפל הוצאה');
+  if (/\(1 \+ VAT_RATE\)/.test(up)) throw new Error('VAT_RATE אינו בהיקף — ייפול בזמן ריצה');
+  if (!/eventBoard\.VAT_RATE/.test(up)) throw new Error('שיעור המע״מ אינו נלקח ממקור אחד');
+  // ושורה בלי מסמך מציעה מיד את שתי הדרכים
+  const chips = app.slice(app.indexOf('function bDocChips'), app.indexOf('function bDocPanel'));
+  if (!/bDocLink\(/.test(chips) || !/bDocUpload\(/.test(chips))
+    throw new Error('שורה בלי מסמך אינה מציעה שיוך והעלאה');
+  return true;
+});
+
+check('מסמכי ספק — התגית בשורה פותחת את המסמך בפאנל הצד', () => {
+  const src = app.slice(app.indexOf('function bDocChips'), app.indexOf('function bDocPanel'));
+  if (!/onclick="event\.stopPropagation\(\);bDocShow\(/.test(src)) throw new Error('התגית אינה פותחת את המסמך');
+  if (!/_bvDoc === d\.id/.test(src)) throw new Error('המסמך הפתוח אינו מסומן בתגית');
+  if (!/<button class="tag invoiced"/.test(src)) throw new Error('התגית אינה לחיצה');
+  // וההצגה עוברת דרך הפאנל הקיים ולא פותחת חלונית חדשה
+  const show = app.slice(app.indexOf('window.bDocShow'), app.indexOf('window.bDocUpload'));
+  if (/document\.createElement\('div'\)[\s\S]{0,80}modal/.test(show)) throw new Error('נפתחת חלונית חדשה');
+  if (!/openBoardView\(ev\.id, true\)/.test(show)) throw new Error('הפאנל אינו מרונדר באותה חלונית');
+  return true;
+});
+
 check('מסמכי ספק — לוח הצפייה נבנה ומציג את מה שמקושר', () => {
   const src = app.slice(app.indexOf('const SUP_DOC_NAMES ='), app.indexOf('window.bDocToggle'));
-  const fns = new Function(`const escapeHtml=(x)=>String(x==null?'':x), money=(n)=>String(n), ddmy=(d)=>String(d||'');
+  const fns = new Function(`const escapeHtml=(x)=>String(x==null?'':x), escAttr=(x)=>String(x==null?'':x), money=(n)=>String(n), ddmy=(d)=>String(d||'');
     const window = {}; const openBoardView = () => {}; const state = { company: 'co_moshe' };
 \n${src}\nreturn { bDocChips, bDocPanel };`)();
   const ev = { id: 'e1' };
