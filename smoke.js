@@ -2203,6 +2203,28 @@ check('התאמת בנק — המסנן מדווח כמה שורות הוא מס
   return true;
 });
 
+// הוצאה שחיה בחשבונית ירוקה בלבד — שיוך לאירועים חייב לעבוד גם עליה. בלי זה
+// הראוט החזיר 404, הסכומים נראו מעודכנים במסך, והאירוע לא הציג שום מסמך.
+check('שיוך הוצאה לאירועים — עובד גם על הוצאה שקיימת רק בחשבונית ירוקה', () => {
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const i = srv.indexOf("add('POST', /^\\/api\\/supplier-payables\\/([^/]+)\\/event-amounts$/");
+  if (i < 0) throw new Error('ראוט השיוך לאירועים לא נמצא');
+  const ea = srv.slice(i, i + 3500);
+  if (!/replace\(\/\^gi:\/, ''\)/.test(ea)) throw new Error('הראוט אינו מקבל מזהה של חשבונית ירוקה');
+  if (!/greenInvoice\.getExpense\(rawId\)/.test(ea)) throw new Error('פרטי ההוצאה אינם נשלפים מחשבונית ירוקה');
+  if (!/row\.paidInvoice = String\(pay\.number\)/.test(ea)) throw new Error('מספר המסמך אינו נשמר על השורה');
+  if (!/async \(req, res, params, q, body\)/.test(ea)) throw new Error('הראוט אינו אסינכרוני');
+
+  // והלוח משלים את פרטי ההוצאה, אחרת התגית תציג "מסמך" ריק
+  const j = srv.indexOf("add('GET', /^\\/api\\/event-board$/");
+  const board = srv.slice(j, j + 2500);
+  if (!/^add\('GET', \/\^\\\/api\\\/event-board\$\/, async/.test(board)) throw new Error('ראוט הלוח אינו אסינכרוני');
+  if (!/String\(x\)\.startsWith\('gi:'\)/.test(board)) throw new Error('הלוח אינו מזהה שורות שמקושרות לחשבונית ירוקה');
+  if (!/payablesById\.set\(gid/.test(board)) throw new Error('פרטי ההוצאה אינם מושלמים לתגית');
+  if (!/slice\(0, 40\)/.test(board)) throw new Error('אין תקרה למספר השליפות מחשבונית ירוקה');
+  return true;
+});
+
 // המסמך המרוכז נבנה בסדר שבו סומנו התיבות, והיה חסר שדות שיש בעורך מסמך המשך.
 // ללקוח הוא נראה מבולגן וחסר, אף שזה אותו עורך.
 check('מסמך מרוכז — מיון לפי תאריך, וכל השדות של מסמך המשך', () => {

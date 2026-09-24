@@ -293,13 +293,32 @@ add('POST', /^\/api\/events$/, async (req, res, _p, _q, body) => {
 // ── לוח האירועים (משה כורסיה) ────────────────────────────────────────────
 // GET /api/event-board?year= — אירועי השנה מקובצים לחודשים, עם סיכומי הכנסה
 // והוצאה לכל חודש ולכל אירוע.
-add('GET', /^\/api\/event-board$/, (req, res, _p, q) => {
+add('GET', /^\/api\/event-board$/, async (req, res, _p, q) => {
   const db = load(), cid = reqCompany(q);
   const year = String(q.year || new Date().getFullYear());
   const evs = (db.events || []).filter(e => ownedBy(e, cid));
   // מפת ההוצאות — כדי שגם שיוך שנעשה ממסך הספקים יופיע בלוח עם סוג ומספר
   const mine = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid);
   const payablesById = new Map(mine.map(p => [String(p.id), p]));
+  // שורות שמקושרות להוצאה שקיימת בחשבונית ירוקה בלבד (gi:<id>) — משלימים את
+  // פרטיה כדי שהתגית תציג סוג, מספר וסכום ולא "מסמך" ריק.
+  const giIds = new Set();
+  for (const ev of companyEvents(db, cid)) for (const c of (ev.contractorDetails || [])) {
+    const ids = [c.paidPayableId, ...((c.docs || []).map(d => d.payableId))];
+    for (const x of ids) if (x && String(x).startsWith('gi:')) giIds.add(String(x));
+  }
+  if (giIds.size && giEnabled(cid) && greenInvoice.haveCredentials()) {
+    await Promise.all([...giIds].slice(0, 40).map(async (gid) => {
+      try {
+        const e = await greenInvoice.getExpense(gid.slice(3));
+        if (e && e.id) payablesById.set(gid, { id: gid, giExpenseId: gid.slice(3),
+          supplierName: (e.supplier && e.supplier.name) || e.supplierName || '',
+          number: e.number ?? e.documentNumber ?? null, date: e.documentDate ?? e.date ?? null,
+          amount: Number(e.amount ?? e.total ?? e.sum) || null,
+          documentType: e.type ?? e.documentType ?? null });
+      } catch { /* לא חוסם את הלוח */ }
+    }));
+  }
   // איתור חוזר לפי ספק ומספר מסמך, למקרה שהמזהה השמור על השורה מצביע להוצאה
   // שכבר לא קיימת. בלי זה הקובץ נפתח במסך הספקים ולא נפתח כאן, עם אותו מסמך.
   const normName = (x) => String(x || '').replace(/בע["'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
@@ -6637,12 +6656,27 @@ add('POST', /^\/api\/daily-report\/run$/, async (req, res, q, body) => {
 // שההוצאה מכסה. הסכום נשמר על האירוע עצמו (contractorDetails[index].amount), ולכן
 // משתקף מיד גם במסך האירועים, ברווחיות ובחישוב "מוכן לתשלום".
 // { items: [{ eventId, index, amount }] }
-add('POST', /^\/api\/supplier-payables\/([^/]+)\/event-amounts$/, (req, res, params, q, body) => {
+add('POST', /^\/api\/supplier-payables\/([^/]+)\/event-amounts$/, async (req, res, params, q, body) => {
   const db = load();
   const cid = reqCompany(q, body);
-  const pay = (db.supplierPayables || []).find(x => x.id === params[0]);
-  if (!pay) return json(res, { error: 'רישום ההוצאה לא נמצא' }, 404);
-  if (!ownedBy(pay, cid)) return wrongCompany(res, 'ההוצאה');
+  const rawId = String(params[0] || '').replace(/^gi:/, '');
+  let pay = (db.supplierPayables || []).find(x => x.id === params[0] || x.id === rawId);
+  if (pay && !ownedBy(pay, cid)) return wrongCompany(res, 'ההוצאה');
+  // הוצאה שקיימת בחשבונית ירוקה בלבד ואינה במראה המקומית. בלי זה השיוך לאירועים
+  // פשוט לא נשמר: הראוט החזיר 404, הסכומים נראו מעודכנים במסך, והאירוע לא הציג
+  // שום מסמך. רוב ההוצאות של משה הן כאלה — 23 מקומיות מול 65 שורות ספק.
+  if (!pay) {
+    if (!(giEnabled(cid) && greenInvoice.haveCredentials())) return json(res, { error: 'רישום ההוצאה לא נמצא' }, 404);
+    let e = null;
+    try { e = await greenInvoice.getExpense(rawId); } catch { }
+    if (!e || !e.id) return json(res, { error: 'רישום ההוצאה לא נמצא' }, 404);
+    pay = { id: 'gi:' + rawId, companyId: cid, giExpenseId: rawId,
+      supplierName: (e.supplier && e.supplier.name) || e.supplierName || '',
+      number: e.number ?? e.documentNumber ?? null,
+      date: e.documentDate ?? e.date ?? null,
+      amount: Number(e.amount ?? e.total ?? e.sum) || null,
+      documentType: e.type ?? e.documentType ?? null, fromGi: true };
+  }
   const items = Array.isArray(body && body.items) ? body.items : [];
   const updated = [], errors = [];
   let linked = 0;   // שורות שהקישור שלהן קובע למזהה
@@ -6659,6 +6693,9 @@ add('POST', /^\/api\/supplier-payables\/([^/]+)\/event-amounts$/, (req, res, par
     // ספק", וכל עריכה של אחד מהשדות האלה מנתקת אותן בשקט. אנחנו כאן בהקשר של ההוצאה
     // הזו בוודאות, אז זו ההזדמנות להפוך את הקישור למפורש ועמיד.
     if (!row.paidPayableId) { row.paidPayableId = pay.id; linked++; }
+    // מספר המסמך נשמר על השורה: כשההוצאה חיה בחשבונית ירוקה בלבד, זה מה שמאפשר
+    // לתגית להציג מספר גם לפני שנשלפו פרטיה
+    if (!row.paidInvoice && pay.number != null) row.paidInvoice = String(pay.number);
     const before = Number(row.amount) || 0;
     if (Math.abs(before - amt) < 0.005) continue;   // לא השתנה
     row.amount = +amt.toFixed(2);
