@@ -298,6 +298,10 @@ add('GET', /^\/api\/event-board$/, async (req, res, _p, q) => {
   const year = String(q.year || new Date().getFullYear());
   const evs = (db.events || []).filter(e => ownedBy(e, cid));
   // מפת ההוצאות — כדי שגם שיוך שנעשה ממסך הספקים יופיע בלוח עם סוג ומספר
+  // סטטוס התשלום נגזר מהתאמות הבנק, אבל החישוב רץ רק במסך הספקים ובעדכון שורת
+  // בנק — ולא כשהלוח נטען. לכן שורה שקיבלה מסמך מותאם המשיכה להציג "טרם שולם"
+  // עד שנכנסת למסך אחר. כאן הוא מופעל גם בטעינת הלוח.
+  try { applyBankSupplierPayments(db, cid); } catch { /* לא חוסם את הלוח */ }
   const mine = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid);
   const payablesById = new Map(mine.map(p => [String(p.id), p]));
   // שורות שמקושרות להוצאה שקיימת בחשבונית ירוקה בלבד (gi:<id>) — משלימים את
@@ -2060,7 +2064,9 @@ const _nrmExpKey = (s) => String(s == null ? '' : s).replace(/\s+/g, '').replace
 function supplierBankDebitByKey(db, want) {
   const byKey = {}; // 'id:'+expenseId / 'num:'+number → סכום מצטבר ששולם בבנק (חובה)
   for (const t of (db.bankTx || [])) {
-    if (want && t.companyId !== want) continue;
+    // ownedBy ולא השוואה נוקשה: תנועה ישנה בלי תיוג חברה שייכת לחברת ברירת המחדל,
+    // והשוואה נוקשה הפילה אותה מהחישוב לגמרי
+    if (want && !ownedBy(t, want)) continue;
     if (t.direction !== 'debit' || !['auto', 'manual', 'approved'].includes(t.matchStatus)) continue;
     const rowAmt = Number(t.absAmount != null ? t.absAmount : Math.abs(Number(t.amount) || 0)) || 0;
     const exps = (t.matchedInvoices || []).filter(inv => inv && inv.kind !== 'income');

@@ -2243,6 +2243,21 @@ check('תשלום לספק — מסמך שמצורף לשורה בלוח נספ�
   build({ 'id:X1': 1800 })(db, 'c');
   if (!db.events[0].contractorDetails[0].paid) throw new Error('מסמך מחשבונית ירוקה לא נספר כתשלום');
 
+  // כיסוי חלקי נחשב שולם: חשבונית אחת מכסה כמה אירועים, ותנועה אחת משלמת
+  // כמה חשבוניות — ולכן השוואת סכומים סימנה תשלומים אמיתיים כלא שולמו
+  db = { supplierPayables: [{ id: 'p1', companyId: 'c', number: '500', amount: 5000 }],
+    events: [{ id: 'e1', companyId: 'c', contractorDetails: [{ name: 'ספק', amount: 1000, paidPayableId: 'p1' }] }] };
+  build({ 'num:500': 1200 })(db, 'c');
+  if (!db.events[0].contractorDetails[0].paid) throw new Error('כיסוי חלקי לא נחשב שולם');
+
+  // והחישוב רץ גם בטעינת הלוח, ולא רק במסך הספקים
+  const board = srv.slice(srv.indexOf("add('GET', /^\\/api\\/event-board$/"), srv.indexOf("// GET /api/event-board/expenses"));
+  if (!/applyBankSupplierPayments\(db, cid\)/.test(board))
+    throw new Error('הלוח אינו מחשב מחדש סטטוס תשלום — הדגלים יישארו ישנים');
+  // ותנועה בלי תיוג חברה אינה נופלת מהחישוב
+  if (!/if \(want && !ownedBy\(t, want\)\) continue;/.test(srv))
+    throw new Error('מפת החובה משתמשת בהשוואה נוקשה ומפילה תנועות בלי תיוג');
+
   // סימון ידני אינו מבוטל בהיעדר התאמה
   db = mk(); db.events[0].contractorDetails[0].paid = true; db.events[0].contractorDetails[0].paidSource = 'manual';
   build({})(db, 'c');
