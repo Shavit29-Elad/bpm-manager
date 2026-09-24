@@ -2359,7 +2359,8 @@ check('ייבוא ממערכת קודמת — סוגים, תאריכים, סגו
 
 check('מסמכי ספק — הסוגים המותרים לפי סוג העוסק', () => {
   const lic = boardMod.supDocTypesFor({ vatExempt: false });
-  if (lic.join(',') !== '300,305,320') throw new Error('עוסק מורשה: ' + lic);
+  // קבלה כלולה גם לעוסק מורשה: היא אינה מסמך המס שלו, אבל היא הוכחת התשלום
+  if (lic.join(',') !== '300,305,320,400') throw new Error('עוסק מורשה: ' + lic);
   const ex = boardMod.supDocTypesFor({ vatExempt: true });
   if (ex.join(',') !== '400') throw new Error('עוסק פטור: ' + ex);
   // הממשק חייב להסכים עם השרת, אחרת המסך יציע סוג שהשרת ידחה

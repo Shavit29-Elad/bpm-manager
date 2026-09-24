@@ -20,7 +20,10 @@ export const isFixedRole = (role) => ROLE_SET.has(String(role || '').trim());
 // מסמכי הספק המותרים לשורה, לפי סוג העוסק. עוסק פטור אינו מוציא חשבונית מס,
 // ולכן המסמך היחיד שלו הוא קבלה. עוסק מורשה: חשבון עסקה, ואחריו חשבונית מס
 // או חשבונית מס-קבלה.
-export const SUP_DOC_TYPES_LICENSED = [300, 305, 320];
+// עוסק מורשה: חשבון עסקה, חשבונית מס ומס-קבלה — ובנוסף קבלה. קבלה אינה מסמך
+// המס שלו, אבל היא הוכחת התשלום, וחסימתה מנעה לצרף לשורה את מה שמראה ששולם.
+// עוסק פטור: קבלה בלבד — הוא אינו רשאי להוציא חשבונית מס.
+export const SUP_DOC_TYPES_LICENSED = [300, 305, 320, 400];
 export const SUP_DOC_TYPES_EXEMPT = [400];
 export const SUP_DOC_NAMES = { 300: 'חשבון עסקה', 305: 'חשבונית מס', 320: 'חשבונית מס-קבלה', 400: 'קבלה' };
 export const supDocTypesFor = (row) => (row && row.vatExempt) ? SUP_DOC_TYPES_EXEMPT : SUP_DOC_TYPES_LICENSED;
