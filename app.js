@@ -8281,7 +8281,11 @@ const supDocTypes = (r) => (r && r.vatExempt) ? [400] : [300, 305, 320];
 // שמזריקה companyId עובדת רק על fetch, ולכן בלי הוספה מפורשת כאן השרת נופל
 // לחברת ברירת המחדל ומחפש את ההוצאה של משה בחשבון של חברה אחרת.
 const bDocUrl = (d) => {
-  const base = d.payableId ? `/api/supplier-payables/${d.payableId}/file` : `/api/files/${encodeURIComponent(d.fileId)}`;
+  // הוצאה מחשבונית ירוקה נשמרת עם payableId בצורת gi:<id>. הנתיב להגשת קובץ
+  // כבר יודע לקבל מזהה הוצאה ישירות, ולכן מסירים את התחילית.
+  const pid = d.giExpenseId || (d.payableId && String(d.payableId).startsWith('gi:')
+    ? String(d.payableId).slice(3) : d.payableId);
+  const base = pid ? `/api/supplier-payables/${encodeURIComponent(pid)}/file` : `/api/files/${encodeURIComponent(d.fileId)}`;
   return state.company ? `${base}?companyId=${encodeURIComponent(state.company)}` : base;
 };
 let _bvOpen = {};   // אילו שורות פתוחות לפירוט, לפי אינדקס

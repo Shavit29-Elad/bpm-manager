@@ -327,7 +327,7 @@ add('GET', /^\/api\/event-board$/, (req, res, _p, q) => {
 
 // GET /api/event-board/expenses?supplier=&q= — הוצאות ספק קיימות במערכת,
 // להשלמת שורה בלוח. מסודרות כך שמה שעדיין לא שויך לשום אירוע מופיע ראשון.
-add('GET', /^\/api\/event-board\/expenses$/, (req, res, _p, q) => {
+add('GET', /^\/api\/event-board\/expenses$/, async (req, res, _p, q) => {
   const db = load(), cid = reqCompany(q);
   const norm = (x) => String(x || '').replace(/בע["\'׳]?מ/g, '').replace(/\s+/g, ' ').trim();
   const want = norm(q.supplier);
@@ -355,8 +355,33 @@ add('GET', /^\/api\/event-board\/expenses$/, (req, res, _p, q) => {
       hasFile: !!(p.localFileId || p.giExpenseId || p.draftId), linked: used.has(String(p.id)) }))
     .sort((a, b) => (a.linked === b.linked ? String(b.date || '').localeCompare(String(a.date || '')) : (a.linked ? 1 : -1)))
     .slice(0, term ? 200 : 80);
-  const totalForCompany = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid).length;
-  json(res, { ok: true, names: eventBoard.SUP_DOC_NAMES, items, totalForCompany, searchedAll: !!term });
+  // ההוצאות של חשבונית ירוקה עצמן — לא רק המראה המקומית. מסך הבנק תמיד קרא
+  // משם, ולכן חשבונית שנקלטה בחשבונית ירוקה הופיעה שם אך נעדרה מכאן לחלוטין.
+  // אצל משה היו 23 רשומות מקומיות מול 65 שורות ספק, וזה בדיוק הפער.
+  const seenNum = new Set(items.map(x => `${String(x.number || '')}|${String(x.supplierName || '')}`));
+  let giItems = [], giError = null;
+  if (giEnabled(cid) && greenInvoice.haveCredentials()) {
+    try {
+      const to = new Date().toISOString().slice(0, 10);
+      const from = `${new Date().getFullYear() - 1}-01-01`;
+      const gi = await greenInvoice.expensesInRange(from, to) || [];
+      giItems = gi
+        .filter(e => term ? true : (!want || norm(e.supplierName).includes(want) || want.includes(norm(e.supplierName))))
+        .filter(e => !term || [e.supplierName, e.number, e.description, e.date, String(e.amount)]
+          .some(x => String(x || '').toLowerCase().includes(term)))
+        .filter(e => !seenNum.has(`${String(e.number || '')}|${String(e.supplierName || '')}`))
+        .map(e => ({ id: 'gi:' + e.id, supplierName: e.supplierName || '', number: e.number || null, date: e.date || null,
+          documentType: eventBoard.normDocType(e.type),
+          amount: Number(e.amount) || 0, amountExcludeVat: Number(e.amountExVat) || 0,
+          description: e.description || '', paid: false, source: 'gi',
+          hasFile: !!e.url, linked: used.has('gi:' + e.id) }));
+    } catch (e) { giError = e.message; }
+  }
+  const merged = [...items, ...giItems]
+    .sort((a, b) => (a.linked === b.linked ? String(b.date || '').localeCompare(String(a.date || '')) : (a.linked ? 1 : -1)))
+    .slice(0, term ? 200 : 80);
+  const totalForCompany = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid).length + giItems.length;
+  json(res, { ok: true, names: eventBoard.SUP_DOC_NAMES, items: merged, totalForCompany, searchedAll: !!term, giError });
 });
 
 // POST /api/event-board — יצירה או עדכון של אירוע בלוח.
@@ -452,6 +477,25 @@ add('POST', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc$/, async (req, res, p
   const reject = () => json(res, { error: r.row.vatExempt ? 'לעוסק פטור אפשר לשייך קבלה בלבד' : 'סוג מסמך שאינו מתאים לספק מורשה' }, 400);
   const type = Number(b.type) || 0;
   let doc = null;
+  // הוצאה שמגיעה מחשבונית ירוקה עצמה (gi:<id>) ואינה במראה המקומית — מסך הבנק
+  // תמיד ידע לשייך אותה, והלוח לא. כאן היא מטופלת באותו מסלול.
+  if (b.payableId && String(b.payableId).startsWith('gi:')) {
+    const gid = String(b.payableId).slice(3);
+    if (!(giEnabled(cid) && greenInvoice.haveCredentials())) return json(res, { error: 'חשבונית ירוקה אינה מחוברת' }, 400);
+    let e = null;
+    try { e = await greenInvoice.getExpense(gid); } catch { }
+    if (!e || !e.id) return json(res, { error: 'ההוצאה לא נמצאה בחשבונית ירוקה' }, 404);
+    const et = eventBoard.normDocType(e.type ?? e.documentType);
+    if (!allowed.includes(et)) return reject();
+    if ((r.row.docs || []).some(d => String(d.payableId) === String(b.payableId))) return json(res, { error: 'המסמך כבר משויך לשורה' }, 400);
+    const amt = Number(e.amount ?? e.total ?? e.sum) || null;
+    doc = { id: id('bdoc'), type: et, number: e.number ?? e.documentNumber ?? null,
+      date: e.documentDate ?? e.date ?? null, amount: amt,
+      payableId: String(b.payableId), giExpenseId: gid, fileId: null, addedAt: new Date().toISOString() };
+    r.row.docs.push(doc);
+    save(db);
+    return json(res, { ok: true, doc });
+  }
   if (b.payableId) {
     const p = (db.supplierPayables || []).find(x => x.id === b.payableId);
     if (!p) return json(res, { error: 'ההוצאה לא נמצאה' }, 404);

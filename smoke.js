@@ -2374,10 +2374,21 @@ check('מסמכי ספק — הסוגים המותרים לפי סוג העוס�
   // השרת אוכף — לא רק מציג
   const srv = fs.readFileSync('server.js', 'utf8');
   const route = srv.slice(srv.indexOf("add('POST', /^\\/api\\/event-board\\/([^/]+)\\/row"));
-  const body = route.slice(0, 2200);
+  const body = route.slice(0, 4200);
   if (!/const allowed = eventBoard\.supDocTypesFor\(r\.row\)/.test(body)) throw new Error('השרת אינו מחשב את הסוגים המותרים');
   // בשיוך, האימות חייב להיות על הסוג האמיתי של ההוצאה ולא על מה שנשלח בבקשה
   if (!/allowed\.includes\(eventBoard\.normDocType\(p\.documentType\)\)/.test(body)) throw new Error('שיוך אינו מאמת את סוג ההוצאה עצמה');
+  // הוצאה שמגיעה מחשבונית ירוקה עצמה (gi:<id>) — מסך הבנק תמיד ידע לשייך אותה,
+  // והלוח לא. היא עוברת באותו מסלול ועם אותה אכיפת סוג.
+  if (!/String\(b\.payableId\)\.startsWith\('gi:'\)/.test(body)) throw new Error('הלוח אינו מקבל הוצאה מחשבונית ירוקה');
+  if (!/if \(!allowed\.includes\(et\)\) return reject\(\)/.test(body)) throw new Error('הוצאת חשבונית ירוקה אינה עוברת אכיפת סוג');
+  // והבורר מציע אותן — אחרת אין מה לשייך
+  const picker = srv.slice(srv.indexOf("add('GET', /^\\/api\\/event-board\\/expenses$/"), srv.indexOf("// POST /api/event-board —"));
+  if (!/expensesInRange/.test(picker)) throw new Error('הבורר אינו קורא את ההוצאות של חשבונית ירוקה');
+  if (!/seenNum\.has/.test(picker)) throw new Error('אין מניעת כפילות בין המראה המקומית לחשבונית ירוקה');
+  // והקובץ ניתן לצפייה מהשורה
+  if (!/d\.giExpenseId \|\| \(d\.payableId && String\(d\.payableId\)\.startsWith\('gi:'\)/.test(app))
+    throw new Error('מסמך מחשבונית ירוקה אינו ניתן לצפייה מהשורה');
   // הוצאות ספק שומרות חשבון עסקה כסוג 20 ולא 300 — בלי נרמול הוא לא מזוהה כלל
   if (boardMod.normDocType(20) !== 300) throw new Error('סוג 20 אינו מנורמל לחשבון עסקה');
   if (boardMod.normDocType(305) !== 305) throw new Error('נרמול שינה סוג תקין');
