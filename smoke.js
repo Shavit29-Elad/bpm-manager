@@ -3439,7 +3439,21 @@ check('השלמת שורה מהוצאות המערכת — ספק, סכום וש
   const route = srv.slice(srv.indexOf("add('GET', /^\\/api\\/event-board\\/expenses$/"), srv.indexOf("// POST /api/event-board —"));
   if (!/\(p\.companyId \|\| giCompanyId\(\)\) === cid/.test(route)) throw new Error('אין סינון לפי חברה');
   if (!/linked: used\.has/.test(route)) throw new Error('אין סימון להוצאה שכבר שויכה');
-  if (!/a\.linked === b\.linked/.test(route)) throw new Error('מה שלא שויך אינו מופיע ראשון');
+  // מיון לפי תאריך אמיתי (dd/mm/yy אינו ממוין כמחרוזת) וקיבוץ לפי שנה בתצוגה
+  if (!/dkey\(b\.date\)\.localeCompare\(dkey\(a\.date\)\)/.test(route)) throw new Error('הרשימה אינה ממוינת מהתאריך החדש לישן');
+  if (!/year: dkey\(x\.date\)\.slice\(0, 4\)/.test(route)) throw new Error('אין שדה שנה לקיבוץ');
+  const dk = new Function('d', `
+    const x = String(d || '').trim();
+    let m = x.match(/^(\\d{2})\\/(\\d{2})\\/(\\d{2,4})/);
+    if (m) return \`\${m[3].length === 2 ? '20' + m[3] : m[3]}-\${m[2]}-\${m[1]}\`;
+    return /^\\d{4}-\\d{2}-\\d{2}/.test(x) ? x.slice(0, 10) : '0000-00-00';`);
+  const order = ['03/10/25', '10/05/26', '11/05/25'].sort((a, b) => dk(b).localeCompare(dk(a)));
+  if (order[0] !== '10/05/26' || order[2] !== '11/05/25') throw new Error('מיון התאריכים שגוי');
+  const grp = app.slice(app.indexOf('function bdlByYear'), app.indexOf('function renderBdLink'));
+  const byYear = new Function('list', `${grp} return bdlByYear(list);`);
+  const g = byYear([{ year: '2025' }, { year: '2026' }, { year: '' }, { year: '2026' }]);
+  if (g[0][0] !== '2026' || g[0][1].length !== 2 || g[1][0] !== '2025' || g[2][0] !== 'ללא תאריך')
+    throw new Error('הקיבוץ לפי שנים אינו מהחדשה לישנה');
 
   // כפתור הדוח לנבחרים קיים בכותרת כל חודש
   const mp = app.slice(app.indexOf('function boardSelBtns'), app.indexOf('window.boardSetYear'));
@@ -3447,6 +3461,22 @@ check('השלמת שורה מהוצאות המערכת — ספק, סכום וש
   if (!/boardIssueMulti\(this\)/.test(mp)) throw new Error('אין כפתור מסמך משותף בכותרת החודש');
   if (!/boardSelBtns\(\)/.test(app.slice(app.indexOf('function boardMonthPanel'), app.indexOf('window.boardSetYear'))))
     throw new Error('הכפתורים אינם מוצגים בכותרת החודש');
+  return true;
+});
+
+check('ניתוק מסמך משורה מחזיר את הסטטוס ל"טרם שולם"', () => {
+  // "שולם" נגזר מהקישור לתנועת בנק. כשהמסמך מנותק אין עוד עדות תשלום, ולכן
+  // הסטטוס חייב לחזור — קודם הוא נשאר "שולם" כי האיפוס דרש שיישאר קישור.
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const fn = srv.slice(srv.indexOf('function applyBankSupplierPayments'), srv.indexOf("// GET /api/supplier-payables?all="));
+  if (/c\.paidSource !== 'manual' && hasLink/.test(fn)) throw new Error('האיפוס עדיין מותנה בקיום קישור');
+  if (!/c\.paidSource === 'bank' \|\| hasLink/.test(fn)) throw new Error('סימון שמקורו בבנק אינו מתאפס בניתוק');
+  if (!/c\.paidSource !== 'manual'/.test(fn)) throw new Error('סימון ידני אינו מוגן');
+  const route = srv.slice(srv.indexOf("add('DELETE', /^\\/api\\/event-board\\/([^/]+)\\/row\\/(\\d+)\\/doc\\/([^/]+)$/"),
+    srv.indexOf("add('DELETE', /^\\/api\\/event-board\\/([^/]+)$/"));
+  if ((route.match(/recomputeRowPayment\(db, cid, r\.row\)/g) || []).length !== 2)
+    throw new Error('הניתוק אינו מחשב מחדש את סטטוס התשלום בשני המסלולים');
+  if (!/function recomputeRowPayment/.test(srv)) throw new Error('חסרה פונקציית החישוב מחדש');
   return true;
 });
 

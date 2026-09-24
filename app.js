@@ -8522,6 +8522,12 @@ async function bdLinkRenderDoc() {
   }
 }
 
+// קיבוץ לפי שנה, החדשה למעלה — ברשימה ארוכה זה ההבדל בין לחפש לבין לראות.
+function bdlByYear(list) {
+  const by = new Map();
+  for (const x of list) { const y = /^\d{4}$/.test(String(x.year || '')) ? String(x.year) : 'ללא תאריך'; if (!by.has(y)) by.set(y, []); by.get(y).push(x); }
+  return [...by.entries()].sort((a, b) => (a[0] === 'ללא תאריך' ? 1 : b[0] === 'ללא תאריך' ? -1 : b[0].localeCompare(a[0])));
+}
 function renderBdLink() {
   const st = _bdl; if (!st) return;
   let m = document.getElementById('bdLinkModal');
@@ -8538,14 +8544,14 @@ function renderBdLink() {
     : (!list.length
       ? `<div class="empty">${q ? `לא נמצאה הוצאה שתואמת "${escapeHtml(q)}".` : `לא נמצאו הוצאות של ${escapeHtml(st.supplier || 'הספק')}. נסה חיפוש או הצג את כל הספקים.`}</div>`
       : `<div style="max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:8px">
-        ${list.map(x => `<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:7px 9px;border-top:1px solid var(--line);${ok(x) ? '' : 'opacity:.55'}">
+        ${bdlByYear(list).map(([yr, grp]) => `<div style="position:sticky;top:0;background:#eef1fb;border-top:1px solid var(--line);padding:4px 10px;font-size:11.5px;font-weight:700;color:#3f4a6b">${escapeHtml(yr)} <span style="font-weight:500;color:#6b7488">· ${grp.length}</span></div>` + grp.map(x => `<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:7px 9px;border-top:1px solid var(--line);${ok(x) ? '' : 'opacity:.55'}">
           <input type="radio" name="bdlpick" value="${escAttr(x.id)}" ${ok(x) ? '' : 'disabled'}${st.pick === x.id ? ' checked' : ''} onchange="bdLinkPreview('${escAttr(x.id)}')"/>
           <span style="flex:1;min-width:0"><b>${escapeHtml(x.supplierName || '—')}</b>
             <span class="muted">· ${escapeHtml(SUP_DOC_NAMES[x.documentType] || 'מסמך')}${x.number ? ' #' + escapeHtml(String(x.number)) : ''}${x.date ? ' · ' + ddmy(x.date) : ''}</span>
             ${ok(x) ? '' : `<div style="font-size:11px;color:var(--warn)">סוג שאינו מתאים ל${st.vatExempt ? 'עוסק פטור' : 'עוסק מורשה'} — מותר: ${escapeHtml(allowedTxt)}</div>`}</span>
           ${x.linked ? `<span class="tag" style="background:#fff4e5;color:#a15c00;font-size:10px" title="${escAttr((x.linkedTo || []).join(' · ') || 'משויך לשורה אחרת')}">כבר משויך${(x.linkedTo || []).length ? ' — ' + escapeHtml(x.linkedTo[0]) + (x.linkedTo.length > 1 ? ` ועוד ${x.linkedTo.length - 1}` : '') : ''}</span>` : ''}
           ${x.hasFile ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33;font-size:10px">קובץ</span>' : ''}
-          <span style="white-space:nowrap;font-weight:600">${money(x.amount)}</span></label>`).join('')}
+          <span style="white-space:nowrap;font-weight:600">${money(x.amount)}</span></label>`).join('')).join('')}
       </div>`);
   // התצוגה המקדימה מרחיבה את החלונית הקיימת ואינה פותחת חדשה — כך רואים את
   // המסמך לצד הרשימה ויודעים שבוחרים את הנכון.

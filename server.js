@@ -385,8 +385,7 @@ add('GET', /^\/api\/event-board\/expenses$/, async (req, res, _p, q) => {
       amount: Number(p.amount) || 0, amountExcludeVat: Number(p.amountExcludeVat) || 0,
       description: p.description || '', paid: !!p.paid,
       hasFile: !!(p.localFileId || p.giExpenseId || p.draftId), linked: used.has(String(p.id)), linkedTo: used.get(String(p.id)) || [] }))
-    .sort((a, b) => (a.linked === b.linked ? String(b.date || '').localeCompare(String(a.date || '')) : (a.linked ? 1 : -1)))
-    .slice(0, term ? 200 : 80);
+    .slice(0, term ? 400 : 200);
   // ההוצאות של חשבונית ירוקה עצמן — לא רק המראה המקומית. מסך הבנק תמיד קרא
   // משם, ולכן חשבונית שנקלטה בחשבונית ירוקה הופיעה שם אך נעדרה מכאן לחלוטין.
   // אצל משה היו 23 רשומות מקומיות מול 65 שורות ספק, וזה בדיוק הפער.
@@ -409,9 +408,18 @@ add('GET', /^\/api\/event-board\/expenses$/, async (req, res, _p, q) => {
           hasFile: !!e.url, linked: used.has('gi:' + e.id), linkedTo: used.get('gi:' + e.id) || [] }));
     } catch (e) { giError = e.message; }
   }
+  // מיון לפי תאריך יורד בלבד. השוואת מחרוזות על DD/MM/YY נתנה סדר שגוי —
+  // "10/05/26" נפל אחרי "03/10/25" — ולכן נדרש מפתח מנורמל.
+  const dkey = (d) => {
+    const x = String(d || '').trim();
+    let m = x.match(/^(\d{2})\/(\d{2})\/(\d{2,4})/);
+    if (m) return `${m[3].length === 2 ? '20' + m[3] : m[3]}-${m[2]}-${m[1]}`;
+    return /^\d{4}-\d{2}-\d{2}/.test(x) ? x.slice(0, 10) : '0000-00-00';
+  };
   const merged = [...items, ...giItems]
-    .sort((a, b) => (a.linked === b.linked ? String(b.date || '').localeCompare(String(a.date || '')) : (a.linked ? 1 : -1)))
-    .slice(0, term ? 200 : 80);
+    .sort((a, b) => dkey(b.date).localeCompare(dkey(a.date)))
+    .slice(0, term ? 200 : 80)
+    .map(x => ({ ...x, year: dkey(x.date).slice(0, 4) }));
   const totalForCompany = (db.supplierPayables || []).filter(p => (p.companyId || giCompanyId()) === cid).length + giItems.length;
   json(res, { ok: true, names: eventBoard.SUP_DOC_NAMES, items: merged, totalForCompany, searchedAll: !!term, giError });
 });
@@ -572,6 +580,16 @@ add('POST', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc$/, async (req, res, p
   json(res, { ok: true, doc });
 });
 
+// ניתוק מסמך משורה משנה את מקור האמת של התשלום — לכן הסטטוס נגזר מחדש מיד,
+// ולא רק בטעינה הבאה של הלוח. שורה שסומנה ידנית אינה מושפעת.
+function recomputeRowPayment(db, cid, row) {
+  try {
+    if (row && row.paid && row.paidSource !== 'manual') { row.paid = false; row.paidSource = null; row.paidDate = null; }
+    applyBankSupplierPayments(db, cid);   // מחזיר "שולם" אם נותר מסמך מותאם אחר
+    save(db);
+  } catch { /* הניתוק עצמו כבר נשמר */ }
+}
+
 add('DELETE', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc\/([^/]+)$/, (req, res, params, q) => {
   const db = load(), cid = reqCompany(q);
   const r = boardRowAt(db, cid, params[0], params[1]);
@@ -581,14 +599,16 @@ add('DELETE', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc\/([^/]+)$/, (req, r
   const legacy = String(params[2]).match(/^pay:(.+)$/);
   if (legacy) {
     if (String(r.row.paidPayableId || '') !== legacy[1]) return json(res, { error: 'המסמך לא נמצא בשורה' }, 404);
-    r.row.paidPayableId = null; r.row.paidInvoice = null;
+    r.row.paidPayableId = null; r.row.paidInvoice = null; r.row.paidExpenseId = null;
     save(db);
+    recomputeRowPayment(db, cid, r.row);
     return json(res, { ok: true, unlinkedPayable: legacy[1] });
   }
   const before = r.row.docs.length;
   r.row.docs = r.row.docs.filter(d => String(d.id) !== String(params[2]));
   if (r.row.docs.length === before) return json(res, { error: 'המסמך לא נמצא בשורה' }, 404);
   save(db);
+  recomputeRowPayment(db, cid, r.row);
   json(res, { ok: true });
 });
 
@@ -2188,8 +2208,10 @@ function applyBankSupplierPayments(db, want) {
       if (v && v.kind === 'full') {
         if (!c.paid || c.paidSource !== v.source) { c.paid = true; c.paidSource = v.source; dirty = true; }
         if (v.source === 'bank' && payDate && c.paidDate !== payDate) { c.paidDate = payDate; dirty = true; }
-      } else if (c.paid && c.paidSource !== 'manual' && hasLink) {
-        // סימון ישן שנוצר מקישור בלבד (לא ידני, לא מכוסה במלואו בבנק) → מאופס
+      } else if (c.paid && c.paidSource !== 'manual' && (c.paidSource === 'bank' || hasLink)) {
+        // סימון ישן שנוצר מקישור בלבד (לא ידני, לא מכוסה במלואו בבנק) → מאופס.
+        // גם ניתוק המסמך מאפס: הסטטוס נגזר מהקישור, ולכן בלי קישור אין "שולם".
+        // סימון ידני וסימונים ישנים ללא מקור ידוע נשארים — אותם רק המשתמש משנה.
         c.paid = false; c.paidSource = null; c.paidDate = null; dirty = true;
       }
     }
