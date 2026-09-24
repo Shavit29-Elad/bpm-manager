@@ -3796,6 +3796,45 @@ add('GET', /^\/api\/contractors\/payables$/, async (req, res, _p, q) => {
   json(res, payables);
 });
 
+// GET /api/contractors/diag — למה ספק/הוצאה אינם מופיעים במסך הספקים.
+// שני מקורות נפרדים נפגשים שם, ובלבול ביניהם הוא הסיבה השכיחה ל"איפה זה":
+//   · "ספקים לתשלום" — נבנה משורות הספק של האירועים (contractorDetails).
+//   · רשימת ההוצאות — נבנית מ-supplierPayables (הוצאות שנקלטו/הועלו).
+// מסמך שהועלה ישירות על שורה בלוח נשמר ב-row.docs ואינו הוצאה, ולכן אינו שם.
+add('GET', /^\/api\/contractors\/diag$/, (req, res, _p, q) => {
+  const cid = reqCompany(q), db = load();
+  const evs = companyEvents(db, cid);
+  let rows = 0, named = 0, skipPaid = 0, skipHandled = 0, noAmount = 0, rowDocs = 0, rowDocsUploaded = 0;
+  const sample = [];
+  for (const ev of evs) {
+    for (const c of (ev.contractorDetails || [])) {
+      rows++;
+      const name = String((c && c.name) || '').trim();
+      if (!name) continue;
+      named++;
+      if (c.handled) skipHandled++;
+      else if (c.paid) skipPaid++;
+      else if (!(Number(c.amount) > 0)) noAmount++;
+      for (const d of (c.docs || [])) { rowDocs++; if (!d.payableId) rowDocsUploaded++; }
+      if (sample.length < 8) sample.push({ event: ev.artist || ev.id, date: ev.date || null, name,
+        amount: c.amount ?? null, paid: !!c.paid, handled: !!c.handled,
+        docs: (c.docs || []).map(d => ({ number: d.number ?? null, type: d.type ?? null, asPayable: !!d.payableId })) });
+    }
+  }
+  const pay = (db.supplierPayables || []).filter(p => ownedBy(p, cid));
+  json(res, {
+    companyId: cid, events: evs.length,
+    supplierRows: { total: rows, withName: named,
+      shownInPayables: Math.max(0, named - skipPaid - skipHandled),
+      hiddenBecausePaid: skipPaid, hiddenBecauseHandled: skipHandled, withoutAmount: noAmount },
+    supplierPayables: { total: pay.length, unpaid: pay.filter(p => !p.paid).length },
+    rowDocuments: { total: rowDocs, linkedToExpense: rowDocs - rowDocsUploaded,
+      uploadedOnly: rowDocsUploaded,
+      note: 'uploadedOnly — קבצים שהועלו ישירות על שורה בלוח. הם אינם הוצאות ולכן אינם ברשימת ההוצאות.' },
+    sample,
+  });
+});
+
 // מפת "החשבונית שולמה לפי הבנק": 'num:<מספר>' / 'id:<מזהה>' → תאריך התנועה.
 // סורקת גם את חשבונית המקור המקוננת (inv.sourceInvoice): כשתנועה מותאמת לקבלה (400),
 // attachSourceInvoices מקנן תחתיה את חשבונית המס שממנה נגזרה ומסיר אותה מהרשימה הראשית
