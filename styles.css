@@ -436,7 +436,10 @@ textarea.doc-desc {
 @media (max-width: 640px) {
   /* שיוך אירועים להוצאת ספק: שני הפאנלים לא נכנסים זה לצד זה במסך צר —
      המסמך עובר למעלה בגובה קבוע, ורשימת האירועים מתחתיו. */
-  #linkEvCard { flex-direction: column !important; width: 96vw !important; }
+  #linkEvCard, #bdlCard { flex-direction: column !important; width: 96vw !important; }
+  #bdlCard > #bdlDocPane { flex: 0 0 38vh !important; min-height: 0 !important; max-height: 38vh !important;
+    border-inline-end: none !important; border-bottom: 1px solid var(--line); }
+  #bdlCard > div:last-child { padding: 14px !important; }
   #linkEvCard > #linkEvDocPane { flex: 0 0 38vh !important; min-height: 0 !important; max-height: 38vh !important;
     border-inline-end: none !important; border-bottom: 1px solid var(--line); }
   #linkEvCard > div:last-child { padding: 14px !important; }

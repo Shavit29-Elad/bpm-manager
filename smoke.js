@@ -3398,6 +3398,18 @@ check('שיוך מסמך ספק — מציג הכול עם סיבה, ולא "ל�
   if (!/ניתן לשייך/.test(src)) throw new Error('לא מוצג אילו סוגים מותרים');
   // מוצע גם מוצא: העלאת קובץ
   if (!/bDocUpload\(/.test(src)) throw new Error('אין מוצא כשאין מסמך מתאים');
+  // בחירת מסמך מרחיבה את החלונית הקיימת ומציגה אותו — ולא פותחת חלונית חדשה
+  const prev = app.slice(app.indexOf('window.bdLinkPreview'), app.indexOf('function renderBdLink'));
+  if (!prev) throw new Error('bdLinkPreview לא נמצאה');
+  if (!/if \(!already\) renderBdLink\(\);/.test(prev)) throw new Error('המעבר לרוחב הכפול אינו חד-פעמי');
+  if (!/bdLinkRenderDoc\(\)/.test(prev)) throw new Error('החלפת מסמך אינה מרנדרת מחדש את הפאנל');
+  if (/document\.createElement\('div'\)[^;]*modal/.test(prev)) throw new Error('נפתחת חלונית חדשה במקום הרחבה');
+  const ren = app.slice(app.indexOf('function renderBdLink'), app.indexOf('function bdLinkSetItems') + 1 || app.indexOf('window.bdLinkConfirm'));
+  if (!/id="bdlDocPane"/.test(ren)) throw new Error('אין פאנל תצוגה בחלונית');
+  if (!/onchange="bdLinkPreview\(/.test(ren)) throw new Error('בחירה אינה מפעילה תצוגה מקדימה');
+  if (!/st\.pick === x\.id \? ' checked' : ''/.test(ren)) throw new Error('הבחירה אובדת ברינדור מחדש');
+  // חיפוש חדש מנקה בחירה שאינה ברשימה
+  if (!/st\.pick && !st\.items\.some/.test(app)) throw new Error('בחירה ישנה נשארת אחרי חיפוש');
   // ומיקוד החיפוש נשמר
   if (!/inp\.focus\(\)/.test(src)) throw new Error('המיקוד אובד וההקלדה נקטעת');
   return true;

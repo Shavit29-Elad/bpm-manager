@@ -8447,7 +8447,7 @@ window.bDocUpSave = async (btn) => {
 let _bdl = null;
 window.bDocLink = async (evId, idx) => {
   const row = bvRow(idx);
-  _bdl = { evId, idx, q: '', items: null, supplier: row.name || '', allowed: supDocTypes(row), vatExempt: !!row.vatExempt };
+  _bdl = { evId, idx, q: '', items: null, pick: null, supplier: row.name || '', allowed: supDocTypes(row), vatExempt: !!row.vatExempt };
   renderBdLink();
   await bdLinkFetch();
 };
@@ -8466,8 +8466,51 @@ async function bdLinkFetch() {
     .catch(() => ({ error: 'שגיאת רשת' }));
   if (_bdl !== st) return;
   st.items = (r && r.items) || []; st.total = r && r.totalForCompany; st.err = r && r.error; st.loading = false;
+  if (st.pick && !st.items.some(x => String(x.id) === String(st.pick))) st.pick = null;   // הבחירה אינה ברשימה החדשה
   renderBdLink();
 }
+// בחירת הוצאה — מרחיבה את החלונית ומציגה את המסמך שנבחר
+let _bdlBlobUrl = null;
+window.bdLinkPreview = (id) => {
+  if (!_bdl) return;
+  const already = Boolean(_bdl.pick);
+  _bdl.pick = id;
+  if (!already) renderBdLink();   // מעבר לרוחב הכפול — מרנדרים מחדש פעם אחת
+  else bdLinkRenderDoc();         // אחר כך מחליפים רק את המסמך, בלי לאבד גלילה
+};
+
+async function bdLinkRenderDoc() {
+  const st = _bdl; if (!st || !st.pick) return;
+  const pane = document.getElementById('bdlDocPane'); if (!pane) return;
+  const x = (st.items || []).find(i => String(i.id) === String(st.pick));
+  if (!x) return;
+  const title = `${SUP_DOC_NAMES[x.documentType] || 'מסמך'}${x.number ? ' #' + x.number : ''} · ${money(x.amount)}${x.date ? ' · ' + ddmy(x.date) : ''}`;
+  const head = (extra) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:#fff">
+      <b style="font-size:12.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(title)}</b>
+      <div style="display:flex;gap:6px;white-space:nowrap">${extra}</div></div>`;
+  if (!x.hasFile) { pane.innerHTML = head('') + `<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center;padding:14px">אין קובץ שמור להוצאה הזו.</div>`; return; }
+  pane.innerHTML = head('') + `<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center">טוען מסמך…</div>`;
+  const url = bDocUrl({ payableId: x.id });
+  try {
+    const resp = await fetch(url);
+    const ct = (resp.headers.get('content-type') || '').toLowerCase();
+    if (!resp.ok || ct.includes('application/json')) throw new Error('אין קובץ');
+    const blob = await resp.blob();
+    if (_bdlBlobUrl) URL.revokeObjectURL(_bdlBlobUrl);
+    _bdlBlobUrl = URL.createObjectURL(blob);
+    const cur = document.getElementById('bdlDocPane');
+    if (!cur || String(_bdl && _bdl.pick) !== String(x.id)) return;   // נבחר מסמך אחר בינתיים
+    const t = blob.type || ct;
+    const view = t.startsWith('image')
+      ? `<div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;background:#fff;padding:6px"><img src="${_bdlBlobUrl}" style="max-width:100%;object-fit:contain" alt="מסמך"/></div>`
+      : `<iframe src="${_bdlBlobUrl}#toolbar=1&navpanes=0&view=FitH" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
+    cur.innerHTML = head(`<button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="previewDoc('${escAttr(url)}')" title="פתיחה בחלון גדול עם זום">⤢</button>`) + view;
+  } catch {
+    const cur = document.getElementById('bdlDocPane');
+    if (cur) cur.innerHTML = head('') + `<div class="empty" style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center;padding:14px">לא ניתן להציג את המסמך כאן.</div>`;
+  }
+}
+
 function renderBdLink() {
   const st = _bdl; if (!st) return;
   let m = document.getElementById('bdLinkModal');
@@ -8485,7 +8528,7 @@ function renderBdLink() {
       ? `<div class="empty">${q ? `לא נמצאה הוצאה שתואמת "${escapeHtml(q)}".` : `לא נמצאו הוצאות של ${escapeHtml(st.supplier || 'הספק')}. נסה חיפוש או הצג את כל הספקים.`}</div>`
       : `<div style="max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:8px">
         ${list.map(x => `<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:7px 9px;border-top:1px solid var(--line);${ok(x) ? '' : 'opacity:.55'}">
-          <input type="radio" name="bdlpick" value="${escAttr(x.id)}" ${ok(x) ? '' : 'disabled'}/>
+          <input type="radio" name="bdlpick" value="${escAttr(x.id)}" ${ok(x) ? '' : 'disabled'}${st.pick === x.id ? ' checked' : ''} onchange="bdLinkPreview('${escAttr(x.id)}')"/>
           <span style="flex:1;min-width:0"><b>${escapeHtml(x.supplierName || '—')}</b>
             <span class="muted">· ${escapeHtml(SUP_DOC_NAMES[x.documentType] || 'מסמך')}${x.number ? ' #' + escapeHtml(String(x.number)) : ''}${x.date ? ' · ' + ddmy(x.date) : ''}</span>
             ${ok(x) ? '' : `<div style="font-size:11px;color:var(--warn)">סוג שאינו מתאים ל${st.vatExempt ? 'עוסק פטור' : 'עוסק מורשה'} — מותר: ${escapeHtml(allowedTxt)}</div>`}</span>
@@ -8493,7 +8536,12 @@ function renderBdLink() {
           ${x.hasFile ? '<span class="tag" style="background:#e7f7ee;color:#0a7d33;font-size:10px">קובץ</span>' : ''}
           <span style="white-space:nowrap;font-weight:600">${money(x.amount)}</span></label>`).join('')}
       </div>`);
-  m.innerHTML = `<div class="modal-card" style="width:min(680px,95vw)">
+  // התצוגה המקדימה מרחיבה את החלונית הקיימת ואינה פותחת חדשה — כך רואים את
+  // המסמך לצד הרשימה ויודעים שבוחרים את הנכון.
+  const wide = Boolean(st.pick);
+  m.innerHTML = `<div class="modal-card" id="bdlCard" style="width:min(${wide ? '1180px,98vw' : '680px,95vw'});max-height:90vh;max-height:90dvh;overflow:hidden;padding:0;display:flex;flex-direction:row">
+    <div id="bdlDocPane" style="display:${wide ? 'flex' : 'none'};flex:1 1 50%;min-width:0;min-height:min(70vh,600px);max-height:90vh;max-height:90dvh;flex-direction:column;border-inline-end:1px solid var(--line);background:#f4f5fb"></div>
+    <div style="flex:1 1 100%;min-width:0;overflow:auto;max-height:90vh;max-height:90dvh;padding:20px">
     <h3 style="margin:0 0 3px">🔗 שיוך מהוצאות המערכת</h3>
     <div class="muted" style="font-size:12.5px;margin-bottom:9px">${escapeHtml(st.supplier || 'כל הספקים')} · ${st.vatExempt ? 'עוסק פטור' : 'עוסק מורשה'} — ניתן לשייך ${escapeHtml(allowedTxt)}${q ? ` · חיפוש בכל ${st.total != null ? st.total + ' ' : ''}ההוצאות` : ''}${list.length ? ` · ${list.length} תוצאות` : ''}</div>
     <div style="display:flex;gap:8px;margin-bottom:8px">
@@ -8507,7 +8555,9 @@ function renderBdLink() {
       <button class="btn ghost" onclick="document.getElementById('bdLinkModal').classList.add('hidden');bDocUpload('${st.evId}',${st.idx})">📎 העלאת קובץ במקום</button>
       <button class="btn primary" onclick="bdLinkConfirm()">שייך</button>
     </div>
+    </div>
   </div>`;
+  if (st.pick) bdLinkRenderDoc();
   const inp = document.getElementById('bdlQ');
   if (inp && st.q) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
 }
