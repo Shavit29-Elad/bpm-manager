@@ -2085,10 +2085,13 @@ function applyBankSupplierPayments(db, want) {
     if (p.giExpenseId != null) paid = Math.max(paid, debitByKey['id:' + String(p.giExpenseId)] || 0);
     if (p.number != null) paid = Math.max(paid, debitByKey['num:' + _nrmExpKey(p.number)] || 0);
     let status = null, source = null, kind = null;
+    // קישור לתנועת בנק = שולם. לא נדרש שהסכום בבנק יכסה את מלוא החשבונית:
+    // חשבונית אחת יכולה לכסות כמה אירועים, ותנועה אחת יכולה לשלם כמה חשבוניות,
+    // ולכן השוואת סכומים סימנה תשלומים אמיתיים כ"טרם שולם". partialCoverage
+    // נשמר לתצוגה — הוא מספר כמה מהחשבונית כוסה, בלי לשנות את הסטטוס.
     if (p.paid) { status = 'paid'; kind = 'full'; source = 'manual'; }
-    else if (total > 0 && paid >= total - 1) { status = 'paid'; kind = 'full'; source = 'bank'; }
-    else if (paid > 0) { status = 'partial'; kind = 'partial'; }
-    payMeta.set(p, { paid, total, status });
+    else if (paid > 0) { status = 'paid'; kind = 'full'; source = 'bank'; }
+    payMeta.set(p, { paid, total, status, partialCoverage: status === 'paid' && source === 'bank' && total > 0 && paid < total - 1 });
     const v = { kind, source };
     if (p.id != null) statusByKey['pid:' + String(p.id)] = v;
     if (p.giExpenseId != null) statusByKey['eid:' + String(p.giExpenseId)] = v;
@@ -3886,6 +3889,27 @@ add('GET', /^\/api\/contractors\/diag$/, (req, res, _p, q) => {
   const evs = companyEvents(db, cid);
   let rows = 0, named = 0, skipPaid = 0, skipHandled = 0, noAmount = 0, rowDocs = 0, rowDocsUploaded = 0;
   const sample = [];
+  // כל מה שמותאם בתנועות חובה בבנק — לפי מספר מסמך ולפי מזהה
+  const nrm = (x) => String(x || '').replace(/\s+/g, '').replace(/^0+/, '');
+  const bankDocKeys = new Set();
+  for (const t of (db.bankTx || [])) {
+    if (!ownedBy(t, cid) || t.direction !== 'debit') continue;
+    if (!['manual', 'auto', 'approved'].includes(t.matchStatus)) continue;
+    for (const mi of (t.matchedInvoices || [])) {
+      if (mi && mi.number != null) bankDocKeys.add('num:' + nrm(mi.number));
+      if (mi && mi.id != null) bankDocKeys.add('id:' + String(mi.id));
+    }
+  }
+  const docKeysOf = (c) => {
+    const k = new Set();
+    const add = (pid, num) => {
+      if (num != null && String(num).trim() !== '') k.add('num:' + nrm(num));
+      if (pid != null) { k.add('id:' + String(pid)); if (String(pid).startsWith('gi:')) k.add('id:' + String(pid).slice(3)); }
+    };
+    add(c.paidPayableId, c.paidInvoice); add(c.paidExpenseId, null);
+    for (const d of (c.docs || [])) add(d.payableId, d.number);
+    return k;
+  };
   for (const ev of evs) {
     for (const c of (ev.contractorDetails || [])) {
       rows++;
@@ -3896,9 +3920,12 @@ add('GET', /^\/api\/contractors\/diag$/, (req, res, _p, q) => {
       else if (c.paid) skipPaid++;
       else if (!(Number(c.amount) > 0)) noAmount++;
       for (const d of (c.docs || [])) { rowDocs++; if (!d.payableId) rowDocsUploaded++; }
-      if (sample.length < 8) sample.push({ event: ev.artist || ev.id, date: ev.date || null, name,
-        amount: c.amount ?? null, paid: !!c.paid, handled: !!c.handled,
-        docs: (c.docs || []).map(d => ({ number: d.number ?? null, type: d.type ?? null, asPayable: !!d.payableId })) });
+      if (sample.length < 12) sample.push({ event: ev.artist || ev.id, date: ev.date || null, name,
+        amount: c.amount ?? null, paid: !!c.paid, paidSource: c.paidSource || null, handled: !!c.handled,
+        links: { paidPayableId: c.paidPayableId || null, paidInvoice: c.paidInvoice || null, paidExpenseId: c.paidExpenseId || null },
+        docs: (c.docs || []).map(d => ({ number: d.number ?? null, type: d.type ?? null, asPayable: !!d.payableId })),
+        // האם מסמך כלשהו של השורה מותאם לתנועת חובה בבנק — זו העדות לתשלום
+        bankMatched: bankDocKeys.size ? [...docKeysOf(c)].filter(k => bankDocKeys.has(k)) : [] });
     }
   }
   const pay = (db.supplierPayables || []).filter(p => ownedBy(p, cid));
@@ -3936,6 +3963,8 @@ add('GET', /^\/api\/contractors\/diag$/, (req, res, _p, q) => {
       shownInPayables: Math.max(0, named - skipPaid - skipHandled),
       hiddenBecausePaid: skipPaid, hiddenBecauseHandled: skipHandled, withoutAmount: noAmount },
     supplierPayables: { total: pay.length, unpaid: pay.filter(p => !p.paid).length },
+    bankDebitDocuments: { matchedDocuments: bankDocKeys.size,
+      note: 'מסמכים שמותאמים לתנועות חובה בבנק. שורה שאין לה כאן התאמה תישאר "טרם שולם" — וזה נכון.' },
     rowDocuments: { total: rowDocs, linkedToExpense: rowDocs - rowDocsUploaded,
       uploadedOnly: rowDocsUploaded,
       note: 'uploadedOnly — קבצים שהועלו ישירות על שורה בלוח. הם אינם הוצאות ולכן אינם ברשימת ההוצאות.' },
