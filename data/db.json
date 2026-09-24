@@ -25,7 +25,33 @@
       "accounting": "greenInvoice"
     }
   ],
-  "events": [],
+  "events": [
+    {
+      "id": "ev_1f1f263ad52a",
+      "companyId": "co_moshe",
+      "source": "board",
+      "confirmed": true,
+      "invoiceStatus": "pending",
+      "linkedDocs": [],
+      "employeeDetails": [],
+      "employees": [],
+      "createdAt": "2026-09-24T15:32:42.321Z",
+      "date": "2026-04-21",
+      "dateRaw": "2026-04-21",
+      "artist": "בדיקה",
+      "location": null,
+      "clientId": null,
+      "clientName": null,
+      "price": 10000,
+      "commissionPct": 15,
+      "commissionOff": true,
+      "commissionBase": "client",
+      "extraCommissions": [],
+      "boardNotes": "",
+      "contractorDetails": [],
+      "contractors": []
+    }
+  ],
   "employees": [],
   "contractors": [],
   "invoices": [],
@@ -289,8 +315,28 @@
   "assets": [],
   "chats": {},
   "memory": {},
-  "users": [],
-  "sessions": {},
+  "users": [
+    {
+      "id": "usr_e18773ed2f0e",
+      "username": "tester",
+      "salt": "c3402ee1c9dd96520a15cab8054d579d",
+      "hash": "bcbe381f4834893e81d052408901cfaefab26e48b612a6e322c128dea17f571ef81506d30b38f50dceb360084e97cb76bb30db834601df4a39a9bb190d672d5c",
+      "role": "admin",
+      "tabs": [],
+      "companies": [],
+      "createdAt": "2026-09-24T15:32:19.666Z"
+    }
+  ],
+  "sessions": {
+    "7635011b736124f7e3479bc282e32283c76d920be9ad568d63713ecc517d7aed": {
+      "userId": "usr_e18773ed2f0e",
+      "exp": 1792855939666
+    },
+    "35cbf78e6fea6ffc406c26ab7f6438be0243fb093f4f21ece3faacc547ffa9f1": {
+      "userId": "usr_e18773ed2f0e",
+      "exp": 1792855939713
+    }
+  },
   "requests": [],
   "expenseNotes": {},
   "artistClientMap": [

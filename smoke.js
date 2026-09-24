@@ -3464,6 +3464,22 @@ check('השלמת שורה מהוצאות המערכת — ספק, סכום וש
   return true;
 });
 
+check('הסרת עמלת השורה הראשונה נשמרת מיד באירוע קיים', () => {
+  // ההסרה נשמרה רק ב"שמירה", ולכן סגירת החלונית אחריה החזירה את העמלה.
+  const src = app.slice(app.indexOf('window.bdPrimaryComm ='), app.indexOf('window.bdExtraAdd') > 0 ? app.indexOf('window.bdExtraAdd') : app.indexOf('window.bdPrimaryComm =') + 1600);
+  if (!/fetch\('\/api\/event-board'/.test(src)) throw new Error('ההסרה אינה נשמרת בשרת');
+  if (!/boardEditBody\(_boardEdit\)/.test(src)) throw new Error('ההסרה אינה שולחת את אותו גוף כמו השמירה');
+  if (!/if \(!_boardEdit\.id\) return/.test(src)) throw new Error('אירוע חדש נשמר לפני שנוצר');
+  // אותו גוף בשני המסלולים — אחרת אחד ישלח commissionOff והשני לא
+  if (!/function boardEditBody/.test(app)) throw new Error('גוף השמירה לא חולץ לפונקציה משותפת');
+  const save = app.slice(app.indexOf('window.boardSave = async'), app.indexOf('window.boardDelete ='));
+  if (!/const body = boardEditBody\(e\)/.test(save)) throw new Error('השמירה אינה משתמשת בגוף המשותף');
+  const body = new Function('e', `${app.slice(app.indexOf('function boardEditBody'), app.indexOf('window.boardSave = async'))} return boardEditBody(e);`);
+  const b = body({ id: 'ev1', date: '2026-04-21', price: 10000, commissionPct: 15, commissionOff: true, rows: [] });
+  if (b.commissionOff !== true) throw new Error('ההסרה אינה נשלחת לשרת');
+  return true;
+});
+
 check('ניתוק מסמך משורה מחזיר את הסטטוס ל"טרם שולם"', () => {
   // "שולם" נגזר מהקישור לתנועת בנק. כשהמסמך מנותק אין עוד עדות תשלום, ולכן
   // הסטטוס חייב לחזור — קודם הוא נשאר "שולם" כי האיפוס דרש שיישאר קישור.

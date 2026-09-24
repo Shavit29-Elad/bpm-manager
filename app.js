@@ -8128,7 +8128,23 @@ function bdExtrasHtml(e) {
 }
 // הסרה והחזרה של עמלת השורה הראשונה — לאירוע הזה בלבד. ברירת המחדל במערכת
 // נשארת 15%, וההסרה הפיכה בלחיצה.
-window.bdPrimaryComm = (on) => { boardEditSync(); _boardEdit.commissionOff = !on; renderBoardEdit(); };
+// הסרת עמלת השורה הראשונה נשמרה רק בלחיצה על "שמירה", ולכן מי שסגר את החלונית
+// אחרי ההסרה ראה את העמלה חוזרת בפתיחה הבאה. באירוע קיים השינוי נשמר מיד.
+window.bdPrimaryComm = async (on) => {
+  boardEditSync();
+  _boardEdit.commissionOff = !on;
+  renderBoardEdit();
+  if (!_boardEdit.id) return;                 // אירוע חדש — יישמר עם השאר
+  const st = document.getElementById('bdStatus');
+  if (st) st.innerHTML = '<span class="muted">שומר…</span>';
+  const r = await fetch('/api/event-board', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(boardEditBody(_boardEdit)) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  const st2 = document.getElementById('bdStatus');
+  if (!st2) return;
+  st2.innerHTML = (!r || r.error)
+    ? `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || 'השמירה נכשלה'))}</span>`
+    : `<span style="color:var(--accent2)">${on ? 'העמלה הוחזרה ונשמרה' : 'העמלה הוסרה ונשמרה'}</span>`;
+};
 window.bdAddComm = () => { boardEditSync(); _boardEdit.extraCommissions = _boardEdit.extraCommissions || []; _boardEdit.extraCommissions.push({ name: '', pct: '', amount: '' }); renderBoardEdit(); };
 window.bdDelComm = (i) => { boardEditSync(); _boardEdit.extraCommissions.splice(i, 1); renderBoardEdit(); };
 
@@ -8243,13 +8259,10 @@ window.boardRecalc = () => {
 };
 window.boardAddRow = () => { boardEditSync(); _boardEdit.rows.push({ role: '', name: '', priceExVat: '', vatExempt: false, priceIncVat: false, note: '', fixed: false }); renderBoardEdit(); };
 window.boardDelRow = (i) => { boardEditSync(); _boardEdit.rows.splice(i, 1); renderBoardEdit(); };
-window.boardSave = async (btn) => {
-  boardEditSync();
-  const e = _boardEdit;
-  const st = document.getElementById('bdStatus');
-  if (!e.date) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש לבחור תאריך.</span>'; return; }
-  if (btn) btn.disabled = true;
-  const body = { id: e.id, date: e.date, artist: e.artist, location: e.location, clientName: e.clientName,
+// גוף השמירה — משותף ל"שמירה" ולהסרת/החזרת עמלת השורה הראשונה, כדי ששני
+// המסלולים ישלחו בדיוק את אותם שדות.
+function boardEditBody(e) {
+  return { id: e.id, date: e.date, artist: e.artist, location: e.location, clientName: e.clientName,
     clientId: e.clientId || null, price: e.price === '' ? null : Number(e.price),
     commissionPct: e.commissionPct === '' ? null : Number(e.commissionPct),
     commissionOff: !!e.commissionOff, commissionBase: e.commissionBase || 'client',
@@ -8257,6 +8270,14 @@ window.boardSave = async (btn) => {
     rows: e.rows.map(r => ({ role: r.role, name: r.name, priceExVat: r.priceExVat === '' ? null : Number(r.priceExVat),
       vatExempt: !!r.vatExempt, priceIncVat: !!r.priceIncVat, note: r.note,
       payableId: r.payableId || null, payableNumber: r.payableNumber || null })) };
+}
+window.boardSave = async (btn) => {
+  boardEditSync();
+  const e = _boardEdit;
+  const st = document.getElementById('bdStatus');
+  if (!e.date) { if (st) st.innerHTML = '<span style="color:var(--danger)">יש לבחור תאריך.</span>'; return; }
+  if (btn) btn.disabled = true;
+  const body = boardEditBody(e);
   const r = await fetch('/api/event-board', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
   if (btn) btn.disabled = false;
