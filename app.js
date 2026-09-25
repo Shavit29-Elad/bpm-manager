@@ -302,16 +302,30 @@ window.openBillDue = async () => {
         return `<div style="display:flex;gap:8px;align-items:center;padding:3px 0;flex-wrap:wrap">
           <span class="muted" style="flex:1;min-width:160px">${ddmy(e.date)} · ${escapeHtml(e.artist || '—')}${e.location ? ' · ' + escapeHtml(e.location) : ''} · ${money(e.amount)}${
             fu ? `<span style="font-size:10.5px;color:var(--warn)"> · ${escapeHtml(BILL_SRC_HE[fu.type] || '')}${fu.number ? ' #' + escapeHtml(String(fu.number)) : ''}</span>` : ''}</span>
-          ${act}</div>`;
+          ${act}
+          <button class="btn ghost" style="padding:2px 9px;font-size:11px;white-space:nowrap" title="הורד את האירוע מההתראה בלי להפיק מסמך — הפיך" onclick="billDueHandled('${escAttr(e.id)}',1)">✓ טופל</button></div>`;
       }).join('')}</div>
-      ${g.events.length > 1 ? `<div style="margin-top:7px"><button class="btn ghost" style="padding:3px 11px;font-size:12px" onclick="billDueMerged('${escAttr(g.client)}','${escAttr(g.clientId || '')}')">🧾 חשבונית מרכזת לכל ${g.events.length} האירועים</button></div>` : ''}
+      <div style="margin-top:7px;display:flex;gap:7px;flex-wrap:wrap">
+        ${g.events.length > 1 ? `<button class="btn ghost" style="padding:3px 11px;font-size:12px" onclick="billDueMerged('${escAttr(g.client)}','${escAttr(g.clientId || '')}')">🧾 חשבונית מרכזת לכל ${g.events.length} האירועים</button>` : ''}
+        ${g.events.length > 1 ? `<button class="btn ghost" style="padding:3px 11px;font-size:12px" title="הורד את כל אירועי הלקוח מההתראה — הפיך" onclick="billDueHandledClient('${escAttr(g.client)}',1)">✓ טופל — כל ${g.events.length} האירועים</button>` : ''}
+      </div>
     </div>`).join('');
+  // מה שסומן "טופל" אינו נמחק — הוא נאסף כאן, כדי שתמיד אפשר להחזיר אירוע
+  // שסומן בטעות.
+  const hd = r.handled || [];
+  const handledBox = hd.length ? `<details style="margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:8px 12px">
+    <summary style="cursor:pointer;font-size:12.5px;font-weight:600">✓ ${hd.length} סומנו כטופלו</summary>
+    <div style="margin-top:6px;font-size:12px">${hd.map(e => `<div style="display:flex;gap:8px;align-items:center;padding:3px 0;flex-wrap:wrap">
+      <span class="muted" style="flex:1;min-width:160px">${ddmy(e.date)} · ${escapeHtml(e.client)} · ${escapeHtml(e.artist || '—')} · ${money(e.amount)}</span>
+      <button class="btn ghost" style="padding:2px 9px;font-size:11px;white-space:nowrap" onclick="billDueHandled('${escAttr(e.id)}',0)">↩ החזר</button></div>`).join('')}</div>
+  </details>` : '';
   m.innerHTML = `<div class="modal-card" style="width:min(640px,95vw);max-height:86vh;max-height:86dvh;overflow:auto">
     <div class="row-between"><h3 style="margin:0">🧾 חשבוניות שצריך להוציא</h3>
       <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick="document.getElementById('billDueModal').classList.add('hidden')">✕</button></div>
     <div class="muted" style="font-size:12px;margin:6px 0 12px">לקוח שמוגדר "סוף חודש" — החשבונית שלו מגיעה ביום האחרון של החודש, על כל אירועי החודש יחד. כל השאר — יום אחרי האירוע. את הרשימה עורכים בפרטי העסק.</div>
     ${r.total ? `<div class="muted" style="font-size:12.5px;margin-bottom:10px">${r.total} אירועים · ${r.clients} לקוחות · ${money(r.amount)}</div>${groups}`
       : '<div class="empty">אין כרגע חשבוניות שהגיע מועד הפקתן 👌</div>'}
+    ${handledBox}
   </div>`;
 };
 
@@ -348,6 +362,21 @@ window.billDueFollowup = (eventId, docId, number, type, uploaded) => {
 window.billDueProduce = async (eventId) => {
   await window.eventProduceDoc(eventId);
   billDueRaise();
+};
+// "טופל" — האירוע יורד מההתראה בלי שנגענו במסמכים שלו. הסימון יושב על האירוע
+// בשרת, ולכן הוא נשמר בין מכשירים, והוא הפיך מתוך אותה חלונית.
+async function _billDueMark(body) {
+  const r = await fetch('/api/billing-due/handled', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (!r || r.error) { alert(String((r && r.error) || 'הסימון נכשל')); return; }
+  _billDue = r;
+  await window.openBillDue();
+  window.refreshBillAlert && window.refreshBillAlert();
+}
+window.billDueHandled = (eventId, on) => _billDueMark({ eventId, on: Number(on) === 1 });
+window.billDueHandledClient = (client, on) => {
+  if (Number(on) === 1 && !confirm(`לסמן כטופל את כל האירועים של ${client}? הם ירדו מההתראה, ותמיד אפשר להחזיר.`)) return;
+  return _billDueMark({ client, on: Number(on) === 1 });
 };
 window.billDueMerged = async (client, clientId) => {
   const g = ((_billDue && _billDue.groups) || []).find(x => x.client === client);

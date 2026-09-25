@@ -4949,6 +4949,7 @@ function billDueDate(db, cid, ev) {
 function billingDue(db, cid, today) {
   const t = today || new Date().toISOString().slice(0, 10);
   const groups = new Map();
+  const handled = [];   // סומנו "טופל" ידנית — יורדים מהספירה, וניתן להחזיר אותם
   for (const ev of (db.events || [])) {
     if (!ownedBy(ev, cid) || !ev.confirmed) continue;
     if (isNoInvoice(ev)) continue;
@@ -4966,6 +4967,14 @@ function billingDue(db, cid, today) {
     // המסמך שממנו מפיקים המשך: חשבון עסקה עדיף על הצעת מחיר
     const fu = active.find(d => Number(d.type) === 300 && d.id) || active.find(d => Number(d.type) === 10 && d.id) || null;
     const client = (ev.clientName || '').trim() || '— ללא לקוח —';
+    // "טופל" — החשבונית הוצאה מחוץ למערכת, או שאין בה צורך. האירוע יורד
+    // מההתראה בלי לגעת במסמכים שלו, והסימון הפיך.
+    if (ev.billingHandled) {
+      handled.push({ id: ev.id, client, date: String(ev.date || ev.dateRaw || '').slice(0, 10),
+        artist: ev.artist || '', location: ev.location || '', amount: eventTotal(ev), due,
+        at: String(ev.billingHandled).slice(0, 10) });
+      continue;
+    }
     const key = billKey(client) || client;
     const g = groups.get(key) || { client, clientId: ev.clientId || null, mode: billModeFor(db, cid, client), events: [], total: 0, due, oldestDue: due };
     if (!g.clientId && ev.clientId) g.clientId = ev.clientId;
@@ -4986,14 +4995,45 @@ function billingDue(db, cid, today) {
       firstDate: dates[0] || null, lastDate: dates[dates.length - 1] || null };
   }).sort((a, b) => String(a.firstDate || '').localeCompare(String(b.firstDate || ''))
     || a.client.localeCompare(b.client, 'he'));
+  handled.sort((a, b) => String(a.date).localeCompare(String(b.date)));
   return { total: out.reduce((s, g) => s + g.events.length, 0), clients: out.length,
-    amount: Math.round(out.reduce((s, g) => s + g.total, 0) * 100) / 100, groups: out };
+    amount: Math.round(out.reduce((s, g) => s + g.total, 0) * 100) / 100, groups: out, handled };
 }
 
 // GET /api/billing-due — מה צריך להוציא עכשיו
 add('GET', /^\/api\/billing-due$/, (req, res, _p, q) => {
   const cid = reqCompany(q);
   json(res, billingDue(load(), cid, /^\d{4}-\d{2}-\d{2}$/.test(String(q.today || '')) ? q.today : null));
+});
+
+// POST /api/billing-due/handled — סימון "טופל" לאירוע בודד או לכל אירועי הלקוח.
+// הסימון יושב על האירוע עצמו ולא נוגע במסמכים, ולכן הוא הפיך: on=false מחזיר.
+add('POST', /^\/api\/billing-due\/handled$/, (req, res, _p, q, body) => {
+  const b = body || {};
+  const cid = reqCompany(q, b);
+  const db = load();
+  const on = b.on !== false;
+  const ids = new Set();
+  if (b.eventId) ids.add(String(b.eventId));
+  if (b.client) {
+    // הלקוח נבחר לפי המפתח המנורמל, כמו בכל שאר לוגיקת החיוב — שם עם תו
+    // בלתי נראה לא ייחשב ללקוח אחר. הרשימה נלקחת ממה שמוצג עכשיו בפועל.
+    const cur = billingDue(db, cid);
+    const key = billKey(b.client) || b.client;
+    const src = on ? (cur.groups || []).filter(g => (billKey(g.client) || g.client) === key).flatMap(g => g.events)
+      : (cur.handled || []).filter(e => (billKey(e.client) || e.client) === key);
+    for (const e of src) ids.add(String(e.id));
+  }
+  if (!ids.size) return json(res, { error: 'לא נמצאו אירועים לסימון' }, 400);
+  let changed = 0;
+  for (const ev of (db.events || [])) {
+    if (!ids.has(String(ev.id))) continue;
+    if (!ownedBy(ev, cid)) return wrongCompany(res, 'האירוע');
+    if (on && !ev.billingHandled) { ev.billingHandled = new Date().toISOString(); changed++; }
+    else if (!on && ev.billingHandled) { delete ev.billingHandled; changed++; }
+  }
+  if (changed) save(db);
+  json(res, { ok: true, changed, ...billingDue(db, cid) });
 });
 
 // GET /api/billing-due/diag — למה לקוח מסוים לא זוהה כ"סוף חודש".

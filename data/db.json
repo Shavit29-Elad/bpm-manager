@@ -27,7 +27,7 @@
   ],
   "events": [
     {
-      "id": "ev_1f1f263ad52a",
+      "id": "ev_cc150515579e",
       "companyId": "co_moshe",
       "source": "board",
       "confirmed": true,
@@ -35,16 +35,91 @@
       "linkedDocs": [],
       "employeeDetails": [],
       "employees": [],
-      "createdAt": "2026-09-24T15:32:42.321Z",
-      "date": "2026-04-21",
-      "dateRaw": "2026-04-21",
-      "artist": "בדיקה",
+      "createdAt": "2026-09-25T13:17:02.464Z",
+      "date": "2026-09-01",
+      "dateRaw": "2026-09-01",
+      "artist": "מופע 2026-09-01",
       "location": null,
       "clientId": null,
-      "clientName": null,
-      "price": 10000,
+      "clientName": "לקוח א",
+      "price": 5000,
       "commissionPct": 15,
-      "commissionOff": true,
+      "commissionOff": false,
+      "commissionBase": "client",
+      "extraCommissions": [],
+      "boardNotes": "",
+      "contractorDetails": [],
+      "contractors": []
+    },
+    {
+      "id": "ev_07a4c6b686d0",
+      "companyId": "co_moshe",
+      "source": "board",
+      "confirmed": true,
+      "invoiceStatus": "pending",
+      "linkedDocs": [],
+      "employeeDetails": [],
+      "employees": [],
+      "createdAt": "2026-09-25T13:17:02.473Z",
+      "date": "2026-09-05",
+      "dateRaw": "2026-09-05",
+      "artist": "מופע 2026-09-05",
+      "location": null,
+      "clientId": null,
+      "clientName": "לקוח א",
+      "price": 5000,
+      "commissionPct": 15,
+      "commissionOff": false,
+      "commissionBase": "client",
+      "extraCommissions": [],
+      "boardNotes": "",
+      "contractorDetails": [],
+      "contractors": []
+    },
+    {
+      "id": "ev_1f0e39cb294e",
+      "companyId": "co_moshe",
+      "source": "board",
+      "confirmed": true,
+      "invoiceStatus": "pending",
+      "linkedDocs": [],
+      "employeeDetails": [],
+      "employees": [],
+      "createdAt": "2026-09-25T13:17:02.481Z",
+      "date": "2026-09-10",
+      "dateRaw": "2026-09-10",
+      "artist": "מופע 2026-09-10",
+      "location": null,
+      "clientId": null,
+      "clientName": "לקוח א",
+      "price": 5000,
+      "commissionPct": 15,
+      "commissionOff": false,
+      "commissionBase": "client",
+      "extraCommissions": [],
+      "boardNotes": "",
+      "contractorDetails": [],
+      "contractors": []
+    },
+    {
+      "id": "ev_89191acf7535",
+      "companyId": "co_moshe",
+      "source": "board",
+      "confirmed": true,
+      "invoiceStatus": "pending",
+      "linkedDocs": [],
+      "employeeDetails": [],
+      "employees": [],
+      "createdAt": "2026-09-25T13:17:02.489Z",
+      "date": "2026-09-07",
+      "dateRaw": "2026-09-07",
+      "artist": "מופע ב",
+      "location": null,
+      "clientId": null,
+      "clientName": "לקוח ב",
+      "price": 3000,
+      "commissionPct": 15,
+      "commissionOff": false,
       "commissionBase": "client",
       "extraCommissions": [],
       "boardNotes": "",
@@ -317,24 +392,24 @@
   "memory": {},
   "users": [
     {
-      "id": "usr_e18773ed2f0e",
+      "id": "usr_11d4bc02dcc0",
       "username": "tester",
-      "salt": "c3402ee1c9dd96520a15cab8054d579d",
-      "hash": "bcbe381f4834893e81d052408901cfaefab26e48b612a6e322c128dea17f571ef81506d30b38f50dceb360084e97cb76bb30db834601df4a39a9bb190d672d5c",
+      "salt": "f467743bdebc8d654d860a0f31bad347",
+      "hash": "82189f53ea20e61af807de20f5d06c92d13acff7513f61c66bac603e2cd6c5848292b61c78c751f55870fa96e1af18bab3a5cb5bb2bd9b03bf780e7167c8b7c5",
       "role": "admin",
       "tabs": [],
       "companies": [],
-      "createdAt": "2026-09-24T15:32:19.666Z"
+      "createdAt": "2026-09-25T13:17:02.406Z"
     }
   ],
   "sessions": {
-    "7635011b736124f7e3479bc282e32283c76d920be9ad568d63713ecc517d7aed": {
-      "userId": "usr_e18773ed2f0e",
-      "exp": 1792855939666
+    "37a20a31a8664ed4b61e8c76d5ebdbd4ac5ca610149aa1916312f16a5ed965a7": {
+      "userId": "usr_11d4bc02dcc0",
+      "exp": 1792934222406
     },
-    "35cbf78e6fea6ffc406c26ab7f6438be0243fb093f4f21ece3faacc547ffa9f1": {
-      "userId": "usr_e18773ed2f0e",
-      "exp": 1792855939713
+    "9cb1d1516cb9c65454aee5a3f613258d573adeb8ee4d5de3503cd65a87434d0d": {
+      "userId": "usr_11d4bc02dcc0",
+      "exp": 1792934222453
     }
   },
   "requests": [],
@@ -450,5 +525,135 @@
       "at": "2026-09-24T15:28:30.663Z",
       "skipped": "לא מחובר"
     }
+  },
+  "businessProfiles": {
+    "co_bpm": {
+      "name": "",
+      "businessNumber": "",
+      "email": "",
+      "address": "",
+      "managers": [
+        {},
+        {}
+      ],
+      "bankConfirmation": null,
+      "taxConfirmation": null,
+      "additionalDocs": [],
+      "accountantEmail": "516942349@rivh.it",
+      "senderEmail": "",
+      "payrollEmail": "",
+      "emailSignature": "",
+      "reportOverdueDays": 0,
+      "defaultClassificationId": "",
+      "mailUser": "",
+      "mailPass": "",
+      "mailFromName": "",
+      "mailBodyTemplate": "",
+      "mailSubjectTemplate": "",
+      "withholdingRate": 0.05,
+      "docRemark": "שם מוטב: בי פי אם הגברה ותאורה בע\"מ\nמספר חשבון: 347346\nמס' סניף: 521 (מודיעין)\nמזרחי טפחות (20)"
+    },
+    "co_moshe": {
+      "name": "",
+      "businessNumber": "",
+      "email": "",
+      "address": "",
+      "managers": [
+        {},
+        {}
+      ],
+      "bankConfirmation": null,
+      "taxConfirmation": null,
+      "additionalDocs": [],
+      "accountantEmail": "",
+      "senderEmail": "",
+      "payrollEmail": "",
+      "emailSignature": "",
+      "reportOverdueDays": 0,
+      "defaultClassificationId": "",
+      "mailUser": "",
+      "mailPass": "",
+      "mailFromName": "",
+      "mailBodyTemplate": "",
+      "mailSubjectTemplate": "",
+      "withholdingRate": 0,
+      "docRemark": "משה כורסיה בע\"מ\nדיסקונט (11)\nסניף 152\nמספר חשבון: 0215130040"
+    },
+    "co_ofek": {
+      "name": "",
+      "businessNumber": "",
+      "email": "",
+      "address": "",
+      "managers": [
+        {},
+        {}
+      ],
+      "bankConfirmation": null,
+      "taxConfirmation": null,
+      "additionalDocs": [],
+      "accountantEmail": "",
+      "senderEmail": "",
+      "payrollEmail": "",
+      "emailSignature": "",
+      "reportOverdueDays": 0,
+      "defaultClassificationId": "",
+      "mailUser": "",
+      "mailPass": "",
+      "mailFromName": "",
+      "mailBodyTemplate": "",
+      "mailSubjectTemplate": "",
+      "withholdingRate": 0,
+      "docRemark": ""
+    },
+    "co_tal": {
+      "name": "",
+      "businessNumber": "",
+      "email": "",
+      "address": "",
+      "managers": [
+        {},
+        {}
+      ],
+      "bankConfirmation": null,
+      "taxConfirmation": null,
+      "additionalDocs": [],
+      "accountantEmail": "",
+      "senderEmail": "",
+      "payrollEmail": "",
+      "emailSignature": "",
+      "reportOverdueDays": 0,
+      "defaultClassificationId": "",
+      "mailUser": "",
+      "mailPass": "",
+      "mailFromName": "",
+      "mailBodyTemplate": "",
+      "mailSubjectTemplate": "",
+      "withholdingRate": 0,
+      "docRemark": ""
+    }
+  },
+  "mailAutoScan": {
+    "enabled": true,
+    "since": "2026-01-01",
+    "lastRun": {
+      "at": "2026-09-25T13:13:22.662Z",
+      "per": {
+        "co_bpm": {
+          "skipped": "אין חשבון מייל"
+        },
+        "co_moshe": {
+          "skipped": "אין חשבון מייל"
+        },
+        "co_ofek": {
+          "skipped": "אין חשבון מייל"
+        },
+        "co_tal": {
+          "skipped": "אין חשבון מייל"
+        }
+      }
+    }
+  },
+  "clientBilling": {
+    "co_moshe": []
   }
 }

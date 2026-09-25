@@ -3464,6 +3464,26 @@ check('השלמת שורה מהוצאות המערכת — ספק, סכום וש
   return true;
 });
 
+check('התראת החיוב — "טופל" לאירוע בודד ולכל אירועי הלקוח', () => {
+  // "טופל" מוריד אירוע מההתראה בלי לגעת במסמכים שלו, והסימון הפיך.
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const fn = srv.slice(srv.indexOf('function billingDue(db, cid, today)'), srv.indexOf("// GET /api/billing-due —"));
+  if (!/if \(ev\.billingHandled\)/.test(fn)) throw new Error('אירוע שסומן כטופל עדיין נספר בהתראה');
+  if (!/handled\.push/.test(fn)) throw new Error('הטופלו אינם נשמרים להחזרה');
+  const route = srv.slice(srv.indexOf("add('POST', /^\\/api\\/billing-due\\/handled$/"), srv.indexOf('// GET /api/billing-due/diag'));
+  if (!route) throw new Error('אין ראוט לסימון "טופל"');
+  if (!/ownedBy\(ev, cid\)/.test(route)) throw new Error('הראוט אינו בודק בעלות חברה');
+  if (!/b\.eventId/.test(route) || !/b\.client/.test(route)) throw new Error('חסר סימון לאירוע בודד או ללקוח שלם');
+  if (!/billKey\(b\.client\)/.test(route)) throw new Error('הלקוח אינו מזוהה לפי המפתח המנורמל');
+  if (!/on && !ev\.billingHandled/.test(route) || !/!on && ev\.billingHandled/.test(route)) throw new Error('הסימון אינו הפיך');
+  // הכפתורים בחלונית
+  const modal = app.slice(app.indexOf('window.openBillDue = async'), app.indexOf('window.billDueGo'));
+  if (!/billDueHandled\('\$\{escAttr\(e\.id\)\}',1\)/.test(modal)) throw new Error('אין כפתור "טופל" לאירוע בודד');
+  if (!/billDueHandledClient\(/.test(modal)) throw new Error('אין כפתור "טופל" לכל אירועי הלקוח');
+  if (!/billDueHandled\('\$\{escAttr\(e\.id\)\}',0\)/.test(modal)) throw new Error('אין אפשרות להחזיר אירוע שסומן');
+  return true;
+});
+
 check('הסרת עמלת השורה הראשונה נשמרת מיד באירוע קיים', () => {
   // ההסרה נשמרה רק ב"שמירה", ולכן סגירת החלונית אחריה החזירה את העמלה.
   const src = app.slice(app.indexOf('window.bdPrimaryComm ='), app.indexOf('window.bdExtraAdd') > 0 ? app.indexOf('window.bdExtraAdd') : app.indexOf('window.bdPrimaryComm =') + 1600);
