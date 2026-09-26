@@ -27,7 +27,7 @@
   ],
   "events": [
     {
-      "id": "ev_cc150515579e",
+      "id": "ev_9a5b929bd42a",
       "companyId": "co_moshe",
       "source": "board",
       "confirmed": true,
@@ -35,96 +35,37 @@
       "linkedDocs": [],
       "employeeDetails": [],
       "employees": [],
-      "createdAt": "2026-09-25T13:17:02.464Z",
-      "date": "2026-09-01",
-      "dateRaw": "2026-09-01",
-      "artist": "מופע 2026-09-01",
-      "location": null,
-      "clientId": null,
-      "clientName": "לקוח א",
-      "price": 5000,
-      "commissionPct": 15,
-      "commissionOff": false,
-      "commissionBase": "client",
-      "extraCommissions": [],
-      "boardNotes": "",
-      "contractorDetails": [],
-      "contractors": []
-    },
-    {
-      "id": "ev_07a4c6b686d0",
-      "companyId": "co_moshe",
-      "source": "board",
-      "confirmed": true,
-      "invoiceStatus": "pending",
-      "linkedDocs": [],
-      "employeeDetails": [],
-      "employees": [],
-      "createdAt": "2026-09-25T13:17:02.473Z",
-      "date": "2026-09-05",
-      "dateRaw": "2026-09-05",
-      "artist": "מופע 2026-09-05",
-      "location": null,
-      "clientId": null,
-      "clientName": "לקוח א",
-      "price": 5000,
-      "commissionPct": 15,
-      "commissionOff": false,
-      "commissionBase": "client",
-      "extraCommissions": [],
-      "boardNotes": "",
-      "contractorDetails": [],
-      "contractors": []
-    },
-    {
-      "id": "ev_1f0e39cb294e",
-      "companyId": "co_moshe",
-      "source": "board",
-      "confirmed": true,
-      "invoiceStatus": "pending",
-      "linkedDocs": [],
-      "employeeDetails": [],
-      "employees": [],
-      "createdAt": "2026-09-25T13:17:02.481Z",
+      "createdAt": "2026-09-26T12:00:53.566Z",
       "date": "2026-09-10",
       "dateRaw": "2026-09-10",
-      "artist": "מופע 2026-09-10",
+      "artist": "מופע",
       "location": null,
       "clientId": null,
-      "clientName": "לקוח א",
-      "price": 5000,
+      "clientName": "לקוח",
+      "price": 10000,
       "commissionPct": 15,
       "commissionOff": false,
       "commissionBase": "client",
       "extraCommissions": [],
       "boardNotes": "",
-      "contractorDetails": [],
-      "contractors": []
-    },
-    {
-      "id": "ev_89191acf7535",
-      "companyId": "co_moshe",
-      "source": "board",
-      "confirmed": true,
-      "invoiceStatus": "pending",
-      "linkedDocs": [],
-      "employeeDetails": [],
-      "employees": [],
-      "createdAt": "2026-09-25T13:17:02.489Z",
-      "date": "2026-09-07",
-      "dateRaw": "2026-09-07",
-      "artist": "מופע ב",
-      "location": null,
-      "clientId": null,
-      "clientName": "לקוח ב",
-      "price": 3000,
-      "commissionPct": 15,
-      "commissionOff": false,
-      "commissionBase": "client",
-      "extraCommissions": [],
-      "boardNotes": "",
-      "contractorDetails": [],
-      "contractors": []
+      "contractorDetails": [
+        {
+          "role": "סאונדמן",
+          "name": "ספק א",
+          "priceExVat": 2360,
+          "vatExempt": false,
+          "priceIncVat": true,
+          "note": "",
+          "amount": 2360,
+          "supplierId": null,
+          "paidPayableId": null,
+          "paidInvoice": null,
+          "docs": []
+        }
+      ],
+      "contractors": [
+        "ספק א"
+      ]
     }
   ],
   "employees": [],
@@ -392,24 +333,24 @@
   "memory": {},
   "users": [
     {
-      "id": "usr_11d4bc02dcc0",
+      "id": "usr_dffd8b5ee85a",
       "username": "tester",
-      "salt": "f467743bdebc8d654d860a0f31bad347",
-      "hash": "82189f53ea20e61af807de20f5d06c92d13acff7513f61c66bac603e2cd6c5848292b61c78c751f55870fa96e1af18bab3a5cb5bb2bd9b03bf780e7167c8b7c5",
+      "salt": "34b999d679ed77b19b96ae03b671279b",
+      "hash": "eb897a78219f8a77907803c273d160fe96cf29705f4b82f991335a117eac3ae3e77172abbd452880cf4ebd679d98df736dcbb1fee681edf6c48d0b45ce57924d",
       "role": "admin",
       "tabs": [],
       "companies": [],
-      "createdAt": "2026-09-25T13:17:02.406Z"
+      "createdAt": "2026-09-26T12:00:53.503Z"
     }
   ],
   "sessions": {
-    "37a20a31a8664ed4b61e8c76d5ebdbd4ac5ca610149aa1916312f16a5ed965a7": {
-      "userId": "usr_11d4bc02dcc0",
-      "exp": 1792934222406
+    "2cc4be019b0f33e1184fa45140d1b6d3ce7d4433c98c921e249a4c6e67aa101a": {
+      "userId": "usr_dffd8b5ee85a",
+      "exp": 1793016053503
     },
-    "9cb1d1516cb9c65454aee5a3f613258d573adeb8ee4d5de3503cd65a87434d0d": {
-      "userId": "usr_11d4bc02dcc0",
-      "exp": 1792934222453
+    "6e83cb1bf167859f42d1907892aed96613a84350dd07133329a30ea529a69b02": {
+      "userId": "usr_dffd8b5ee85a",
+      "exp": 1793016053555
     }
   },
   "requests": [],
@@ -636,7 +577,7 @@
     "enabled": true,
     "since": "2026-01-01",
     "lastRun": {
-      "at": "2026-09-25T13:13:22.662Z",
+      "at": "2026-09-26T11:47:55.828Z",
       "per": {
         "co_bpm": {
           "skipped": "אין חשבון מייל"
@@ -652,8 +593,5 @@
         }
       }
     }
-  },
-  "clientBilling": {
-    "co_moshe": []
   }
 }

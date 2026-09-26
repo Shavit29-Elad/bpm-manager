@@ -612,6 +612,27 @@ add('DELETE', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/doc\/([^/]+)$/, (req, r
   json(res, { ok: true });
 });
 
+// POST /api/event-board/:id/row/:i/price — מחיר השורה מתוך חלונית האירוע.
+// עד כה שינוי מחיר או סימון "עוסק פטור" חייבו לצאת לעריכת האירוע, בדיוק ברגע
+// שבו משייכים מסמך ורואים את הסכום האמיתי שלו. הסכום נשמר בדיוק כמו בעריכה:
+// הערך שהוזן + הדגלים, ו-amount (כולל מע"מ) שעליו עובד מעקב הספקים.
+add('POST', /^\/api\/event-board\/([^/]+)\/row\/(\d+)\/price$/, (req, res, params, q, body) => {
+  const b = body || {};
+  const db = load(), cid = reqCompany(q, b);
+  const r = boardRowAt(db, cid, params[0], params[1]);
+  if (r.error) return r.code === 403 ? wrongCompany(res, 'האירוע') : json(res, { error: r.error }, r.code);
+  const raw = b.priceExVat;
+  const price = (raw === '' || raw == null) ? null : Number(raw);
+  if (price != null && (!isFinite(price) || price < 0)) return json(res, { error: 'מחיר לא תקין' }, 400);
+  r.row.priceExVat = price;
+  r.row.vatExempt = b.vatExempt === true;
+  r.row.priceIncVat = !r.row.vatExempt && b.priceIncVat === true;   // פטור גובר, כמו בעריכה
+  const t = eventBoard.rowTotals(r.row);
+  r.row.amount = t.inc;
+  save(db);
+  json(res, { ok: true, ...t });
+});
+
 add('DELETE', /^\/api\/event-board\/([^/]+)$/, (req, res, params, q) => {
   const db = load(), cid = reqCompany(q);
   const ev = (db.events || []).find(e => e.id === params[0]);

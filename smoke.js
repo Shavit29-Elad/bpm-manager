@@ -2652,6 +2652,7 @@ check('חלונית האירוע נבנית תקין גם עם מסמך פתוח
       createElement: () => ({ classList:{add(){},remove(){}}, style:{}, set innerHTML(v){ __h=v; }, get innerHTML(){ return __h; } }) };
     const window = {}; const state = { company: 'co_moshe' };
     const boardFind = () => ev;
+    const VAT_RATE = 0.18;   // באפליקציה מוגדר למעלה בקובץ, מחוץ לקטע שנחתך כאן
   `;
   const ev = { id: 'e1', date: '2026-10-08', artist: 'רידינג 3', clientName: 'לקוח', notes: '',
     totals: { incomeEx: 5000, incomeInc: 5900, expenseEx: 1500, expenseInc: 1770, profitEx: 3500, unpaidRows: 1 },
@@ -3461,6 +3462,37 @@ check('השלמת שורה מהוצאות המערכת — ספק, סכום וש
   if (!/boardIssueMulti\(this\)/.test(mp)) throw new Error('אין כפתור מסמך משותף בכותרת החודש');
   if (!/boardSelBtns\(\)/.test(app.slice(app.indexOf('function boardMonthPanel'), app.indexOf('window.boardSetYear'))))
     throw new Error('הכפתורים אינם מוצגים בכותרת החודש');
+  return true;
+});
+
+check('שורת ספק — מחיר לפני וכולל מע״מ, וסימון עוסק פטור', () => {
+  // המחיר נבדק מול המסמך ששויך, ולכן הוא נערך באותו מקום — בלי לצאת לעריכה.
+  const calc = new Function('price', 'exempt', 'inc', `
+    const VAT_RATE = 0.18;
+    ${app.slice(app.indexOf('function bdRowVals'), app.indexOf('function bdRowPriceHtml'))}
+    return bdRowVals(price, exempt, inc);`);
+  const a = calc(2000, false, false);
+  if (a.ex !== 2000 || a.inc !== 2360) throw new Error('חישוב מע״מ שגוי על מחיר ללא מע״מ');
+  const b = calc(2360, false, true);
+  if (b.ex !== 2000 || b.inc !== 2360) throw new Error('הפרדת מע״מ ממחיר שכולל מע״מ שגויה');
+  const c = calc(2000, true, true);
+  if (c.ex !== 2000 || c.inc !== 2000) throw new Error('עוסק פטור אינו גובר על "כולל מע״מ"');
+  if (calc(0, false, false).inc !== 0) throw new Error('מחיר ריק אינו מתאפס');
+  // הפאנל מציג את שני המספרים ואת שני הסימונים
+  const html = app.slice(app.indexOf('function bdRowPriceHtml'), app.indexOf('window.bdPriceCalc'));
+  for (const t of ['ללא מע״מ', 'כולל מע״מ', 'עוסק פטור', 'bdPriceSave'])
+    if (!html.includes(t)) throw new Error('חסר בפאנל: ' + t);
+  if (!/bdRowPriceHtml\(ev, r\)/.test(app.slice(app.indexOf('function bDocPanel'), app.indexOf('window.bDocToggle'))))
+    throw new Error('עורך המחיר אינו מוצג בפירוט השורה');
+  // השרת: אותה לוגיקה, כולל amount שעליו עובד מעקב הספקים
+  const srv = fs.readFileSync('server.js', 'utf8');
+  const route = srv.slice(srv.indexOf("add('POST', /^\\/api\\/event-board\\/([^/]+)\\/row\\/(\\d+)\\/price$/"), srv.indexOf("add('DELETE', /^\\/api\\/event-board\\/([^/]+)$/"));
+  if (!route) throw new Error('אין ראוט לעדכון מחיר השורה');
+  if (!/boardRowAt\(db, cid/.test(route)) throw new Error('הראוט אינו בודק בעלות חברה');
+  if (!/!r\.row\.vatExempt && b\.priceIncVat === true/.test(route)) throw new Error('פטור אינו גובר בשרת');
+  if (!/r\.row\.amount = t\.inc/.test(route)) throw new Error('amount אינו מתעדכן לפי כולל מע״מ');
+  const t = boardMod.rowTotals({ priceExVat: 2000, vatExempt: false, priceIncVat: false });
+  if (t.inc !== 2360 || calc(2000, false, false).inc !== t.inc) throw new Error('החישוב בדפדפן ובשרת אינו זהה');
   return true;
 });
 

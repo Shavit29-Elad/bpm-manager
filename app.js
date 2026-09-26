@@ -8375,6 +8375,49 @@ function bDocChips(ev, r) {
   return `${chips || hint}${docs.length && missing.length ? ` <span class="muted" style="font-size:10.5px">· חסר: ${missing.map(t => SUP_DOC_NAMES[t]).join(' / ')}</span>` : ''}`;
 }
 
+// עריכת המחיר של שורת הספק במקום שבו הוא באמת נבדק — מול המסמך ששויך.
+// המחיר נשמר כפי שהוזן, והצד השני (ללא/כולל מע"מ) נגזר ממנו, כדי שלא יוזן
+// אותו מספר פעמיים בשתי צורות. "עוסק פטור" גובר על "המחיר כולל מע"מ".
+function bdRowVals(price, exempt, inc) {
+  const p = Number(price) || 0;
+  if (!p) return { ex: 0, inc: 0 };
+  if (exempt) return { ex: p, inc: p };
+  if (inc) return { ex: +(p / (1 + VAT_RATE)).toFixed(2), inc: p };
+  return { ex: p, inc: +(p * (1 + VAT_RATE)).toFixed(2) };
+}
+function bdRowPriceHtml(ev, r) {
+  const i = r.index;
+  const v = bdRowVals(r.priceExVat, r.vatExempt, r.priceIncVat);
+  return `<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;font-size:12px;margin-bottom:7px;padding-bottom:7px;border-bottom:1px solid var(--line)">
+    <span class="muted">מחיר שהוזן</span>
+    <input id="bdP${i}" type="number" step="any" inputmode="decimal" value="${escAttr(String(r.priceExVat ?? ''))}" oninput="bdPriceCalc(${i})" style="width:96px;padding:3px 6px"/>
+    <label style="display:flex;gap:4px;align-items:center;white-space:nowrap"><input type="checkbox" id="bdPInc${i}" ${r.priceIncVat ? 'checked' : ''} ${r.vatExempt ? 'disabled' : ''} onchange="bdPriceCalc(${i})"/> המחיר כולל מע״מ</label>
+    <label style="display:flex;gap:4px;align-items:center;white-space:nowrap" title="ספק שאינו מחויב במע״מ — הסכום זהה בשתי העמודות, והמסמך שלו הוא קבלה"><input type="checkbox" id="bdPEx${i}" ${r.vatExempt ? 'checked' : ''} onchange="bdPriceCalc(${i})"/> עוסק פטור</label>
+    <span id="bdPOut${i}" style="white-space:nowrap">ללא מע״מ <b>${money(v.ex)}</b> · כולל מע״מ <b>${money(v.inc)}</b></span>
+    <button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="bdPriceSave('${escAttr(ev.id)}',${i},this)">💾 עדכן מחיר</button>
+  </div>`;
+}
+window.bdPriceCalc = (i) => {
+  const g = (id) => document.getElementById(id + i);
+  const ex = g('bdPEx'), inc = g('bdPInc'), out = g('bdPOut');
+  if (!out) return;
+  if (inc) { inc.disabled = Boolean(ex && ex.checked); if (inc.disabled) inc.checked = false; }
+  const v = bdRowVals(g('bdP') ? g('bdP').value : 0, ex && ex.checked, inc && inc.checked);
+  out.innerHTML = `ללא מע״מ <b>${money(v.ex)}</b> · כולל מע״מ <b>${money(v.inc)}</b>`;
+};
+window.bdPriceSave = async (evId, i, btn) => {
+  const g = (id) => document.getElementById(id + i);
+  const st = document.getElementById('bDocStatus' + i);
+  if (btn) btn.disabled = true;
+  if (st) st.innerHTML = '<span class="muted">שומר…</span>';
+  const r = await fetch(`/api/event-board/${evId}/row/${i}/price`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ priceExVat: g('bdP') ? g('bdP').value : null,
+      vatExempt: Boolean(g('bdPEx') && g('bdPEx').checked), priceIncVat: Boolean(g('bdPInc') && g('bdPInc').checked) }) })
+    .then(x => x.json()).catch(() => ({ error: 'שגיאת רשת' }));
+  if (btn) btn.disabled = false;
+  if (!r || r.error) { if (st) st.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String((r && r.error) || 'השמירה נכשלה'))}</span>`; return; }
+  await boardReloadInto(evId);   // הסכומים של האירוע כולו מתעדכנים מיד
+};
 function bDocPanel(ev, r) {
   const docs = r.docs || [];
   const rows = docs.length ? docs.map(d => `<tr>
@@ -8390,6 +8433,7 @@ function bDocPanel(ev, r) {
   return `<tr class="bv-docs"><td colspan="7" data-label="" style="padding:0">
     <div style="margin:0 0 6px;padding:8px 10px;background:var(--panel2);border-radius:8px">
       <div style="font-size:12px;font-weight:600;margin-bottom:5px">מסמכי ${escapeHtml(r.name || r.role)} — ${r.vatExempt ? 'עוסק פטור (קבלה)' : 'עוסק מורשה (עסקה → מס / מס-קבלה)'}</div>
+      ${bdRowPriceHtml(ev, r)}
       <table class="tbl no-cardify" style="width:100%;font-size:12px"><tbody>${rows}</tbody></table>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
         <button class="btn ghost" style="padding:2px 9px;font-size:11.5px" onclick="bDocLink('${ev.id}',${r.index})">🔗 שיוך מהוצאות המערכת</button>
